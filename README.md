@@ -5,6 +5,15 @@ efficiently via Fast Multipole Method.
 
 [Name `volumential` courtesy of Andreas Klöckner.](https://gitlab.tiker.net/xywei/volumential/issues/2)
 
+This repository uses `git-lfs`.
+
+**NOTE**: If you would like to skip downloading large resource files (IPython
+notebooks etc.), use
+```
+GIT_LFS_SKIP_SMUDGE=1 git clone SERVER-REPOSITORY
+```
+This does not affect using the library.
+
 Volumential is under the MIT license.
 
 ## Singular Integral Methods
