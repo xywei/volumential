@@ -26,12 +26,6 @@ build/
 *.msh
 
 .ipynb_checkpoints/
-*.ipynb
-
-resources/
-
-*.npz
-*.npy
 
 gmsh_tmp/
 *.meshmode
