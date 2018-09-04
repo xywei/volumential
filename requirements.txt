@@ -1,0 +1,3 @@
+git+https://gitlab.tiker.net/xywei/boxtree.git
+git+https://github.com/inducer/loopy.git
+git+https://github.com/inducer/sumpy.git

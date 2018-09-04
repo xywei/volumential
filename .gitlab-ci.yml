@@ -1,0 +1,28 @@
+# Might as wall try prospecter for linting?
+
+Flake8:
+    script:
+    - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/master/prepare-and-run-flake8.sh
+    - ". ./prepare-and-run-flake8.sh volumential test"
+    tags:
+    - python3.5
+    except:
+    - tags
+
+Python 3.6 POCL:
+  script:
+  - export PY_EXE=python3.6
+  - export PYOPENCL_TEST=portable
+  - export EXTRA_INSTALL="numpy scipy mako wheel"
+  - git submodule sync && git submodule update --init --recursive --remote
+  - (cd contrib/meshgen11_dealii/; ./build.sh)
+  - ls && ls volumential
+  - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/master/build-and-test-py-project.sh
+  - ". ./build-and-test-py-project.sh"
+  tags:
+  - python3.6
+  - pocl
+  - dealii
+  except:
+  - tags
+
