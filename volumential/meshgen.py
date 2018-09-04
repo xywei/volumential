@@ -23,9 +23,12 @@ THE SOFTWARE.
 import logging
 logger = logging.getLogger(__name__)
 
+provider = None
+
 try:
     logger.info("Trying to find a mesh generator..")
     import volumential.meshgen_dealii  # noqa: F401
+    provider = "meshgen_dealii"
 
 except ImportError as e:
     logger.debug(repr(e))
@@ -35,6 +38,7 @@ except ImportError as e:
         logger.info("Trying out BoxTree.TreeInteractiveBuild interface.")
         import boxtree.tree_interactive_build  # noqa: F401
         from modepy import GaussLegendreQuadrature
+        provider = "meshgen_boxtree"
 
     except ImportError as ee:
         logger.debug(repr(ee))

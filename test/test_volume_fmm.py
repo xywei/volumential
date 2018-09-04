@@ -39,6 +39,8 @@ from pyopencl.tools import (  # NOQA
 import logging
 logger = logging.getLogger(__name__)
 
+import volumential.meshgen as mg
+
 import pytest
 
 # {{{ make sure context getter works
@@ -117,8 +119,6 @@ def laplace_problem(ctx_getter):
         return np.exp(-alpha * norm2)
 
 # {{{ generate quad points
-
-    import volumential.meshgen as mg
 
     mesh = mg.MeshGen2D(q_order, n_levels)
     iloop = 0
@@ -253,7 +253,8 @@ def laplace_problem(ctx_getter):
 
 # }}} End laplace volume potential
 
-
+@pytest.mark.skipif(mg.provider is not "meshgen_dealii",
+                    reason="Adaptive mesh module is not available")
 def test_volume_fmm_laplace(laplace_problem):
 
     trav, wrangler, source_vals, q_weights = laplace_problem
