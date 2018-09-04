@@ -28,6 +28,8 @@ build/
 .ipynb_checkpoints/
 *.ipynb
 
+resources/
+
 *.npz
 *.npy
 
