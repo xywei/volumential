@@ -253,6 +253,7 @@ def laplace_problem(ctx_getter):
 
 # }}} End laplace volume potential
 
+
 @pytest.mark.skipif(mg.provider is not "meshgen_dealii",
                     reason="Adaptive mesh module is not available")
 def test_volume_fmm_laplace(laplace_problem):

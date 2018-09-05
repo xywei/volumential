@@ -65,7 +65,8 @@ def drive_test_completeness(q_order):
         [cl.array.to_device(queue, q_points[i]) for i in range(dim)])
 
     q_weights = cl.array.to_device(queue, q_weights)
-    q_radii = cl.array.to_device(queue, q_radii)
+    if q_radii is not None:
+        q_radii = cl.array.to_device(queue, q_radii)
 
     # }}}
 

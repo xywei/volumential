@@ -135,6 +135,9 @@ class NearFieldInteractionTableManager(
         dim = int(dim)
         assert dim >= 1
 
+        if compute_method is None:
+            compute_method = "Transform"
+
         is_recomputed = False
 
         if kernel_type not in self.supported_kernels:
