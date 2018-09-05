@@ -143,8 +143,8 @@ def drive_test_direct_quad_same_box(q_order):
     u = laplace_const_source_same_box(q_order)
     func = interp_func(q_order, u)
 
-    # nft, _ = table_manager.get_table(
-    #   dim, "Laplace", q_order=q_order, force_recompute=False)
+    nft, _ = table_manager.get_table(
+            dim, "Laplace", q_order=q_order, force_recompute=False)
 
     def const_one_source_func(x, y):
         return 1
