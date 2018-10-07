@@ -34,6 +34,7 @@ class Flip(SymmetryOperationBase):
     """
     Flip the sign of an axis, spanning S_2^dim
     """
+
     def __init__(self, iaxis):
         self.axis = iaxis
 
@@ -45,11 +46,13 @@ class Swap(SymmetryOperationBase):
     """
     Swap two axes, spanning S_dim
     """
+
     def __init__(self, iaxis, jaxis):
         self.axes = (iaxis, jaxis)
 
     def __repr__(self):
         return "Swap(%d,%d)" % self.axes
+
 
 # }}} End symmetry operations
 
@@ -58,6 +61,7 @@ class CaseVecReduction(object):
     """
     Reduce a set of case vectors based on symmetry.
     """
+
     def __init__(self, vecs=None, sym_tags=None, do_reduction=True):
         """
         sym_tags is a list of SymmetryOperationBase objects.
@@ -75,7 +79,7 @@ class CaseVecReduction(object):
                 assert isinstance(tag, SymmetryOperationBase)
         self.symmetry_tags = sym_tags
         self.flippable, self.swappable_groups = self.parse_symmetry_tags(
-                self.symmetry_tags)
+            self.symmetry_tags)
 
         self.reduced = False
         if do_reduction:
@@ -100,8 +104,7 @@ class CaseVecReduction(object):
                 gi = None
                 gj = None
                 for gid, group in zip(
-                        range(len(swappable_groups)),
-                        swappable_groups):
+                        range(len(swappable_groups)), swappable_groups):
                     if iaxis in group:
                         assert gi is None
                         gi = gid
@@ -125,12 +128,9 @@ class CaseVecReduction(object):
                         else:
                             # Merge groups
                             swappable_groups.append(set().union(
-                                swappable_groups[gi],
-                                swappable_groups[gj]))
-                            swappable_groups.remove(
-                                    swappable_groups[gi])
-                            swappable_groups.remove(
-                                    swappable_groups[gj])
+                                swappable_groups[gi], swappable_groups[gj]))
+                            swappable_groups.remove(swappable_groups[gi])
+                            swappable_groups.remove(swappable_groups[gj])
 
             else:
                 raise NotImplementedError
@@ -192,7 +192,8 @@ class CaseVecReduction(object):
     def reduce(self):
         self.reduced_vecs, self.reduced_vec_ids = self.find_base_vecs()
         self.reduced_invariant_groups = [
-                self.find_invariant_group(v) for v in self.reduced_vecs]
+            self.find_invariant_group(v) for v in self.reduced_vecs
+        ]
         self.reduced = True
 
     # call reduce() before calling getters
@@ -215,7 +216,7 @@ class CaseVecReduction(object):
         for vid in range(len(self.reduced_vecs)):
             ratio = 1
             fable, sgroups = self.parse_symmetry_tags(
-                    self.reduced_invariant_groups[vid])
+                self.reduced_invariant_groups[vid])
             ratio = ratio / (2**(sum(fable)))
             for grp in sgroups:
                 ratio = ratio / math.factorial(len(grp))
@@ -224,7 +225,7 @@ class CaseVecReduction(object):
 
     def get_full_reduction_ratio(self):
         return self.get_inter_box_reduction_ratio(
-                ) * self.get_intra_box_reduction_ratio()
+        ) * self.get_intra_box_reduction_ratio()
 
     def get_reduced_invariant_groups(self):
         assert self.reduced

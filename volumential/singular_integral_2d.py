@@ -42,21 +42,17 @@ quad_points_y = np.array([])
 quad_weights = np.array([])
 
 
-def update_qquad_leggauss_formula(
-        deg1, deg2):
+def update_qquad_leggauss_formula(deg1, deg2):
 
-    x1, w1 = np.polynomial.legendre.leggauss(
-        deg1)
+    x1, w1 = np.polynomial.legendre.leggauss(deg1)
     x1 = (x1 + 1) / 2
     w1 = w1 / 2
 
-    x2, w2 = np.polynomial.legendre.leggauss(
-        deg2)
+    x2, w2 = np.polynomial.legendre.leggauss(deg2)
     x2 = (x2 + 1) / 2
     w2 = w2 / 2
 
-    quad_points_x, quad_points_y = np.meshgrid(
-        x1, x2)
+    quad_points_x, quad_points_y = np.meshgrid(x1, x2)
     ww1, ww2 = np.meshgrid(w1, w2)
     global quad_weights
     quad_weights = ww1 * ww2
@@ -127,38 +123,36 @@ def qquad(func,
     if method == "Adaptive":
 
         # Using lambda for readability
-        def outer_integrand(y): return quad(  # NOQA
-            lambda x: func(x, y, *args), a, b, (), toli, rtoli, maxiteri, vec_func, miniteri)[0]  # NOQA
+        def outer_integrand(y):
+            return quad(  # NOQA
+                lambda x: func(x, y, *args), a, b, (), toli, rtoli, maxiteri,
+                vec_func, miniteri)[0]  # NOQA
 
         # Is there a simple way to retrieve err info from the inner quad calls?
 
-        val, err = quad(
-            outer_integrand, c, d, (),
-            tol, rtol, maxitero,
-            vec_func, minitero)
+        val, err = quad(outer_integrand, c, d, (), tol, rtol, maxitero, vec_func,
+                        minitero)
 
     elif method == "Gauss":
 
         # Gauss quadrature with orders equal to maxiters
 
         # Using lambda for readability
-        def outer_integrand(y): return sp.integrate.fixed_quad(  # NOQA
-                np.vectorize(lambda x: func(x, y, *args)),
-                a, b, (), maxiteri)[0]  # NOQA
+        def outer_integrand(y):
+            return sp.integrate.fixed_quad(  # NOQA
+                np.vectorize(lambda x: func(x, y, *args)), a, b, (),
+                maxiteri)[0]  # NOQA
 
         # Is there a simple way to retrieve err info from the inner quad calls?
 
         val, err = sp.integrate.fixed_quad(
-            np.vectorize(outer_integrand), c, d, (),
-            maxitero)
+            np.vectorize(outer_integrand), c, d, (), maxitero)
 
         assert err is None
 
     else:
 
-        raise NotImplementedError(
-            "Unsupported quad method: "
-            + method)
+        raise NotImplementedError("Unsupported quad method: " + method)
 
     return (val, err)
 
@@ -168,8 +162,7 @@ def qquad(func,
 # {{{ affine mappings
 
 
-def solve_affine_map_2d(source_tria,
-                        target_tria):
+def solve_affine_map_2d(source_tria, target_tria):
     """Computes the affine map and its inverse that maps the source_tria to
        target_tria.
 
@@ -198,42 +191,17 @@ def solve_affine_map_2d(source_tria,
 
     # DOFs: A11, A12, A21, A22, b1, b2
     rhs = np.array([
-        target_tria[0][0],
-        target_tria[0][1],
-        target_tria[1][0],
-        target_tria[1][1],
-        target_tria[2][0],
-        target_tria[2][1]
+        target_tria[0][0], target_tria[0][1], target_tria[1][0], target_tria[1][1],
+        target_tria[2][0], target_tria[2][1]
     ])
 
     coef = np.array([
-        [
-            source_tria[0][0],
-            source_tria[0][1], 0, 0, 1,
-            0
-        ],
-        [
-            0, 0, source_tria[0][0],
-            source_tria[0][1], 0, 1
-        ],
-        [
-            source_tria[1][0],
-            source_tria[1][1], 0, 0, 1,
-            0
-        ],
-        [
-            0, 0, source_tria[1][0],
-            source_tria[1][1], 0, 1
-        ],
-        [
-            source_tria[2][0],
-            source_tria[2][1], 0, 0, 1,
-            0
-        ],
-        [
-            0, 0, source_tria[2][0],
-            source_tria[2][1], 0, 1
-        ],
+        [source_tria[0][0], source_tria[0][1], 0, 0, 1, 0],
+        [0, 0, source_tria[0][0], source_tria[0][1], 0, 1],
+        [source_tria[1][0], source_tria[1][1], 0, 0, 1, 0],
+        [0, 0, source_tria[1][0], source_tria[1][1], 0, 1],
+        [source_tria[2][0], source_tria[2][1], 0, 0, 1, 0],
+        [0, 0, source_tria[2][0], source_tria[2][1], 0, 1],
     ])
 
     # x, residuals, _, _ = np.linalg.lstsq(coef, rhs)
@@ -244,15 +212,11 @@ def solve_affine_map_2d(source_tria,
         print('')
         print("source:", source_tria)
         print("target:", target_tria)
-        raise SystemExit(
-            "Error: Singular source triangle encountered"
-        )
+        raise SystemExit("Error: Singular source triangle encountered")
     assert (len(x) == 6)
-    assert (np.allclose(
-        np.dot(coef, x), rhs))
+    assert (np.allclose(np.dot(coef, x), rhs))
 
-    a = np.array([[x[0], x[1]],
-                  [x[2], x[3]]])
+    a = np.array([[x[0], x[1]], [x[2], x[3]]])
     b = np.array([x[4], x[5]])
 
     # Using default value is the idiomatic way to "capture by value"
@@ -264,12 +228,9 @@ def solve_affine_map_2d(source_tria,
     invmap = lambda x, a=inva, b=invb: inva.dot(np.array(x)) + invb  # NOQA
     inv_jacob = np.linalg.det(inva)
 
-    assert (
-        np.abs(jacob * inv_jacob - 1) <
-        1e-12)
+    assert (np.abs(jacob * inv_jacob - 1) < 1e-12)
 
-    return (mapping, jacob, invmap,
-            inv_jacob)
+    return (mapping, jacob, invmap, inv_jacob)
 
 
 # }}}
@@ -292,27 +253,20 @@ def tria2rect_map_2d():
 
     # (x,y) --> (rho, theta): T --> R
     def mapping(x):
-        return (x[0] + x[1], np.arctan2(
-            np.sqrt(x[1]),
-            np.sqrt(x[0])))
+        return (x[0] + x[1], np.arctan2(np.sqrt(x[1]), np.sqrt(x[0])))
 
     def jacob(x):
-        return 1 / (
-            2 * np.sqrt(x[0] * x[1]))
+        return 1 / (2 * np.sqrt(x[0] * x[1]))
 
     # x = rho * cos^2(theta), y = rho * sin^2(theta)
     # J = rho * sin(2*theta)
     def invmap(u):
-        return (u[0] *
-                (np.cos(u[1])**2),
-                u[0] *
-                (np.sin(u[1])**2))
+        return (u[0] * (np.cos(u[1])**2), u[0] * (np.sin(u[1])**2))
 
     def inv_jacob(u):
         return u[0] * np.sin(2 * u[1])
 
-    return (mapping, jacob, invmap,
-            inv_jacob)
+    return (mapping, jacob, invmap, inv_jacob)
 
 
 def is_in_t(pt):
@@ -332,11 +286,7 @@ def is_in_t(pt):
     return flag
 
 
-def is_in_r(pt,
-            a=0,
-            b=1,
-            c=0,
-            d=np.pi / 2):
+def is_in_r(pt, a=0, b=1, c=0, d=np.pi / 2):
     """Checks if a point is in the (template) rectangle R.
 
        :param pt: The point to be checked.
@@ -364,8 +314,7 @@ def is_collinear(p0, p1, p2):
     # v2 = p0 --> p2
     x2, y2 = p2[0] - p0[0], p2[1] - p0[1]
     # v1 cross v2 == 0 <==> collinearity
-    return np.abs(x1 * y2 -
-                  x2 * y1) < 1e-16
+    return np.abs(x1 * y2 - x2 * y1) < 1e-16
 
 
 def is_positive_triangle(tria):
@@ -434,40 +383,31 @@ def tria_quad(func,
         return (0., 0.)
 
     # The function must be regular at the last two vertices
-    assert (np.isfinite(
-        func(*tria[1], *args)))
-    assert (np.isfinite(
-        func(*tria[2], *args)))
+    assert (np.isfinite(func(*tria[1], *args)))
+    assert (np.isfinite(func(*tria[2], *args)))
 
     # Solve for transforms
-    template_tria = ((0, 0), (1, 0),
-                     (0, 1))
-    afmp, j_afmp, inv_afmp, j_inv_afmp = solve_affine_map_2d(
-        tria, template_tria)
-    nlmp, j_nlmp, inv_nlmp, j_inv_nlmp = tria2rect_map_2d(
-    )
+    template_tria = ((0, 0), (1, 0), (0, 1))
+    afmp, j_afmp, inv_afmp, j_inv_afmp = solve_affine_map_2d(tria, template_tria)
+    nlmp, j_nlmp, inv_nlmp, j_inv_nlmp = tria2rect_map_2d()
 
     # tria --> rect
     def mapping(x, y):
         return (nlmp(afmp((x, y))))
 
     def jacobian(x, y):
-        return (j_afmp *
-                j_nlmp(afmp((x, y))))
+        return (j_afmp * j_nlmp(afmp((x, y))))
 
     # rect --> tria
     def inv_mapping(rho, theta):
-        return (inv_afmp(
-            inv_nlmp((rho, theta))))
+        return (inv_afmp(inv_nlmp((rho, theta))))
 
     def inv_jacobian(rho, theta):
-        return (j_inv_afmp * j_inv_nlmp(
-            (rho, theta)))
+        return (j_inv_afmp * j_inv_nlmp((rho, theta)))
 
     # Transformed function is defined on [0,1]X[0,pi/2]
     def transformed_func(rho, theta):
-        preimage = inv_mapping(
-            rho, theta)
+        preimage = inv_mapping(rho, theta)
         return func(*preimage, *args)
 
     # Transformed function, when multiplied by jacobian, should have no
@@ -476,9 +416,7 @@ def tria_quad(func,
     # integrand = func * jacobian
 
     def integrand(rho, theta):
-        prior = transformed_func(
-            rho, theta) * inv_jacobian(
-                rho, theta)
+        prior = transformed_func(rho, theta) * inv_jacobian(rho, theta)
         # If something blows up, it is near the singular point
         if (~np.isfinite(prior)):
             assert (rho < 1e-3)
@@ -558,30 +496,20 @@ def box_quad(func,
         - **err**: Difference between last two estimates of the integral.
     :rtype: tuple(float,float).
     """
-    box = ((a, c), (b, c), (b, d), (a,
-                                    d))
+    box = ((a, c), (b, c), (b, d), (a, d))
 
-    if not isinstance(singular_point,
-                      tuple):
-        singular_point = (
-            singular_point[0],
-            singular_point[1])
+    if not isinstance(singular_point, tuple):
+        singular_point = (singular_point[0], singular_point[1])
 
     # When singular point is outside, project it onto the box bounday
     # This can import speed by not integrating around the actual singularity
     # when not necessary. (The splitting is still needed since it can be quite
     # close to singular).
-    singular_point = (max(
-        singular_point[0], a), max(
-            singular_point[1], c))
-    singular_point = (min(
-        singular_point[0], b), min(
-            singular_point[1], d))
+    singular_point = (max(singular_point[0], a), max(singular_point[1], c))
+    singular_point = (min(singular_point[0], b), min(singular_point[1], d))
 
-    return quadri_quad(
-        func, box, singular_point, args,
-        tol, rtol, maxiter, vec_func,
-        miniter)
+    return quadri_quad(func, box, singular_point, args, tol, rtol, maxiter, vec_func,
+                       miniter)
 
 
 # quadrilateral
@@ -634,32 +562,22 @@ def quadri_quad(func,
 
     # split the quadrilateral into four triangles
     trias = [
-        (singular_point,
-         quadrilateral[0],
-         quadrilateral[1]),
-        (singular_point,
-         quadrilateral[1],
-         quadrilateral[2]),
-        (singular_point,
-         quadrilateral[2],
-         quadrilateral[3]),
-        (singular_point,
-         quadrilateral[3],
-         quadrilateral[0]),
+        (singular_point, quadrilateral[0], quadrilateral[1]),
+        (singular_point, quadrilateral[1], quadrilateral[2]),
+        (singular_point, quadrilateral[2], quadrilateral[3]),
+        (singular_point, quadrilateral[3], quadrilateral[0]),
     ]
 
     for tria in trias:
         if not is_positive_triangle(tria):
-            assert(is_collinear(*tria))
+            assert (is_collinear(*tria))
 
     val = np.zeros(4)
     err = np.zeros(4)
 
     for i in range(4):
-        val[i], err[i] = tria_quad(
-            func, trias[i], args, tol,
-            rtol, maxiter, vec_func,
-            miniter)
+        val[i], err[i] = tria_quad(func, trias[i], args, tol, rtol, maxiter,
+                                   vec_func, miniter)
 
     integral = np.sum(val)
     error = np.linalg.norm(err)
@@ -668,8 +586,6 @@ def quadri_quad(func,
 
 
 # }}}
-
-
 '''
 class DesingularizationMapping:
     def __init__(self, nquad_points_1d):
@@ -684,6 +600,5 @@ def build_singular_box_quadrature(
     :arg desing_mapping: an instance of :class:`sumpy.kernel.Kernel`
     """
 '''
-
 
 # vim: filetype=pyopencl.python:fdm=marker

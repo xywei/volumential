@@ -55,8 +55,7 @@ except ImportError as e:
         def greet():
             return "Hello from Meshgen via BoxTree!"
 
-        def make_uniform_cubic_grid(degree, nlevels=1, dim=2, queue=None,
-                **kwargs):
+        def make_uniform_cubic_grid(degree, nlevels=1, dim=2, queue=None, **kwargs):
             """Uniform cubic grid in [-1,1]^dim.
             This function provides backward compatibility with meshgen_dealii.
             """
@@ -69,10 +68,8 @@ except ImportError as e:
                 nlevels = kwargs['level']
 
             tree = BoxTree()
-            tree.generate_uniform_boxtree(queue,
-                    nlevels=nlevels,
-                    root_extent=2,
-                    root_vertex=np.zeros(dim)-1)
+            tree.generate_uniform_boxtree(
+                queue, nlevels=nlevels, root_extent=2, root_vertex=np.zeros(dim) - 1)
             quad_rule = GaussLegendreQuadrature(degree - 1)
             quad = QuadratureOnBoxTree(tree, quad_rule)
             q_weights = quad.get_q_weights(queue).get(queue)
@@ -99,6 +96,7 @@ except ImportError as e:
             this class also implements native CL getters like get_q_points_dev()
             that play well with the other libraries like boxtree.
             """
+
             def __init__(self, degree, nlevels, a=-1, b=1, queue=None):
                 assert degree > 0
                 assert nlevels > 0
@@ -123,15 +121,16 @@ except ImportError as e:
 
                 # plug in dimension-specific details
                 self.dimension_specific_setup()
-                self.n_q_points = self.degree ** self.dim
+                self.n_q_points = self.degree**self.dim
 
                 self.boxtree = BoxTree()
-                self.boxtree.generate_uniform_boxtree(self.queue,
-                        nlevels=self.nlevels,
-                        root_extent=self.root_extent,
-                        root_vertex=self.root_vertex)
+                self.boxtree.generate_uniform_boxtree(
+                    self.queue,
+                    nlevels=self.nlevels,
+                    root_extent=self.root_extent,
+                    root_vertex=self.root_vertex)
                 self.quadrature = QuadratureOnBoxTree(self.boxtree,
-                        self.quadrature_formula)
+                                                      self.quadrature_formula)
 
             def get_q_points_dev(self):
                 return self.quadrature.get_q_points(self.queue)
@@ -179,18 +178,16 @@ except ImportError as e:
             def n_active_cells(self):
                 return self.boxtree.n_active_boxes
 
-            def update_mesh(self, criteria,
-                    top_fraction_of_cells, bottom_fraction_of_cells):
+            def update_mesh(self, criteria, top_fraction_of_cells,
+                            bottom_fraction_of_cells):
                 # TODO
                 raise NotImplementedError
 
             def print_info(self, logging_func=print):
-                logging_func("Number of cells: " +
-                        str(self.n_cells()))
-                logging_func("Number of active cells: " +
-                        str(self.n_active_cells()))
+                logging_func("Number of cells: " + str(self.n_cells()))
+                logging_func("Number of active cells: " + str(self.n_active_cells()))
                 logging_func("Number of quad points per cell: " +
-                        str(self.n_q_points))
+                             str(self.n_q_points))
 
             def generate_gmsh(self, filename):
                 """
@@ -204,12 +201,14 @@ except ImportError as e:
         class MeshGen1D(MeshGenBase):
             """Meshgen in 1D
             """
+
             def dimension_specific_setup(self):
                 assert self.dim == 1
 
         class MeshGen2D(MeshGenBase):
             """Meshgen in 2D
             """
+
             def dimension_specific_setup(self):
                 if self.dim == 1:
                     # allow passing scalar values of a and b to the constructor
@@ -221,6 +220,7 @@ except ImportError as e:
         class MeshGen3D(MeshGenBase):
             """Meshgen in 3D
             """
+
             def dimension_specific_setup(self):
                 if self.dim == 1:
                     # allow passing scalar values of a and b to the constructor

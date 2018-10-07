@@ -34,8 +34,13 @@ logging.basicConfig(level=logging.INFO)
 
 
 class NearFieldEvalBase(KernelCacheWrapper):
-    def __init__(self, integral_kernel, table_data_shapes,
-            options=[], name=None, device=None, **kwargs):
+    def __init__(self,
+                 integral_kernel,
+                 table_data_shapes,
+                 options=[],
+                 name=None,
+                 device=None,
+                 **kwargs):
 
         self.integral_kernel = integral_kernel
 
@@ -59,6 +64,7 @@ class NearFieldEvalBase(KernelCacheWrapper):
     def get_cache_key(self):
         return (type(self).__name__, self.name, self.kname,
                 "infer_scaling=" + str(self.extra_kwargs['infer_kernel_scaling']))
+
 
 # }}} End near field eval base class
 
@@ -95,25 +101,29 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 logger.info("scaling for LapKnl2D")
                 return "sbox_extent * sbox_extent / \
                         (table_root_extent * table_root_extent)"
+
             # Constant 2D
             elif self.kname == "CstKnl2D":
                 logger.info("scaling for CstKnl2D")
                 return "sbox_extent * sbox_extent / \
                         (table_root_extent * table_root_extent)"
+
             # Laplace 3D
             elif self.kname == "LapKnl3D":
                 logger.info("scaling for Lapknl3D")
                 return "sbox_extent * sbox_extent / \
                         (table_root_extent * table_root_extent)"
+
             # Constant 3D
             elif self.kname == "CstKnl3D":
                 logger.info("scaling for CstKnl3D")
                 return "sbox_extent * sbox_extent * sbox_extent / \
                         (table_root_extent * table_root_extent * table_root_extent)"
+
             else:
                 logger.warn("Kernel not scalable and not using multiple tables, "
-                        "to get correct results, please make sure that your "
-                        "tree is uniform and only needs one table.")
+                            "to get correct results, please make sure that your "
+                            "tree is uniform and only needs one table.")
                 return "1.0"
         else:
             logger.info("not scaling for " + self.kname)
@@ -129,6 +139,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 s = "-0.5 / PI * scaling * \
                         log(sbox_extent / table_root_extent) * \
                         mode_nmlz[table_lev, sid]"
+
                 import math
                 return s.replace("PI", str(math.pi))
             # Constant 2D
@@ -145,8 +156,8 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 return "0.0"
             else:
                 logger.warn("Kernel not scalable and not using multiple tables, "
-                        "to get correct results, please make sure that your "
-                        "tree is uniform and only needs one table.")
+                            "to get correct results, please make sure that your "
+                            "tree is uniform and only needs one table.")
                 return "0.0"
         else:
             logger.info("no displacement for " + self.kname)
@@ -156,16 +167,14 @@ class NearFieldFromCSR(NearFieldEvalBase):
     def codegen_get_table_level(self):
         if ('infer_kernel_scaling' in self.extra_kwargs) and (
                 self.extra_kwargs['infer_kernel_scaling']):
-            if (self.kname == "LapKnl2D" or
-                    self.kname == "LapKnl3D" or
-                    self.kname == "CstKnl2D" or
-                    self.kname == "CstKnl3D"):
+            if (self.kname == "LapKnl2D" or self.kname == "LapKnl3D"
+                    or self.kname == "CstKnl2D" or self.kname == "CstKnl3D"):
                 logger.info("scaling from table[0] for " + self.kname)
                 return "0.0"
             else:
                 logger.warn("Kernel not scalable and not using multiple tables, "
-                        "to get correct results, please make sure that your "
-                        "tree is uniform and only needs one table.")
+                            "to get correct results, please make sure that your "
+                            "tree is uniform and only needs one table.")
                 return "0.0"
         else:
             logger.info("computing table level from box size")
@@ -181,7 +190,8 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 "{ [ tid, sbox ] : 0 <= tid < n_box_targets and \
                         sbox_begin <= sbox < sbox_end }",
                 "{ [ sid ] : 0 <= sid < n_box_sources }"
-            ], """
+            ],
+            """
             for tbox
                 <> target_box_id    = target_boxes[tbox]
                 <> box_target_beg   = box_target_starts[target_box_id]
@@ -252,33 +262,33 @@ class NearFieldFromCSR(NearFieldEvalBase):
 
                 end
             end
-            """.replace("COMPUTE_VEC_ID",
-                        self.codegen_vec_id()).replace(
-                            "COMPUTE_SCALING",
-                            self.codegen_compute_scaling()).replace(
-                                "COMPUTE_DISPLACEMENT",
-                                self.codegen_compute_displacement()).replace(
-                                        "GET_TABLE_LEVEL",
-                                        self.codegen_get_table_level()),
+            """.replace("COMPUTE_VEC_ID", self.codegen_vec_id()).replace(
+                "COMPUTE_SCALING", self.codegen_compute_scaling()).replace(
+                    "COMPUTE_DISPLACEMENT",
+                    self.codegen_compute_displacement()).replace(
+                        "GET_TABLE_LEVEL", self.codegen_get_table_level()),
             [
                 loopy.TemporaryVariable("vec_id", np.int32),
                 loopy.TemporaryVariable("vec_id_tmp", np.float64),
                 loopy.TemporaryVariable("table_lev", np.int32),
                 loopy.TemporaryVariable("table_lev_tmp", np.float64),
                 loopy.ValueArg("encoding_base", np.int32),
-                loopy.GlobalArg("mode_nmlz", np.float64,
+                loopy.GlobalArg(
+                    "mode_nmlz",
+                    np.float64,
                     # shape=(self.n_tables, self.n_q_points)
-                    "n_tables, n_q_points"
-                    ),
-                loopy.GlobalArg("table_data", np.float64,
+                    "n_tables, n_q_points"),
+                loopy.GlobalArg(
+                    "table_data",
+                    np.float64,
                     # shape=(self.n_tables, self.n_table_entries)
-                    "n_tables, n_table_entries"
-                    ),
+                    "n_tables, n_table_entries"),
                 loopy.GlobalArg("source_boxes", np.int32, "n_source_boxes"),
                 loopy.GlobalArg("box_centers", None, "dim, aligned_nboxes"),
                 loopy.ValueArg("aligned_nboxes", np.int32),
                 loopy.ValueArg("table_root_extent", np.float64),
-                loopy.ValueArg("dim, n_source_boxes, n_tables, "
+                loopy.ValueArg(
+                    "dim, n_source_boxes, n_tables, "
                     "n_q_points, n_table_entries", np.int32),
                 "..."
             ],
@@ -323,37 +333,38 @@ class NearFieldFromCSR(NearFieldEvalBase):
         table_data_combined = kwargs.pop("table_data_combined")
         target_boxes = kwargs.pop("target_boxes")
 
-        evt, res = knl(queue,
-                result=result,
-                #db_table_lev=np.zeros(out_pot.shape),
-                #db_case_id=np.zeros(out_pot.shape),
-                #db_vec_id=np.zeros(out_pot.shape),
-                #db_n_box_sources=np.zeros(out_pot.shape),
-                #db_n_box_targets=np.zeros(out_pot.shape),
-                #db_entry_id=np.zeros(out_pot.shape),
-                box_centers=box_centers,
-                box_levels=box_levels,
-                box_source_counts_cuml=box_source_counts_cumul,
-                box_source_starts=box_source_starts,
-                box_target_counts_cumul=box_target_counts_cumul,
-                box_target_starts=box_target_starts,
-                case_indices=case_indices,
-                dim=self.dim,
-                n_tables=self.n_tables,
-                n_table_entries=self.n_table_entries,
-                n_q_points=self.n_q_points,
-                encoding_base=encoding_base,
-                encoding_shift=encoding_shift,
-                mode_nmlz=mode_nmlz_combined,
-                n_tgt_boxes=len(target_boxes),
-                neighbor_source_boxes_starts=neighbor_source_boxes_starts,
-                root_extent=root_extent,
-                source_boxes=neighbor_source_boxes_lists,
-                n_source_boxes=len(neighbor_source_boxes_lists),
-                source_coefs=mode_coefs,
-                table_data=table_data_combined,
-                target_boxes=target_boxes,
-                table_root_extent=table_root_extent)
+        evt, res = knl(
+            queue,
+            result=result,
+            #db_table_lev=np.zeros(out_pot.shape),
+            #db_case_id=np.zeros(out_pot.shape),
+            #db_vec_id=np.zeros(out_pot.shape),
+            #db_n_box_sources=np.zeros(out_pot.shape),
+            #db_n_box_targets=np.zeros(out_pot.shape),
+            #db_entry_id=np.zeros(out_pot.shape),
+            box_centers=box_centers,
+            box_levels=box_levels,
+            box_source_counts_cuml=box_source_counts_cumul,
+            box_source_starts=box_source_starts,
+            box_target_counts_cumul=box_target_counts_cumul,
+            box_target_starts=box_target_starts,
+            case_indices=case_indices,
+            dim=self.dim,
+            n_tables=self.n_tables,
+            n_table_entries=self.n_table_entries,
+            n_q_points=self.n_q_points,
+            encoding_base=encoding_base,
+            encoding_shift=encoding_shift,
+            mode_nmlz=mode_nmlz_combined,
+            n_tgt_boxes=len(target_boxes),
+            neighbor_source_boxes_starts=neighbor_source_boxes_starts,
+            root_extent=root_extent,
+            source_boxes=neighbor_source_boxes_lists,
+            n_source_boxes=len(neighbor_source_boxes_lists),
+            source_coefs=mode_coefs,
+            table_data=table_data_combined,
+            target_boxes=target_boxes,
+            table_root_extent=table_root_extent)
 
         assert (result is res['result'])
         result.add_event(evt)
@@ -362,5 +373,6 @@ class NearFieldFromCSR(NearFieldEvalBase):
         #if not (np.max(np.abs(out_pot.get()))) < 100:
         #    import pudb; pu.db
         return result
+
 
 # }}} End eval from CSR data

@@ -26,13 +26,11 @@ from volumential.singular_integral_2d import box_quad
 from volumential.version import VERSION_TEXT
 from volumential.table_manager import NearFieldInteractionTableManager  # noqa: F401
 from volumential.nearfield_potential_table import (  # noqa: F401
-        NearFieldInteractionTable)
+    NearFieldInteractionTable)
 
 volumential_version = VERSION_TEXT
 
-__all__ = ["volumential_version", "box_quad",
-           "nearfield_potential_table"]
-
+__all__ = ["volumential_version", "box_quad", "nearfield_potential_table"]
 """
 try:
     import volumential.meshgen as meshgen  # noqa: F401
@@ -44,7 +42,6 @@ except ImportError:
             "version of boxtree that provides interactive tree "
             "building.")
 """
-
 
 __doc__ = """
 :mod:`volumential` can compute 2D volume potentials using FMM

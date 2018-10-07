@@ -47,8 +47,8 @@ class DrosteBase(KernelCacheWrapper):
     Base class for Droste methods.
     It uses sumpy tools to cache the loopy kernel.
     """
-    def __init__(self, integral_knl, quad_order, case_vecs,
-            n_brick_quad_points=15):
+
+    def __init__(self, integral_knl, quad_order, case_vecs, n_brick_quad_points=15):
         from sumpy.kernel import Kernel
         assert isinstance(integral_knl, Kernel)
         self.integral_knl = integral_knl
@@ -58,13 +58,13 @@ class DrosteBase(KernelCacheWrapper):
 
         for cvec in case_vecs:
             assert len(cvec) == self.dim
-        self.interaction_case_vecs = np.array([
-            [v[d] for v in case_vecs] for d in range(self.dim)])
+        self.interaction_case_vecs = np.array(
+            [[v[d] for v in case_vecs] for d in range(self.dim)])
 
         self.interaction_case_scls = np.array([
-            1 if int(max(abs(np.array(vec)))) == 0
-            else max([abs(l) - 0.5 for l in np.array(vec)/4]) * 2
-            for vec in case_vecs])
+            1 if int(max(abs(np.array(vec)))) == 0 else
+            max([abs(l) - 0.5 for l in np.array(vec) / 4]) * 2 for vec in case_vecs
+        ])
 
         self.nfunctions = max(quad_order, 3)
         self.ntgt_points = quad_order
@@ -96,11 +96,8 @@ class DrosteBase(KernelCacheWrapper):
     def make_pwaffs(self):
         import islpy as isl
         self.pwaffs = isl.make_zero_and_vars(
-            self.tgt_vars +
-            self.basis_vars +
-            self.basis_eval_vars +
-            self.quad_vars
-            + ["iside", "iaxis", "ibrick_side", "ibrick_axis", "ilevel", "icase"],
+            self.tgt_vars + self.basis_vars + self.basis_eval_vars + self.quad_vars +
+            ["iside", "iaxis", "ibrick_side", "ibrick_axis", "ilevel", "icase"],
             ["nlevels"])
         return self.pwaffs
 
@@ -114,10 +111,8 @@ class DrosteBase(KernelCacheWrapper):
         from functools import reduce
         import operator
         return reduce(operator.and_, [
-            (pwaffs[0]+lbound).le_set(pwaffs[var]) for var in variables
-            ] + [
-            pwaffs[var].lt_set(ubound_pwaff) for var in variables
-            ])
+            (pwaffs[0] + lbound).le_set(pwaffs[var]) for var in variables
+        ] + [pwaffs[var].lt_set(ubound_pwaff) for var in variables])
 
     def get_sumpy_kernel_insns(self):
         # get sumpy kernel insns
@@ -125,23 +120,20 @@ class DrosteBase(KernelCacheWrapper):
         dvec = make_sym_vector("dist", self.dim)
         from sumpy.assignment_collection import SymbolicAssignmentCollection
         sac = SymbolicAssignmentCollection()
-        result_name = sac.assign_unique("knl_val",
-                self.integral_knl.postprocess_at_target(
-                    self.integral_knl.postprocess_at_source(
-                        self.integral_knl.get_expression(dvec),
-                        dvec),
-                    dvec)
-                )
+        result_name = sac.assign_unique(
+            "knl_val",
+            self.integral_knl.postprocess_at_target(
+                self.integral_knl.postprocess_at_source(
+                    self.integral_knl.get_expression(dvec), dvec), dvec))
         sac.run_global_cse()
         import six
         from sumpy.codegen import to_loopy_insns
-        loopy_insns = to_loopy_insns(six.iteritems(sac.assignments),
-                vector_names=set(["dist"]),
-                pymbolic_expr_maps=[
-                    self.integral_knl.get_code_transformer()],
-                retain_names=[result_name],
-                complex_dtype=np.complex128
-                )
+        loopy_insns = to_loopy_insns(
+            six.iteritems(sac.assignments),
+            vector_names=set(["dist"]),
+            pymbolic_expr_maps=[self.integral_knl.get_code_transformer()],
+            retain_names=[result_name],
+            complex_dtype=np.complex128)
         # for i in loopy_insns:
         #     print(i)
         return loopy_insns
@@ -150,19 +142,20 @@ class DrosteBase(KernelCacheWrapper):
         # actual integral kernel evaluation (within proper inames)
         knl_loopy_insns = self.get_sumpy_kernel_insns()
         quad_inames = frozenset(["icase"] + self.tgt_vars + self.basis_vars +
-            ["ilevel", "ibrick_axis", "ibrick_side"] + self.quad_vars)
+                                ["ilevel", "ibrick_axis", "ibrick_side"] +
+                                self.quad_vars)
         quad_kernel_insns = [
-                insn.copy(
-                    within_inames=insn.within_inames | quad_inames
-                    )
-                for insn in knl_loopy_insns]
+            insn.copy(within_inames=insn.within_inames | quad_inames)
+            for insn in knl_loopy_insns
+        ]
 
         from sumpy.symbolic import SympyToPymbolicMapper
         sympy_conv = SympyToPymbolicMapper()
-        scaling_assignment = lp.Assignment(id=None,
-                assignee="knl_scaling",
-                expression=sympy_conv(self.integral_knl.get_global_scaling_const()),
-                temp_var_type=lp.auto)
+        scaling_assignment = lp.Assignment(
+            id=None,
+            assignee="knl_scaling",
+            expression=sympy_conv(self.integral_knl.get_global_scaling_const()),
+            temp_var_type=lp.auto)
 
         return quad_kernel_insns + [scaling_assignment]
 
@@ -198,47 +191,52 @@ class DrosteBase(KernelCacheWrapper):
         resknl = resknl.replace("TGT_VARS", ",".join(self.tgt_vars))
         resknl = resknl.replace("QUAD_VARS", ",".join(self.quad_vars))
 
-        resknl = resknl.replace("PROD_QUAD_WEIGHT", " * ".join(
-            ["quadrature_weights[QID]".replace("QID", qvar)
-                for qvar in self.quad_vars]))
+        resknl = resknl.replace(
+            "PROD_QUAD_WEIGHT", " * ".join([
+                "quadrature_weights[QID]".replace("QID", qvar)
+                for qvar in self.quad_vars
+            ]))
 
         if self.dim == 1:
             resknl = resknl.replace("TPLTGT_ASSIGNMENT", """target_nodes[t0]""")
-            resknl = resknl.replace("QUAD_PT_ASSIGNMENT",
-                    """quadrature_nodes[q0]""")
-            resknl = resknl.replace("DENSITY_VAL_ASSIGNMENT",
-                    """basis_eval0""")
-            resknl = resknl.replace("PREPARE_BASIS_VALS",
-                "\n".join([self.codegen_basis_eval(i) for i in range(self.dim)]) +
-                """
+            resknl = resknl.replace("QUAD_PT_ASSIGNMENT", """quadrature_nodes[q0]""")
+            resknl = resknl.replace("DENSITY_VAL_ASSIGNMENT", """basis_eval0""")
+            resknl = resknl.replace(
+                "PREPARE_BASIS_VALS",
+                "\n".join([self.codegen_basis_eval(i)
+                           for i in range(self.dim)]) + """
                 ... nop {id=basis_evals,dep=basis0}
                 """)
 
         elif self.dim == 2:
-            resknl = resknl.replace("TPLTGT_ASSIGNMENT",
+            resknl = resknl.replace(
+                "TPLTGT_ASSIGNMENT",
                 """if(iaxis == 0, target_nodes[t0], target_nodes[t1])""")
-            resknl = resknl.replace("QUAD_PT_ASSIGNMENT",
+            resknl = resknl.replace(
+                "QUAD_PT_ASSIGNMENT",
                 """if(iaxis == 0, quadrature_nodes[q0], quadrature_nodes[q1])""")
             resknl = resknl.replace("DENSITY_VAL_ASSIGNMENT",
-                """basis_eval0 * basis_eval1""")
-            resknl = resknl.replace("PREPARE_BASIS_VALS",
-                "\n".join([self.codegen_basis_eval(i) for i in range(self.dim)]) +
-                """
+                                    """basis_eval0 * basis_eval1""")
+            resknl = resknl.replace(
+                "PREPARE_BASIS_VALS",
+                "\n".join([self.codegen_basis_eval(i)
+                           for i in range(self.dim)]) + """
                 ... nop {id=basis_evals,dep=basis0:basis1}
                 """)
 
         elif self.dim == 3:
-            resknl = resknl.replace("TPLTGT_ASSIGNMENT",
-                """if(iaxis == 0, target_nodes[t0], if(
+            resknl = resknl.replace(
+                "TPLTGT_ASSIGNMENT", """if(iaxis == 0, target_nodes[t0], if(
                           iaxis == 1, target_nodes[t1], target_nodes[t2]))""")
-            resknl = resknl.replace("QUAD_PT_ASSIGNMENT",
-                """if(iaxis == 0, quadrature_nodes[q0], if(
+            resknl = resknl.replace(
+                "QUAD_PT_ASSIGNMENT", """if(iaxis == 0, quadrature_nodes[q0], if(
                   iaxis == 1, quadrature_nodes[q1], quadrature_nodes[q2]))""")
             resknl = resknl.replace("DENSITY_VAL_ASSIGNMENT",
-                """basis_eval0 * basis_eval1 * basis_eval2""")
-            resknl = resknl.replace("PREPARE_BASIS_VALS",
-                "\n".join([self.codegen_basis_eval(i) for i in range(self.dim)]) +
-                """
+                                    """basis_eval0 * basis_eval1 * basis_eval2""")
+            resknl = resknl.replace(
+                "PREPARE_BASIS_VALS",
+                "\n".join([self.codegen_basis_eval(i)
+                           for i in range(self.dim)]) + """
                 ... nop {id=basis_evals,dep=basis0:basis1:basis2}
                 """)
 
@@ -248,7 +246,8 @@ class DrosteBase(KernelCacheWrapper):
         return resknl
 
     def get_kernel_code(self):
-        return [self.make_dim_independent("""
+        return [
+            self.make_dim_independent("""
         for iaxis
             <> root_center[iaxis] = 0.5 * (
                     root_brick[iaxis, 1] + root_brick[iaxis, 0]) {dup=iaxis}
@@ -423,28 +422,22 @@ class DrosteBase(KernelCacheWrapper):
                     *  knl_scaling
                 ) {id=result,dep=jac:mpoint:density:finish_kval}
         end
-        """)]
+        """)
+        ]
 
     def get_target_points(self):
         import volumential.meshgen as mg
         q_points, _, _ = mg.make_uniform_cubic_grid(
-                degree=self.ntgt_points,
-                level=1,
-                dim=self.dim)
+            degree=self.ntgt_points, level=1, dim=self.dim)
         # map to [0,1]^d
-        mapped_q_points = np.array([
-            0.5 * (qp + np.ones(self.dim))
-            for qp in q_points
-        ])
+        mapped_q_points = np.array(
+            [0.5 * (qp + np.ones(self.dim)) for qp in q_points])
         # sort in dictionary order, preserve only the leading
         # digits to prevent floating point errors from polluting
         # the ordering.
-        q_points_ordering = sorted(range(len(mapped_q_points)),
-                                   key=lambda i: list(
-                                       np.floor(
-                                           mapped_q_points[i] * 10000)
-                                       )
-                                   )
+        q_points_ordering = sorted(
+            range(len(mapped_q_points)),
+            key=lambda i: list(np.floor(mapped_q_points[i] * 10000)))
         return mapped_q_points[q_points_ordering]
 
     def postprocess_cheb_table(self, cheb_table, cheb_coefs):
@@ -454,18 +447,19 @@ class DrosteBase(KernelCacheWrapper):
         concat_axes = [iaxis for iaxis in range(self.dim)]
         for mid in range(self.n_q_points):
             mccoefs = cheb_coefs[mid]
-            nfp_table[mid] = np.tensordot(mccoefs.reshape(
-                            [self.nfunctions for iaxis in range(self.dim)]),
-                            cheb_table,
-                            axes=(concat_axes, concat_axes))
+            nfp_table[mid] = np.tensordot(
+                mccoefs.reshape([self.nfunctions for iaxis in range(self.dim)]),
+                cheb_table,
+                axes=(concat_axes, concat_axes))
 
         # transform to self.data format
-        transpose_axes = (self.dim + 1, 0) + tuple(
-                self.dim - i for i in range(self.dim))
+        transpose_axes = (self.dim + 1, 0) + tuple(self.dim - i
+                                                   for i in range(self.dim))
         if self.dim == 2:
             assert transpose_axes == (3, 0, 2, 1)
 
         return nfp_table.transpose(transpose_axes).reshape(-1, order='C')
+
 
 # }}} End Droste base class
 
@@ -476,10 +470,9 @@ class DrosteFull(DrosteBase):
     """
     Build the full table directly.
     """
-    def __init__(self, integral_knl, quad_order, case_vecs,
-            n_brick_quad_points=50):
-        super().__init__(integral_knl, quad_order, case_vecs,
-                n_brick_quad_points)
+
+    def __init__(self, integral_knl, quad_order, case_vecs, n_brick_quad_points=50):
+        super().__init__(integral_knl, quad_order, case_vecs, n_brick_quad_points)
         self.name = "DrosteFull"
 
     def make_loop_domain(self):
@@ -489,17 +482,16 @@ class DrosteFull(DrosteBase):
         basis_eval_vars = self.make_basis_eval_vars()
         pwaffs = self.make_pwaffs()
         self.loop_domain = (
-                self.make_brick_domain(tgt_vars, self.ntgt_points)
-                & self.make_brick_domain(quad_vars, self.nquad_points)
-                & self.make_brick_domain(basis_vars, self.nfunctions)
-                & self.make_brick_domain(basis_eval_vars, self.nfunctions, lbound=2)
-                & self.make_brick_domain(["iside"], 2)
-                & self.make_brick_domain(["iaxis"], self.dim)
-                & self.make_brick_domain(["ibrick_side"], 2)
-                & self.make_brick_domain(["ibrick_axis"], self.dim)
-                & self.make_brick_domain(["ilevel"], "nlevels")
-                & self.make_brick_domain(["icase"], self.ncases)
-                )
+            self.make_brick_domain(tgt_vars, self.ntgt_points)
+            & self.make_brick_domain(quad_vars, self.nquad_points)
+            & self.make_brick_domain(basis_vars, self.nfunctions)
+            & self.make_brick_domain(basis_eval_vars, self.nfunctions, lbound=2)
+            & self.make_brick_domain(["iside"], 2)
+            & self.make_brick_domain(["iaxis"], self.dim)
+            & self.make_brick_domain(["ibrick_side"], 2)
+            & self.make_brick_domain(["ibrick_axis"], self.dim)
+            & self.make_brick_domain(["ilevel"], "nlevels")
+            & self.make_brick_domain(["icase"], self.ncases))
         return self.loop_domain
 
     def get_kernel(self, **kwargs):
@@ -510,24 +502,21 @@ class DrosteFull(DrosteBase):
         if 'extra_kernel_kwarg_types' in kwargs:
             extra_kernel_kwarg_types = kwargs['extra_kernel_kwarg_types']
 
-        loopy_knl = lp.make_kernel( # NOQA
-                [domain],
-                self.get_kernel_code()
-                + self.get_sumpy_kernel_eval_insns(),
-                [
-                    lp.ValueArg("alpha", np.float64),
-                    lp.ValueArg("n_cases, nfunctions, quad_order, dim", np.int32),
-                    lp.GlobalArg("interaction_case_vecs", np.float64,
-                        "dim, n_cases"),
-                    lp.GlobalArg("interaction_case_scls", np.float64, "n_cases"),
-                    lp.GlobalArg("result", np.float64, ', '.join(
-                        ["nfunctions" for d in range(self.dim)] +
-                        ["quad_order" for d in range(self.dim)]) +
-                        ", n_cases"),
-                    *extra_kernel_kwarg_types,
-                    "..."
-                    ],
-                name="brick_map")
+        loopy_knl = lp.make_kernel(  # NOQA
+            [domain],
+            self.get_kernel_code() + self.get_sumpy_kernel_eval_insns(), [
+                lp.ValueArg("alpha", np.float64),
+                lp.ValueArg("n_cases, nfunctions, quad_order, dim", np.int32),
+                lp.GlobalArg("interaction_case_vecs", np.float64, "dim, n_cases"),
+                lp.GlobalArg("interaction_case_scls", np.float64, "n_cases"),
+                lp.GlobalArg(
+                    "result", np.float64,
+                    ', '.join(["nfunctions" for d in range(self.dim)] +
+                              ["quad_order"
+                               for d in range(self.dim)]) + ", n_cases"),
+                *extra_kernel_kwarg_types, "..."
+            ],
+            name="brick_map")
 
         loopy_knl = lp.fix_parameters(loopy_knl, d=self.dim)
         loopy_knl = lp.set_options(loopy_knl, write_cl=False)
@@ -544,8 +533,7 @@ class DrosteFull(DrosteBase):
         # FIXME
         # nproc = 16 on porter
         knl = self.get_kernel(**kwargs)
-        knl = lp.split_iname(knl, "icase", 16,
-                outer_tag="g.0", inner_tag="l.0")
+        knl = lp.split_iname(knl, "icase", 16, outer_tag="g.0", inner_tag="l.0")
         return knl
 
     def call_loopy_kernel(self, queue, **kwargs):
@@ -582,24 +570,24 @@ class DrosteFull(DrosteBase):
         missing_measure = (alpha**nlevels * source_box_extent)**self.dim
         if abs(missing_measure) > 1e-6:
             from warnings import warn
-            warn("Droste probably has too few levels, missing measure = "
-                    + str(missing_measure))
+            warn("Droste probably has too few levels, missing measure = " +
+                 str(missing_measure))
 
         if 'result_array' in kwargs:
             result_array = kwargs['result_array']
         else:
             if self.dim == 1:
-                result_array = np.zeros((self.nfunctions,
-                    self.ntgt_points, self.ncases)) + np.nan
+                result_array = np.zeros(
+                    (self.nfunctions, self.ntgt_points, self.ncases)) + np.nan
             elif self.dim == 2:
-                result_array = np.zeros((self.nfunctions, self.nfunctions,
-                    self.ntgt_points, self.ntgt_points,
-                    self.ncases)) + np.nan
+                result_array = np.zeros(
+                    (self.nfunctions, self.nfunctions, self.ntgt_points,
+                     self.ntgt_points, self.ncases)) + np.nan
             elif self.dim == 3:
-                result_array = np.zeros((
-                    self.nfunctions, self.nfunctions, self.nfunctions,
-                    self.ntgt_points, self.ntgt_points, self.ntgt_points,
-                    self.ncases)) + np.nan
+                result_array = np.zeros(
+                    (self.nfunctions, self.nfunctions, self.nfunctions,
+                     self.ntgt_points, self.ntgt_points, self.ntgt_points,
+                     self.ncases)) + np.nan
             else:
                 raise NotImplementedError
 
@@ -618,25 +606,27 @@ class DrosteFull(DrosteBase):
         #legendre_nodes, _, legendre_weights = sps.legendre(
         #        nquad_points).weights.T
         legendre_nodes, legendre_weights = sps.p_roots(self.nquad_points)
-        legendre_nodes = legendre_nodes*0.5 + 0.5
+        legendre_nodes = legendre_nodes * 0.5 + 0.5
         legendre_weights = legendre_weights * 0.5
 
         knl = self.get_cached_optimized_kernel()
-        evt, res = knl(queue, alpha=alpha,
-                result=result_array,
-                root_brick=root_brick,
-                target_nodes=t.astype(np.float64, copy=True),
-                quadrature_nodes=legendre_nodes,
-                quadrature_weights=legendre_weights,
-                interaction_case_vecs=self.interaction_case_vecs.astype(
-                    np.float64, copy=True),
-                interaction_case_scls=self.interaction_case_scls.reshape(
-                    -1).astype(np.float64, copy=True),
-                n_cases=self.ncases,
-                nfunctions=self.nfunctions,
-                quad_order=self.ntgt_points,
-                nlevels=nlevels,
-                **extra_kernel_kwargs)
+        evt, res = knl(
+            queue,
+            alpha=alpha,
+            result=result_array,
+            root_brick=root_brick,
+            target_nodes=t.astype(np.float64, copy=True),
+            quadrature_nodes=legendre_nodes,
+            quadrature_weights=legendre_weights,
+            interaction_case_vecs=self.interaction_case_vecs.astype(
+                np.float64, copy=True),
+            interaction_case_scls=self.interaction_case_scls.reshape(-1).astype(
+                np.float64, copy=True),
+            n_cases=self.ncases,
+            nfunctions=self.nfunctions,
+            quad_order=self.ntgt_points,
+            nlevels=nlevels,
+            **extra_kernel_kwargs)
 
         cheb_table = res['result']
 
@@ -644,8 +634,7 @@ class DrosteFull(DrosteBase):
 
     def get_cache_key(self):
         return (type(self).__name__, str(self.dim) + "D",
-                self.integral_knl.__str__(),
-                "quad_order-" + str(self.ntgt_points),
+                self.integral_knl.__str__(), "quad_order-" + str(self.ntgt_points),
                 "brick_order-" + str(self.nquad_points))
 
     def __call__(self, queue, **kwargs):
@@ -661,11 +650,11 @@ class DrosteFull(DrosteBase):
                 assert len(ccoef) == self.nfunctions**self.dim
             cheb_coefs = kwargs['cheb_coefs']
             return self.postprocess_cheb_table(
-                    self.call_loopy_kernel(queue, **kwargs),
-                    cheb_coefs)
+                self.call_loopy_kernel(queue, **kwargs), cheb_coefs)
         else:
             logger.info("Returning cheb table directly")
             return self.call_loopy_kernel(queue, **kwargs)
+
 
 # }}} End full Droste method
 
@@ -677,15 +666,19 @@ class DrosteReduced(DrosteBase):
     Reduce the workload by only building part of the table and infer the
     rest of the table by symmetry.
     """
-    def __init__(self, integral_knl, quad_order, case_vecs,
-            n_brick_quad_points=50, knl_symmetry_tags=None):
-        super().__init__(integral_knl, quad_order, case_vecs,
-                n_brick_quad_points)
+
+    def __init__(self,
+                 integral_knl,
+                 quad_order,
+                 case_vecs,
+                 n_brick_quad_points=50,
+                 knl_symmetry_tags=None):
+        super().__init__(integral_knl, quad_order, case_vecs, n_brick_quad_points)
 
         from volumential.list1_symmetry import CaseVecReduction
         self.reduce_by_symmetry = CaseVecReduction(case_vecs, knl_symmetry_tags)
-        logger.info("Reduction ratio by symmetry = " + str(
-            self.reduce_by_symmetry.get_full_reduction_ratio()))
+        logger.info("Reduction ratio by symmetry = " +
+                    str(self.reduce_by_symmetry.get_full_reduction_ratio()))
 
         self.nbcases = len(self.reduce_by_symmetry.reduced_vecs)
         self.loop_domains = [None for bvec in self.reduce_by_symmetry.reduced_vecs]
@@ -710,21 +703,20 @@ class DrosteReduced(DrosteBase):
         basis_eval_vars = self.make_basis_eval_vars()
         pwaffs = self.make_pwaffs()
         loop_domain_common_parts = (
-                self.make_brick_domain(quad_vars, self.nquad_points)
-                & self.make_brick_domain(basis_vars, self.nfunctions)
-                & self.make_brick_domain(basis_eval_vars, self.nfunctions, lbound=2)
-                & self.make_brick_domain(["iside"], 2)
-                & self.make_brick_domain(["iaxis"], self.dim)
-                & self.make_brick_domain(["ibrick_side"], 2)
-                & self.make_brick_domain(["ibrick_axis"], self.dim)
-                & self.make_brick_domain(["ilevel"], "nlevels")
-                & self.make_brick_domain(["icase"], 1)
-                )
+            self.make_brick_domain(quad_vars, self.nquad_points)
+            & self.make_brick_domain(basis_vars, self.nfunctions)
+            & self.make_brick_domain(basis_eval_vars, self.nfunctions, lbound=2)
+            & self.make_brick_domain(["iside"], 2)
+            & self.make_brick_domain(["iaxis"], self.dim)
+            & self.make_brick_domain(["ibrick_side"], 2)
+            & self.make_brick_domain(["ibrick_axis"], self.dim)
+            & self.make_brick_domain(["ilevel"], "nlevels")
+            & self.make_brick_domain(["icase"], 1))
 
         # target brick domain depends on symmetry group of the case vec
         # upper bounds account for flippings, and lower bounds account for swappings
         flippable, swappable_groups = self.reduce_by_symmetry.parse_symmetry_tags(
-                self.reduce_by_symmetry.reduced_invariant_groups[base_case_id])
+            self.reduce_by_symmetry.reduced_invariant_groups[base_case_id])
         prev_swappable = -np.ones(self.dim, dtype=np.int32)
         for iaxis in range(self.dim):
             for group in swappable_groups:
@@ -738,16 +730,16 @@ class DrosteReduced(DrosteBase):
         from functools import reduce
         import operator
         tgt_domain_ubounds = reduce(operator.and_, [
-            pwaffs["t" + str(iaxis)].lt_set(pwaffs[0] +
-                ((self.ntgt_points + 1) // 2
-                    if flippable[iaxis] else self.ntgt_points))
+            pwaffs["t" + str(iaxis)].lt_set(pwaffs[0] + (
+                (self.ntgt_points + 1) //
+                2 if flippable[iaxis] else self.ntgt_points))
             for iaxis in range(self.dim)
-            ])
-        tgt_domain_lbounds = reduce(operator.and_, [
-            (pwaffs[0] if prev_swappable[iaxis] == -1
-                else pwaffs["t" + str(prev_swappable[iaxis])]).le_set(
-                    pwaffs["t" + str(iaxis)]) for iaxis in range(self.dim)
-            ])
+        ])
+        tgt_domain_lbounds = reduce(
+            operator.and_, [(pwaffs[0] if prev_swappable[iaxis] == -1 else
+                             pwaffs["t" + str(prev_swappable[iaxis])]).le_set(
+                                 pwaffs["t" + str(iaxis)])
+                            for iaxis in range(self.dim)])
         tgt_domain = tgt_domain_ubounds & tgt_domain_lbounds
 
         self.loop_domains[base_case_id] = loop_domain_common_parts & tgt_domain
@@ -761,10 +753,10 @@ class DrosteReduced(DrosteBase):
         #case_id = self.reduce_by_symmetry.reduced_vec_ids[self.current_base_case]
         #case_vec = self.reduce_by_symmetry.reduced_vecs[self.current_base_case]
         invariant_group = self.reduce_by_symmetry.reduced_invariant_groups[
-                self.current_base_case]
+            self.current_base_case]
 
         flippable, swappable_groups = self.reduce_by_symmetry.parse_symmetry_tags(
-                invariant_group)
+            invariant_group)
         nflippables = int(sum(flippable))
         assert len(flippable) == self.dim
         flippable_ids = [i for i in range(self.dim) if flippable[i]]
@@ -774,9 +766,7 @@ class DrosteReduced(DrosteBase):
 
         def flip_tgt(tgt_var):
             assert isinstance(tgt_var, str)
-            return (str(self.ntgt_points) +
-                    ' - ' + tgt_var +
-                    ' - 1')
+            return (str(self.ntgt_points) + ' - ' + tgt_var + ' - 1')
 
         def conjunct(var):
             # conjunct(v_i) = v_{dim-1-i}
@@ -786,11 +776,12 @@ class DrosteReduced(DrosteBase):
             return var[0] + str(self.dim - 1 - vid)
 
         from itertools import product, permutations
-        ext_ids = [ext for ext in
-                product(
-                    [fid for fid in product([0, 1], repeat=nflippables)],
-                    *[[sid for sid in permutations(sgroup)]
-                        for sgroup in swappable_groups])]
+        ext_ids = [
+            ext
+            for ext in product([fid for fid in product([0, 1], repeat=nflippables)],
+                               *[[sid for sid in permutations(sgroup)]
+                                 for sgroup in swappable_groups])
+        ]
 
         # print(ext_ids)
 
@@ -818,26 +809,25 @@ class DrosteReduced(DrosteBase):
                     iaxis = flippable_ids[fid]
                     itgt = ext_tgt_ordering.index("t" + str(iaxis))
                     ext_tgt_ordering[itgt] = flip_tgt(ext_tgt_ordering[itgt])
-                    ext_sign = (ext_sign +
-                            ' * if(' + self.basis_vars[iaxis] + ' % 2 == 0, 1, -1)')
+                    ext_sign = (ext_sign + ' * if(' + self.basis_vars[iaxis] +
+                                ' % 2 == 0, 1, -1)')
 
             # print(', '.join(ext_tgt_ordering))
             ext_tgt_ordering.reverse()
             ext_fun_ordering.reverse()
 
-            expansion_code += [self.make_dim_independent("""
+            expansion_code += [
+                self.make_dim_independent("""
                 for BASIS_VARS, TGT_VARS, icase
                     result[EXT_BASIS_VARS, EXT_TGT_VARS, icase] = (
                         EXT_SIGN *
                         result[REV_BASIS_VARS, REV_TGT_VARS, icase]
                         ) {id=result_ext_EXT_ID}
                 end
-                """
-                .replace("EXT_TGT_VARS", ','.join(ext_tgt_ordering))
-                .replace("EXT_BASIS_VARS", ','.join(ext_fun_ordering))
-                .replace("EXT_SIGN", ext_sign)
-                .replace("EXT_ID", str(ext_index))
-                )]
+                """.replace("EXT_TGT_VARS", ','.join(ext_tgt_ordering)).replace(
+                    "EXT_BASIS_VARS", ','.join(ext_fun_ordering)).replace(
+                        "EXT_SIGN", ext_sign).replace("EXT_ID", str(ext_index)))
+            ]
 
         return expansion_code
 
@@ -850,47 +840,42 @@ class DrosteReduced(DrosteBase):
             extra_kernel_kwarg_types = kwargs['extra_kernel_kwarg_types']
 
         if self.get_kernel_id == 0:
-            loopy_knl = lp.make_kernel( # NOQA
-                    [domain],
-                    self.get_kernel_code()
-                    # FIXME: cannot have expansion in the same kernel, since it
-                    # will require a global barrier
-                    # + self.get_kernel_expansion_by_symmetry_code()
-                    + self.get_sumpy_kernel_eval_insns(),
-                    [
-                        lp.ValueArg("alpha", np.float64),
-                        lp.ValueArg("n_cases, nfunctions, quad_order, dim",
-                            np.int32),
-                        lp.GlobalArg("interaction_case_vecs", np.float64,
-                            "dim, n_cases"),
-                        lp.GlobalArg("interaction_case_scls", np.float64, "n_cases"),
-                        lp.GlobalArg("target_nodes", np.float64, "quad_order"),
-                        lp.GlobalArg("result", np.float64,
-                            ', '.join(
-                                ["nfunctions" for d in range(self.dim)] +
-                                ["quad_order" for d in range(self.dim)]
-                                ) + ", n_cases"),
-                        *extra_kernel_kwarg_types,
-                        "..."
-                        ],
-                    name="brick_map")
+            loopy_knl = lp.make_kernel(  # NOQA
+                [domain],
+                self.get_kernel_code()
+                # FIXME: cannot have expansion in the same kernel, since it
+                # will require a global barrier
+                # + self.get_kernel_expansion_by_symmetry_code()
+                + self.get_sumpy_kernel_eval_insns(),
+                [
+                    lp.ValueArg("alpha", np.float64),
+                    lp.ValueArg("n_cases, nfunctions, quad_order, dim", np.int32),
+                    lp.GlobalArg("interaction_case_vecs", np.float64,
+                                 "dim, n_cases"),
+                    lp.GlobalArg("interaction_case_scls", np.float64, "n_cases"),
+                    lp.GlobalArg("target_nodes", np.float64, "quad_order"),
+                    lp.GlobalArg(
+                        "result", np.float64,
+                        ', '.join(["nfunctions" for d in range(self.dim)] +
+                                  ["quad_order"
+                                   for d in range(self.dim)]) + ", n_cases"),
+                    *extra_kernel_kwarg_types, "..."
+                ],
+                name="brick_map")
 
         elif self.get_kernel_id == 1:
-            loopy_knl = lp.make_kernel( # NOQA
-                    [domain],
-                    self.get_kernel_expansion_by_symmetry_code(),
-                    [
-                        lp.ValueArg("n_cases, nfunctions, quad_order, dim",
-                            np.int32),
-                        lp.GlobalArg("result", np.float64,
-                            ', '.join(
-                                ["nfunctions" for d in range(self.dim)] +
-                                ["quad_order" for d in range(self.dim)]
-                                ) + ", n_cases"),
-                        *extra_kernel_kwarg_types,
-                        "..."
-                        ],
-                    name="brick_map_expansion")
+            loopy_knl = lp.make_kernel(  # NOQA
+                [domain],
+                self.get_kernel_expansion_by_symmetry_code(), [
+                    lp.ValueArg("n_cases, nfunctions, quad_order, dim", np.int32),
+                    lp.GlobalArg(
+                        "result", np.float64,
+                        ', '.join(["nfunctions" for d in range(self.dim)] +
+                                  ["quad_order"
+                                   for d in range(self.dim)]) + ", n_cases"),
+                    *extra_kernel_kwarg_types, "..."
+                ],
+                name="brick_map_expansion")
 
         else:
             raise NotImplementedError
@@ -957,24 +942,24 @@ class DrosteReduced(DrosteBase):
         missing_measure = (alpha**nlevels * source_box_extent)**self.dim
         if abs(missing_measure) > 1e-6:
             from warnings import warn
-            warn("Droste probably has too few levels, missing measure = "
-                    + str(missing_measure))
+            warn("Droste probably has too few levels, missing measure = " +
+                 str(missing_measure))
 
         if 'result_array' in kwargs:
             result_array = kwargs['result_array']
         else:
             if self.dim == 1:
-                result_array = np.zeros((self.nfunctions,
-                    self.ntgt_points, 1)) + np.nan
+                result_array = np.zeros(
+                    (self.nfunctions, self.ntgt_points, 1)) + np.nan
             elif self.dim == 2:
-                result_array = np.zeros((self.nfunctions, self.nfunctions,
-                    self.ntgt_points, self.ntgt_points,
-                    1)) + np.nan
+                result_array = np.zeros(
+                    (self.nfunctions, self.nfunctions, self.ntgt_points,
+                     self.ntgt_points, 1)) + np.nan
             elif self.dim == 3:
-                result_array = np.zeros((
-                    self.nfunctions, self.nfunctions, self.nfunctions,
-                    self.ntgt_points, self.ntgt_points, self.ntgt_points,
-                    1)) + np.nan
+                result_array = np.zeros(
+                    (self.nfunctions, self.nfunctions, self.nfunctions,
+                     self.ntgt_points, self.ntgt_points, self.ntgt_points,
+                     1)) + np.nan
             else:
                 raise NotImplementedError
 
@@ -987,12 +972,13 @@ class DrosteReduced(DrosteBase):
         assert len(q_points) == self.ntgt_points**self.dim
         t = np.array([pt[-1] for pt in q_points[:self.ntgt_points]])
 
-        base_case_vec = np.array([
-                    [self.reduce_by_symmetry.reduced_vecs[self.current_base_case][d]]
-                    for d in range(self.dim)])
-        base_case_scl = np.array([self.interaction_case_scls[
-                        self.reduce_by_symmetry.reduced_vec_ids[
-                            self.current_base_case]]])
+        base_case_vec = np.array(
+            [[self.reduce_by_symmetry.reduced_vecs[self.current_base_case][d]]
+             for d in range(self.dim)])
+        base_case_scl = np.array([
+            self.interaction_case_scls[self.reduce_by_symmetry.reduced_vec_ids[
+                self.current_base_case]]
+        ])
 
         # quad formula for each brick (normalized to [0,1])
         # sps.legendre blows up easily at high order
@@ -1000,7 +986,7 @@ class DrosteReduced(DrosteBase):
         #legendre_nodes, _, legendre_weights = sps.legendre(
         #        nquad_points).weights.T
         legendre_nodes, legendre_weights = sps.p_roots(self.nquad_points)
-        legendre_nodes = legendre_nodes*0.5 + 0.5
+        legendre_nodes = legendre_nodes * 0.5 + 0.5
         legendre_weights = legendre_weights * 0.5
 
         self.get_kernel_id = 0
@@ -1009,19 +995,21 @@ class DrosteReduced(DrosteBase):
         except Exception:
             pass
         knl = self.get_cached_optimized_kernel()
-        evt, res = knl(queue, alpha=alpha,
-                result=result_array,
-                root_brick=root_brick,
-                target_nodes=t.astype(np.float64, copy=True),
-                quadrature_nodes=legendre_nodes,
-                quadrature_weights=legendre_weights,
-                interaction_case_vecs=base_case_vec.astype(np.float64, copy=True),
-                interaction_case_scls=base_case_scl.astype(np.float64, copy=True),
-                n_cases=1,
-                nfunctions=self.nfunctions,
-                quad_order=self.ntgt_points,
-                nlevels=nlevels,
-                **extra_kernel_kwargs)
+        evt, res = knl(
+            queue,
+            alpha=alpha,
+            result=result_array,
+            root_brick=root_brick,
+            target_nodes=t.astype(np.float64, copy=True),
+            quadrature_nodes=legendre_nodes,
+            quadrature_weights=legendre_weights,
+            interaction_case_vecs=base_case_vec.astype(np.float64, copy=True),
+            interaction_case_scls=base_case_scl.astype(np.float64, copy=True),
+            n_cases=1,
+            nfunctions=self.nfunctions,
+            quad_order=self.ntgt_points,
+            nlevels=nlevels,
+            **extra_kernel_kwargs)
         raw_cheb_table_case = res['result']
 
         self.get_kernel_id = 1
@@ -1030,13 +1018,14 @@ class DrosteReduced(DrosteBase):
         except Exception:
             pass
         knl2 = self.get_cached_optimized_kernel()
-        evt, res2 = knl2(queue,
-                result=raw_cheb_table_case,
-                n_cases=1,
-                nfunctions=self.nfunctions,
-                quad_order=self.ntgt_points,
-                nlevels=nlevels,
-                **extra_kernel_kwargs)
+        evt, res2 = knl2(
+            queue,
+            result=raw_cheb_table_case,
+            n_cases=1,
+            nfunctions=self.nfunctions,
+            quad_order=self.ntgt_points,
+            nlevels=nlevels,
+            **extra_kernel_kwargs)
         cheb_table_case = res2['result']
 
         return cheb_table_case
@@ -1044,16 +1033,16 @@ class DrosteReduced(DrosteBase):
     def build_cheb_table(self, queue, **kwargs):
         # Build the table using Cheb modes as sources
         if self.dim == 1:
-            cheb_table = np.zeros((self.nfunctions,
-                self.ntgt_points, self.ncases)) + np.nan
+            cheb_table = np.zeros(
+                (self.nfunctions, self.ntgt_points, self.ncases)) + np.nan
         elif self.dim == 2:
-            cheb_table = np.zeros((self.nfunctions, self.nfunctions,
-                self.ntgt_points, self.ntgt_points,
-                self.ncases)) + np.nan
+            cheb_table = np.zeros(
+                (self.nfunctions, self.nfunctions, self.ntgt_points,
+                 self.ntgt_points, self.ncases)) + np.nan
         elif self.dim == 3:
-            cheb_table = np.zeros((self.nfunctions, self.nfunctions, self.nfunctions,
-                self.ntgt_points, self.ntgt_points, self.ntgt_points,
-                self.ncases)) + np.nan
+            cheb_table = np.zeros(
+                (self.nfunctions, self.nfunctions, self.nfunctions, self.ntgt_points,
+                 self.ntgt_points, self.ntgt_points, self.ncases)) + np.nan
         else:
             raise NotImplementedError
 
@@ -1062,7 +1051,7 @@ class DrosteReduced(DrosteBase):
             self.current_base_case = base_case_id
             case_id = self.reduce_by_symmetry.reduced_vec_ids[base_case_id]
             cheb_table[..., case_id] = self.call_loopy_kernel_case(
-                    queue, base_case_id, **kwargs)[..., 0]
+                queue, base_case_id, **kwargs)[..., 0]
             # print("Loopy kernel finished")
 
             # {{{ expansion by symmetry
@@ -1074,11 +1063,12 @@ class DrosteReduced(DrosteBase):
             flippable_ids = [i for i in range(self.dim) if flippable[i]]
 
             from itertools import product, permutations
-            ext_ids = [ext for ext in product(
-                [fid for fid in product([0, 1], repeat=nflippables)],
-                *[[sid for sid in permutations(sgroup)]
-                    for sgroup in swappable_groups]
-                )]
+            ext_ids = [
+                ext for ext in
+                product([fid for fid in product([0, 1], repeat=nflippables)],
+                        *[[sid for sid in permutations(sgroup)]
+                          for sgroup in swappable_groups])
+            ]
 
             base_case_vec = self.reduce_by_symmetry.full_vecs[case_id]
             assert base_case_vec == \
@@ -1119,8 +1109,9 @@ class DrosteReduced(DrosteBase):
                             #   lambda x:
                             #     np.flip(x, (self.dim - 1 - iaxis)
                             #     + self.dim))
-                            full_slice = [slice(None, None)
-                                    for axid in range(2*self.dim)]
+                            full_slice = [
+                                slice(None, None) for axid in range(2 * self.dim)
+                            ]
                             for basis_id in range(self.nfunctions):
                                 if basis_id % 2 == 0:
                                     continue
@@ -1129,7 +1120,7 @@ class DrosteReduced(DrosteBase):
                                 np.multiply.at(tmp_table_part, sign_slice, -1)
 
                         tmp_table_part = np.flip(tmp_table_part,
-                                (self.dim - 1 - iaxis) + self.dim)
+                                                 (self.dim - 1 - iaxis) + self.dim)
 
                 #if case_id == 69:
                 #    print("after flipping:",
@@ -1147,8 +1138,7 @@ class DrosteReduced(DrosteBase):
 
     def get_cache_key(self):
         return (type(self).__name__, str(self.dim) + "D",
-                self.integral_knl.__str__(),
-                "quad_order-" + str(self.ntgt_points),
+                self.integral_knl.__str__(), "quad_order-" + str(self.ntgt_points),
                 "brick_order-" + str(self.nquad_points),
                 "case-" + str(self.current_base_case),
                 "kernel_id-" + str(self.get_kernel_id))
@@ -1166,10 +1156,10 @@ class DrosteReduced(DrosteBase):
                 assert len(ccoef) == self.nfunctions**self.dim
             cheb_coefs = kwargs['cheb_coefs']
             return self.postprocess_cheb_table(
-                    self.build_cheb_table(queue, **kwargs),
-                    cheb_coefs)
+                self.build_cheb_table(queue, **kwargs), cheb_coefs)
         else:
             logger.info("Returning cheb table directly")
             return self.build_cheb_table(queue, **kwargs)
+
 
 # }}} End reduced Droste method

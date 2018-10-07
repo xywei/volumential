@@ -41,7 +41,7 @@ from sumpy.kernel import ExpressionKernel
 
 
 class ConstantKernel(ExpressionKernel):
-    init_arg_names = ("dim",)
+    init_arg_names = ("dim", )
 
     def __init__(self, dim=None):
 
@@ -49,10 +49,10 @@ class ConstantKernel(ExpressionKernel):
         scaling = 1
 
         super(ConstantKernel, self).__init__(
-                dim,
-                expression=expr,
-                global_scaling_const=scaling,
-                is_complex_valued=False)
+            dim,
+            expression=expr,
+            global_scaling_const=scaling,
+            is_complex_valued=False)
 
     has_efficient_scale_adjustment = True
 
@@ -60,7 +60,7 @@ class ConstantKernel(ExpressionKernel):
         return expr / rscale
 
     def __getinitargs__(self):
-        return (self.dim,)
+        return (self.dim, )
 
     def __repr__(self):
         return "CstKnl%dD" % self.dim
@@ -73,8 +73,7 @@ class ConstantKernel(ExpressionKernel):
 # {{{ table dataset manager class
 
 
-class NearFieldInteractionTableManager(
-        object):
+class NearFieldInteractionTableManager(object):
     """
     A class that manages near field interaction table computation and
     storage.
@@ -83,12 +82,7 @@ class NearFieldInteractionTableManager(
     e.g., '2D/Laplace/Order_1/Level_0/data'
     """
 
-    def __init__(
-            self,
-            dataset_filename="nft.hdf5",
-            root_extent=1,
-            dtype=np.float64
-    ):
+    def __init__(self, dataset_filename="nft.hdf5", root_extent=1, dtype=np.float64):
         self.dtype = dtype
 
         self.filename = dataset_filename
@@ -101,32 +95,30 @@ class NearFieldInteractionTableManager(
         if "root_extent" not in self.datafile.attrs:
             self.datafile.attrs['root_extent'] = self.root_extent
         else:
-            if not abs(self.datafile.attrs['root_extent']
-                    - self.root_extent) < 1e-15:
+            if not abs(self.datafile.attrs['root_extent'] -
+                       self.root_extent) < 1e-15:
                 raise RuntimeError("The table cache file " + self.filename +
-                        " was built with root_extent = " +
-                        str(self.datafile.attrs['root_extent']) +
-                        ", which is different from the requested value " +
-                        str(self.root_extent))
+                                   " was built with root_extent = " +
+                                   str(self.datafile.attrs['root_extent']) +
+                                   ", which is different from the requested value " +
+                                   str(self.root_extent))
 
         self.supported_kernels = [
-            "Laplace", "Constant",
-            "Yukawa", "Yukawa-Dx", "Yukawa-Dy",
-            "Cahn-Hilliard", "Cahn-Hilliard-Laplacian",
-            "Cahn-Hilliard-Dx", "Cahn-Hilliard-Dy",
-            "Cahn-Hilliard-Laplacian-Dx", "Cahn-Hilliard-Laplacian-Dy"
+            "Laplace", "Constant", "Yukawa", "Yukawa-Dx", "Yukawa-Dy",
+            "Cahn-Hilliard", "Cahn-Hilliard-Laplacian", "Cahn-Hilliard-Dx",
+            "Cahn-Hilliard-Dy", "Cahn-Hilliard-Laplacian-Dx",
+            "Cahn-Hilliard-Laplacian-Dy"
         ]
 
-    def get_table(
-            self,
-            dim,
-            kernel_type,
-            q_order,
-            source_box_level=0,
-            force_recompute=False,
-            compute_method=None,
-            queue=None,
-            **kwargs):
+    def get_table(self,
+                  dim,
+                  kernel_type,
+                  q_order,
+                  source_box_level=0,
+                  force_recompute=False,
+                  compute_method=None,
+                  queue=None,
+                  **kwargs):
         """Primary user interface. Get the specified table regardless of how.
         In the case of a cache miss or a forced re-computation, the method
         specified in the compute_method will be used.
@@ -141,10 +133,7 @@ class NearFieldInteractionTableManager(
         is_recomputed = False
 
         if kernel_type not in self.supported_kernels:
-            raise NotImplementedError(
-                    "Kernel type not supported: " +
-                    kernel_type
-            )
+            raise NotImplementedError("Kernel type not supported: " + kernel_type)
 
         q_order = int(q_order)
         assert q_order >= 1
@@ -171,23 +160,23 @@ class NearFieldInteractionTableManager(
             logger.info("Table cache missing. Invoking fresh computation.")
             is_recomputed = True
             grp.create_group("Level_" + str(source_box_level))
-            table = self.compute_and_update_table(
-                dim, kernel_type, q_order, source_box_level,
-                compute_method, queue, **kwargs)
+            table = self.compute_and_update_table(dim, kernel_type, q_order,
+                                                  source_box_level, compute_method,
+                                                  queue, **kwargs)
 
         elif force_recompute:
             logger.info("Invoking fresh computation since force_recompute is set")
             is_recomputed = True
-            table = self.compute_and_update_table(
-                dim, kernel_type, q_order, source_box_level,
-                compute_method, queue, **kwargs)
+            table = self.compute_and_update_table(dim, kernel_type, q_order,
+                                                  source_box_level, compute_method,
+                                                  queue, **kwargs)
 
         else:
             try:
 
-                table = self.load_saved_table(
-                        dim, kernel_type, q_order, source_box_level,
-                        compute_method, **kwargs)
+                table = self.load_saved_table(dim, kernel_type, q_order,
+                                              source_box_level, compute_method,
+                                              **kwargs)
 
             except KeyError:
 
@@ -197,8 +186,8 @@ class NearFieldInteractionTableManager(
                 logger.info("Recomputing due to table data corruption.")
                 is_recomputed = True
                 table = self.compute_and_update_table(
-                    dim, kernel_type, q_order, source_box_level,
-                    compute_method, queue, **kwargs)
+                    dim, kernel_type, q_order, source_box_level, compute_method,
+                    queue, **kwargs)
 
             # Ensure loaded table matches requirements specified in kwargs
             for kkey, kval in kwargs.items():
@@ -209,15 +198,15 @@ class NearFieldInteractionTableManager(
                             if not kval == tbval:
                                 from warnings import warn
                                 warn("Table data loaded with a different value " +
-                                        kkey + " = " + str(tbval) +
-                                        " (expected " + str(kval) + ")")
+                                     kkey + " = " + str(tbval) + " (expected " +
+                                     str(kval) + ")")
                         else:
                             assert isinstance(tbval, (float, complex))
-                            if not abs(kval-tbval) < 1e-12:
+                            if not abs(kval - tbval) < 1e-12:
                                 from warnings import warn
                                 warn("Table data loaded with a different value " +
-                                        kkey + " = " + str(tbval) +
-                                        " (expected " + str(kval) + ")")
+                                     kkey + " = " + str(tbval) + " (expected " +
+                                     str(kval) + ")")
 
                     except AttributeError as e:
                         strict_loading = False
@@ -228,27 +217,28 @@ class NearFieldInteractionTableManager(
                         if strict_loading:
                             from warnings import warn
                             warn("Consistency is not fully ensured "
-                                    "(kwarg specified but cannot be loaded). "
-                                    "NOTE: this is most likely due to non-standard "
-                                    "arguements being passed, since only "
-                                    "(int, float, complex, str) "
-                                    "are stored in the cache. "
-                                    "Also, some parameters related to method for "
-                                    "table building are not critical for "
-                                    "consistency.")
+                                 "(kwarg specified but cannot be loaded). "
+                                 "NOTE: this is most likely due to non-standard "
+                                 "arguements being passed, since only "
+                                 "(int, float, complex, str) "
+                                 "are stored in the cache. "
+                                 "Also, some parameters related to method for "
+                                 "table building are not critical for "
+                                 "consistency.")
                             print(e)
 
         return table, is_recomputed
 
-    def load_saved_table(self, dim,
+    def load_saved_table(self,
+                         dim,
                          kernel_type,
-                         q_order, source_box_level=0,
-                         compute_method=None, **kwargs):
+                         q_order,
+                         source_box_level=0,
+                         compute_method=None,
+                         **kwargs):
 
         if kernel_type not in self.supported_kernels:
-            raise NotImplementedError(
-                "Kernel type not supported."
-            )
+            raise NotImplementedError("Kernel type not supported.")
 
         q_order = int(q_order)
         assert q_order >= 1
@@ -259,20 +249,19 @@ class NearFieldInteractionTableManager(
         # Check data table integrity
         assert (str(dim) + "D" in self.datafile)
         assert (kernel_type in self.datafile[str(dim) + "D"])
-        assert ("Order_" + str(q_order) in
-                self.datafile[str(dim) + "D"][kernel_type])
-        assert ("Level_" + str(source_box_level) in
-                self.datafile[str(dim) + "D"][kernel_type]["Order_" + str(q_order)])
+        assert (
+            "Order_" + str(q_order) in self.datafile[str(dim) + "D"][kernel_type])
+        assert ("Level_" + str(source_box_level) in self.datafile[str(dim) + "D"]
+                [kernel_type]["Order_" + str(q_order)])
 
-        grp = self.datafile[str(dim) + "D"][kernel_type][
-                "Order_" + str(q_order)]["Level_" + str(source_box_level)]
+        grp = self.datafile[str(dim) + "D"][kernel_type]["Order_" + str(q_order)][
+            "Level_" + str(source_box_level)]
 
         assert (dim == grp.attrs['dim'])
         assert (q_order == grp.attrs['quad_order'])
 
         if compute_method == "Transform":
-            knl_func = self.get_kernel_function(
-                dim, kernel_type, **kwargs)
+            knl_func = self.get_kernel_function(dim, kernel_type, **kwargs)
             sumpy_knl = None
         elif compute_method == "DrosteSum":
             knl_func = None
@@ -291,11 +280,9 @@ class NearFieldInteractionTableManager(
             kernel_func=knl_func,
             kernel_type=self.get_kernel_function_type(dim, kernel_type),
             sumpy_kernel=sumpy_knl,
-            source_box_extent=self.root_extent * (2**(-source_box_level))
-            )
+            source_box_extent=self.root_extent * (2**(-source_box_level)))
 
-        assert abs(
-                table.source_box_extent - grp.attrs["source_box_extent"]) < 1e-15
+        assert abs(table.source_box_extent - grp.attrs["source_box_extent"]) < 1e-15
         assert source_box_level == grp.attrs["source_box_level"]
 
         # Load data
@@ -319,8 +306,7 @@ class NearFieldInteractionTableManager(
         def case_encode(case_vec):
             table_id = 0
             for l in case_vec:
-                table_id = table_id * base + (
-                    l + shift)
+                table_id = table_id * base + (l + shift)
             return int(table_id)
 
         table.case_encode = case_encode
@@ -333,8 +319,7 @@ class NearFieldInteractionTableManager(
 
         return table
 
-    def get_kernel_function(
-            self, dim, kernel_type, **kwargs):
+    def get_kernel_function(self, dim, kernel_type, **kwargs):
 
         if kernel_type == "Laplace":
             # knl = LaplaceKernel(dim)
@@ -344,19 +329,16 @@ class NearFieldInteractionTableManager(
         elif kernel_type == "Constant":
             knl_func = vm.nearfield_potential_table.constant_one
         elif kernel_type == "Cahn-Hilliard":
-            knl_func = vm.nearfield_potential_table.get_cahn_hilliard(dim,
-                    kwargs['b'], kwargs['c'])
+            knl_func = vm.nearfield_potential_table.get_cahn_hilliard(
+                dim, kwargs['b'], kwargs['c'])
         elif kernel_type in self.supported_kernels:
             knl_func = None
         else:
-            raise NotImplementedError(
-                "Kernel type not supported."
-            )
+            raise NotImplementedError("Kernel type not supported.")
 
         return knl_func
 
-    def get_sumpy_kernel(
-            self, dim, kernel_type):
+    def get_sumpy_kernel(self, dim, kernel_type):
 
         if kernel_type == "Laplace":
             from sumpy.kernel import LaplaceKernel
@@ -394,15 +376,15 @@ class NearFieldInteractionTableManager(
             from sumpy.kernel import FactorizedBiharmonicKernel, \
                     LaplacianTargetDerivative
             from sumpy.kernel import AxisTargetDerivative
-            return AxisTargetDerivative(0,
-                    LaplacianTargetDerivative(FactorizedBiharmonicKernel(dim)))
+            return AxisTargetDerivative(
+                0, LaplacianTargetDerivative(FactorizedBiharmonicKernel(dim)))
 
         elif kernel_type == "Cahn-Hilliard-Laplacian-Dy":
             from sumpy.kernel import FactorizedBiharmonicKernel, \
                     LaplacianTargetDerivative
             from sumpy.kernel import AxisTargetDerivative
-            return AxisTargetDerivative(1,
-                    LaplacianTargetDerivative(FactorizedBiharmonicKernel(dim)))
+            return AxisTargetDerivative(
+                1, LaplacianTargetDerivative(FactorizedBiharmonicKernel(dim)))
 
         elif kernel_type == "Cahn-Hilliard-Dy":
             from sumpy.kernel import FactorizedBiharmonicKernel, AxisTargetDerivative
@@ -412,12 +394,9 @@ class NearFieldInteractionTableManager(
             return None
 
         else:
-            raise NotImplementedError(
-                "Kernel type not supported."
-            )
+            raise NotImplementedError("Kernel type not supported.")
 
-    def get_kernel_function_type(
-            self, dim, kernel_type):
+    def get_kernel_function_type(self, dim, kernel_type):
 
         if kernel_type == "Laplace":
             if dim == 2:
@@ -425,50 +404,43 @@ class NearFieldInteractionTableManager(
             elif dim >= 3:
                 return "inv_power"
             else:
-                raise NotImplementedError(
-                    "Kernel scaling not supported"
-                )
+                raise NotImplementedError("Kernel scaling not supported")
 
         elif kernel_type == "Constant":
             if dim >= 1 and dim <= 3:
                 return "const"
             else:
-                raise NotImplementedError(
-                    "Kernel scaling not supported"
-                )
+                raise NotImplementedError("Kernel scaling not supported")
 
         elif kernel_type in self.supported_kernels:
             return None
 
         else:
-            raise NotImplementedError(
-                "Kernel scaling not supported"
-            )
+            raise NotImplementedError("Kernel scaling not supported")
 
-    def update_dataset(self, group,
-                       dataset_name,
-                       data_array):
+    def update_dataset(self, group, dataset_name, data_array):
 
         data_array = np.array(data_array)
 
         if dataset_name not in group:
             dset = group.create_dataset(
-                dataset_name,
-                data_array.shape,
-                dtype=data_array.dtype)
+                dataset_name, data_array.shape, dtype=data_array.dtype)
         else:
             dset = group[dataset_name]
 
         dset[...] = data_array
 
-    def compute_and_update_table(
-            self, dim, kernel_type, q_order, source_box_level=0,
-            compute_method=None, queue=None, **kwargs):
+    def compute_and_update_table(self,
+                                 dim,
+                                 kernel_type,
+                                 q_order,
+                                 source_box_level=0,
+                                 compute_method=None,
+                                 queue=None,
+                                 **kwargs):
 
         if kernel_type not in self.supported_kernels:
-            raise NotImplementedError(
-                "Kernel type not supported."
-            )
+            raise NotImplementedError("Kernel type not supported.")
 
         if compute_method is None:
             logger.debug("Using default compute_method (Transform)")
@@ -482,8 +454,7 @@ class NearFieldInteractionTableManager(
         assert "Order_" + str(q_order) in self.datafile[str(dim) + "D"][kernel_type]
 
         if compute_method == "Transform":
-            knl_func = self.get_kernel_function(
-                dim, kernel_type, **kwargs)
+            knl_func = self.get_kernel_function(dim, kernel_type, **kwargs)
             sumpy_knl = None
         elif compute_method == "DrosteSum":
             knl_func = None
@@ -496,24 +467,22 @@ class NearFieldInteractionTableManager(
         # compute table
         logger.debug("Start computing interaction table.")
         table = NearFieldInteractionTable(
-                dim=dim,
-                quad_order=q_order,
-                dtype=self.dtype,
-                kernel_func=knl_func,
-                kernel_type=knl_type,
-                sumpy_kernel=sumpy_knl,
-                build_method=compute_method,
-                source_box_extent=self.root_extent * (2**(-source_box_level))
-                )
+            dim=dim,
+            quad_order=q_order,
+            dtype=self.dtype,
+            kernel_func=knl_func,
+            kernel_type=knl_type,
+            sumpy_kernel=sumpy_knl,
+            build_method=compute_method,
+            source_box_extent=self.root_extent * (2**(-source_box_level)))
         table.build_table(queue, **kwargs)
         assert (table.is_built)
 
         # update database
         logger.debug("Start updating database.")
 
-        grp = self.datafile[
-                str(dim) + "D"][kernel_type][
-                        "Order_" + str(q_order)]["Level_" + str(source_box_level)]
+        grp = self.datafile[str(dim) + "D"][kernel_type]["Order_" + str(q_order)][
+            "Level_" + str(source_box_level)]
 
         grp.attrs['n_q_points'] = table.n_q_points
         grp.attrs['quad_order'] = table.quad_order
@@ -530,18 +499,14 @@ class NearFieldInteractionTableManager(
         self.update_dataset(grp, "data", table.data)
         self.update_dataset(grp, "mode_normalizers", table.mode_normalizers)
         self.update_dataset(grp, "interaction_case_vecs",
-                table.interaction_case_vecs)
+                            table.interaction_case_vecs)
         self.update_dataset(grp, "case_indices", table.case_indices)
 
         distinct_numbers = set()
         for vec in table.interaction_case_vecs:
             for l in vec:
                 distinct_numbers.add(l)
-        base = len(
-            range(
-                min(distinct_numbers),
-                max(distinct_numbers) +
-                1))
+        base = len(range(min(distinct_numbers), max(distinct_numbers) + 1))
         shift = -min(distinct_numbers)
 
         grp.attrs['case_encoding_base'] = base

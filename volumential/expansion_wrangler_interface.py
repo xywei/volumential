@@ -77,8 +77,7 @@ class ExpansionWranglerInterface(metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def form_multipoles(self, level_start_source_box_nrs, source_boxes,
-                        src_weights):
+    def form_multipoles(self, level_start_source_box_nrs, source_boxes, src_weights):
         """
         Return an expansions array containing multipole expansions
         in *source_boxes* due to sources with *src_weights*.
@@ -114,8 +113,7 @@ class ExpansionWranglerInterface(metaclass=ABCMeta):
 
     @abstractmethod
     def multipole_to_local(self, level_start_target_or_target_parent_box_nrs,
-                           target_or_target_parent_boxes, starts, lists,
-                           mpole_exps):
+                           target_or_target_parent_boxes, starts, lists, mpole_exps):
         """
         For each box in *target_or_target_parent_boxes*, translate and add
         the influence of the multipole expansion in *mpole_exps* into a new
@@ -201,6 +199,7 @@ class ExpansionWranglerCodeContainer(SumpyExpansionWranglerCodeContainer):
     more ephemeral than the code, the code's lifetime
     is decoupled by storing it in this object.
     """
+
 
 # }}} End sumpy based expansion wrangler code container
 
