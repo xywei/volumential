@@ -132,8 +132,7 @@ def drive_test_direct_quad_neighbor_box(q_order, case_id):
 
         print(target, v1, v2, v3)
         '''
-        assert (np.abs(v1 - v2) < 2e-3)
-        # assert (np.abs(v1 - v3) < 1e-6)
+        assert (np.abs(v1 - v3) < 1e-6)
 
 
 def test_direct_quad_neighbor_box():

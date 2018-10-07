@@ -166,8 +166,7 @@ def drive_test_direct_quad_same_box(q_order):
 
         print(target, v1, v2, v3)
         '''
-        assert (np.abs(v1 - v2) < 2e-2)
-        # assert (np.abs(v1 - v3) < 1e-6)
+        assert (np.abs(v1 - v2) < 1e-6)
 
 
 def test_direct_quad():

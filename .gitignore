@@ -17,6 +17,7 @@ a.out
 .pytest_cache
 
 build/
+builds/
 *.so
 
 *.png

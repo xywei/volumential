@@ -49,7 +49,7 @@ pybind11_add_module(meshgen11 meshgen.cpp)
 set_target_properties(meshgen11 PROPERTIES PREFIX "")
 set_target_properties(meshgen11 PROPERTIES OUTPUT_NAME "meshgen")
 
-if(TRUE)
+if(FALSE)
   # This script does not work on current Debian testing
   DEAL_II_SETUP_TARGET(meshgen11)
 else()

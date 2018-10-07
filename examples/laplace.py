@@ -182,11 +182,12 @@ from pytools import single_valued
 coord_dtype = single_valued(coord.dtype for coord in q_points)
 from boxtree.bounding_box import make_bounding_box_dtype
 bbox_type, _ = make_bounding_box_dtype(ctx.devices[0], dim, coord_dtype)
-
 bbox = np.empty(1, bbox_type)
 for ax in axis_names:
     bbox["min_" + ax] = a
     bbox["max_" + ax] = b
+
+import pudb; pu.db
 
 # tune max_particles_in_box to reconstruct the mesh
 # TODO: use points from FieldPlotter are used as target points for better
@@ -198,6 +199,15 @@ tree, _ = tb(
     particles=q_points,
     targets=q_points,
     bbox=bbox,
+    max_particles_in_box=q_order**2 * 4 - 1,
+    kind="adaptive-level-restricted")
+
+bbox2 = np.array([[a, b], [a, b]])
+tree2, _ = tb(
+    queue,
+    particles=q_points,
+    targets=q_points,
+    bbox=bbox2,
     max_particles_in_box=q_order**2 * 4 - 1,
     kind="adaptive-level-restricted")
 
