@@ -25,7 +25,7 @@
 ##
 ## ---------------------------------------------------------------------
 
-# This scripe updates the copyright year of every file based on the last
+# This script updates the copyright year of every file based on the last
 # modification recorded in the git logs
 
 if test ! -d volumential -o ! -d test -o ! -d examples ! -d contrib ; then
