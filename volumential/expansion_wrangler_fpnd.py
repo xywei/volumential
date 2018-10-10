@@ -36,7 +36,7 @@ def level_to_rscale(tree, level):
     return tree.root_extent * (2**-level)
 
 
-from sumpy.fmm import SumpyExpansionWrangler
+from sumpy.fmm import SumpyExpansionWrangler, SumpyTimingFuture
 
 
 class FPNDExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrangler):
@@ -293,7 +293,7 @@ class FPNDExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrangler):
         from volumential.list1 import NearFieldFromCSR
         near_field = NearFieldFromCSR(out_kernel, table_data_shapes)
 
-        res = near_field(
+        res, evt = near_field(
             self.queue,
             result=out_pot,
             box_centers=self.tree.box_centers,
@@ -322,22 +322,24 @@ class FPNDExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrangler):
         # sorted_target_ids=self.tree.user_source_ids,
         # user_source_ids=self.tree.user_source_ids)
 
-        return out_pot
+        return out_pot, evt
 
     def eval_direct(self, target_boxes, neighbor_source_boxes_starts,
                     neighbor_source_boxes_lists, mode_coefs):
         pot = self.output_zeros()
+        events = []
         for i in range(len(self.code.out_kernels)):
             # print("processing near-field of out_kernel", i)
-            self.eval_direct_single_out_kernel(
+            pot[i], evt = self.eval_direct_single_out_kernel(
                 pot[i], self.code.out_kernels[i], target_boxes,
                 neighbor_source_boxes_starts, neighbor_source_boxes_lists,
                 mode_coefs)
+            events.append(evt)
 
         for out_pot in pot:
             out_pot.finish()
 
-        return pot
+        return (pot, SumpyTimingFuture(self.queue, events))
 
 # }}} End direct evaluation of near field interactions
 

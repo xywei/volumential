@@ -25,6 +25,7 @@ THE SOFTWARE.
 import logging
 logger = logging.getLogger(__name__)
 
+from boxtree.fmm import TimingRecorder
 from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
 
 import numpy as np
@@ -34,7 +35,8 @@ def drive_volume_fmm(traversal,
                      expansion_wrangler,
                      src_weights,
                      src_func,
-                     direct_evaluation=False):
+                     direct_evaluation=False,
+                     timing_data=None):
     """
     Top-level driver routine for volume potential calculation
     via fast multiple method.
@@ -60,6 +62,7 @@ def drive_volume_fmm(traversal,
     wrangler = expansion_wrangler
     assert (issubclass(type(wrangler), ExpansionWranglerInterface))
 
+    recorder = TimingRecorder()
     logger.info("start fmm")
 
     logger.debug("reorder source weights")
@@ -67,21 +70,24 @@ def drive_volume_fmm(traversal,
     src_weights = wrangler.reorder_sources(src_weights)
     src_func = wrangler.reorder_sources(src_func)
 
-    # {{{ "Step 2.1:" Construct local multipoles
+    # {{{ Construct local multipoles
 
     logger.debug("construct local multipoles")
-    mpole_exps = wrangler.form_multipoles(traversal.level_start_source_box_nrs,
-                                          traversal.source_boxes, src_weights)
+    mpole_exps, timing_future = wrangler.form_multipoles(
+        traversal.level_start_source_box_nrs, traversal.source_boxes, src_weights)
+    recorder.add("form_multipoles", timing_future)
 
     # print(max(abs(mpole_exps)))
 
     # }}}
 
-    # {{{ "Step 2.2:" Propagate multipoles upward
+    # {{{ Propagate multipoles upward
 
     logger.debug("propagate multipoles upward")
-    wrangler.coarsen_multipoles(traversal.level_start_source_parent_box_nrs,
-                                traversal.source_parent_boxes, mpole_exps)
+    mpole_exps, timing_future = wrangler.coarsen_multipoles(
+        traversal.level_start_source_parent_box_nrs, traversal.source_parent_boxes,
+        mpole_exps)
+    recorder.add("coarsen_multipoles", timing_future)
 
     # print(max(abs(mpole_exps)))
 
@@ -89,16 +95,17 @@ def drive_volume_fmm(traversal,
 
     # }}}
 
-    # {{{ "Stage 3:" Direct evaluation from neighbor source boxes ("list 1")
+    # {{{ Direct evaluation from neighbor source boxes ("list 1")
 
     logger.debug("direct evaluation from neighbor source boxes ('list 1')")
     # look up in the prebuilt table
     # this step also constructs the output array
-    potentials = wrangler.eval_direct(
+    potentials, timing_future = wrangler.eval_direct(
         traversal.target_boxes, traversal.neighbor_source_boxes_starts,
         traversal.neighbor_source_boxes_lists, src_func)
+    recorder.add("eval_direct", timing_future)
 
-    # List 1 only, for debugging
+    # Return list 1 only, for debugging
     if False:
         logger.debug("reorder potentials")
         result = wrangler.reorder_potentials(potentials)
@@ -116,7 +123,7 @@ def drive_volume_fmm(traversal,
 
     # }}}
 
-    # {{{ "Stage X:" direct evaluation of everything and return
+    # {{{ (Optional) direct evaluation of everything and return
     if direct_evaluation:
 
         print("Warning: NOT USING FMM (forcing global p2p)")
@@ -161,13 +168,14 @@ def drive_volume_fmm(traversal,
 
     # }}} End Stage
 
-    # {{{ "Stage 4:" translate separated siblings' ("list 2") mpoles to local
+    # {{{ Translate separated siblings' ("list 2") mpoles to local
 
     logger.debug("translate separated siblings' ('list 2') mpoles to local")
-    local_exps = wrangler.multipole_to_local(
+    local_exps, timing_future = wrangler.multipole_to_local(
         traversal.level_start_target_or_target_parent_box_nrs,
         traversal.target_or_target_parent_boxes, traversal.from_sep_siblings_starts,
         traversal.from_sep_siblings_lists, mpole_exps)
+    recorder.add("multipole_to_local", timing_future)
 
     # print(max(abs(local_exps)))
 
@@ -175,16 +183,19 @@ def drive_volume_fmm(traversal,
 
     # }}}
 
-    # {{{ "Stage 5:" evaluate sep. smaller mpoles ("list 3") at particles
+    # {{{ Evaluate sep. smaller mpoles ("list 3") at particles
 
     logger.debug("evaluate sep. smaller mpoles at particles ('list 3 far')")
 
     # (the point of aiming this stage at particles is specifically to keep its
     # contribution *out* of the downward-propagating local expansions)
 
-    potentials = potentials + wrangler.eval_multipoles(
+    mpole_result, timing_future = wrangler.eval_multipoles(
         traversal.target_boxes_sep_smaller_by_source_level,
         traversal.from_sep_smaller_by_level, mpole_exps)
+    recorder.add("eval_multipoles", timing_future)
+
+    potentials = potentials + mpole_result
 
     # these potentials are called beta in [1]
 
@@ -201,14 +212,18 @@ def drive_volume_fmm(traversal,
 
     # }}}
 
-    # {{{ "Stage 6:" form locals for separated bigger source boxes ("list 4")
+    # {{{ Form locals for separated bigger source boxes ("list 4")
 
     logger.debug("form locals for separated bigger source boxes ('list 4 far')")
 
-    local_exps = local_exps + wrangler.form_locals(
+    local_result, timing_future = wrangler.form_locals(
         traversal.level_start_target_or_target_parent_box_nrs,
         traversal.target_or_target_parent_boxes, traversal.from_sep_bigger_starts,
         traversal.from_sep_bigger_lists, src_weights)
+
+    recorder.add("form_locals", timing_future)
+
+    local_exps = local_exps + local_result
 
     # volume fmm does not work with list 4 currently
     assert (traversal.from_sep_close_bigger_starts is None)
@@ -223,25 +238,33 @@ def drive_volume_fmm(traversal,
 
     # }}}
 
-    # {{{ "Stage 7:" propagate local_exps downward
+    # {{{ Propagate local_exps downward
 
     logger.debug("propagate local_exps downward")
     # import numpy.linalg as la
 
-    wrangler.refine_locals(traversal.level_start_target_or_target_parent_box_nrs,
-                           traversal.target_or_target_parent_boxes, local_exps)
+    local_exps, timing_future = wrangler.refine_locals(
+        traversal.level_start_target_or_target_parent_box_nrs,
+        traversal.target_or_target_parent_boxes, local_exps)
+
+    recorder.add("refine_locals", timing_future)
 
     # }}}
 
-    # {{{ "Stage 8:" evaluate locals
+    # {{{ Evaluate locals
 
     logger.debug("evaluate locals")
 
-    potentials = potentials + wrangler.eval_locals(
+    local_result, timing_future = wrangler.eval_locals(
         traversal.level_start_target_box_nrs, traversal.target_boxes, local_exps)
+
+    recorder.add("eval_locals", timing_future)
+
+    potentials = potentials + local_result
 
     # }}}
 
+    # {{{ Reorder potentials
     logger.debug("reorder potentials")
     result = wrangler.reorder_potentials(potentials)
 
@@ -249,6 +272,10 @@ def drive_volume_fmm(traversal,
     result = wrangler.finalize_potentials(result)
 
     logger.info("fmm complete")
+    # }}} End Reorder potentials
+
+    if timing_data is not None:
+        timing_data.update(recorder.summarize())
 
     return result
 

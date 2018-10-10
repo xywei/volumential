@@ -372,7 +372,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
         # check for data integrity
         #if not (np.max(np.abs(out_pot.get()))) < 100:
         #    import pudb; pu.db
-        return result
+        return result, evt
 
 
 # }}} End eval from CSR data

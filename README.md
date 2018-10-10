@@ -21,3 +21,10 @@ Volumential is under the MIT license.
 - `Transform`: Apply coordinate transforms to remove the singularity (or, hide the singularity into the Jacobian of the transform).
 
 - `DrosteSum`: Subdivide the box iteratively into layers of "bricks" towards the singular point. The name comes from **Droste effect** ([Wikipedia](https://en.wikipedia.org/wiki/Droste_effect)).
+
+## TODOs
+
+- [x] PEP8 compliant for `volumential/`
+- [ ] PEP8 compliant for all subdirectories.
+- [ ] Add type hints.
+- [ ] Improve docstrings.
