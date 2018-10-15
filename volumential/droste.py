@@ -480,7 +480,7 @@ class DrosteFull(DrosteBase):
         quad_vars = self.make_quad_vars()
         basis_vars = self.make_basis_vars()
         basis_eval_vars = self.make_basis_eval_vars()
-        pwaffs = self.make_pwaffs()
+        pwaffs = self.make_pwaffs()  # noqa: F841
         self.loop_domain = (
             self.make_brick_domain(tgt_vars, self.ntgt_points)
             & self.make_brick_domain(quad_vars, self.nquad_points)
