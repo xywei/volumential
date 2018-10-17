@@ -1,6 +1,4 @@
-from __future__ import division
-
-__copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
+__copyright__ = "Copyright (C) 2018 Xiaoyu Wei"
 
 __license__ = """
 Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -22,29 +20,3 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
-from volumential.singular_integral_2d import box_quad
-from volumential.version import VERSION_TEXT
-from volumential.table_manager import NearFieldInteractionTableManager  # noqa: F401
-from volumential.nearfield_potential_table import (  # noqa: F401
-    NearFieldInteractionTable)
-
-volumential_version = VERSION_TEXT
-
-__all__ = ["volumential_version", "box_quad", "nearfield_potential_table"]
-"""
-try:
-    import volumential.meshgen as meshgen  # noqa: F401
-    __all__.append("meshgen")
-except ImportError:
-    raise ImportError("Could not import volumential.meshgen. "
-            "You need to either run 'build.sh' in "
-            "volumential/contrib/meshgen11_dealii or install a "
-            "version of boxtree that provides interactive tree "
-            "building.")
-"""
-
-__doc__ = """
-:mod:`volumential` can compute 2/3D volume potentials using FMM
-"""
-
-# vim: filetype=pyopencl:fdm=marker
