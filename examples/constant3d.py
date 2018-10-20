@@ -50,7 +50,7 @@ table_filename = "nft_brick.hdf5"
 
 print("Using table cache:", table_filename)
 
-q_order = 1 # quadrature order
+q_order = 1  # quadrature order
 n_levels = 4  # 2^(n_levels-1) subintervals in 1D, must be at least 2 if not adaptive
 
 verbose = True
@@ -113,10 +113,12 @@ else:
     iloop = -1
     while mesh.n_active_cells() < refined_n_cells:
         iloop += 1
-        crtr = np.array([
-            np.abs(source_field(c) * m)
-                 for (c, m) in
-                 zip(mesh.get_cell_centers(), mesh.get_cell_measures()) ])
+        crtr = np.array(
+            [
+                np.abs(source_field(c) * m)
+                for (c, m) in zip(mesh.get_cell_centers(), mesh.get_cell_measures())
+            ]
+        )
         mesh.update_mesh(crtr, rratio_top, rratio_bot)
         if iloop > n_refinement_loops:
             print("Max number of refinement loops reached.")
@@ -131,17 +133,18 @@ mesh.generate_gmsh("box_grid.msh")
 legacy_msh_file = True
 if legacy_msh_file:
     import os
-    os.system('gmsh box_grid.msh convert_grid -')
 
-assert (len(q_points) == len(q_weights))
-assert (q_points.shape[1] == dim)
+    os.system("gmsh box_grid.msh convert_grid -")
+
+assert len(q_points) == len(q_weights)
+assert q_points.shape[1] == dim
 
 q_points_org = q_points
 q_points = np.ascontiguousarray(np.transpose(q_points))
 
 from pytools.obj_array import make_obj_array
-q_points = make_obj_array(
-    [cl.array.to_device(queue, q_points[i]) for i in range(dim)])
+
+q_points = make_obj_array([cl.array.to_device(queue, q_points[i]) for i in range(dim)])
 
 q_weights = cl.array.to_device(queue, q_weights)
 # q_radii = cl.array.to_device(queue, q_radii)
@@ -152,9 +155,9 @@ q_weights = cl.array.to_device(queue, q_weights)
 
 logger.info("discretizing source field")
 source_eval = Eval(dim, source_expr, [x, y, z])
-source_vals = cl.array.to_device(queue,
-        source_eval(queue, np.array(
-            [coords.get() for coords in q_points])))
+source_vals = cl.array.to_device(
+    queue, source_eval(queue, np.array([coords.get() for coords in q_points]))
+)
 
 # particle_weigt = source_val * q_weight
 
@@ -163,11 +166,14 @@ source_vals = cl.array.to_device(queue,
 # {{{ build tree and traversals
 
 from boxtree.tools import AXIS_NAMES
+
 axis_names = AXIS_NAMES[:dim]
 
 from pytools import single_valued
+
 coord_dtype = single_valued(coord.dtype for coord in q_points)
 from boxtree.bounding_box import make_bounding_box_dtype
+
 bbox_type, _ = make_bounding_box_dtype(ctx.devices[0], dim, coord_dtype)
 
 bbox = np.empty(1, bbox_type)
@@ -180,16 +186,19 @@ for ax in axis_names:
 # visuals
 print("building tree")
 from boxtree import TreeBuilder
+
 tb = TreeBuilder(ctx)
 tree, _ = tb(
     queue,
     particles=q_points,
     targets=q_points,
     bbox=bbox,
-    max_particles_in_box=q_order**3 * 8 - 1,
-    kind="adaptive-level-restricted")
+    max_particles_in_box=q_order ** 3 * 8 - 1,
+    kind="adaptive-level-restricted",
+)
 
 from boxtree.traversal import FMMTraversalBuilder
+
 tg = FMMTraversalBuilder(ctx)
 trav, _ = tg(queue, tree)
 
@@ -198,24 +207,35 @@ trav, _ = tg(queue, tree)
 # {{{ build near field potential table
 
 from volumential.table_manager import NearFieldInteractionTableManager
-tm = NearFieldInteractionTableManager(table_filename,
-        root_extent=root_table_source_extent)
+
+tm = NearFieldInteractionTableManager(
+    table_filename, root_extent=root_table_source_extent
+)
 
 if use_multilevel_table:
     logger.info("Using multilevel tables")
-    assert abs(
-            int((b-a)/root_table_source_extent) * root_table_source_extent
-            - (b-a)) < 1e-15
+    assert (
+        abs(
+            int((b - a) / root_table_source_extent) * root_table_source_extent - (b - a)
+        )
+        < 1e-15
+    )
     nftable = []
-    for l in range(0, tree.nlevels+1):
+    for l in range(0, tree.nlevels + 1):
         print("Getting table at level", l)
-        tb, _ = tm.get_table(dim, "Constant", q_order,
-                source_box_level=l,
-                compute_method="DrosteSum", queue=queue,
-                n_brick_quad_points=120,
-                adaptive_level=False,
-                use_symmetry=True,
-                alpha=0, n_levels=1)
+        tb, _ = tm.get_table(
+            dim,
+            "Constant",
+            q_order,
+            source_box_level=l,
+            compute_method="DrosteSum",
+            queue=queue,
+            n_brick_quad_points=120,
+            adaptive_level=False,
+            use_symmetry=True,
+            alpha=0,
+            n_levels=1,
+        )
         nftable.append(tb)
 
     print("Using table list of length", len(nftable))
@@ -224,13 +244,19 @@ else:
     logger.info("Using single level table")
     force_recompute = False
     # 15 levels are sufficient (the inner most brick is 1e-15**3 in volume)
-    nftable, _ = tm.get_table(dim, "Constant", q_order,
-            force_recompute=force_recompute,
-            compute_method="DrosteSum", queue=queue,
-            n_brick_quad_poitns=120,
-            adaptive_level=False,
-            use_symmetry=True,
-            alpha=0, n_levels=1)
+    nftable, _ = tm.get_table(
+        dim,
+        "Constant",
+        q_order,
+        force_recompute=force_recompute,
+        compute_method="DrosteSum",
+        queue=queue,
+        n_brick_quad_poitns=120,
+        adaptive_level=False,
+        use_symmetry=True,
+        alpha=0,
+        n_levels=1,
+    )
 
 # }}} End build near field potential table
 
@@ -247,11 +273,14 @@ mpole_expn_class = VolumeTaylorMultipoleExpansion
 
 exclude_self = True
 from volumential.expansion_wrangler_interface import ExpansionWranglerCodeContainer
-wcc = ExpansionWranglerCodeContainer(ctx,
-                                     partial(mpole_expn_class, knl),
-                                     partial(local_expn_class, knl),
-                                     out_kernels,
-                                     exclude_self=exclude_self)
+
+wcc = ExpansionWranglerCodeContainer(
+    ctx,
+    partial(mpole_expn_class, knl),
+    partial(local_expn_class, knl),
+    out_kernels,
+    exclude_self=exclude_self,
+)
 
 if exclude_self:
     target_to_source = np.arange(tree.ntargets, dtype=np.int32)
@@ -260,6 +289,7 @@ else:
     self_extra_kwargs = {}
 
 from volumential.expansion_wrangler_fpnd import FPNDExpansionWrangler
+
 wrangler = FPNDExpansionWrangler(
     code_container=wcc,
     queue=queue,
@@ -268,7 +298,8 @@ wrangler = FPNDExpansionWrangler(
     dtype=dtype,
     fmm_level_to_order=lambda kernel, kernel_args, tree, lev: m_order,
     quad_order=q_order,
-    self_extra_kwargs=self_extra_kwargs)
+    self_extra_kwargs=self_extra_kwargs,
+)
 
 # }}} End sumpy expansion for constant kernel
 
@@ -279,8 +310,14 @@ print("*************************")
 # {{{ conduct fmm computation
 
 from volumential.volume_fmm import drive_volume_fmm
-pot, = drive_volume_fmm(trav, wrangler, source_vals * q_weights, source_vals,
-        direct_evaluation=force_direct_evaluation)
+
+pot, = drive_volume_fmm(
+    trav,
+    wrangler,
+    source_vals * q_weights,
+    source_vals,
+    direct_evaluation=force_direct_evaluation,
+)
 
 # }}} End conduct fmm computation
 
@@ -305,61 +342,70 @@ logger.info("Evaluated exact solution")
 
 zs = pot.get()
 
-print_error=True
+print_error = True
 if print_error:
     logger.info("Computing absolute error")
-    err = np.max(np.abs(ze-zs))
+    err = np.max(np.abs(ze - zs))
     print("Error =", err)
 
 
 if 1:
     print("Performing P2P")
-    pot_direct, = drive_volume_fmm(trav, wrangler, source_vals * q_weights, source_vals,
-        direct_evaluation=True)
+    pot_direct, = drive_volume_fmm(
+        trav, wrangler, source_vals * q_weights, source_vals, direct_evaluation=True
+    )
     zds = pot_direct.get()
     zs = pot.get()
 
-    print("P2P-FMM diff =",
-            np.max(np.abs(
-                zs - zds)))
+    print("P2P-FMM diff =", np.max(np.abs(zs - zds)))
 
-    print("P2P Error =",
-            np.max(np.abs(
-                ze - zds)))
+    print("P2P Error =", np.max(np.abs(ze - zds)))
 
 # Write vtk
 if 0:
     from meshmode.mesh.io import read_gmsh
+
     modemesh = read_gmsh("box_grid.msh", force_ambient_dim=None)
-    from meshmode.discretization.poly_element import \
-            LegendreGaussLobattoTensorProductGroupFactory
+    from meshmode.discretization.poly_element import (
+        LegendreGaussLobattoTensorProductGroupFactory,
+    )
     from meshmode.discretization import Discretization
+
     box_discr = Discretization(
-            ctx, modemesh,
-            LegendreGaussLobattoTensorProductGroupFactory(q_order))
+        ctx, modemesh, LegendreGaussLobattoTensorProductGroupFactory(q_order)
+    )
 
     box_nodes_x = box_discr.nodes()[0].with_queue(queue).get()
     box_nodes_y = box_discr.nodes()[1].with_queue(queue).get()
     box_nodes_z = box_discr.nodes()[2].with_queue(queue).get()
     box_nodes = make_obj_array(
-            # get() first for CL compatibility issues
-            [cl.array.to_device(queue, box_nodes_x),
-                cl.array.to_device(queue, box_nodes_y),
-                cl.array.to_device(queue, box_nodes_z)])
+        # get() first for CL compatibility issues
+        [
+            cl.array.to_device(queue, box_nodes_x),
+            cl.array.to_device(queue, box_nodes_y),
+            cl.array.to_device(queue, box_nodes_z),
+        ]
+    )
 
     visual_order = 1
     from meshmode.discretization.visualization import make_visualizer
+
     vis = make_visualizer(queue, box_discr, visual_order)
 
     from volumential.volume_fmm import interpolate_volume_potential
+
     volume_potential = interpolate_volume_potential(box_nodes, trav, wrangler, pot)
-    source_density = interpolate_volume_potential(box_nodes, trav, wrangler, source_vals)
-    exact_solution = interpolate_volume_potential(box_nodes, trav, wrangler,
-            cl.array.to_device(queue, ze))
+    source_density = interpolate_volume_potential(
+        box_nodes, trav, wrangler, source_vals
+    )
+    exact_solution = interpolate_volume_potential(
+        box_nodes, trav, wrangler, cl.array.to_device(queue, ze)
+    )
 
     # clean up the mess
     def clean_file(filename):
         import os
+
         try:
             os.remove(filename)
         except OSError:
@@ -367,11 +413,14 @@ if 0:
 
     vtu_filename = "constant3d.vtu"
     clean_file(vtu_filename)
-    vis.write_vtk_file(vtu_filename, [
-        ("VolPot", volume_potential),
-        ("SrcDensity", source_density),
-        ("ExactSol", exact_solution)
-        ])
+    vis.write_vtk_file(
+        vtu_filename,
+        [
+            ("VolPot", volume_potential),
+            ("SrcDensity", source_density),
+            ("ExactSol", exact_solution),
+        ],
+    )
     print("Written file " + vtu_filename)
 
 # }}} End postprocess and plot

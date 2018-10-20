@@ -26,7 +26,8 @@ from volumential.singular_integral_2d import box_quad
 from volumential.version import VERSION_TEXT
 from volumential.table_manager import NearFieldInteractionTableManager  # noqa: F401
 from volumential.nearfield_potential_table import (  # noqa: F401
-    NearFieldInteractionTable)
+    NearFieldInteractionTable,
+)
 
 volumential_version = VERSION_TEXT
 

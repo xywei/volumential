@@ -21,6 +21,7 @@ THE SOFTWARE.
 """
 
 import numpy as np
+
 # import volumential.nearfield_potential_table as npt
 from sumpy.point_calculus import CalculusPatch
 
@@ -38,11 +39,12 @@ def test_patch_laplace():
     size = 0.05
 
     import random
+
     for r in range(rep):
         center = [random.uniform(-1, 1) for d in range(dim)]
         patch = make_patch(center, size)
 
-        f_values = 1/6 * (patch.x**2 + patch.y**2 + patch.z**2)
+        f_values = 1 / 6 * (patch.x ** 2 + patch.y ** 2 + patch.z ** 2)
 
         lap = patch.laplace(f_values)
 

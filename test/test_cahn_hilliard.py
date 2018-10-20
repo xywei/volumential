@@ -32,10 +32,10 @@ s = 1.5
 epsilon = 0.01
 delta_t = 0.05
 final_t = delta_t * 1
-theta_y = 60. / 180. * np.pi
+theta_y = 60.0 / 180.0 * np.pi
 
-b = s / (epsilon**2)
-c = 1. / (epsilon * delta_t)
+b = s / (epsilon ** 2)
+c = 1.0 / (epsilon * delta_t)
 
 
 def make_patch(center, size):
@@ -48,13 +48,14 @@ def test_patch_cahn_hilliard():
     size = 0.05
 
     import random
+
     for r in range(rep):
         center_x = random.uniform(-1, 1)
         center_y = random.uniform(-1, 1)
         center = [center_x, center_y]
         patch = make_patch(center, size)
 
-        f_values = 0.5 * 1/(4*3*2) * (patch.x**4 + patch.y**4)
+        f_values = 0.5 * 1 / (4 * 3 * 2) * (patch.x ** 4 + patch.y ** 4)
 
         lap = patch.laplace(f_values)
         laplap = patch.laplace(lap)
@@ -71,7 +72,7 @@ def test_kernel_func():
     alternate_knl_func = npt.get_cahn_hilliard(dim, b, c, True)
 
     for i in range(50):
-        ri = 0.001 * 2**(-i)
+        ri = 0.001 * 2 ** (-i)
         assert abs(knl_func(ri, 0) - alternate_knl_func(ri, 0)) < 1e-12
 
 
@@ -80,18 +81,13 @@ def direct_quad(source_func, target_point):
     knl_func = npt.get_cahn_hilliard(dim, b, c)
 
     def integrand(x, y):
-        return source_func(x, y) * knl_func(target_point[0] - x,
-                                            target_point[1] - y)
+        return source_func(x, y) * knl_func(target_point[0] - x, target_point[1] - y)
 
     import volumential.singular_integral_2d as squad
+
     integral, error = squad.box_quad(
-        func=integrand,
-        a=0,
-        b=1,
-        c=0,
-        d=1,
-        singular_point=target_point,
-        maxiter=100)
+        func=integrand, a=0, b=1, c=0, d=1, singular_point=target_point, maxiter=100
+    )
 
     return integral
 
@@ -120,6 +116,7 @@ def test_cahn_hilliard_same_box_on_patch():
 
     # inside the box
     import random
+
     for r in range(rep):
         center_x = random.uniform(size / 2, 1 - size / 2)
         center_y = random.uniform(size / 2, 1 - size / 2)
@@ -128,27 +125,30 @@ def test_cahn_hilliard_same_box_on_patch():
 
         def source_func(x, y):
             return c
+
         f_values = eval_f(patch, source_func)
 
         lap = patch.laplace(f_values)
         laplap = patch.laplace(lap)
 
-        #print(c)
-        #print(center)
-        #print((laplap - b * lap + c * f_values))
-        #print((laplap - b * lap + c * f_values - c) / c)
+        # print(c)
+        # print(center)
+        # print((laplap - b * lap + c * f_values))
+        # print((laplap - b * lap + c * f_values - c) / c)
 
         assert np.max(np.abs(laplap - b * lap + c * f_values - c) / c) < 5e-2
 
 
 # def test_cahn_hilliard_table():
-    # assert False
+# assert False
 
 
 if __name__ == "__main__":
     import sys
+
     if len(sys.argv) > 1:
         exec(sys.argv[1])
     else:
         from py.test.cmdline import main
+
         main([__file__])

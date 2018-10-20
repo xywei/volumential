@@ -23,6 +23,7 @@ THE SOFTWARE.
 """
 
 import logging
+
 logger = logging.getLogger(__name__)
 
 from abc import ABCMeta, abstractmethod
@@ -85,8 +86,9 @@ class ExpansionWranglerInterface(metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def coarsen_multipoles(self, level_start_source_parent_box_nrs,
-                           source_parent_boxes, mpoles):
+    def coarsen_multipoles(
+        self, level_start_source_parent_box_nrs, source_parent_boxes, mpoles
+    ):
         """
         For each box in *source_parent_boxes*, gather (and translate)
         the box's children's multipole expansions in *mpoles* and add
@@ -98,8 +100,9 @@ class ExpansionWranglerInterface(metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def eval_direct(self, target_boxes, neighbor_sources_starts,
-                    neighbor_sources_lists):
+    def eval_direct(
+        self, target_boxes, neighbor_sources_starts, neighbor_sources_lists
+    ):
         """
         For each box in *target_boxes*, evaluate the influence of the
         neighbor sources due to *src_weights*
@@ -112,8 +115,14 @@ class ExpansionWranglerInterface(metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def multipole_to_local(self, level_start_target_or_target_parent_box_nrs,
-                           target_or_target_parent_boxes, starts, lists, mpole_exps):
+    def multipole_to_local(
+        self,
+        level_start_target_or_target_parent_box_nrs,
+        target_or_target_parent_boxes,
+        starts,
+        lists,
+        mpole_exps,
+    ):
         """
         For each box in *target_or_target_parent_boxes*, translate and add
         the influence of the multipole expansion in *mpole_exps* into a new
@@ -124,8 +133,9 @@ class ExpansionWranglerInterface(metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def eval_multipoles(self, level_start_target_box_nrs, target_boxes, starts,
-                        lists, mpole_exps):
+    def eval_multipoles(
+        self, level_start_target_box_nrs, target_boxes, starts, lists, mpole_exps
+    ):
         """
         For each box in *target_boxes*, evaluate the multipole expansion in
         *mpole_exps* in the nearby boxes given in *starts* and *lists*, and
@@ -136,8 +146,14 @@ class ExpansionWranglerInterface(metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def form_locals(self, level_start_target_or_target_parent_box_nrs,
-                    target_or_target_parent_boxes, starts, lists, src_weights):
+    def form_locals(
+        self,
+        level_start_target_or_target_parent_box_nrs,
+        target_or_target_parent_boxes,
+        starts,
+        lists,
+        src_weights,
+    ):
         """
         For each box in *target_or_target_parent_boxes*, form local
         expansions due to the sources in the nearby boxes given in *starts* and
@@ -148,8 +164,12 @@ class ExpansionWranglerInterface(metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def refine_locals(self, level_start_target_or_target_parent_box_nrs,
-                      target_or_target_parent_boxes, local_exps):
+    def refine_locals(
+        self,
+        level_start_target_or_target_parent_box_nrs,
+        target_or_target_parent_boxes,
+        local_exps,
+    ):
         """
         For each box in *child_boxes*,
         translate the box's parent's local expansion in *local_exps* and add

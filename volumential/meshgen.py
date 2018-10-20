@@ -21,6 +21,7 @@ THE SOFTWARE.
 """
 
 import logging
+
 logger = logging.getLogger(__name__)
 
 provider = None
@@ -28,6 +29,7 @@ provider = None
 try:
     logger.info("Trying to find a mesh generator..")
     import volumential.meshgen_dealii  # noqa: F401
+
     provider = "meshgen_dealii"
 
 except ImportError as e:
@@ -38,6 +40,7 @@ except ImportError as e:
         logger.info("Trying out BoxTree.TreeInteractiveBuild interface.")
         import boxtree.tree_interactive_build  # noqa: F401
         from modepy import GaussLegendreQuadrature
+
         provider = "meshgen_boxtree"
 
     except ImportError as ee:
@@ -64,12 +67,13 @@ except ImportError as e:
                 queue = cl.CommandQueue(ctx)
 
             # For meshgen_dealii compatibility
-            if 'level' in kwargs:
-                nlevels = kwargs['level']
+            if "level" in kwargs:
+                nlevels = kwargs["level"]
 
             tree = BoxTree()
             tree.generate_uniform_boxtree(
-                queue, nlevels=nlevels, root_extent=2, root_vertex=np.zeros(dim) - 1)
+                queue, nlevels=nlevels, root_extent=2, root_vertex=np.zeros(dim) - 1
+            )
             quad_rule = GaussLegendreQuadrature(degree - 1)
             quad = QuadratureOnBoxTree(tree, quad_rule)
             q_weights = quad.get_q_weights(queue).get(queue)
@@ -121,16 +125,18 @@ except ImportError as e:
 
                 # plug in dimension-specific details
                 self.dimension_specific_setup()
-                self.n_q_points = self.degree**self.dim
+                self.n_q_points = self.degree ** self.dim
 
                 self.boxtree = BoxTree()
                 self.boxtree.generate_uniform_boxtree(
                     self.queue,
                     nlevels=self.nlevels,
                     root_extent=self.root_extent,
-                    root_vertex=self.root_vertex)
-                self.quadrature = QuadratureOnBoxTree(self.boxtree,
-                                                      self.quadrature_formula)
+                    root_vertex=self.root_vertex,
+                )
+                self.quadrature = QuadratureOnBoxTree(
+                    self.boxtree, self.quadrature_formula
+                )
 
             def get_q_points_dev(self):
                 return self.quadrature.get_q_points(self.queue)
@@ -178,16 +184,16 @@ except ImportError as e:
             def n_active_cells(self):
                 return self.boxtree.n_active_boxes
 
-            def update_mesh(self, criteria, top_fraction_of_cells,
-                            bottom_fraction_of_cells):
+            def update_mesh(
+                self, criteria, top_fraction_of_cells, bottom_fraction_of_cells
+            ):
                 # TODO
                 raise NotImplementedError
 
             def print_info(self, logging_func=print):
                 logging_func("Number of cells: " + str(self.n_cells()))
                 logging_func("Number of active cells: " + str(self.n_active_cells()))
-                logging_func("Number of quad points per cell: " +
-                             str(self.n_q_points))
+                logging_func("Number of quad points per cell: " + str(self.n_q_points))
 
             def generate_gmsh(self, filename):
                 """
@@ -234,4 +240,9 @@ except ImportError as e:
 else:
     # noexcept on importing meshgen_dealii
     logger.info("Using Meshgen via Deal.II interface.")
-    from volumential.meshgen_dealii import greet, MeshGen2D, MeshGen3D, make_uniform_cubic_grid  # noqa
+    from volumential.meshgen_dealii import (
+        greet,
+        MeshGen2D,
+        MeshGen3D,
+        make_uniform_cubic_grid,
+    )  # noqa

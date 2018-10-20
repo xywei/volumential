@@ -38,15 +38,15 @@ def test_quadrature_1d_interval():
         rtol=1e-8,
         maxiter=50,
         vec_func=False,
-        miniter=1)
-    assert (np.abs(val) < 1e-8)
-    assert (err < 1e-8)
+        miniter=1,
+    )
+    assert np.abs(val) < 1e-8
+    assert err < 1e-8
 
 
 def test_quadrature_2d_box():
     def integrand(x, y):
-        return np.sin(10 * x) * np.cos(
-            3 * y)
+        return np.sin(10 * x) * np.cos(3 * y)
 
     val, err = sint.qquad(
         func=integrand,
@@ -61,22 +61,20 @@ def test_quadrature_2d_box():
         maxiteri=50,
         vec_func=True,
         minitero=1,
-        miniteri=1)
-    assert (np.abs(val) < 1e-8)
-    assert (err < 1e-8)
+        miniteri=1,
+    )
+    assert np.abs(val) < 1e-8
+    assert err < 1e-8
 
 
 def test_affine_mapping():
     tria1 = ((1, 1), (2, 3), (0, 4))
     tria2 = ((0, 0), (1, 0), (0, 1))
-    mp, J, imp, iJ = sint.solve_affine_map_2d(
-        tria1, tria2)
-    assert (np.isclose(J * iJ, 1))
+    mp, J, imp, iJ = sint.solve_affine_map_2d(tria1, tria2)
+    assert np.isclose(J * iJ, 1)
     for i in range(3):
-        assert (np.allclose(
-            mp(tria1[i]), tria2[i]))
-        assert (np.allclose(
-            imp(tria2[i]), tria1[i]))
+        assert np.allclose(mp(tria1[i]), tria2[i])
+        assert np.allclose(imp(tria2[i]), tria1[i])
 
 
 def test_is_in_t():
@@ -84,10 +82,10 @@ def test_is_in_t():
     p2 = (1.1, 0.1)
     p3 = (-0.1, 0.1)
     p4 = (0.1, -0.7)
-    assert (sint.is_in_t(p1))
-    assert (not sint.is_in_t(p2))
-    assert (not sint.is_in_t(p3))
-    assert (not sint.is_in_t(p4))
+    assert sint.is_in_t(p1)
+    assert not sint.is_in_t(p2)
+    assert not sint.is_in_t(p3)
+    assert not sint.is_in_t(p4)
 
 
 def test_is_in_r():
@@ -95,43 +93,31 @@ def test_is_in_r():
     p2 = (1.1, 0.1)
     p3 = (-0.1, 0.1)
     p4 = (0.1, -0.7)
-    assert (sint.is_in_r(p1))
-    assert (not sint.is_in_r(p2))
-    assert (not sint.is_in_r(p3))
-    assert (not sint.is_in_r(p4))
+    assert sint.is_in_r(p1)
+    assert not sint.is_in_r(p2)
+    assert not sint.is_in_r(p3)
+    assert not sint.is_in_r(p4)
 
 
 def test_tria2rect_map():
-    t2r, J_t2r, r2t, J_r2t = sint.tria2rect_map_2d(
-    )
-    assert (np.allclose(
-        t2r((0, 0)), (0, 0)))
-    assert (np.allclose(
-        t2r((1, 0)), (1, 0)))
-    assert (np.allclose(
-        t2r((0, 1)), (1, np.pi / 2)))
-    assert (np.allclose(
-        r2t((0, 0)), (0, 0)))
-    assert (np.allclose(
-        r2t((1, 0)), (1, 0)))
-    assert (np.allclose(
-        r2t((1, np.pi / 2)), (0, 1)))
-    assert (np.allclose(
-        r2t((0, np.pi / 2)), (0, 0)))
+    t2r, J_t2r, r2t, J_r2t = sint.tria2rect_map_2d()
+    assert np.allclose(t2r((0, 0)), (0, 0))
+    assert np.allclose(t2r((1, 0)), (1, 0))
+    assert np.allclose(t2r((0, 1)), (1, np.pi / 2))
+    assert np.allclose(r2t((0, 0)), (0, 0))
+    assert np.allclose(r2t((1, 0)), (1, 0))
+    assert np.allclose(r2t((1, np.pi / 2)), (0, 1))
+    assert np.allclose(r2t((0, np.pi / 2)), (0, 0))
 
 
 def test_tria2rect_jacobian():
-    t2r, J_t2r, r2t, J_r2t = sint.tria2rect_map_2d(
-    )
+    t2r, J_t2r, r2t, J_r2t = sint.tria2rect_map_2d()
     p1 = (0.1, 0.1)
-    assert (np.isclose(
-        J_t2r(p1) * J_r2t(t2r(p1)), 1))
-    assert (np.isclose(
-        J_r2t(p1) * J_t2r(r2t(p1)), 1))
+    assert np.isclose(J_t2r(p1) * J_r2t(t2r(p1)), 1)
+    assert np.isclose(J_r2t(p1) * J_t2r(r2t(p1)), 1)
 
 
-def run_test_tria_quad(func, region,
-                       exact):
+def run_test_tria_quad(func, region, exact):
     val, err = sint.tria_quad(
         func,
         region,
@@ -140,12 +126,11 @@ def run_test_tria_quad(func, region,
         rtol=1e-10,
         maxiter=50,
         vec_func=True,
-        miniter=1)
+        miniter=1,
+    )
 
-    assert (np.isclose(
-        exact, val, atol=1e-8))
-    assert (np.isclose(
-        err, 0, atol=1e-8))
+    assert np.isclose(exact, val, atol=1e-8)
+    assert np.isclose(err, 0, atol=1e-8)
 
 
 def test_tria_quad_1():
@@ -153,22 +138,16 @@ def test_tria_quad_1():
         return 1
 
     # area = 0.5 * (10 * 9) = 45
-    region = ((2.33, 1), (12.33, 1),
-              (5, 10))
+    region = ((2.33, 1), (12.33, 1), (5, 10))
 
-    run_test_tria_quad(const_func,
-                       region, 45)
+    run_test_tria_quad(const_func, region, 45)
 
 
 def test_tria_quad_2():
     def greens_func(x, y, x0, y0):
-        return -1 / (
-            2 * np.pi
-        ) * np.log((x - x0)**2 +
-                   (y - y0)**2) * 0.5
+        return -1 / (2 * np.pi) * np.log((x - x0) ** 2 + (y - y0) ** 2) * 0.5
 
-    region = ((2.33, 1), (12.33, 1),
-              (5, 10))
+    region = ((2.33, 1), (12.33, 1), (5, 10))
 
     val, err = sint.tria_quad(
         greens_func,
@@ -178,11 +157,11 @@ def test_tria_quad_2():
         rtol=1e-8,
         maxiter=80,
         vec_func=True,
-        miniter=1)
+        miniter=1,
+    )
 
-    assert (np.isclose(
-        err, 0, atol=1e-6))
-    assert (np.isfinite(val))
+    assert np.isclose(err, 0, atol=1e-6)
+    assert np.isfinite(val)
 
 
 def test_box_quad_1():
@@ -208,12 +187,11 @@ def test_box_quad_1():
         rtol=1e-8,
         maxiter=50,
         vec_func=True,
-        miniter=1)
+        miniter=1,
+    )
 
-    assert (np.isclose(
-        val, area, atol=1e-8))
-    assert (np.isclose(
-        err, 0, atol=1e-8))
+    assert np.isclose(val, area, atol=1e-8)
+    assert np.isclose(err, 0, atol=1e-8)
 
 
 def test_box_quad_2():
@@ -239,30 +217,25 @@ def test_box_quad_2():
         rtol=1e-8,
         maxiter=50,
         vec_func=True,
-        miniter=1)
+        miniter=1,
+    )
 
     print(area, val)
     print(err)
-    assert (np.isclose(
-        val, area, atol=1e-8))
-    assert (np.isclose(
-        err, 0, atol=1e-8))
+    assert np.isclose(val, area, atol=1e-8)
+    assert np.isclose(err, 0, atol=1e-8)
 
 
 def test_box_quad_3():
     def greens_func(x, y, x0, y0):
-        return -1 / (
-            2 * np.pi
-        ) * np.log((x - x0)**2 +
-                   (y - y0)**2) * 0.5
+        return -1 / (2 * np.pi) * np.log((x - x0) ** 2 + (y - y0) ** 2) * 0.5
 
     a = 0
     b = 1
     c = 0
     d = 1
     # by symmetry, all four singular integrals should be equal
-    sps = [(0.1, 0.1), (0.9, 0.1),
-           (0.9, 0.9), (0.1, 0.9)]
+    sps = [(0.1, 0.1), (0.9, 0.1), (0.9, 0.9), (0.1, 0.9)]
 
     val = np.zeros(len(sps))
     err = np.zeros(len(sps))
@@ -280,14 +253,13 @@ def test_box_quad_3():
             rtol=1e-8,
             maxiter=50,
             vec_func=True,
-            miniter=1)
+            miniter=1,
+        )
 
     val = val - np.mean(val)
 
-    assert (np.allclose(
-        val, 0, atol=1e-8))
-    assert (np.allclose(
-        err, 0, atol=1e-8))
+    assert np.allclose(val, 0, atol=1e-8)
+    assert np.allclose(err, 0, atol=1e-8)
 
 
 # vim: filetype=pyopencl.python:fdm=marker

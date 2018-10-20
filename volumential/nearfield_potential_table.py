@@ -29,6 +29,7 @@ import volumential.list1_gallery as gallery
 import volumential.singular_integral_2d as squad
 
 import logging
+
 logger = logging.getLogger(__name__)
 
 # NOTE: Cannot use sumpy kernels for "Transform" since they
@@ -45,10 +46,13 @@ def _self_tp(vec, tpd=2):
     if tpd == 1:
         return vec
     elif tpd == 2:
-        return (vec.reshape([len(vec), 1]) * vec.reshape([1, len(vec)]))
+        return vec.reshape([len(vec), 1]) * vec.reshape([1, len(vec)])
     elif tpd == 3:
-        return (vec.reshape([len(vec), 1, 1]) * vec.reshape([1, len(vec), 1]) *
-                vec.reshape([1, 1, len(vec)]))
+        return (
+            vec.reshape([len(vec), 1, 1])
+            * vec.reshape([1, len(vec), 1])
+            * vec.reshape([1, 1, len(vec)])
+        )
     else:
         raise NotImplementedError
 
@@ -68,36 +72,38 @@ def constant_one(x, y=None, z=None):
 
 def get_laplace(dim):
     if dim != 2:
-        raise NotImplementedError("Kernel function Laplace" + str(dim) +
-                                  "D not implemented.")
+        raise NotImplementedError(
+            "Kernel function Laplace" + str(dim) + "D not implemented."
+        )
     else:
 
         def laplace(x, y):
-            return -0.25 * np.log(np.array(x)**2 + np.array(y)**2) / np.pi
+            return -0.25 * np.log(np.array(x) ** 2 + np.array(y) ** 2) / np.pi
 
         return laplace
 
 
 def get_cahn_hilliard(dim, b=0, c=0, approx_at_origin=False):
     if dim != 2:
-        raise NotImplementedError("Kernel function Laplace" + str(dim) +
-                                  "D not implemented.")
+        raise NotImplementedError(
+            "Kernel function Laplace" + str(dim) + "D not implemented."
+        )
     else:
 
         def quadratic_formula_1(a, b, c):
-            return (-b + np.sqrt(b**2 - 4 * a * c)) / (2 * a)
+            return (-b + np.sqrt(b ** 2 - 4 * a * c)) / (2 * a)
 
         def quadratic_formula_2(a, b, c):
-            return (-b - np.sqrt(b**2 - 4 * a * c)) / (2 * a)
+            return (-b - np.sqrt(b ** 2 - 4 * a * c)) / (2 * a)
 
         def citardauq_formula_1(a, b, c):
-            return 2 * c / (-b - np.sqrt(b**2 - 4 * a * c))
+            return 2 * c / (-b - np.sqrt(b ** 2 - 4 * a * c))
 
         def citardauq_formula_2(a, b, c):
-            return 2 * c / (-b + np.sqrt(b**2 - 4 * a * c))
+            return 2 * c / (-b + np.sqrt(b ** 2 - 4 * a * c))
 
         def f(x):
-            return x**2 - b * x + c
+            return x ** 2 - b * x + c
 
         root11 = quadratic_formula_1(1, -b, c)
         root12 = citardauq_formula_1(1, -b, c)
@@ -113,8 +119,8 @@ def get_cahn_hilliard(dim, b=0, c=0, approx_at_origin=False):
         else:
             lam2 = np.sqrt(root22)
 
-        #assert np.abs(f(lam1**2)) < 1e-12
-        #assert np.abs(f(lam2**2)) < 1e-12
+        # assert np.abs(f(lam1**2)) < 1e-12
+        # assert np.abs(f(lam2**2)) < 1e-12
 
         lambdas = sorted([lam1, lam2], key=abs, reverse=True)  # biggest first
         lam1 = lambdas[0]
@@ -123,29 +129,38 @@ def get_cahn_hilliard(dim, b=0, c=0, approx_at_origin=False):
         import scipy.special as sp
 
         def cahn_hilliard(x, y):
-            r = np.sqrt(np.array(x)**2 + np.array(y)**2)
+            r = np.sqrt(np.array(x) ** 2 + np.array(y) ** 2)
 
             # Leading order removed analytically
             def k0_approx(rr, lam):
                 euler_constant = 0.57721566490153286060651209008240243104215933593992
                 r = rr * lam
-                return -(np.log(lam) + euler_constant) - (
-                    np.log(r / 2) + euler_constant) * (r**2 / 4 + r**4 / 64) + (
-                        r**2 / 4 + r**4 * 3 / 128)
+                return (
+                    -(np.log(lam) + euler_constant)
+                    - (np.log(r / 2) + euler_constant) * (r ** 2 / 4 + r ** 4 / 64)
+                    + (r ** 2 / 4 + r ** 4 * 3 / 128)
+                )
 
             if approx_at_origin:
-                return -1 / (2 * np.pi * (lam1**2 - lam2**2)) * (
-                    k0_approx(r, lam1) - k0_approx(r, lam2))
+                return (
+                    -1
+                    / (2 * np.pi * (lam1 ** 2 - lam2 ** 2))
+                    * (k0_approx(r, lam1) - k0_approx(r, lam2))
+                )
             else:
-                return -1 / (2 * np.pi * (lam1**2 - lam2**2)) * (
-                    sp.kn(0, lam1 * r) - sp.kn(0, lam2 * r))
+                return (
+                    -1
+                    / (2 * np.pi * (lam1 ** 2 - lam2 ** 2))
+                    * (sp.kn(0, lam1 * r) - sp.kn(0, lam2 * r))
+                )
 
         return cahn_hilliard
 
 
 def get_cahn_hilliard_laplacian(dim, b=0, c=0):
-    raise NotImplementedError("Transform method under construction, "
-                              "use DrosteSum instead")
+    raise NotImplementedError(
+        "Transform method under construction, " "use DrosteSum instead"
+    )
 
 
 # }}} End kernel function getters
@@ -153,6 +168,7 @@ def get_cahn_hilliard_laplacian(dim, b=0, c=0):
 
 def sumpy_kernel_to_lambda(sknl):
     from sympy import Symbol, symbols, lambdify
+
     var_name_prefix = "x"
     var_names = " ".join([var_name_prefix + str(i) for i in range(sknl.dim)])
     arg_names = symbols(var_names)
@@ -160,9 +176,10 @@ def sumpy_kernel_to_lambda(sknl):
 
     def func(x, y=None, z=None):
         coord = (x, y, z)
-        lmd = lambdify(arg_names,
-                       sknl.get_expression(args) * sknl.get_global_scaling_const())
-        return lmd(*coord[:sknl.dim])
+        lmd = lambdify(
+            arg_names, sknl.get_expression(args) * sknl.get_global_scaling_const()
+        )
+        return lmd(*coord[: sknl.dim])
 
     return func
 
@@ -185,16 +202,18 @@ class NearFieldInteractionTable(object):
 
     # {{{ constructor
 
-    def __init__(self,
-                 quad_order,
-                 method="gauss-legendre",
-                 dim=2,
-                 kernel_func=None,
-                 kernel_type=None,
-                 sumpy_kernel=None,
-                 build_method="Transform",
-                 source_box_extent=1,
-                 dtype=np.float64):
+    def __init__(
+        self,
+        quad_order,
+        method="gauss-legendre",
+        dim=2,
+        kernel_func=None,
+        kernel_type=None,
+        sumpy_kernel=None,
+        build_method="Transform",
+        source_box_extent=1,
+        dtype=np.float64,
+    ):
         """
         kernel_type determines how the kernel is scaled w.r.t. box size.
         build_method can be "Transform" or "DrosteSum".
@@ -245,38 +264,43 @@ class NearFieldInteractionTable(object):
 
         # number of quad points per box
         # equals to the number of modes per box
-        self.n_q_points = self.quad_order**dim
+        self.n_q_points = self.quad_order ** dim
 
         # Normalizers for polynomial modes
         # Needed only when we want to rescale log type kernels
         self.mode_normalizers = np.zeros(self.n_q_points, dtype=self.dtype)
 
         # number of (source_mode, target_point) pairs between two boxes
-        self.n_pairs = self.n_q_points**2
+        self.n_pairs = self.n_q_points ** 2
 
         # possible interaction cases
-        self.interaction_case_vecs, self.case_encode, self.case_indices \
-            = gallery.generate_list1_gallery(self.dim)
+        self.interaction_case_vecs, self.case_encode, self.case_indices = gallery.generate_list1_gallery(
+            self.dim
+        )
         self.n_cases = len(self.interaction_case_vecs)
 
         if method == "gauss-legendre":
             # quad points in [-1,1]
             import volumential.meshgen as mg
 
-            #FIXME: 3D support
+            # FIXME: 3D support
             q_points, _, _ = mg.make_uniform_cubic_grid(
-                degree=quad_order, level=1, dim=self.dim)
+                degree=quad_order, level=1, dim=self.dim
+            )
             # map to source box
-            mapped_q_points = np.array([
-                0.5 * self.source_box_extent * (qp + np.ones(self.dim))
-                for qp in q_points
-            ])
+            mapped_q_points = np.array(
+                [
+                    0.5 * self.source_box_extent * (qp + np.ones(self.dim))
+                    for qp in q_points
+                ]
+            )
             # sort in dictionary order, preserve only the leading
             # digits to prevent floating point errors from polluting
             # the ordering.
             q_points_ordering = sorted(
                 range(len(mapped_q_points)),
-                key=lambda i: list(np.floor(mapped_q_points[i] * 10000)))
+                key=lambda i: list(np.floor(mapped_q_points[i] * 10000)),
+            )
             self.q_points = mapped_q_points[q_points_ordering]
 
         else:
@@ -288,6 +312,7 @@ class NearFieldInteractionTable(object):
         total_evals = len(self.data) + self.n_q_points
 
         from pytools import ProgressBar
+
         self.pb = ProgressBar("Building table:", total_evals)
 
         self.is_built = False
@@ -298,8 +323,8 @@ class NearFieldInteractionTable(object):
 
     def get_entry_index(self, source_mode_index, target_point_index, case_id):
 
-        assert (source_mode_index >= 0 and source_mode_index < self.n_q_points)
-        assert (target_point_index >= 0 and target_point_index < self.n_q_points)
+        assert source_mode_index >= 0 and source_mode_index < self.n_q_points
+        assert target_point_index >= 0 and target_point_index < self.n_q_points
         pair_id = source_mode_index * self.n_q_points + target_point_index
 
         return case_id * self.n_pairs + pair_id
@@ -340,22 +365,24 @@ class NearFieldInteractionTable(object):
             idx = [mode_index // self.quad_order, mode_index % self.quad_order]
         elif self.dim == 3:
             idx = [
-                mode_index // (self.quad_order**2),
-                mode_index % (self.quad_order**2) // self.quad_order,
-                mode_index % (self.quad_order**2) % self.quad_order
+                mode_index // (self.quad_order ** 2),
+                mode_index % (self.quad_order ** 2) // self.quad_order,
+                mode_index % (self.quad_order ** 2) % self.quad_order,
             ]
         return idx
 
     def get_template_mode(self, mode_index):
-        assert (mode_index >= 0 and mode_index < self.n_q_points)
+        assert mode_index >= 0 and mode_index < self.n_q_points
         """
         template modes are defined on an l_infty circle.
         """
         idx = self.unwrap_mode_index(mode_index)
 
-        xi = np.array([p[self.dim - 1] for p in self.q_points[:self.quad_order]
-                       ]) / self.source_box_extent
-        assert (len(xi) == self.quad_order)
+        xi = (
+            np.array([p[self.dim - 1] for p in self.q_points[: self.quad_order]])
+            / self.source_box_extent
+        )
+        assert len(xi) == self.quad_order
 
         yi = []
         for d in range(self.dim):
@@ -380,12 +407,12 @@ class NearFieldInteractionTable(object):
         """
         normal modes are deined on the source box
         """
-        assert (mode_index >= 0 and mode_index < self.n_q_points)
+        assert mode_index >= 0 and mode_index < self.n_q_points
 
         idx = self.unwrap_mode_index(mode_index)
 
-        xi = np.array([p[self.dim - 1] for p in self.q_points[:self.quad_order]])
-        assert (len(xi) == self.quad_order)
+        xi = np.array([p[self.dim - 1] for p in self.q_points[: self.quad_order]])
+        assert len(xi) == self.quad_order
 
         yi = []
         for d in range(self.dim):
@@ -413,6 +440,7 @@ class NearFieldInteractionTable(object):
         """
 
         import scipy.special as sps
+
         cheby_nodes, _, cheby_weights = sps.chebyt(cheb_order).weights.T
         window = [0, 1]
 
@@ -424,32 +452,42 @@ class NearFieldInteractionTable(object):
         mvals = mode(*grid)
 
         from numpy.polynomial.chebyshev import Chebyshev
+
         coef_scale = 2 * np.ones(cheb_order) / cheb_order
         coef_scale[0] /= 2
-        basis_1d = np.array([
-            Chebyshev(coef=_orthonormal(cheb_order, i), domain=window)(cheby_nodes)
-            for i in range(cheb_order)
-        ])
+        basis_1d = np.array(
+            [
+                Chebyshev(coef=_orthonormal(cheb_order, i), domain=window)(cheby_nodes)
+                for i in range(cheb_order)
+            ]
+        )
 
         from itertools import product
+
         if self.dim == 1:
             basis_set = basis_1d
 
         elif self.dim == 2:
-            basis_set = np.array([
-                b1.reshape([cheb_order, 1]) * b2.reshape([1, cheb_order])
-                for b1, b2 in product(*[basis_1d for d in range(self.dim)])
-            ])
+            basis_set = np.array(
+                [
+                    b1.reshape([cheb_order, 1]) * b2.reshape([1, cheb_order])
+                    for b1, b2 in product(*[basis_1d for d in range(self.dim)])
+                ]
+            )
 
         elif self.dim == 3:
-            basis_set = np.array([
-                b1.reshape([cheb_order, 1, 1]) * b2.reshape([1, cheb_order, 1]) *
-                b3.reshape([1, 1, cheb_order])
-                for b1, b2, b3 in product(*[basis_1d for d in range(self.dim)])
-            ])
+            basis_set = np.array(
+                [
+                    b1.reshape([cheb_order, 1, 1])
+                    * b2.reshape([1, cheb_order, 1])
+                    * b3.reshape([1, 1, cheb_order])
+                    for b1, b2, b3 in product(*[basis_1d for d in range(self.dim)])
+                ]
+            )
 
-        mode_cheb_coeffs = np.array([np.sum(mvals * basis) for basis in basis_set
-                                     ]) * _self_tp(coef_scale, self.dim).reshape(-1)
+        mode_cheb_coeffs = np.array(
+            [np.sum(mvals * basis) for basis in basis_set]
+        ) * _self_tp(coef_scale, self.dim).reshape(-1)
 
         # purge small coeffs that are 15 digits away
         mm = np.max(np.abs(mode_cheb_coeffs))
@@ -495,7 +533,7 @@ class NearFieldInteractionTable(object):
             for d in range(-1, -1 - self.dim, -1):
                 k[d] = resid % self.quad_order
                 resid = resid // self.quad_order
-            assert (resid == 0)
+            assert resid == 0
             for d in range(self.dim):
                 if s1[d] < 0:
                     k[d] = self.quad_order - 1 - k[d]
@@ -513,25 +551,29 @@ class NearFieldInteractionTable(object):
         Only translations and scalings are allowed in this step, avoiding the
         indices of quad points to be messed up.
         """
-        assert (target_point_index >= 0 and target_point_index < self.n_q_points)
+        assert target_point_index >= 0 and target_point_index < self.n_q_points
 
         # rescale to source box with size 1x1
-        vec = np.array(
-            self.interaction_case_vecs[case_index]) / 4.0 * self.source_box_extent
+        vec = (
+            np.array(self.interaction_case_vecs[case_index])
+            / 4.0
+            * self.source_box_extent
+        )
 
-        new_cntr = np.ones(
-            self.dim, dtype=self.dtype) * 0.5 * self.source_box_extent + vec
+        new_cntr = (
+            np.ones(self.dim, dtype=self.dtype) * 0.5 * self.source_box_extent + vec
+        )
 
         if int(max(abs(np.array(self.interaction_case_vecs[case_index])))) == 0:
             new_size = 1
         else:
-            new_size = max(
-                [abs(l) - 2 for l in self.interaction_case_vecs[case_index]]) / 2
+            new_size = (
+                max([abs(l) - 2 for l in self.interaction_case_vecs[case_index]]) / 2
+            )
 
         # print(vec, new_cntr, new_size)
 
-        return new_cntr + new_size * (
-            self.q_points[target_point_index] - self.center)
+        return new_cntr + new_size * (self.q_points[target_point_index] - self.center)
 
     def lookup_by_symmetry(self, entry_id):
         """Loop up table entry that is mapped to a region where:
@@ -552,8 +594,7 @@ class NearFieldInteractionTable(object):
         #    case_index=entry_info[
         #        "case_index"])
 
-        vec_map, qp_map = self.get_symmetry_transform(
-            entry_info["source_mode_index"])
+        vec_map, qp_map = self.get_symmetry_transform(entry_info["source_mode_index"])
         # mapped (canonical) case_id
         case_vec = self.interaction_case_vecs[entry_info["case_index"]]
         cc_vec = vec_map(case_vec)
@@ -573,7 +614,8 @@ class NearFieldInteractionTable(object):
         source_mode = self.get_mode(entry_info["source_mode_index"])
         target_point = self.find_target_point(
             target_point_index=entry_info["target_point_index"],
-            case_index=entry_info["case_index"])
+            case_index=entry_info["case_index"],
+        )
 
         # print(entry_info, target_point)
         # source_point = (
@@ -585,7 +627,8 @@ class NearFieldInteractionTable(object):
 
             def integrand(x, y):
                 return source_mode(x, y) * self.kernel_func(
-                    x - target_point[0], y - target_point[1])
+                    x - target_point[0], y - target_point[1]
+                )
 
             integral, error = squad.box_quad(
                 func=integrand,
@@ -597,7 +640,8 @@ class NearFieldInteractionTable(object):
                 # tol=1e-10,
                 # rtol=1e-10,
                 # miniter=300,
-                maxiter=301)
+                maxiter=301,
+            )
         else:
             raise NotImplemented
 
@@ -616,7 +660,8 @@ class NearFieldInteractionTable(object):
             minitero=25,
             miniteri=25,
             maxitero=100,
-            maxiteri=100)
+            maxiteri=100,
+        )
         return (mode_id, nmlz)
 
     def build_normalizer_table(self, pool=None, pb=None):
@@ -626,10 +671,12 @@ class NearFieldInteractionTable(object):
         assert self.dim == 2
         if pool is None:
             from multiprocess import Pool
+
             pool = Pool(processes=None)
 
         for mode_id, nmlz in pool.imap_unordered(
-                self.compute_nmlz, [i for i in range(self.n_q_points)]):
+            self.compute_nmlz, [i for i in range(self.n_q_points)]
+        ):
             self.mode_normalizers[mode_id] = nmlz
             if pb is not None:
                 pb.progress(1)
@@ -659,16 +706,19 @@ class NearFieldInteractionTable(object):
             i for i in range(len(self.data)) if self.lookup_by_symmetry(i) == i
         ]
 
-        for entry_id, entry_val in pool.imap_unordered(self.compute_table_entry,
-                                                       invariant_entry_ids):
+        for entry_id, entry_val in pool.imap_unordered(
+            self.compute_table_entry, invariant_entry_ids
+        ):
             self.data[entry_id] = entry_val
             self.pb.progress(1)
 
         # Then complete the table via symmetry lookup
         for entry_id, centry_id in enumerate(
-                pool.imap_unordered(self.lookup_by_symmetry,
-                                    [i for i in range(len(self.data))])):
-            assert (not np.isnan(self.data[centry_id]))
+            pool.imap_unordered(
+                self.lookup_by_symmetry, [i for i in range(len(self.data))]
+            )
+        ):
+            assert not np.isnan(self.data[centry_id])
             if centry_id == entry_id:
                 continue
             self.data[entry_id] = self.data[centry_id]
@@ -677,7 +727,7 @@ class NearFieldInteractionTable(object):
         self.pb.finished()
 
         for entry in self.data:
-            assert (not np.isnan(entry))
+            assert not np.isnan(entry)
 
         self.is_built = True
 
@@ -685,28 +735,31 @@ class NearFieldInteractionTable(object):
 
     # {{{ build table via adding up a Droste of bricks
 
-    def build_table_via_droste_bricks(self,
-                                      n_brick_quad_points=50,
-                                      alpha=0,
-                                      queue=None,
-                                      adaptive_level=True,
-                                      use_symmetry=False,
-                                      **kwargs):
+    def build_table_via_droste_bricks(
+        self,
+        n_brick_quad_points=50,
+        alpha=0,
+        queue=None,
+        adaptive_level=True,
+        use_symmetry=False,
+        **kwargs
+    ):
 
         if queue is None:
             import pyopencl as cl
+
             cl_ctx = cl.create_some_context(interactive=True)
             queue = cl.CommandQueue(cl_ctx)
 
         assert alpha >= 0 and alpha < 1
-        if 'nlevels' in kwargs:
-            nlev = kwargs['nlevels']
+        if "nlevels" in kwargs:
+            nlev = kwargs["nlevels"]
         else:
             nlev = 1
 
         extra_kernel_kwargs = {}
-        if 'extra_kernel_kwargs' in kwargs:
-            extra_kernel_kwargs = kwargs['extra_kernel_kwargs']
+        if "extra_kernel_kwargs" in kwargs:
+            extra_kernel_kwargs = kwargs["extra_kernel_kwargs"]
 
         cheb_coefs = [
             self.get_mode_cheb_coeffs(mid, max(self.quad_order, 3))
@@ -715,19 +768,29 @@ class NearFieldInteractionTable(object):
 
         if not use_symmetry:
             from volumential.droste import DrosteFull
-            drf = DrosteFull(self.integral_knl, self.quad_order,
-                             self.interaction_case_vecs, n_brick_quad_points)
+
+            drf = DrosteFull(
+                self.integral_knl,
+                self.quad_order,
+                self.interaction_case_vecs,
+                n_brick_quad_points,
+            )
         else:
             from volumential.droste import DrosteReduced
-            if 'knl_symietry_tags' in kwargs:
-                knl_symmetry_tags = kwargs['knl_symmetry_tags']
+
+            if "knl_symietry_tags" in kwargs:
+                knl_symmetry_tags = kwargs["knl_symmetry_tags"]
             else:
                 # Maximum symmetry by default
                 knl_symmetry_tags = None
 
-            drf = DrosteReduced(self.integral_knl, self.quad_order,
-                                self.interaction_case_vecs, n_brick_quad_points,
-                                knl_symmetry_tags)
+            drf = DrosteReduced(
+                self.integral_knl,
+                self.quad_order,
+                self.interaction_case_vecs,
+                n_brick_quad_points,
+                knl_symmetry_tags,
+            )
 
         # adaptive level refinement
         data0 = drf(
@@ -736,13 +799,14 @@ class NearFieldInteractionTable(object):
             alpha=alpha,
             nlevels=nlev,
             extra_kernel_kwargs=extra_kernel_kwargs,
-            cheb_coefs=cheb_coefs)
+            cheb_coefs=cheb_coefs,
+        )
         resid = -1
 
         if not adaptive_level:
             self.data = data0
         else:
-            while alpha**nlev > 1e-6:
+            while alpha ** nlev > 1e-6:
                 nlev = nlev + 1
                 data1 = drf(
                     queue,
@@ -750,21 +814,26 @@ class NearFieldInteractionTable(object):
                     alpha=alpha,
                     nlevels=nlev,
                     extra_kernel_kwargs=extra_kernel_kwargs,
-                    cheb_coefs=cheb_coefs)
+                    cheb_coefs=cheb_coefs,
+                )
 
-                resid = (np.max(np.abs(data1 - data0)) / np.max(np.abs(data1)))
+                resid = np.max(np.abs(data1 - data0)) / np.max(np.abs(data1))
 
                 data0 = data1
 
                 if resid < 1e-12 and resid > 0:
                     self.data = data0
-                    logger.info("Adaptive level refinement "
-                                "converged at level %d" % (nlev - 1))
+                    logger.info(
+                        "Adaptive level refinement "
+                        "converged at level %d" % (nlev - 1)
+                    )
                     break
 
                 if np.isnan(resid):
-                    logger.info("Adaptive level refinement terminated "
-                                "at %d before converging due to NaNs" % nlev)
+                    logger.info(
+                        "Adaptive level refinement terminated "
+                        "at %d before converging due to NaNs" % nlev
+                    )
                     break
 
             if resid >= 1e-12:
@@ -805,15 +874,13 @@ class NearFieldInteractionTable(object):
 
     # {{{ query table and transform to actual box
 
-    def get_potential_scaler(self,
-                             entry_id,
-                             source_box_size=1,
-                             kernel_type=None,
-                             kernel_power=None):
+    def get_potential_scaler(
+        self, entry_id, source_box_size=1, kernel_type=None, kernel_power=None
+    ):
         """Returns a helper function to rescale the table entry based on
            source_box's actual size (edge length).
         """
-        assert (source_box_size > 0)
+        assert source_box_size > 0
         a = source_box_size
 
         if kernel_type is None:
@@ -821,23 +888,23 @@ class NearFieldInteractionTable(object):
 
         if kernel_type is None:
             raise NotImplementedError(
-                "Specify kernel type before performing scaling queries")
+                "Specify kernel type before performing scaling queries"
+            )
 
         if kernel_type == "log":
-            assert (kernel_power is None)
+            assert kernel_power is None
             source_mode_index = self.decode_index(entry_id)["source_mode_index"]
-            displacement = a**2 * np.log(
-                a) * self.mode_normalizers[source_mode_index]
-            scaling = a**2
+            displacement = a ** 2 * np.log(a) * self.mode_normalizers[source_mode_index]
+            scaling = a ** 2
 
         elif kernel_type == "const":
             displacement = 0
             scaling = 1
 
         elif kernel_type == "inv_power":
-            assert (kernel_power is not None)
+            assert kernel_power is not None
             displacement = 0
-            scaling = source_box_size**(2 + kernel_power)
+            scaling = source_box_size ** (2 + kernel_power)
 
         elif kernel_type == "rigid":
             # TODO: add assertion for source box size

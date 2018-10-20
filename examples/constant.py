@@ -26,6 +26,7 @@ THE SOFTWARE.
 """
 
 import logging
+
 logger = logging.getLogger(__name__)
 
 import numpy as np
@@ -52,13 +53,13 @@ m_order = 1  # multipole order
 
 # RHS
 def source_field(x):
-    assert (len(x) == dim)
+    assert len(x) == dim
     return 1
 
 
 # analytical solution
 def exact_solu(x, y):
-    return 0.5 * (x**2 + y**2)
+    return 0.5 * (x ** 2 + y ** 2)
 
 
 # bounding box
@@ -71,18 +72,20 @@ queue = cl.CommandQueue(ctx)
 # {{{ generate quad points
 
 import volumential.meshgen as mg
-q_points, q_weights, q_radii = mg.make_uniform_cubic_grid(
-    degree=q_order, level=n_levels)
 
-assert (len(q_points) == len(q_weights))
-assert (q_points.shape[1] == dim)
+q_points, q_weights, q_radii = mg.make_uniform_cubic_grid(
+    degree=q_order, level=n_levels
+)
+
+assert len(q_points) == len(q_weights)
+assert q_points.shape[1] == dim
 
 q_points_org = q_points
 q_points = np.ascontiguousarray(np.transpose(q_points))
 
 from pytools.obj_array import make_obj_array
-q_points = make_obj_array(
-    [cl.array.to_device(queue, q_points[i]) for i in range(dim)])
+
+q_points = make_obj_array([cl.array.to_device(queue, q_points[i]) for i in range(dim)])
 
 q_weights = cl.array.to_device(queue, q_weights)
 q_radii = cl.array.to_device(queue, q_radii)
@@ -91,9 +94,9 @@ q_radii = cl.array.to_device(queue, q_radii)
 
 # {{{ discretize the source field
 
-source_vals = cl.array.to_device(queue,
-                                 np.array(
-                                     [source_field(qp) for qp in q_points_org]))
+source_vals = cl.array.to_device(
+    queue, np.array([source_field(qp) for qp in q_points_org])
+)
 
 # particle_weigt = source_val * q_weight
 
@@ -102,11 +105,14 @@ source_vals = cl.array.to_device(queue,
 # {{{ build tree and traversals
 
 from boxtree.tools import AXIS_NAMES
+
 axis_names = AXIS_NAMES[:dim]
 
 from pytools import single_valued
+
 coord_dtype = single_valued(coord.dtype for coord in q_points)
 from boxtree.bounding_box import make_bounding_box_dtype
+
 bbox_type, _ = make_bounding_box_dtype(ctx.devices[0], dim, coord_dtype)
 
 bbox = np.empty(1, bbox_type)
@@ -118,16 +124,19 @@ for ax in axis_names:
 # TODO: use points from FieldPlotter are used as target points for better
 # visuals
 from boxtree import TreeBuilder
+
 tb = TreeBuilder(ctx)
 tree, _ = tb(
     queue,
     particles=q_points,
     targets=q_points,
     bbox=bbox,
-    max_particles_in_box=q_order**2 * 4 - 1,
-    kind="adaptive-level-restricted")
+    max_particles_in_box=q_order ** 2 * 4 - 1,
+    kind="adaptive-level-restricted",
+)
 
 from boxtree.traversal import FMMTraversalBuilder
+
 tg = FMMTraversalBuilder(ctx)
 trav, _ = tg(queue, tree)
 
@@ -136,11 +145,20 @@ trav, _ = tg(queue, tree)
 # {{{ build near field potential table
 
 from volumential.table_manager import NearFieldInteractionTableManager
+
 tm = NearFieldInteractionTableManager("nft.hdf5")
-nftable, _ = tm.get_table(dim, "Constant", q_order,
-        compute_method="DrosteSum", queue=queue,
-        n_brick_quad_points=120, adaptive_level=False,
-        use_symmetry=True, alpha=0, n_levels=1)
+nftable, _ = tm.get_table(
+    dim,
+    "Constant",
+    q_order,
+    compute_method="DrosteSum",
+    queue=queue,
+    n_brick_quad_points=120,
+    adaptive_level=False,
+    use_symmetry=True,
+    alpha=0,
+    n_levels=1,
+)
 
 # }}} End build near field potential table
 
@@ -150,6 +168,7 @@ from sumpy.kernel import ExpressionKernel
 from sumpy.expansion.multipole import VolumeTaylorMultipoleExpansion
 from sumpy.expansion.local import VolumeTaylorLocalExpansion
 
+
 class ConstantKernel(ExpressionKernel):
     init_arg_names = ("dim",)
 
@@ -158,10 +177,8 @@ class ConstantKernel(ExpressionKernel):
         scaling = 1
 
         super(ConstantKernel, self).__init__(
-                dim,
-                expression=expr,
-                global_scaling_const=scaling,
-                is_complex_valued=False)
+            dim, expression=expr, global_scaling_const=scaling, is_complex_valued=False
+        )
 
     has_efficient_scale_adjustment = True
 
@@ -177,6 +194,7 @@ class ConstantKernel(ExpressionKernel):
     # Using some existing mapping
     mapper_method = "map_expression_kernel"
 
+
 knl = ConstantKernel(2)
 
 out_kernels = [knl]
@@ -184,12 +202,13 @@ local_expn_class = VolumeTaylorLocalExpansion
 mpole_expn_class = VolumeTaylorMultipoleExpansion
 
 from volumential.expansion_wrangler_interface import ExpansionWranglerCodeContainer
-wcc = ExpansionWranglerCodeContainer(ctx,
-                                     partial(mpole_expn_class, knl),
-                                     partial(local_expn_class, knl),
-                                     out_kernels)
+
+wcc = ExpansionWranglerCodeContainer(
+    ctx, partial(mpole_expn_class, knl), partial(local_expn_class, knl), out_kernels
+)
 
 from volumential.expansion_wrangler_fpnd import FPNDExpansionWrangler
+
 wrangler = FPNDExpansionWrangler(
     code_container=wcc,
     queue=queue,
@@ -197,21 +216,22 @@ wrangler = FPNDExpansionWrangler(
     near_field_table=nftable,
     dtype=dtype,
     fmm_level_to_order=lambda kernel, kernel_args, tree, lev: m_order,
-    quad_order=q_order)
+    quad_order=q_order,
+)
 
 # }}} End sumpy expansion for laplace kernel
 
 # {{{ conduct fmm computation
 
 from volumential.volume_fmm import drive_volume_fmm
-pot, = drive_volume_fmm(trav, wrangler, q_weights, source_vals,
-        direct_evaluation=False)
+
+pot, = drive_volume_fmm(trav, wrangler, q_weights, source_vals, direct_evaluation=False)
 
 # }}} End conduct fmm computation
 
 # {{{ postprocess and plot
 
-n_cells = (2**(n_levels-1))**2
+n_cells = (2 ** (n_levels - 1)) ** 2
 cell_area = 4 / n_cells
 print("Number of cells =", n_cells)
 print("Cell area =", cell_area)
@@ -222,8 +242,9 @@ pot = pot.get()
 print(pot)
 
 if 1:
-    pot2, = drive_volume_fmm(trav, wrangler, q_weights, source_vals,
-            direct_evaluation=True)
+    pot2, = drive_volume_fmm(
+        trav, wrangler, q_weights, source_vals, direct_evaluation=True
+    )
     pot2 = pot2.get()
     print(pot2)
 
@@ -234,6 +255,7 @@ if 0:
         plt.plot(q_points[0].get(), q_points[1].get(), ".")
 
     from boxtree.visualization import TreePlotter
+
     plotter = TreePlotter(tree.get(queue=queue))
     plotter.draw_tree(fill=False, edgecolor="black")
     plotter.draw_box_numbers()
@@ -258,7 +280,7 @@ if 0:
 
     plt.draw()
     plt.show()
-    #plt.savefig("exact.png")
+    # plt.savefig("exact.png")
 
 # }}} End postprocess and plot
 
