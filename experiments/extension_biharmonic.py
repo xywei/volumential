@@ -63,22 +63,38 @@ def setup_qbx_and_discr(ctx, nelements,
     logger = logging.getLogger("SETUP")
     logger.info(locals())
 
+    cl_ctx = setup_cl_ctx(ctx)
+
     if ovsmp_target_order is None:
         ovsmp_target_order = target_order * 4
 
     from meshmode.mesh.generation import (  # noqa
             make_curve_mesh, starfish, ellipse, drop)
-    mesh = make_curve_mesh(
+    inner_mesh = make_curve_mesh(
             lambda t: circle_rad * ellipse(1, t),
             np.linspace(0, 1, nelements+1),
             mesh_order)
+    outer_mesh = make_curve_mesh(
+            lambda t: circle_rad * ellipse(1, t),
+            np.linspace(0, 1, 2*nelements+1),
+            mesh_order)
 
-    cl_ctx = setup_cl_ctx(ctx)
+    from meshmode.mesh.processing import affine_map, merge_disjoint_meshes
+    outer_mesh = affine_map(outer_mesh,
+            A=np.diag([-2, -2]), b=np.array([0, 0]))
+
+    mesh = merge_disjoint_meshes([inner_mesh, outer_mesh], single_group=True)
+
+    if 1:
+        from meshmode.mesh.visualization import draw_curve
+        draw_curve(mesh)
+        import matplotlib.pyplot as plt
+        plt.show()
+
     from meshmode.discretization import Discretization
     from meshmode.discretization.poly_element import \
             InterpolatoryQuadratureSimplexGroupFactory
-    coarse_density_discr = Discretization(
-            cl_ctx, mesh,
+    coarse_density_discr = Discretization(cl_ctx, mesh,
             InterpolatoryQuadratureSimplexGroupFactory(target_order))
 
     from pytential.qbx import QBXLayerPotentialSource
