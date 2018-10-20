@@ -24,7 +24,7 @@ THE SOFTWARE.
 
 import numpy as np
 import pyopencl as cl
-import pyopencl.array # NOQA
+import pyopencl.array  # NOQA
 
 from functools import partial
 
@@ -42,7 +42,7 @@ def drive_test_completeness(q_order):
     dtype = np.float64
 
     def source_field(x):
-        assert (len(x) == dim)
+        assert len(x) == dim
         return 1
 
     ctx = cl.create_some_context()
@@ -51,18 +51,22 @@ def drive_test_completeness(q_order):
     # {{{ generate quad points
 
     import volumential.meshgen as mg
-    q_points, q_weights, q_radii = mg.make_uniform_cubic_grid(
-        degree=q_order, level=n_levels)
 
-    assert (len(q_points) == len(q_weights))
-    assert (q_points.shape[1] == dim)
+    q_points, q_weights, q_radii = mg.make_uniform_cubic_grid(
+        degree=q_order, level=n_levels
+    )
+
+    assert len(q_points) == len(q_weights)
+    assert q_points.shape[1] == dim
 
     q_points_org = q_points
     q_points = np.ascontiguousarray(np.transpose(q_points))
 
     from pytools.obj_array import make_obj_array
+
     q_points = make_obj_array(
-        [cl.array.to_device(queue, q_points[i]) for i in range(dim)])
+        [cl.array.to_device(queue, q_points[i]) for i in range(dim)]
+    )
 
     q_weights = cl.array.to_device(queue, q_weights)
     if q_radii is not None:
@@ -72,20 +76,23 @@ def drive_test_completeness(q_order):
 
     # {{{ discretize the source field
 
-    source_vals = cl.array.to_device(queue,
-                                     np.array(
-                                         [source_field(qp) for qp in q_points_org]))
+    source_vals = cl.array.to_device(
+        queue, np.array([source_field(qp) for qp in q_points_org])
+    )
 
     # }}} End discretize the source field
 
     # {{{ build tree and traversals
 
     from boxtree.tools import AXIS_NAMES
+
     axis_names = AXIS_NAMES[:dim]
 
     from pytools import single_valued
+
     coord_dtype = single_valued(coord.dtype for coord in q_points)
     from boxtree.bounding_box import make_bounding_box_dtype
+
     bbox_type, _ = make_bounding_box_dtype(ctx.devices[0], dim, coord_dtype)
 
     bbox = np.empty(1, bbox_type)
@@ -97,22 +104,26 @@ def drive_test_completeness(q_order):
     # TODO: use points from FieldPlotter are used as target points for better
     # visuals
     from boxtree import TreeBuilder
+
     tb = TreeBuilder(ctx)
     tree, _ = tb(
         queue,
         particles=q_points,
         targets=q_points,
         bbox=bbox,
-        max_particles_in_box=q_order**2 * 4 - 1,
-        kind="adaptive-level-restricted")
+        max_particles_in_box=q_order ** 2 * 4 - 1,
+        kind="adaptive-level-restricted",
+    )
 
     from boxtree.traversal import FMMTraversalBuilder
+
     tg = FMMTraversalBuilder(ctx)
     trav, _ = tg(queue, tree)
 
     # }}} End build tree and traversals
 
     from volumential.table_manager import NearFieldInteractionTableManager
+
     tm = NearFieldInteractionTableManager("nft.hdf5")
     nft, _ = tm.get_table(dim, "Constant", q_order)
 
@@ -127,15 +138,18 @@ def drive_test_completeness(q_order):
     local_expn_class = VolumeTaylorLocalExpansion
     mpole_expn_class = VolumeTaylorMultipoleExpansion
 
-    from volumential.expansion_wrangler_interface \
-            import ExpansionWranglerCodeContainer
-    wcc = ExpansionWranglerCodeContainer(ctx,
-                                         partial(mpole_expn_class, knl),
-                                         partial(local_expn_class, knl),
-                                         out_kernels,
-                                         exclude_self=True)
+    from volumential.expansion_wrangler_interface import ExpansionWranglerCodeContainer
+
+    wcc = ExpansionWranglerCodeContainer(
+        ctx,
+        partial(mpole_expn_class, knl),
+        partial(local_expn_class, knl),
+        out_kernels,
+        exclude_self=True,
+    )
 
     from volumential.expansion_wrangler_fpnd import FPNDExpansionWrangler
+
     wrangler = FPNDExpansionWrangler(
         code_container=wcc,
         queue=queue,
@@ -143,16 +157,19 @@ def drive_test_completeness(q_order):
         near_field_table=nft,
         dtype=dtype,
         fmm_level_to_order=lambda kernel, kernel_args, tree, lev: 1,
-        quad_order=q_order)
+        quad_order=q_order,
+    )
 
     # }}} End sumpy expansion for laplace kernel
-    pot = wrangler.eval_direct(trav.target_boxes,
-                               trav.neighbor_source_boxes_starts,
-                               trav.neighbor_source_boxes_lists,
-                               mode_coefs=source_vals)
+    pot = wrangler.eval_direct(
+        trav.target_boxes,
+        trav.neighbor_source_boxes_starts,
+        trav.neighbor_source_boxes_lists,
+        mode_coefs=source_vals,
+    )
     pot = pot[0]
     for p in pot[0]:
-        assert(abs(p - 4) < 1e-12)
+        assert abs(p - 4) < 1e-12
 
 
 def test_completeness():

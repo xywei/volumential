@@ -1,6 +1,6 @@
-'''
+"""
 FMM convergence test (laplace kernel)
-'''
+"""
 from __future__ import absolute_import, division, print_function
 
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
@@ -26,6 +26,7 @@ THE SOFTWARE.
 """
 
 import logging
+
 logger = logging.getLogger(__name__)
 
 import numpy as np
@@ -42,7 +43,7 @@ print("*************************")
 
 dim = 2
 
-q_order = 2 # quadrature order
+q_order = 2  # quadrature order
 n_levels = 6  # 2^(n_levels-1) subintervals in 1D, must be at least 2 if not adaptive
 adaptive_mesh = False
 n_refinement_loops = 100
@@ -52,31 +53,37 @@ rratio_bot = 0.5
 
 dtype = np.float64
 
-m_orders = [ i for i in range(10,31) ] # multipole order
+m_orders = [i for i in range(10, 31)]  # multipole order
 
 
 if 1:
     # source 1 in a small region, to test for missing interation
-    n_subintervals = 2**(n_levels-1)
+    n_subintervals = 2 ** (n_levels - 1)
     h = 2 / n_subintervals
     kk = 0  # radius
     from random import randint
+
     kx = randint(-n_levels + 1, n_levels - 1)
     ky = randint(-n_levels + 1, n_levels - 1)
     print(kx, ky)
     # RHS
     def source_field(x):
-        assert (len(x) == dim)
+        assert len(x) == dim
         return 0
-        if x[0] > (kx-kk)*h and x[0] < max(kx+kk,kx+1)*h \
-                and x[1] > (ky-kk)*h and x[1] < max(ky+kk,ky+1)*h:
+        if (
+            x[0] > (kx - kk) * h
+            and x[0] < max(kx + kk, kx + 1) * h
+            and x[1] > (ky - kk) * h
+            and x[1] < max(ky + kk, ky + 1) * h
+        ):
             return -1
         else:
             return 0
 
     # analytical solution, up to a harmonic function
     def exact_solu(x, y):
-        return 0.25 * (x**2 + y**2)
+        return 0.25 * (x ** 2 + y ** 2)
+
 
 else:
 
@@ -86,14 +93,14 @@ else:
     alpha = 160 / np.sqrt(2)
 
     def source_field(x):
-        assert (len(x) == dim)
-        assert (dim == 2)
-        norm2 = x[0]**2 + x[1]**2
-        lap_u = (4 * alpha**2 * norm2 - 4 * alpha) * np.exp(-alpha * norm2)
+        assert len(x) == dim
+        assert dim == 2
+        norm2 = x[0] ** 2 + x[1] ** 2
+        lap_u = (4 * alpha ** 2 * norm2 - 4 * alpha) * np.exp(-alpha * norm2)
         return -lap_u
 
     def exact_solu(x, y):
-        norm2 = x**2 + y**2
+        norm2 = x ** 2 + y ** 2
         return np.exp(-alpha * norm2)
 
 
@@ -110,7 +117,8 @@ import volumential.meshgen as mg
 
 if not adaptive_mesh:
     q_points, q_weights, q_radii = mg.make_uniform_cubic_grid(
-        degree=q_order, level=n_levels)
+        degree=q_order, level=n_levels
+    )
     print("Number of quad points:", len(q_points))
 else:
 
@@ -118,10 +126,12 @@ else:
     iloop = 0
     while mesh.n_active_cells() < refined_n_cells:
         iloop += 1
-        crtr = np.array([
-            np.abs(source_field(c) * m)
-                 for (c, m) in
-                 zip(mesh.get_cell_centers(), mesh.get_cell_measures()) ])
+        crtr = np.array(
+            [
+                np.abs(source_field(c) * m)
+                for (c, m) in zip(mesh.get_cell_centers(), mesh.get_cell_measures())
+            ]
+        )
         mesh.update_mesh(crtr, rratio_top, rratio_bot)
         if iloop > n_refinement_loops:
             print("Max number of refinement loops reached.")
@@ -132,16 +142,16 @@ else:
     q_weights = mesh.get_q_weights()
     q_radii = None
 
-assert (len(q_points) == len(q_weights))
-assert (q_points.shape[1] == dim)
+assert len(q_points) == len(q_weights)
+assert q_points.shape[1] == dim
 print(q_weights)
 
 q_points_org = q_points
 q_points = np.ascontiguousarray(np.transpose(q_points))
 
 from pytools.obj_array import make_obj_array
-q_points = make_obj_array(
-    [cl.array.to_device(queue, q_points[i]) for i in range(dim)])
+
+q_points = make_obj_array([cl.array.to_device(queue, q_points[i]) for i in range(dim)])
 
 q_weights = cl.array.to_device(queue, q_weights)
 # q_radii = cl.array.to_device(queue, q_radii)
@@ -150,17 +160,19 @@ q_weights = cl.array.to_device(queue, q_weights)
 
 # {{{ discretize the source field
 
+
 def hs(f):
     if abs(f) > 1e-8:
         return 1
     else:
         return 0
 
-source_vals = cl.array.to_device(queue,
-        np.array(
-            [source_field(qp) for qp in q_points_org]))
 
-print(sum([ hs(source_field(qp)) for qp in q_points_org ]))
+source_vals = cl.array.to_device(
+    queue, np.array([source_field(qp) for qp in q_points_org])
+)
+
+print(sum([hs(source_field(qp)) for qp in q_points_org]))
 
 
 # particle_weigt = source_val * q_weight
@@ -170,11 +182,14 @@ print(sum([ hs(source_field(qp)) for qp in q_points_org ]))
 # {{{ build tree and traversals
 
 from boxtree.tools import AXIS_NAMES
+
 axis_names = AXIS_NAMES[:dim]
 
 from pytools import single_valued
+
 coord_dtype = single_valued(coord.dtype for coord in q_points)
 from boxtree.bounding_box import make_bounding_box_dtype
+
 bbox_type, _ = make_bounding_box_dtype(ctx.devices[0], dim, coord_dtype)
 
 bbox = np.empty(1, bbox_type)
@@ -186,16 +201,19 @@ for ax in axis_names:
 # TODO: use points from FieldPlotter are used as target points for better
 # visuals
 from boxtree import TreeBuilder
+
 tb = TreeBuilder(ctx)
 tree, _ = tb(
     queue,
     particles=q_points,
     targets=q_points,
     bbox=bbox,
-    max_particles_in_box=q_order**2 * 4 - 1,
-    kind="adaptive-level-restricted")
+    max_particles_in_box=q_order ** 2 * 4 - 1,
+    kind="adaptive-level-restricted",
+)
 
 from boxtree.traversal import FMMTraversalBuilder
+
 tg = FMMTraversalBuilder(ctx)
 trav, _ = tg(queue, tree)
 
@@ -204,6 +222,7 @@ trav, _ = tg(queue, tree)
 # {{{ build near field potential table
 
 from volumential.table_manager import NearFieldInteractionTableManager
+
 tm = NearFieldInteractionTableManager("nft.hdf5")
 nftable, _ = tm.get_table(dim, "Laplace", q_order)
 
@@ -227,11 +246,14 @@ mpole_expn_class = LaplaceConformingVolumeTaylorMultipoleExpansion
 
 exclude_self = True
 from volumential.expansion_wrangler_interface import ExpansionWranglerCodeContainer
-wcc = ExpansionWranglerCodeContainer(ctx,
-                                     partial(mpole_expn_class, knl),
-                                     partial(local_expn_class, knl),
-                                     out_kernels,
-                                     exclude_self=exclude_self)
+
+wcc = ExpansionWranglerCodeContainer(
+    ctx,
+    partial(mpole_expn_class, knl),
+    partial(local_expn_class, knl),
+    out_kernels,
+    exclude_self=exclude_self,
+)
 
 if exclude_self:
     target_to_source = np.arange(tree.ntargets, dtype=np.int32)
@@ -258,11 +280,12 @@ wrangler = FPNDExpansionWrangler(
     dtype=dtype,
     fmm_level_to_order=lambda kernel, kernel_args, tree, lev: m_order,
     quad_order=q_order,
-    self_extra_kwargs=self_extra_kwargs)
+    self_extra_kwargs=self_extra_kwargs,
+)
 
-direct_pot, = drive_volume_fmm(trav, wrangler,
-        source_vals * q_weights, source_vals,
-        direct_evaluation=True)
+direct_pot, = drive_volume_fmm(
+    trav, wrangler, source_vals * q_weights, source_vals, direct_evaluation=True
+)
 norm_pot = max(abs(direct_pot))
 if norm_pot == 0:
     norm_pot = 1
@@ -282,11 +305,12 @@ for m_order in m_orders:
         dtype=dtype,
         fmm_level_to_order=lambda kernel, kernel_args, tree, lev: m_order,
         quad_order=q_order,
-        self_extra_kwargs=self_extra_kwargs)
+        self_extra_kwargs=self_extra_kwargs,
+    )
 
-    pot, = drive_volume_fmm(trav, wrangler,
-            source_vals * q_weights, source_vals,
-            direct_evaluation=False)
+    pot, = drive_volume_fmm(
+        trav, wrangler, source_vals * q_weights, source_vals, direct_evaluation=False
+    )
 
     absolute_err = max(abs(direct_pot - pot))
     print("  Relative error =", absolute_err / norm_pot)

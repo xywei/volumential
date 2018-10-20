@@ -31,4 +31,5 @@ fi
 
 files="`echo volumential/*py`"
 
-yapf --in-place --style=contrib/utilities/style.yapf $files
+# yapf --in-place --style=contrib/utilities/style.yapf $files
+black $files

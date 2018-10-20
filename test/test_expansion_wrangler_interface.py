@@ -32,8 +32,8 @@ def test_interface_allocation():
         wrglr.local_expansion_zeros()
         wrglr.output_zeros()
     except NotImplementedError:
-        assert (False)
-    assert (True)
+        assert False
+    assert True
 
 
 def test_interface_utilities():
@@ -45,8 +45,8 @@ def test_interface_utilities():
         wrglr.reorder_potentials(None)
         wrglr.finalize_potentials(None)
     except NotImplementedError:
-        assert (False)
-    assert (True)
+        assert False
+    assert True
 
 
 def test_interface_multipole_formation():
@@ -55,18 +55,18 @@ def test_interface_multipole_formation():
     wrglr = ewi.ExpansionWranglerInterface()
     try:
         wrglr.form_multipoles(
-            level_start_source_box_nrs=None,
-            source_boxes=None,
-            src_weights=None)
+            level_start_source_box_nrs=None, source_boxes=None, src_weights=None
+        )
         wrglr.form_locals(
             level_start_target_or_target_parent_box_nrs=None,
             target_or_target_parent_boxes=None,
             starts=None,
             lists=None,
-            src_weights=None)
+            src_weights=None,
+        )
     except NotImplementedError:
-        assert (False)
-    assert (True)
+        assert False
+    assert True
 
 
 def test_interface_multipole_evaluation():
@@ -75,22 +75,21 @@ def test_interface_multipole_evaluation():
     wrglr = ewi.ExpansionWranglerInterface()
     try:
         wrglr.eval_direct(
-            target_boxes=None,
-            neighbor_sources_starts=None,
-            neighbor_sources_lists=None)
+            target_boxes=None, neighbor_sources_starts=None, neighbor_sources_lists=None
+        )
         wrglr.eval_locals(
-            level_start_target_box_nrs=None,
-            target_boxes=None,
-            local_exps=None)
+            level_start_target_box_nrs=None, target_boxes=None, local_exps=None
+        )
         wrglr.eval_multipoles(
             level_start_target_box_nrs=None,
             target_boxes=None,
             starts=None,
             lists=None,
-            mpole_exps=None)
+            mpole_exps=None,
+        )
     except NotImplementedError:
-        assert (False)
-    assert (True)
+        assert False
+    assert True
 
 
 def test_interface_multipole_manipulation():
@@ -101,17 +100,20 @@ def test_interface_multipole_manipulation():
         wrglr.coarsen_multipoles(
             level_start_source_parent_box_nrs=None,
             source_parent_boxes=None,
-            mpoles=None)
+            mpoles=None,
+        )
         wrglr.multipole_to_local(
             level_start_target_or_target_parent_box_nrs=None,
             target_or_target_parent_boxes=None,
             starts=None,
             lists=None,
-            mpole_exps=None)
+            mpole_exps=None,
+        )
         wrglr.refine_locals(
             level_start_target_or_target_parent_box_nrs=None,
             target_or_target_parent_boxes=None,
-            local_exps=None)
+            local_exps=None,
+        )
     except NotImplementedError:
-        assert (False)
-    assert (True)
+        assert False
+    assert True
