@@ -53,19 +53,20 @@ def test_patch_laplace():
     size = 0.05
 
     import random
+
     for r in range(rep):
         center_x = random.uniform(-1, 1)
         center_y = random.uniform(-1, 1)
         center = [center_x, center_y]
         patch = make_patch(center, size)
 
-        f_values = 0.25 * (patch.x**2 + patch.y**2)
+        f_values = 0.25 * (patch.x ** 2 + patch.y ** 2)
 
         lap = patch.laplace(f_values)
 
         print(center, size, len(patch.x), lap)
 
-        assert (np.max(np.abs(lap - 1)) < 1e-4)
+        assert np.max(np.abs(lap - 1)) < 1e-4
 
 
 def direct_quad(source_func, target_point):
@@ -73,18 +74,13 @@ def direct_quad(source_func, target_point):
     knl_func = npt.get_laplace(dim)
 
     def integrand(x, y):
-        return source_func(x, y) * knl_func(target_point[0] - x,
-                                            target_point[1] - y)
+        return source_func(x, y) * knl_func(target_point[0] - x, target_point[1] - y)
 
     import volumential.singular_integral_2d as squad
+
     integral, error = squad.box_quad(
-        func=integrand,
-        a=0,
-        b=1,
-        c=0,
-        d=1,
-        singular_point=target_point,
-        maxiter=1000)
+        func=integrand, a=0, b=1, c=0, d=1, singular_point=target_point, maxiter=1000
+    )
 
     return integral
 
@@ -114,6 +110,7 @@ def test_laplace_same_box_on_patch():
 
     # inside the box
     import random
+
     for r in range(rep):
         center_x = random.uniform(size / 2, 1 - size / 2)
         center_y = random.uniform(size / 2, 1 - size / 2)
@@ -131,7 +128,7 @@ def test_laplace_same_box_on_patch():
         print("f_vals", f_values)
         print("lap", lap)
 
-        assert (max(abs(lap + 1)) < 0.1)
+        assert max(abs(lap + 1)) < 0.1
 
     # outside of the box
 
@@ -158,4 +155,4 @@ def test_laplace_same_box_on_patch():
         print("f_vals", f_values)
         print("lap", lap)
 
-        assert (max(abs((lap))) < 0.1)
+        assert max(abs((lap))) < 0.1

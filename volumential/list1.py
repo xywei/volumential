@@ -26,6 +26,7 @@ import loopy
 from sumpy.tools import KernelCacheWrapper
 
 import logging
+
 logger = logging.getLogger(__name__)
 
 logging.basicConfig(level=logging.INFO)
@@ -34,19 +35,21 @@ logging.basicConfig(level=logging.INFO)
 
 
 class NearFieldEvalBase(KernelCacheWrapper):
-    def __init__(self,
-                 integral_kernel,
-                 table_data_shapes,
-                 options=[],
-                 name=None,
-                 device=None,
-                 **kwargs):
+    def __init__(
+        self,
+        integral_kernel,
+        table_data_shapes,
+        options=[],
+        name=None,
+        device=None,
+        **kwargs
+    ):
 
         self.integral_kernel = integral_kernel
 
-        self.n_tables = table_data_shapes['n_tables']
-        self.n_q_points = table_data_shapes['n_q_points']
-        self.n_table_entries = table_data_shapes['n_table_entries']
+        self.n_tables = table_data_shapes["n_tables"]
+        self.n_q_points = table_data_shapes["n_q_points"]
+        self.n_table_entries = table_data_shapes["n_table_entries"]
 
         self.options = options
         self.name = name or self.default_name
@@ -55,15 +58,19 @@ class NearFieldEvalBase(KernelCacheWrapper):
 
         # Allow user to pass more tables to force using multiple tables
         # instead of performing kernel scaling
-        if not ('infer_kernel_scaling' in self.extra_kwargs):
-            self.extra_kwargs['infer_kernel_scaling'] = (self.n_tables == 1)
+        if not ("infer_kernel_scaling" in self.extra_kwargs):
+            self.extra_kwargs["infer_kernel_scaling"] = self.n_tables == 1
 
         self.kname = self.integral_kernel.__repr__()
         self.dim = self.integral_kernel.dim
 
     def get_cache_key(self):
-        return (type(self).__name__, self.name, self.kname,
-                "infer_scaling=" + str(self.extra_kwargs['infer_kernel_scaling']))
+        return (
+            type(self).__name__,
+            self.name,
+            self.kname,
+            "infer_scaling=" + str(self.extra_kwargs["infer_kernel_scaling"]),
+        )
 
 
 # }}} End near field eval base class
@@ -79,11 +86,17 @@ class NearFieldFromCSR(NearFieldEvalBase):
             dimension = self.dim - 1
         else:
             dimension = d
-        return "(" + \
-            "(box_centers[" + str(dimension) + ", target_box_id]" + \
-            "- box_centers[" + str(dimension) + ", source_box_id]" + \
-            ") / sbox_extent * 4.0 + encoding_shift" + \
-               ")"
+        return (
+            "("
+            + "(box_centers["
+            + str(dimension)
+            + ", target_box_id]"
+            + "- box_centers["
+            + str(dimension)
+            + ", source_box_id]"
+            + ") / sbox_extent * 4.0 + encoding_shift"
+            + ")"
+        )
 
     def codegen_vec_id(self):
         dim = self.dim
@@ -94,8 +107,9 @@ class NearFieldFromCSR(NearFieldEvalBase):
         return code
 
     def codegen_compute_scaling(self):
-        if ('infer_kernel_scaling' in self.extra_kwargs) and (
-                self.extra_kwargs['infer_kernel_scaling']):
+        if ("infer_kernel_scaling" in self.extra_kwargs) and (
+            self.extra_kwargs["infer_kernel_scaling"]
+        ):
             # Laplace 2D
             if self.kname == "LapKnl2D":
                 logger.info("scaling for LapKnl2D")
@@ -121,9 +135,11 @@ class NearFieldFromCSR(NearFieldEvalBase):
                         (table_root_extent * table_root_extent * table_root_extent)"
 
             else:
-                logger.warn("Kernel not scalable and not using multiple tables, "
-                            "to get correct results, please make sure that your "
-                            "tree is uniform and only needs one table.")
+                logger.warn(
+                    "Kernel not scalable and not using multiple tables, "
+                    "to get correct results, please make sure that your "
+                    "tree is uniform and only needs one table."
+                )
                 return "1.0"
         else:
             logger.info("not scaling for " + self.kname)
@@ -131,8 +147,9 @@ class NearFieldFromCSR(NearFieldEvalBase):
             return "1.0"
 
     def codegen_compute_displacement(self):
-        if ('infer_kernel_scaling' in self.extra_kwargs) and (
-                self.extra_kwargs['infer_kernel_scaling']):
+        if ("infer_kernel_scaling" in self.extra_kwargs) and (
+            self.extra_kwargs["infer_kernel_scaling"]
+        ):
             # Laplace 2D
             if self.kname == "LapKnl2D":
                 logger.info("displacement for laplace 2D")
@@ -141,6 +158,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
                         mode_nmlz[table_lev, sid]"
 
                 import math
+
                 return s.replace("PI", str(math.pi))
             # Constant 2D
             elif self.kname == "CstKnl2D":
@@ -155,9 +173,11 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 logger.info("no displacement for CstKnl3D")
                 return "0.0"
             else:
-                logger.warn("Kernel not scalable and not using multiple tables, "
-                            "to get correct results, please make sure that your "
-                            "tree is uniform and only needs one table.")
+                logger.warn(
+                    "Kernel not scalable and not using multiple tables, "
+                    "to get correct results, please make sure that your "
+                    "tree is uniform and only needs one table."
+                )
                 return "0.0"
         else:
             logger.info("no displacement for " + self.kname)
@@ -165,16 +185,23 @@ class NearFieldFromCSR(NearFieldEvalBase):
             return "0.0"
 
     def codegen_get_table_level(self):
-        if ('infer_kernel_scaling' in self.extra_kwargs) and (
-                self.extra_kwargs['infer_kernel_scaling']):
-            if (self.kname == "LapKnl2D" or self.kname == "LapKnl3D"
-                    or self.kname == "CstKnl2D" or self.kname == "CstKnl3D"):
+        if ("infer_kernel_scaling" in self.extra_kwargs) and (
+            self.extra_kwargs["infer_kernel_scaling"]
+        ):
+            if (
+                self.kname == "LapKnl2D"
+                or self.kname == "LapKnl3D"
+                or self.kname == "CstKnl2D"
+                or self.kname == "CstKnl3D"
+            ):
                 logger.info("scaling from table[0] for " + self.kname)
                 return "0.0"
             else:
-                logger.warn("Kernel not scalable and not using multiple tables, "
-                            "to get correct results, please make sure that your "
-                            "tree is uniform and only needs one table.")
+                logger.warn(
+                    "Kernel not scalable and not using multiple tables, "
+                    "to get correct results, please make sure that your "
+                    "tree is uniform and only needs one table."
+                )
                 return "0.0"
         else:
             logger.info("computing table level from box size")
@@ -189,7 +216,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 "{ [ tbox ] : 0 <= tbox < n_tgt_boxes }",
                 "{ [ tid, sbox ] : 0 <= tid < n_box_targets and \
                         sbox_begin <= sbox < sbox_end }",
-                "{ [ sid ] : 0 <= sid < n_box_sources }"
+                "{ [ sid ] : 0 <= sid < n_box_sources }",
             ],
             """
             for tbox
@@ -262,11 +289,12 @@ class NearFieldFromCSR(NearFieldEvalBase):
 
                 end
             end
-            """.replace("COMPUTE_VEC_ID", self.codegen_vec_id()).replace(
-                "COMPUTE_SCALING", self.codegen_compute_scaling()).replace(
-                    "COMPUTE_DISPLACEMENT",
-                    self.codegen_compute_displacement()).replace(
-                        "GET_TABLE_LEVEL", self.codegen_get_table_level()),
+            """.replace(
+                "COMPUTE_VEC_ID", self.codegen_vec_id()
+            )
+            .replace("COMPUTE_SCALING", self.codegen_compute_scaling())
+            .replace("COMPUTE_DISPLACEMENT", self.codegen_compute_displacement())
+            .replace("GET_TABLE_LEVEL", self.codegen_get_table_level()),
             [
                 loopy.TemporaryVariable("vec_id", np.int32),
                 loopy.TemporaryVariable("vec_id_tmp", np.float64),
@@ -277,33 +305,41 @@ class NearFieldFromCSR(NearFieldEvalBase):
                     "mode_nmlz",
                     np.float64,
                     # shape=(self.n_tables, self.n_q_points)
-                    "n_tables, n_q_points"),
+                    "n_tables, n_q_points",
+                ),
                 loopy.GlobalArg(
                     "table_data",
                     np.float64,
                     # shape=(self.n_tables, self.n_table_entries)
-                    "n_tables, n_table_entries"),
+                    "n_tables, n_table_entries",
+                ),
                 loopy.GlobalArg("source_boxes", np.int32, "n_source_boxes"),
                 loopy.GlobalArg("box_centers", None, "dim, aligned_nboxes"),
                 loopy.ValueArg("aligned_nboxes", np.int32),
                 loopy.ValueArg("table_root_extent", np.float64),
                 loopy.ValueArg(
-                    "dim, n_source_boxes, n_tables, "
-                    "n_q_points, n_table_entries", np.int32),
-                "..."
+                    "dim, n_source_boxes, n_tables, " "n_q_points, n_table_entries",
+                    np.int32,
+                ),
+                "...",
             ],
-            name="near_field")
+            name="near_field",
+        )
 
-        #print(lpknl)
-        #lpknl = loopy.set_options(lpknl, write_code=True)
+        # print(lpknl)
+        # lpknl = loopy.set_options(lpknl, write_code=True)
 
         lpknl = loopy.set_options(lpknl, return_dict=True)
 
         return lpknl
 
     def get_cache_key(self):
-        return (type(self).__name__, self.name, self.kname,
-                "infer_scaling=" + str(self.extra_kwargs['infer_kernel_scaling']))
+        return (
+            type(self).__name__,
+            self.name,
+            self.kname,
+            "infer_scaling=" + str(self.extra_kwargs["infer_kernel_scaling"]),
+        )
 
     def get_optimized_kernel(self):
         # FIXME
@@ -336,12 +372,12 @@ class NearFieldFromCSR(NearFieldEvalBase):
         evt, res = knl(
             queue,
             result=result,
-            #db_table_lev=np.zeros(out_pot.shape),
-            #db_case_id=np.zeros(out_pot.shape),
-            #db_vec_id=np.zeros(out_pot.shape),
-            #db_n_box_sources=np.zeros(out_pot.shape),
-            #db_n_box_targets=np.zeros(out_pot.shape),
-            #db_entry_id=np.zeros(out_pot.shape),
+            # db_table_lev=np.zeros(out_pot.shape),
+            # db_case_id=np.zeros(out_pot.shape),
+            # db_vec_id=np.zeros(out_pot.shape),
+            # db_n_box_sources=np.zeros(out_pot.shape),
+            # db_n_box_targets=np.zeros(out_pot.shape),
+            # db_entry_id=np.zeros(out_pot.shape),
             box_centers=box_centers,
             box_levels=box_levels,
             box_source_counts_cuml=box_source_counts_cumul,
@@ -364,13 +400,14 @@ class NearFieldFromCSR(NearFieldEvalBase):
             source_coefs=mode_coefs,
             table_data=table_data_combined,
             target_boxes=target_boxes,
-            table_root_extent=table_root_extent)
+            table_root_extent=table_root_extent,
+        )
 
-        assert (result is res['result'])
+        assert result is res["result"]
         result.add_event(evt)
 
         # check for data integrity
-        #if not (np.max(np.abs(out_pot.get()))) < 100:
+        # if not (np.max(np.abs(out_pot.get()))) < 100:
         #    import pudb; pu.db
         return result, evt
 

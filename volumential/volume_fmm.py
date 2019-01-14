@@ -23,6 +23,7 @@ THE SOFTWARE.
 """
 
 import logging
+
 logger = logging.getLogger(__name__)
 
 from boxtree.fmm import TimingRecorder
@@ -31,12 +32,14 @@ from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
 import numpy as np
 
 
-def drive_volume_fmm(traversal,
-                     expansion_wrangler,
-                     src_weights,
-                     src_func,
-                     direct_evaluation=False,
-                     timing_data=None):
+def drive_volume_fmm(
+    traversal,
+    expansion_wrangler,
+    src_weights,
+    src_func,
+    direct_evaluation=False,
+    timing_data=None,
+):
     """
     Top-level driver routine for volume potential calculation
     via fast multiple method.
@@ -60,7 +63,7 @@ def drive_volume_fmm(traversal,
     Returns the potentials computed by *expansion_wrangler*.
     """
     wrangler = expansion_wrangler
-    assert (issubclass(type(wrangler), ExpansionWranglerInterface))
+    assert issubclass(type(wrangler), ExpansionWranglerInterface)
 
     recorder = TimingRecorder()
     logger.info("start fmm")
@@ -74,7 +77,8 @@ def drive_volume_fmm(traversal,
 
     logger.debug("construct local multipoles")
     mpole_exps, timing_future = wrangler.form_multipoles(
-        traversal.level_start_source_box_nrs, traversal.source_boxes, src_weights)
+        traversal.level_start_source_box_nrs, traversal.source_boxes, src_weights
+    )
     recorder.add("form_multipoles", timing_future)
 
     # print(max(abs(mpole_exps)))
@@ -85,8 +89,10 @@ def drive_volume_fmm(traversal,
 
     logger.debug("propagate multipoles upward")
     mpole_exps, timing_future = wrangler.coarsen_multipoles(
-        traversal.level_start_source_parent_box_nrs, traversal.source_parent_boxes,
-        mpole_exps)
+        traversal.level_start_source_parent_box_nrs,
+        traversal.source_parent_boxes,
+        mpole_exps,
+    )
     recorder.add("coarsen_multipoles", timing_future)
 
     # print(max(abs(mpole_exps)))
@@ -101,8 +107,11 @@ def drive_volume_fmm(traversal,
     # look up in the prebuilt table
     # this step also constructs the output array
     potentials, timing_future = wrangler.eval_direct(
-        traversal.target_boxes, traversal.neighbor_source_boxes_starts,
-        traversal.neighbor_source_boxes_lists, src_func)
+        traversal.target_boxes,
+        traversal.neighbor_source_boxes_starts,
+        traversal.neighbor_source_boxes_lists,
+        src_func,
+    )
     recorder.add("eval_direct", timing_future)
 
     # Return list 1 only, for debugging
@@ -139,22 +148,30 @@ def drive_volume_fmm(traversal,
             wrangler.queue.context,
             wrangler.code.out_kernels,
             exclude_self=wrangler.code.exclude_self,
-            value_dtypes=[wrangler.dtype])
-        evt, (ref_pot, ) = p2p(wrangler.queue, traversal.tree.targets,
-                               traversal.tree.sources, (src_weights.astype(dtype), ),
-                               **wrangler.self_extra_kwargs,
-                               **wrangler.kernel_extra_kwargs)
+            value_dtypes=[wrangler.dtype],
+        )
+        evt, (ref_pot,) = p2p(
+            wrangler.queue,
+            traversal.tree.targets,
+            traversal.tree.sources,
+            (src_weights.astype(dtype),),
+            **wrangler.self_extra_kwargs,
+            **wrangler.kernel_extra_kwargs
+        )
         potentials[0] += ref_pot
 
         potentials = potentials - wrangler.eval_direct_p2p(
-            traversal.target_boxes, traversal.neighbor_source_boxes_starts,
-            traversal.neighbor_source_boxes_lists, src_weights)
+            traversal.target_boxes,
+            traversal.neighbor_source_boxes_starts,
+            traversal.neighbor_source_boxes_lists,
+            src_weights,
+        )
 
         # list 3
-        assert (traversal.from_sep_close_smaller_starts is None)
+        assert traversal.from_sep_close_smaller_starts is None
 
         # list 4
-        assert (traversal.from_sep_close_bigger_starts is None)
+        assert traversal.from_sep_close_bigger_starts is None
 
         logger.debug("reorder potentials")
         result = wrangler.reorder_potentials(potentials)
@@ -173,8 +190,11 @@ def drive_volume_fmm(traversal,
     logger.debug("translate separated siblings' ('list 2') mpoles to local")
     local_exps, timing_future = wrangler.multipole_to_local(
         traversal.level_start_target_or_target_parent_box_nrs,
-        traversal.target_or_target_parent_boxes, traversal.from_sep_siblings_starts,
-        traversal.from_sep_siblings_lists, mpole_exps)
+        traversal.target_or_target_parent_boxes,
+        traversal.from_sep_siblings_starts,
+        traversal.from_sep_siblings_lists,
+        mpole_exps,
+    )
     recorder.add("multipole_to_local", timing_future)
 
     # print(max(abs(local_exps)))
@@ -192,7 +212,9 @@ def drive_volume_fmm(traversal,
 
     mpole_result, timing_future = wrangler.eval_multipoles(
         traversal.target_boxes_sep_smaller_by_source_level,
-        traversal.from_sep_smaller_by_level, mpole_exps)
+        traversal.from_sep_smaller_by_level,
+        mpole_exps,
+    )
     recorder.add("eval_multipoles", timing_future)
 
     potentials = potentials + mpole_result
@@ -201,7 +223,7 @@ def drive_volume_fmm(traversal,
 
     # volume fmm does not work with list 3 close currently
     # but list 3 should be empty with our use cases
-    assert (traversal.from_sep_close_smaller_starts is None)
+    assert traversal.from_sep_close_smaller_starts is None
     # if traversal.from_sep_close_smaller_starts is not None:
     #    logger.debug("evaluate separated close smaller interactions directly "
     #                 "('list 3 close')")
@@ -218,15 +240,18 @@ def drive_volume_fmm(traversal,
 
     local_result, timing_future = wrangler.form_locals(
         traversal.level_start_target_or_target_parent_box_nrs,
-        traversal.target_or_target_parent_boxes, traversal.from_sep_bigger_starts,
-        traversal.from_sep_bigger_lists, src_weights)
+        traversal.target_or_target_parent_boxes,
+        traversal.from_sep_bigger_starts,
+        traversal.from_sep_bigger_lists,
+        src_weights,
+    )
 
     recorder.add("form_locals", timing_future)
 
     local_exps = local_exps + local_result
 
     # volume fmm does not work with list 4 currently
-    assert (traversal.from_sep_close_bigger_starts is None)
+    assert traversal.from_sep_close_bigger_starts is None
     # if traversal.from_sep_close_bigger_starts is not None:
     #    logger.debug("evaluate separated close bigger interactions directly "
     #                 "('list 4 close')")
@@ -245,7 +270,9 @@ def drive_volume_fmm(traversal,
 
     local_exps, timing_future = wrangler.refine_locals(
         traversal.level_start_target_or_target_parent_box_nrs,
-        traversal.target_or_target_parent_boxes, local_exps)
+        traversal.target_or_target_parent_boxes,
+        local_exps,
+    )
 
     recorder.add("refine_locals", timing_future)
 
@@ -256,7 +283,8 @@ def drive_volume_fmm(traversal,
     logger.debug("evaluate locals")
 
     local_result, timing_future = wrangler.eval_locals(
-        traversal.level_start_target_box_nrs, traversal.target_boxes, local_exps)
+        traversal.level_start_target_box_nrs, traversal.target_boxes, local_exps
+    )
 
     recorder.add("eval_locals", timing_future)
 
@@ -289,6 +317,7 @@ def compute_barycentric_lagrange_params(q_order):
 
     # interpolation weights for barycentric Lagrange interpolation
     from scipy.interpolate import BarycentricInterpolator as Interpolator
+
     interp = Interpolator(xi=q_points_1d, yi=None)
     interp_weights = interp.wi
     interp_points = interp.xi
@@ -296,12 +325,9 @@ def compute_barycentric_lagrange_params(q_order):
     return (interp_points, interp_weights)
 
 
-def interpolate_volume_potential(target_points,
-                                 traversal,
-                                 wrangler,
-                                 potential,
-                                 target_radii=None,
-                                 lbl_lookup=None):
+def interpolate_volume_potential(
+    target_points, traversal, wrangler, potential, target_radii=None, lbl_lookup=None
+):
     """
     Interpolate the volume potential.
     target_points and potential should be an cl array.
@@ -318,20 +344,22 @@ def interpolate_volume_potential(target_points,
     coord_dtype = tree.coord_dtype
     n_points = len(target_points[0])
 
-    assert (dim == len(target_points))
+    assert dim == len(target_points)
 
     # Building the lookup takes O(n*log(n))
     if lbl_lookup is None:
         from boxtree.area_query import LeavesToBallsLookupBuilder
+
         lookup_builder = LeavesToBallsLookupBuilder(ctx)
 
         if target_radii is None:
             import pyopencl as cl
+
             # Set this number small enough so that all points found
             # are inside the box
             target_radii = cl.array.to_device(
-                queue,
-                np.ones(n_points, dtype=coord_dtype) * 1e-12)
+                queue, np.ones(n_points, dtype=coord_dtype) * 1e-12
+            )
 
         lbl_lookup, evt = lookup_builder(queue, tree, target_points, target_radii)
 
@@ -366,26 +394,29 @@ def interpolate_volume_potential(target_points,
     elif dim == 2:
         code_mode_index_assignment = """if(
         iaxis == 0, mid / Q_ORDER,
-                    mid % Q_ORDER)""".replace("Q_ORDER", "q_order")
+                    mid % Q_ORDER)""".replace(
+            "Q_ORDER", "q_order"
+        )
     elif dim == 3:
         code_mode_index_assignment = """if(
         iaxis == 0, mid / (Q_ORDER * Q_ORDER), if(
         iaxis == 1, mid % (Q_ORDER * Q_ORDER) / Q_ORDER,
                     mid % (Q_ORDER * Q_ORDER) % Q_ORDER))""".replace(
-            "Q_ORDER", "q_order")
+            "Q_ORDER", "q_order"
+        )
     else:
         raise NotImplementedError
 
     import loopy
+
     # FIXME: noqa for specific lines does not work here
     # flake8: noqa
     lpknl = loopy.make_kernel(  # noqa
         [
-            "{ [ tbox, iaxis ] : 0 <= tbox < n_tgt_boxes "
-            "and 0 <= iaxis < dim }",
+            "{ [ tbox, iaxis ] : 0 <= tbox < n_tgt_boxes " "and 0 <= iaxis < dim }",
             "{ [ tpt, mid, mjd, mkd ] : tpt_begin <= tpt < tpt_end "
             "and 0 <= mid < n_box_modes and 0 <= mjd < q_order "
-            "and 0 <= mkd < q_order }"
+            "and 0 <= mkd < q_order }",
         ],
         """
             for tbox
@@ -476,20 +507,22 @@ def interpolate_volume_potential(target_points,
             end
 
             """.replace(
-            "TARGET_COORDS_ASSIGNMENT", code_target_coords_assignment).replace(
-                "MODE_INDEX_ASSIGNMENT", code_mode_index_assignment).replace(
-                    "Q_ORDER", "q_order"),
+            "TARGET_COORDS_ASSIGNMENT", code_target_coords_assignment
+        )
+        .replace("MODE_INDEX_ASSIGNMENT", code_mode_index_assignment)
+        .replace("Q_ORDER", "q_order"),
         [
             loopy.TemporaryVariable("idx", np.int32, "dim,"),
-            #loopy.TemporaryVariable("denom", dtype, "dim,"),
-            #loopy.TemporaryVariable("diff", dtype, "dim, q_order"),
+            # loopy.TemporaryVariable("denom", dtype, "dim,"),
+            # loopy.TemporaryVariable("diff", dtype, "dim, q_order"),
             loopy.GlobalArg("box_centers", None, "dim, aligned_nboxes"),
             loopy.GlobalArg("balls_near_box_lists", None, None),
             loopy.ValueArg("aligned_nboxes", np.int32),
             loopy.ValueArg("dim", np.int32),
             loopy.ValueArg("q_order", np.int32),
-            "..."
-        ])
+            "...",
+        ],
+    )
     # }}} End loopy kernel for interpolation
 
     # loopy does not directly support object arrays
@@ -498,13 +531,13 @@ def interpolate_volume_potential(target_points,
     elif dim == 2:
         target_coords_knl_kwargs = {
             "target_coords_x": target_points[0],
-            "target_coords_y": target_points[1]
+            "target_coords_y": target_points[1],
         }
     elif dim == 3:
         target_coords_knl_kwargs = {
             "target_coords_x": target_points[0],
             "target_coords_y": target_points[1],
-            "target_coords_z": target_points[2]
+            "target_coords_z": target_points[2],
         }
     else:
         raise NotImplementedError
@@ -529,10 +562,11 @@ def interpolate_volume_potential(target_points,
         **target_coords_knl_kwargs,
         target_boxes=traversal.target_boxes,
         root_extent=tree.root_extent,
-        n_tgt_boxes=len(traversal.target_boxes))
+        n_tgt_boxes=len(traversal.target_boxes)
+    )
 
-    assert (pout is res_dict["p_out"])
-    assert (multiplicity is res_dict["multiplicity"])
+    assert pout is res_dict["p_out"]
+    assert multiplicity is res_dict["multiplicity"]
     pout.add_event(evt)
     multiplicity.add_event(evt)
 

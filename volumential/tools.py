@@ -33,6 +33,7 @@ def clean_file(filename, new_name=None):
     Fails silently when the file does not exist.
     """
     import os
+
     if new_name is None:
         try:
             os.remove(filename)
@@ -75,8 +76,12 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
         self.name = "ScalarFieldExpressionEvaluation"
 
     def get_cache_key(self):
-        return (type(self).__name__, str(self.dim) + "D", self.expr.__str__(),
-                ','.join([x.__str__() for x in self.vars]))
+        return (
+            type(self).__name__,
+            str(self.dim) + "D",
+            self.expr.__str__(),
+            ",".join([x.__str__() for x in self.vars]),
+        )
 
     def get_normalised_expr(self):
         nexpr = self.expr
@@ -101,47 +106,55 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
     def get_kernel(self, **kwargs):
 
         extra_kernel_kwarg_types = ()
-        if 'extra_kernel_kwarg_types' in kwargs:
-            extra_kernel_kwarg_types = kwargs['extra_kernel_kwarg_types']
+        if "extra_kernel_kwarg_types" in kwargs:
+            extra_kernel_kwarg_types = kwargs["extra_kernel_kwarg_types"]
 
         eval_inames = frozenset(["itgt"])
         scalar_assignment = lp.Assignment(
             id=None,
             assignee="expr_val",
             expression=self.get_normalised_expr(),
-            temp_var_type=lp.auto)
+            temp_var_type=lp.auto,
+        )
         eval_insns = [
             insn.copy(within_inames=insn.within_inames | eval_inames)
             for insn in [scalar_assignment]
         ]
 
         loopy_knl = lp.make_kernel(  # NOQA
-            "{ [itgt]: 0<=itgt<n_targets }", [
+            "{ [itgt]: 0<=itgt<n_targets }",
+            [
                 """
                 for itgt
                     VAR_ASSIGNMENT
                 end
-                """.replace("VAR_ASSIGNMENT", self.get_variable_assignment_code())
-            ] + eval_insns + [
+                """.replace(
+                    "VAR_ASSIGNMENT", self.get_variable_assignment_code()
+                )
+            ]
+            + eval_insns
+            + [
                 """
                 for itgt
                     result[itgt] = expr_val
                 end
                 """
-            ], [
+            ],
+            [
                 lp.ValueArg("dim, n_targets", np.int32),
                 lp.GlobalArg("target_points", np.float64, "dim, n_targets"),
-                *extra_kernel_kwarg_types, "..."
+                *extra_kernel_kwarg_types,
+                "...",
             ],
-            name="eval_expr")
+            name="eval_expr",
+        )
 
         loopy_knl = lp.fix_parameters(loopy_knl, dim=self.dim)
         loopy_knl = lp.set_options(loopy_knl, write_cl=False)
         loopy_knl = lp.set_options(loopy_knl, return_dict=True)
 
         if self.function_manglers is not None:
-            loopy_knl = lp.register_function_manglers(loopy_knl,
-                                                      self.function_manglers)
+            loopy_knl = lp.register_function_manglers(loopy_knl, self.function_manglers)
 
         return loopy_knl
 
@@ -162,8 +175,8 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
             assert len(tgt_d) == n_tgt_points
 
         extra_kernel_kwargs = {}
-        if 'extra_kernel_kwargs' in kwargs:
-            extra_kernel_kwargs = kwargs['extra_kernel_kwargs']
+        if "extra_kernel_kwargs" in kwargs:
+            extra_kernel_kwargs = kwargs["extra_kernel_kwargs"]
 
         knl = self.get_cached_optimized_kernel()
         evt, res = knl(
@@ -171,6 +184,7 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
             target_points=target_points,
             n_targets=n_tgt_points,
             result=np.zeros(n_tgt_points),
-            **extra_kernel_kwargs)
+            **extra_kernel_kwargs
+        )
 
-        return res['result']
+        return res["result"]

@@ -79,7 +79,8 @@ class CaseVecReduction(object):
                 assert isinstance(tag, SymmetryOperationBase)
         self.symmetry_tags = sym_tags
         self.flippable, self.swappable_groups = self.parse_symmetry_tags(
-            self.symmetry_tags)
+            self.symmetry_tags
+        )
 
         self.reduced = False
         if do_reduction:
@@ -103,8 +104,7 @@ class CaseVecReduction(object):
                 iaxis, jaxis = tag.axes
                 gi = None
                 gj = None
-                for gid, group in zip(
-                        range(len(swappable_groups)), swappable_groups):
+                for gid, group in zip(range(len(swappable_groups)), swappable_groups):
                     if iaxis in group:
                         assert gi is None
                         gi = gid
@@ -127,8 +127,9 @@ class CaseVecReduction(object):
                             pass
                         else:
                             # Merge groups
-                            swappable_groups.append(set().union(
-                                swappable_groups[gi], swappable_groups[gj]))
+                            swappable_groups.append(
+                                set().union(swappable_groups[gi], swappable_groups[gj])
+                            )
                             swappable_groups.remove(swappable_groups[gi])
                             swappable_groups.remove(swappable_groups[gj])
 
@@ -216,16 +217,18 @@ class CaseVecReduction(object):
         for vid in range(len(self.reduced_vecs)):
             ratio = 1
             fable, sgroups = self.parse_symmetry_tags(
-                self.reduced_invariant_groups[vid])
-            ratio = ratio / (2**(sum(fable)))
+                self.reduced_invariant_groups[vid]
+            )
+            ratio = ratio / (2 ** (sum(fable)))
             for grp in sgroups:
                 ratio = ratio / math.factorial(len(grp))
             total_ratio += ratio
         return total_ratio / len(self.reduced_vecs)
 
     def get_full_reduction_ratio(self):
-        return self.get_inter_box_reduction_ratio(
-        ) * self.get_intra_box_reduction_ratio()
+        return (
+            self.get_inter_box_reduction_ratio() * self.get_intra_box_reduction_ratio()
+        )
 
     def get_reduced_invariant_groups(self):
         assert self.reduced
