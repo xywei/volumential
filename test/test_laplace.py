@@ -21,9 +21,12 @@ THE SOFTWARE.
 """
 
 import numpy as np
-
+import pytest
 import volumential.nearfield_potential_table as npt
 from sumpy.point_calculus import CalculusPatch
+
+LONGRUN = pytest.mark.skipif(not pytest.config.option.longrun,
+                             reason="needs --longrun option to run")
 
 # Directly evaluate volume integrals on a calculus patch to
 # test the correctness of singular quadrature and formulation
@@ -102,6 +105,7 @@ def eval_f(patch, source_func=None):
     return ff
 
 
+@LONGRUN
 def test_laplace_same_box_on_patch():
 
     rep = 3

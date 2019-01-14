@@ -21,9 +21,12 @@ THE SOFTWARE.
 """
 
 import numpy as np
-
+import pytest
 import volumential.nearfield_potential_table as npt
 from sumpy.point_calculus import CalculusPatch
+
+LONGRUN = pytest.mark.skipif(not pytest.config.option.longrun,
+                             reason="needs --longrun option to run")
 
 dim = 2
 patch_order = 6
@@ -112,6 +115,7 @@ def eval_f(patch, source_func=None):
     return ff
 
 
+@LONGRUN
 def test_cahn_hilliard_same_box_on_patch():
 
     rep = 1

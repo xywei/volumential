@@ -21,10 +21,12 @@ THE SOFTWARE.
 """
 
 import volumential.nearfield_potential_table as npt
-import pytest # NOQA
+import pytest
 import numpy as np
 from numpy.polynomial.chebyshev import Chebyshev
 
+LONGRUN = pytest.mark.skipif(not pytest.config.option.longrun,
+                             reason="needs --longrun option to run")
 
 # @pytest.mark.skipif("True")
 def test_const_order_1():
@@ -35,6 +37,7 @@ def test_const_order_1():
         assert (np.allclose(ary, 1))
 
 
+@LONGRUN
 # @pytest.mark.skipif("True")
 def test_const_order_2():
     table = npt.NearFieldInteractionTable(

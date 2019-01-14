@@ -25,8 +25,11 @@ THE SOFTWARE.
 import numpy as np
 import pyopencl as cl
 import pyopencl.array # NOQA
-
+import pytest
 from functools import partial
+
+LONGRUN = pytest.mark.skipif(not pytest.config.option.longrun,
+                             reason="needs --longrun option to run")
 
 
 def drive_test_completeness(q_order):
@@ -152,9 +155,14 @@ def drive_test_completeness(q_order):
                                mode_coefs=source_vals)
     pot = pot[0]
     for p in pot[0]:
-        assert(abs(p - 4) < 1e-12)
+        assert(abs(p - 4) < 1e-8)
 
 
+def test_completeness_1():
+    drive_test_completeness(1)
+
+
+@LONGRUN
 def test_completeness():
-    for q in range(1, 4):
+    for q in range(2, 4):
         drive_test_completeness(q)
