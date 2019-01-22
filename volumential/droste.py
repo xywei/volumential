@@ -459,7 +459,7 @@ class DrosteBase(KernelCacheWrapper):
 
         for BASIS_VARS, TGT_VARS, icase
             # the first index is contiguous
-            result[REV_BASIS_VARS, REV_TGT_VARS, icase] = real(sum(
+            result[REV_BASIS_VARS, REV_TGT_VARS, icase] = (sum(
                     (ilevel, ibrick_axis, ibrick_side, QUAD_VARS),
                     PROD_QUAD_WEIGHT
                     * jacobian
