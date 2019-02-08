@@ -695,8 +695,6 @@ class NearFieldInteractionTable(object):
 
         self.pb.draw()
 
-        # import volumential.pickle_class_method
-
         self.build_normalizer_table(pool, pb=self.pb)
         self.has_normalizers = True
 
