@@ -794,7 +794,7 @@ class DrosteReduced(DrosteBase):
         assert base_case_id >= 0
         assert base_case_id < self.nbcases
 
-        # tgt_vars = self.make_tgt_vars()
+        tgt_vars = self.make_tgt_vars()
         quad_vars = self.make_quad_vars()
         basis_vars = self.make_basis_vars()
         basis_eval_vars = self.make_basis_eval_vars()
