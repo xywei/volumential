@@ -291,6 +291,57 @@ class DrosteBase(KernelCacheWrapper):
 
         return resknl
 
+    def make_result_array(self, **kwargs):
+        """Allocate memory space for results.
+        """
+        # by default uses double type returns
+        if "result_dtype" in kwargs:
+            result_dtype = kwargs["result_dtype"]
+        else:
+            result_dtype = np.float64
+
+        # allocate return arrays
+        if self.dim == 1:
+            result_array = (
+                    np.zeros((self.nfunctions, self.ntgt_points, self.ncases),
+                        result_dtype
+                        ) + np.nan
+                    )
+        elif self.dim == 2:
+            result_array = (
+                    np.zeros(
+                        (
+                            self.nfunctions,
+                            self.nfunctions,
+                            self.ntgt_points,
+                            self.ntgt_points,
+                            self.ncases,
+                            ),
+                        result_dtype
+                        )
+                    + np.nan
+                    )
+        elif self.dim == 3:
+            result_array = (
+                    np.zeros(
+                        (
+                            self.nfunctions,
+                            self.nfunctions,
+                            self.nfunctions,
+                            self.ntgt_points,
+                            self.ntgt_points,
+                            self.ntgt_points,
+                            self.ncases,
+                            ),
+                        result_dtype
+                        )
+                    + np.nan
+                    )
+        else:
+            raise NotImplementedError
+        return result_array
+
+
     def get_kernel_code(self):
         return [
             self.make_dim_independent(
@@ -565,7 +616,7 @@ class DrosteFull(DrosteBase):
                 lp.GlobalArg("interaction_case_scls", np.float64, "n_cases"),
                 lp.GlobalArg(
                     "result",
-                    np.float64,
+                    lp.auto,
                     ", ".join(
                         ["nfunctions" for d in range(self.dim)]
                         + ["quad_order" for d in range(self.dim)]
@@ -638,42 +689,10 @@ class DrosteFull(DrosteBase):
 
         if "result_array" in kwargs:
             result_array = kwargs["result_array"]
-        else:
-            if self.dim == 1:
-                result_array = (
-                    np.zeros((self.nfunctions, self.ntgt_points, self.ncases)) + np.nan
-                )
-            elif self.dim == 2:
-                result_array = (
-                    np.zeros(
-                        (
-                            self.nfunctions,
-                            self.nfunctions,
-                            self.ntgt_points,
-                            self.ntgt_points,
-                            self.ncases,
-                        )
-                    )
-                    + np.nan
-                )
-            elif self.dim == 3:
-                result_array = (
-                    np.zeros(
-                        (
-                            self.nfunctions,
-                            self.nfunctions,
-                            self.nfunctions,
-                            self.ntgt_points,
-                            self.ntgt_points,
-                            self.ntgt_points,
-                            self.ncases,
-                        )
-                    )
-                    + np.nan
-                )
-            else:
-                raise NotImplementedError
 
+        else:
+            result_array = self.make_result_array(**kwargs)
+           
         # root brick
         root_brick = np.zeros((self.dim, 2))
         root_brick[:, 1] = source_box_extent
@@ -794,7 +813,7 @@ class DrosteReduced(DrosteBase):
         assert base_case_id >= 0
         assert base_case_id < self.nbcases
 
-        tgt_vars = self.make_tgt_vars()
+        # tgt_vars = self.make_tgt_vars()
         quad_vars = self.make_quad_vars()
         basis_vars = self.make_basis_vars()
         basis_eval_vars = self.make_basis_eval_vars()
@@ -982,7 +1001,7 @@ class DrosteReduced(DrosteBase):
                     lp.GlobalArg("target_nodes", np.float64, "quad_order"),
                     lp.GlobalArg(
                         "result",
-                        np.float64,
+                        lp.auto,
                         ", ".join(
                             ["nfunctions" for d in range(self.dim)]
                             + ["quad_order" for d in range(self.dim)]
@@ -1003,7 +1022,7 @@ class DrosteReduced(DrosteBase):
                     lp.ValueArg("n_cases, nfunctions, quad_order, dim", np.int32),
                     lp.GlobalArg(
                         "result",
-                        np.float64,
+                        lp.auto,
                         ", ".join(
                             ["nfunctions" for d in range(self.dim)]
                             + ["quad_order" for d in range(self.dim)]
@@ -1091,38 +1110,7 @@ class DrosteReduced(DrosteBase):
         if "result_array" in kwargs:
             result_array = kwargs["result_array"]
         else:
-            if self.dim == 1:
-                result_array = np.zeros((self.nfunctions, self.ntgt_points, 1)) + np.nan
-            elif self.dim == 2:
-                result_array = (
-                    np.zeros(
-                        (
-                            self.nfunctions,
-                            self.nfunctions,
-                            self.ntgt_points,
-                            self.ntgt_points,
-                            1,
-                        )
-                    )
-                    + np.nan
-                )
-            elif self.dim == 3:
-                result_array = (
-                    np.zeros(
-                        (
-                            self.nfunctions,
-                            self.nfunctions,
-                            self.nfunctions,
-                            self.ntgt_points,
-                            self.ntgt_points,
-                            self.ntgt_points,
-                            1,
-                        )
-                    )
-                    + np.nan
-                )
-            else:
-                raise NotImplementedError
+            result_array = self.make_result_array(**kwargs)
 
         # root brick
         root_brick = np.zeros((self.dim, 2))

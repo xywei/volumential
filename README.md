@@ -28,3 +28,11 @@ Volumential is under the MIT license.
 - [ ] PEP8 compliant for all subdirectories.
 - [ ] Add type hints.
 - [ ] Improve docstrings.
+
+## Notes on meshgen_dealii
+
+A simple way to compile `meshgen_dealii`:
+
+- Install everything in `conda-forge`
+- Download `deal-ii` and compile it with all things disabled (~15min)
+- Build `meshgen11_dealii` under `contrib` in the conda env (`python 3.6` must be used)

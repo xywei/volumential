@@ -755,9 +755,9 @@ class NearFieldInteractionTable(object):
         else:
             nlev = 1
 
-        extra_kernel_kwargs = {}
-        if "extra_kernel_kwargs" in kwargs:
-            extra_kernel_kwargs = kwargs["extra_kernel_kwargs"]
+        # extra_kernel_kwargs = {}
+        # if "extra_kernel_kwargs" in kwargs:
+        #     extra_kernel_kwargs = kwargs["extra_kernel_kwargs"]
 
         cheb_coefs = [
             self.get_mode_cheb_coeffs(mid, max(self.quad_order, 3))
@@ -796,8 +796,9 @@ class NearFieldInteractionTable(object):
             source_box_extent=self.source_box_extent,
             alpha=alpha,
             nlevels=nlev,
-            extra_kernel_kwargs=extra_kernel_kwargs,
+            # extra_kernel_kwargs=extra_kernel_kwargs,
             cheb_coefs=cheb_coefs,
+            **kwargs
         )
         resid = -1
 
@@ -811,8 +812,9 @@ class NearFieldInteractionTable(object):
                     source_box_extent=self.source_box_extent,
                     alpha=alpha,
                     nlevels=nlev,
-                    extra_kernel_kwargs=extra_kernel_kwargs,
+                    # extra_kernel_kwargs=extra_kernel_kwargs,
                     cheb_coefs=cheb_coefs,
+                    **kwargs
                 )
 
                 resid = np.max(np.abs(data1 - data0)) / np.max(np.abs(data1))
