@@ -470,4 +470,4 @@ if 1:
 
 # }}} End postprocess and plot
 
-# vim: filetype=pyopencl:foldmethod=marker
+# vim: filetype=python.pyopencl:foldmethod=marker
