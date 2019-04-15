@@ -160,7 +160,11 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
 
     def get_optimized_kernel(self, **kwargs):
         knl = self.get_kernel(**kwargs)
-        knl = lp.split_iname(knl, "itgt", 16, outer_tag="g.0", inner_tag="l.0")
+        knl = lp.split_iname(
+                knl,
+                split_iname="itgt",
+                inner_length=16,
+                inner_tag="g.0")
         return knl
 
     def __call__(self, queue, target_points, **kwargs):
@@ -179,6 +183,11 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
             extra_kernel_kwargs = kwargs["extra_kernel_kwargs"]
 
         knl = self.get_cached_optimized_kernel()
+
+        # FIXME: caching loses function mangler information
+        if self.function_manglers is not None:
+            knl = lp.register_function_manglers(knl, self.function_manglers)
+
         evt, res = knl(
             queue,
             target_points=target_points,
