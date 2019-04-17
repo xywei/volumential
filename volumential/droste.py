@@ -276,7 +276,8 @@ class DrosteBase(KernelCacheWrapper):
                   iaxis == 1, quadrature_nodes[q1], quadrature_nodes[q2]))""",
             )
             resknl = resknl.replace(
-                "DENSITY_VAL_ASSIGNMENT", """basis_eval0 * basis_eval1 * basis_eval2"""
+                "DENSITY_VAL_ASSIGNMENT",
+                """basis_eval0 * basis_eval1 * basis_eval2"""
             )
             resknl = resknl.replace(
                 "PREPARE_BASIS_VALS",
@@ -303,10 +304,11 @@ class DrosteBase(KernelCacheWrapper):
         # allocate return arrays
         if self.dim == 1:
             result_array = (
-                    np.zeros((self.nfunctions, self.ntgt_points, self.ncases),
+                    np.zeros(
+                        (self.nfunctions, self.ntgt_points, self.ncases),
                         result_dtype
-                        ) + np.nan
-                    )
+                        )
+                    + np.nan)
         elif self.dim == 2:
             result_array = (
                     np.zeros(
@@ -340,7 +342,6 @@ class DrosteBase(KernelCacheWrapper):
         else:
             raise NotImplementedError
         return result_array
-
 
     def get_kernel_code(self):
         return [
@@ -531,7 +532,12 @@ class DrosteBase(KernelCacheWrapper):
             degree=self.ntgt_points, level=1, dim=self.dim
         )
         # map to [0,1]^d
-        mapped_q_points = np.array([0.5 * (qp + np.ones(self.dim)) for qp in q_points])
+        mapped_q_points = np.array(
+                [
+                    0.5 * (qp + np.ones(self.dim))
+                    for qp in q_points
+                    ]
+                )
         # sort in dictionary order, preserve only the leading
         # digits to prevent floating point errors from polluting
         # the ordering.
@@ -543,7 +549,7 @@ class DrosteBase(KernelCacheWrapper):
 
     def postprocess_cheb_table(self, cheb_table, cheb_coefs):
         # Cheb table is indexed by f0, f1, t0, t1, icase
-        nfp_table = np.zeros([self.n_q_points, *cheb_table.shape[self.dim :]])
+        nfp_table = np.zeros([self.n_q_points, *cheb_table.shape[self.dim:]])
         # transform to interpolatory basis functions
         concat_axes = [iaxis for iaxis in range(self.dim)]
         for mid in range(self.n_q_points):
@@ -692,7 +698,7 @@ class DrosteFull(DrosteBase):
 
         else:
             result_array = self.make_result_array(**kwargs)
-           
+
         # root brick
         root_brick = np.zeros((self.dim, 2))
         root_brick[:, 1] = source_box_extent
@@ -916,7 +922,10 @@ class DrosteReduced(DrosteBase):
             ext
             for ext in product(
                 [fid for fid in product([0, 1], repeat=nflippables)],
-                *[[sid for sid in permutations(sgroup)] for sgroup in swappable_groups]
+                *[
+                    [sid for sid in permutations(sgroup)]
+                    for sgroup in swappable_groups
+                    ]
             )
         ]
 
@@ -996,7 +1005,8 @@ class DrosteReduced(DrosteBase):
                 [
                     lp.ValueArg("alpha", np.float64),
                     lp.ValueArg("n_cases, nfunctions, quad_order, dim", np.int32),
-                    lp.GlobalArg("interaction_case_vecs", np.float64, "dim, n_cases"),
+                    lp.GlobalArg("interaction_case_vecs",
+                        np.float64, "dim, n_cases"),
                     lp.GlobalArg("interaction_case_scls", np.float64, "n_cases"),
                     lp.GlobalArg("target_nodes", np.float64, "quad_order"),
                     lp.GlobalArg(
@@ -1235,9 +1245,10 @@ class DrosteReduced(DrosteBase):
             # print("Loopy kernel finished")
 
             # {{{ expansion by symmetry
-            flippable, swappable_groups = self.reduce_by_symmetry.parse_symmetry_tags(
-                self.reduce_by_symmetry.symmetry_tags
-            )
+            flippable, swappable_groups = \
+                    self.reduce_by_symmetry.parse_symmetry_tags(
+                            self.reduce_by_symmetry.symmetry_tags
+                            )
             nflippables = int(sum(flippable))
             assert len(flippable) == self.dim
             flippable_ids = [i for i in range(self.dim) if flippable[i]]
@@ -1256,7 +1267,8 @@ class DrosteReduced(DrosteBase):
             ]
 
             base_case_vec = self.reduce_by_symmetry.full_vecs[case_id]
-            assert base_case_vec == self.reduce_by_symmetry.reduced_vecs[base_case_id]
+            assert (base_case_vec
+                    == self.reduce_by_symmetry.reduced_vecs[base_case_id])
             for ext_index, ext_id in zip(range(len(ext_ids)), ext_ids):
                 # start from the base vec
                 ext_vec = list(base_case_vec)

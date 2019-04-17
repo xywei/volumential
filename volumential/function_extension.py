@@ -32,11 +32,12 @@ import numpy as np
 import pyopencl as cl
 from pytools.obj_array import make_obj_array
 from pymbolic import var
-from pytential import bind, sym, norm
+from pytential import bind, sym
 from pytential.solve import gmres
 from pytential.symbolic.stokes import StressletWrapper, StokesletWrapper
 
 # {{{ helper functions
+
 
 def setup_cl_ctx(ctx=None, queue=None):
     if ctx is None:
@@ -89,20 +90,16 @@ def get_arclength_parametrization_derivative(queue, density_discr, where=None):
 
     return bind(density_discr, xps)(queue), bind(density_discr, yps)(queue)
 
-
-
 # }}} End helper functions
 
 # {{{ constant extension
 
+
 def compute_constant_extension(queue, target_discr,
         qbx, density_discr, constant_val=0):
     """Constant extension."""
-    dim = qbx.ambient_dim
     queue = setup_command_queue(queue=queue)
     debugging_info = {}
-
-    nodes = density_discr.nodes().with_queue(queue)
 
     ext_f = bind(
                  (qbx, target_discr),
@@ -114,6 +111,7 @@ def compute_constant_extension(queue, target_discr,
 # }}} End constant extension
 
 # {{{ harmonic extension
+
 
 def compute_harmonic_extension(queue, target_discr,
         qbx, density_discr, f,
@@ -127,8 +125,6 @@ def compute_harmonic_extension(queue, target_discr,
     """
     dim = qbx.ambient_dim
     queue = setup_command_queue(queue=queue)
-
-    nodes = density_discr.nodes().with_queue(queue)
 
     # {{{ describe bvp
 
@@ -195,7 +191,7 @@ def compute_harmonic_extension(queue, target_discr,
 # {{{ Goursat kernels
 
 from sumpy.kernel import ExpressionKernel, AxisTargetDerivative
-from sumpy.kernel import KernelArgument
+
 
 class ComplexLogKernel(ExpressionKernel):
 
@@ -381,7 +377,6 @@ def compute_biharmonic_extension(queue, target_discr,
     queue = setup_command_queue(queue=queue)
     qbx_forced_limit = 1
 
-    nodes = density_discr.nodes().with_queue(queue)
     normal = get_normal_vectors(queue, density_discr, loc_sign=1)
 
     bdry_op_sym = get_extension_bie_symbolic_operator(loc_sign=1)
@@ -408,28 +403,28 @@ def compute_biharmonic_extension(queue, target_discr,
     density_conj_rho_sym = density_mu_sym[1] + 1j * density_mu_sym[0]
 
     # convolutions
-    GS1 = sym.IntG(
+    GS1 = sym.IntG(  # noqa: N806
             ComplexLinearLogKernel(dim), density_rho_sym,
             qbx_forced_limit=None)
-    GS2 = sym.IntG(
+    GS2 = sym.IntG(  # noqa: N806
             ComplexLinearKernel(dim), density_conj_rho_sym,
             qbx_forced_limit=None)
-    GD1 = sym.IntG(
+    GD1 = sym.IntG(  # noqa: N806
             ComplexFractionalKernel(dim), density_rho_sym * dxids_sym,
             qbx_forced_limit=None)
-    GD2 = [sym.IntG(
+    GD2 = [sym.IntG(  # noqa: N806
             AxisTargetDerivative(iaxis, ComplexLogKernel(dim)),
             density_conj_rho_sym * dxids_sym + density_rho_sym * dxids_conj_sym,
             qbx_forced_limit=qbx_forced_limit
             ) for iaxis in range(dim)]
 
-    GS1_bdry = sym.IntG(
+    GS1_bdry = sym.IntG(  # noqa: N806
             ComplexLinearLogKernel(dim), density_rho_sym,
             qbx_forced_limit=qbx_forced_limit)
-    GS2_bdry = sym.IntG(
+    GS2_bdry = sym.IntG(  # noqa: N806
             ComplexLinearKernel(dim), density_conj_rho_sym,
             qbx_forced_limit=qbx_forced_limit)
-    GD1_bdry = sym.IntG(
+    GD1_bdry = sym.IntG(  # noqa: N806
             ComplexFractionalKernel(dim), density_rho_sym * dxids_sym,
             qbx_forced_limit=qbx_forced_limit)
 
@@ -462,10 +457,12 @@ def compute_biharmonic_extension(queue, target_discr,
     sigma = gmres_result.solution
     qbx_stick_out = qbx.copy(
             target_association_tolerance=target_association_tolerance)
-    v1 = bind((qbx_stick_out, target_discr),
+    v1 = bind(
+            (qbx_stick_out, target_discr),
             operator_v1.representation(var("sigma"), qbx_forced_limit=None)
             )(queue, sigma=sigma)
-    grad_v1 = bind((qbx_stick_out, target_discr),
+    grad_v1 = bind(
+            (qbx_stick_out, target_discr),
             operator_v1.representation(var("sigma"), qbx_forced_limit=None,
                 map_potentials=lambda pot: sym.grad(dim, pot))
             )(queue, sigma=sigma)
@@ -478,58 +475,60 @@ def compute_biharmonic_extension(queue, target_discr,
     int_rho = 1 / (8 * np.pi) * bind(qbx,
             sym.integral(dim, dim - 1, density_rho_sym))(queue, mu=mu)
 
-    # checking complex line integral with the area formula
-    int_area = (1 / 2j) * bind(qbx,
-            sym.integral(dim, dim - 1, var("z_conj") * dxids_sym))(queue,
-                    z_conj=z_conj_bdry,
-                    arclength_parametrization_derivatives=make_obj_array(
-                        [xp, yp]))
-    area_exact = np.pi * (0.25**2)
-    # See logger.info(str(int_area) + " " + str(area_exact))
+    omega_S1 = bind(  # noqa: N806
+            (qbx_stick_out, target_discr), GS1)(queue, mu=mu).real
+    omega_S2 = - bind(  # noqa: N806
+            (qbx_stick_out, target_discr), GS2)(queue, mu=mu).real
+    omega_S3 = (z_conj * int_rho).real  # noqa: N806
+    omega_S = -(omega_S1 + omega_S2 + omega_S3)  # noqa: N806
 
-    omega_S1 = bind((qbx_stick_out, target_discr), GS1)(queue, mu=mu).real
-    omega_S2 = - bind((qbx_stick_out, target_discr), GS2)(queue, mu=mu).real
-    omega_S3 = (z_conj * int_rho).real
-    omega_S = -(omega_S1 + omega_S2 + omega_S3)
-
-    grad_omega_S1 = bind((qbx_stick_out, target_discr),
+    grad_omega_S1 = bind(  # noqa: N806
+            (qbx_stick_out, target_discr),
             sym.grad(dim, GS1))(queue, mu=mu).real
-    grad_omega_S2 = - bind((qbx_stick_out, target_discr),
+    grad_omega_S2 = - bind(  # noqa: N806
+            (qbx_stick_out, target_discr),
             sym.grad(dim, GS2))(queue, mu=mu).real
-    grad_omega_S3 = (int_rho * make_obj_array([1., -1.])).real
-    grad_omega_S = -(grad_omega_S1 + grad_omega_S2 + grad_omega_S3)
+    grad_omega_S3 = (int_rho * make_obj_array([1., -1.])).real  # noqa: N806
+    grad_omega_S = -(grad_omega_S1 + grad_omega_S2 + grad_omega_S3)  # noqa: N806
 
-    omega_S1_bdry = bind(qbx, GS1_bdry)(queue, mu=mu).real
-    omega_S2_bdry = - bind(qbx, GS2_bdry)(queue, mu=mu).real
-    omega_S3_bdry = (z_conj_bdry * int_rho).real
-    omega_S_bdry = -(omega_S1_bdry + omega_S2_bdry + omega_S3_bdry)
+    omega_S1_bdry = bind(qbx, GS1_bdry)(queue, mu=mu).real  # noqa: N806
+    omega_S2_bdry = - bind(qbx, GS2_bdry)(queue, mu=mu).real  # noqa: N806
+    omega_S3_bdry = (z_conj_bdry * int_rho).real  # noqa: N806
+    omega_S_bdry = -(omega_S1_bdry + omega_S2_bdry + omega_S3_bdry)  # noqa: N806
 
-    omega_D1 = bind((qbx_stick_out, target_discr), GD1)(queue, mu=mu,
+    omega_D1 = bind(  # noqa: N806
+            (qbx_stick_out, target_discr), GD1)(queue, mu=mu,
             arclength_parametrization_derivatives=make_obj_array([xp, yp])).real
-    omega_D = (omega_D1 + v1)
+    omega_D = (omega_D1 + v1)  # noqa: N806
 
-    grad_omega_D1 = bind((qbx_stick_out, target_discr),
+    grad_omega_D1 = bind(  # noqa: N806
+            (qbx_stick_out, target_discr),
             sym.grad(dim, GD1)
             )(queue, mu=mu,
                     arclength_parametrization_derivatives=make_obj_array(
                         [xp, yp]
                         )
                     ).real
-    grad_omega_D = grad_omega_D1 + grad_v1
+    grad_omega_D = grad_omega_D1 + grad_v1  # noqa: N806
 
-    omega_D1_bdry = bind(qbx, GD1_bdry)(queue, mu=mu,
-            arclength_parametrization_derivatives=make_obj_array([xp, yp])).real
-    omega_D_bdry = (omega_D1_bdry + v1_bdry)
+    omega_D1_bdry = bind(  # noqa: N806
+            qbx, GD1_bdry)(
+                    queue, mu=mu,
+                    arclength_parametrization_derivatives=make_obj_array(
+                        [xp, yp])
+                    ).real
+    omega_D_bdry = (omega_D1_bdry + v1_bdry)  # noqa: N806
 
     int_bdry_mu = bind(qbx, sym.integral(dim, dim - 1, sym.make_sym_vector(
         "mu", dim)))(queue, mu=mu)
-    omega_W = int_bdry_mu[0] * target_discr.nodes()[1] - \
-            int_bdry_mu[1] * target_discr.nodes()[0]
-    grad_omega_W = make_obj_array([
-        -int_bdry_mu[1], int_bdry_mu[0]
-        ])
-    omega_W_bdry = int_bdry_mu[0] * density_discr.nodes().with_queue(queue)[1] - \
-            int_bdry_mu[1] * density_discr.nodes().with_queue(queue)[0]
+    omega_W = (  # noqa: N806
+            int_bdry_mu[0] * target_discr.nodes()[1]
+            - int_bdry_mu[1] * target_discr.nodes()[0])
+    grad_omega_W = make_obj_array(  # noqa: N806
+            [-int_bdry_mu[1], int_bdry_mu[0]])
+    omega_W_bdry = (  # noqa: N806
+            int_bdry_mu[0] * density_discr.nodes().with_queue(queue)[1]
+            - int_bdry_mu[1] * density_discr.nodes().with_queue(queue)[0])
 
     int_bdry = bind(qbx, sym.integral(dim, dim - 1, var("integrand")))(
             queue, integrand=omega_S_bdry+omega_D_bdry+omega_W_bdry)

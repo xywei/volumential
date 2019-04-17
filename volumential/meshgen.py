@@ -193,7 +193,8 @@ except ImportError as e:
             def print_info(self, logging_func=print):
                 logging_func("Number of cells: " + str(self.n_cells()))
                 logging_func("Number of active cells: " + str(self.n_active_cells()))
-                logging_func("Number of quad points per cell: " + str(self.n_q_points))
+                logging_func("Number of quad points per cell: "
+                        + str(self.n_q_points))
 
             def generate_gmsh(self, filename):
                 """
@@ -240,9 +241,9 @@ except ImportError as e:
 else:
     # noexcept on importing meshgen_dealii
     logger.info("Using Meshgen via Deal.II interface.")
-    from volumential.meshgen_dealii import (
+    from volumential.meshgen_dealii import (  # noqa: F401
         greet,
         MeshGen2D,
         MeshGen3D,
         make_uniform_cubic_grid,
-    )  # noqa
+    )

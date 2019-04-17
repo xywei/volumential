@@ -50,7 +50,8 @@ class ConstantKernel(ExpressionKernel):
         scaling = 1
 
         super(ConstantKernel, self).__init__(
-            dim, expression=expr, global_scaling_const=scaling, is_complex_valued=False
+            dim, expression=expr,
+            global_scaling_const=scaling, is_complex_valued=False
         )
 
     has_efficient_scale_adjustment = True
@@ -92,9 +93,12 @@ class NearFieldInteractionTableManager(object):
 
         # If the file exists, it must be for the same root_extent
         if "root_extent" not in self.datafile.attrs:
-            self.datafile.attrs["root_extent"] = self.root_extent
+            self.datafile.attrs["root_extent"] = \
+                    self.root_extent
         else:
-            if not abs(self.datafile.attrs["root_extent"] - self.root_extent) < 1e-15:
+            if not abs(
+                    self.datafile.attrs["root_extent"] - self.root_extent
+                    ) < 1e-15:
                 raise RuntimeError(
                     "The table cache file "
                     + self.filename
@@ -570,7 +574,8 @@ class NearFieldInteractionTableManager(object):
         grp.attrs["dim"] = table.dim
         grp.attrs["n_pairs"] = table.n_pairs
         grp.attrs["source_box_level"] = source_box_level
-        grp.attrs["source_box_extent"] = self.root_extent * (2 ** (-source_box_level))
+        grp.attrs["source_box_extent"] = self.root_extent * (
+                2 ** (-source_box_level))
 
         for key, kval in kwargs.items():
             if isinstance(kval, (int, float, complex, str)):
@@ -579,7 +584,8 @@ class NearFieldInteractionTableManager(object):
         self.update_dataset(grp, "q_points", table.q_points)
         self.update_dataset(grp, "data", table.data)
         self.update_dataset(grp, "mode_normalizers", table.mode_normalizers)
-        self.update_dataset(grp, "interaction_case_vecs", table.interaction_case_vecs)
+        self.update_dataset(grp, "interaction_case_vecs",
+                table.interaction_case_vecs)
         self.update_dataset(grp, "case_indices", table.case_indices)
 
         distinct_numbers = set()

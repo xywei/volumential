@@ -274,9 +274,8 @@ class NearFieldInteractionTable(object):
         self.n_pairs = self.n_q_points ** 2
 
         # possible interaction cases
-        self.interaction_case_vecs, self.case_encode, self.case_indices = gallery.generate_list1_gallery(
-            self.dim
-        )
+        self.interaction_case_vecs, self.case_encode, self.case_indices = \
+                gallery.generate_list1_gallery(self.dim)
         self.n_cases = len(self.interaction_case_vecs)
 
         if method == "gauss-legendre":
@@ -304,7 +303,7 @@ class NearFieldInteractionTable(object):
             self.q_points = mapped_q_points[q_points_ordering]
 
         else:
-            raise NotImplemented
+            raise NotImplementedError
 
         self.data = np.empty(self.n_pairs * self.n_cases, dtype=self.dtype)
         self.data.fill(np.nan)
@@ -457,7 +456,9 @@ class NearFieldInteractionTable(object):
         coef_scale[0] /= 2
         basis_1d = np.array(
             [
-                Chebyshev(coef=_orthonormal(cheb_order, i), domain=window)(cheby_nodes)
+                Chebyshev(
+                    coef=_orthonormal(cheb_order, i),
+                    domain=window)(cheby_nodes)
                 for i in range(cheb_order)
             ]
         )
@@ -573,7 +574,8 @@ class NearFieldInteractionTable(object):
 
         # print(vec, new_cntr, new_size)
 
-        return new_cntr + new_size * (self.q_points[target_point_index] - self.center)
+        return new_cntr + new_size * (
+                self.q_points[target_point_index] - self.center)
 
     def lookup_by_symmetry(self, entry_id):
         """Loop up table entry that is mapped to a region where:
@@ -594,7 +596,8 @@ class NearFieldInteractionTable(object):
         #    case_index=entry_info[
         #        "case_index"])
 
-        vec_map, qp_map = self.get_symmetry_transform(entry_info["source_mode_index"])
+        vec_map, qp_map = self.get_symmetry_transform(
+                entry_info["source_mode_index"])
         # mapped (canonical) case_id
         case_vec = self.interaction_case_vecs[entry_info["case_index"]]
         cc_vec = vec_map(case_vec)
@@ -643,7 +646,7 @@ class NearFieldInteractionTable(object):
                 maxiter=301,
             )
         else:
-            raise NotImplemented
+            raise NotImplementedError
 
         return (entry_id, integral)
 
@@ -894,7 +897,8 @@ class NearFieldInteractionTable(object):
         if kernel_type == "log":
             assert kernel_power is None
             source_mode_index = self.decode_index(entry_id)["source_mode_index"]
-            displacement = a ** 2 * np.log(a) * self.mode_normalizers[source_mode_index]
+            displacement = (a ** 2) * np.log(a) \
+                    * self.mode_normalizers[source_mode_index]
             scaling = a ** 2
 
         elif kernel_type == "const":

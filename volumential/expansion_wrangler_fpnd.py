@@ -106,7 +106,8 @@ class FPNDExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrangler):
         elif isinstance(near_field_table, dict):
             assert len(self.code.out_kernels) <= len(near_field_table)
             self.near_field_table = near_field_table
-            self.n_tables = len(near_field_table[self.code.out_kernels[0].__repr__()])
+            self.n_tables = len(
+                    near_field_table[self.code.out_kernels[0].__repr__()])
 
         else:
             raise RuntimeError("Table type unrecognized.")
@@ -132,8 +133,9 @@ class FPNDExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrangler):
         for kid in range(len(self.code.out_kernels)):
             kname = self.code.out_kernels[kid].__repr__()
             for lev, table in zip(
-                range(len(self.near_field_table[kname])), self.near_field_table[kname]
-            ):
+                    range(len(self.near_field_table[kname])),
+                    self.near_field_table[kname]
+                    ):
                 assert table.quad_order == self.quad_order
 
                 if not table.is_built:
@@ -144,7 +146,8 @@ class FPNDExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrangler):
 
                 table_root_extent = table.source_box_extent * 2 ** lev
                 assert (
-                    abs(self.root_table_source_box_extent - table_root_extent) < 1e-15
+                    abs(self.root_table_source_box_extent - table_root_extent)
+                    < 1e-15
                 )
 
                 # If the kernel cannot be scaled,
@@ -321,7 +324,9 @@ class FPNDExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrangler):
                 lev
             ].mode_normalizers
 
-        logger.info("Table data for kernel " + out_kernel.__repr__() + " congregated")
+        logger.info(
+                "Table data for kernel "
+                + out_kernel.__repr__() + " congregated")
 
         # The loop domain needs to know some info about the tables being used
         table_data_shapes = {

@@ -154,17 +154,20 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
         loopy_knl = lp.set_options(loopy_knl, return_dict=True)
 
         if self.function_manglers is not None:
-            loopy_knl = lp.register_function_manglers(loopy_knl, self.function_manglers)
+            loopy_knl = lp.register_function_manglers(
+                loopy_knl,
+                self.function_manglers
+                )
 
         return loopy_knl
 
     def get_optimized_kernel(self, **kwargs):
         knl = self.get_kernel(**kwargs)
         knl = lp.split_iname(
-                knl,
-                split_iname="itgt",
-                inner_length=16,
-                inner_tag="g.0")
+            knl,
+            split_iname="itgt",
+            inner_length=16,
+            inner_tag="g.0")
         return knl
 
     def __call__(self, queue, target_points, **kwargs):
