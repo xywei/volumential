@@ -28,6 +28,7 @@ from numpy.polynomial.chebyshev import Chebyshev
 LONGRUN = pytest.mark.skipif(not pytest.config.option.longrun,
                              reason="needs --longrun option to run")
 
+
 # @pytest.mark.skipif("True")
 def test_const_order_1():
     table = npt.NearFieldInteractionTable(quad_order=1, kernel_func=None)

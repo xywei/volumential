@@ -141,7 +141,8 @@ def drive_test_completeness(q_order):
     local_expn_class = VolumeTaylorLocalExpansion
     mpole_expn_class = VolumeTaylorMultipoleExpansion
 
-    from volumential.expansion_wrangler_interface import ExpansionWranglerCodeContainer
+    from volumential.expansion_wrangler_interface \
+            import ExpansionWranglerCodeContainer
 
     wcc = ExpansionWranglerCodeContainer(
         ctx,

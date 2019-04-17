@@ -240,7 +240,8 @@ def laplace_problem(ctx_getter):
     # mpole_expn_class = VolumeTaylorMultipoleExpansion
 
     exclude_self = True
-    from volumential.expansion_wrangler_interface import ExpansionWranglerCodeContainer
+    from volumential.expansion_wrangler_interface \
+            import ExpansionWranglerCodeContainer
 
     wcc = ExpansionWranglerCodeContainer(
         ctx,
@@ -278,7 +279,7 @@ def laplace_problem(ctx_getter):
 
 
 @pytest.mark.skipif(
-    mg.provider is not "meshgen_dealii", reason="Adaptive mesh module is not available"
+    mg.provider != "meshgen_dealii", reason="Adaptive mesh module is not available"
 )
 def test_volume_fmm_laplace(laplace_problem):
 

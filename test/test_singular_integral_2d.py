@@ -29,6 +29,7 @@ import volumential.singular_integral_2d as sint
 LONGRUN = pytest.mark.skipif(not pytest.config.option.longrun,
                              reason="needs --longrun option to run")
 
+
 def test_quadrature_1d_interval():
     integrand = np.sin
     val, err = sint.quad(

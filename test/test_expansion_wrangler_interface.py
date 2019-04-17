@@ -75,7 +75,9 @@ def test_interface_multipole_evaluation():
     wrglr = ewi.ExpansionWranglerInterface()
     try:
         wrglr.eval_direct(
-            target_boxes=None, neighbor_sources_starts=None, neighbor_sources_lists=None
+            target_boxes=None,
+            neighbor_sources_starts=None,
+            neighbor_sources_lists=None
         )
         wrglr.eval_locals(
             level_start_target_box_nrs=None, target_boxes=None, local_exps=None
