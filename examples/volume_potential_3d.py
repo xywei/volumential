@@ -1,7 +1,5 @@
-"""
-    Solve (compute volume integral for) Poisson equation
-        - \Delta u = f
-    on [-1,1]^3 with Laplace kernel.
+""" This example evaluates the volume potential over
+    [-1,1]^3 with the Laplace kernel.
 """
 from __future__ import absolute_import, division, print_function
 
