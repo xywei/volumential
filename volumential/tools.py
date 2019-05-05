@@ -147,6 +147,7 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
                 "...",
             ],
             name="eval_expr",
+            lang_version=(2018, 2),
         )
 
         loopy_knl = lp.fix_parameters(loopy_knl, dim=self.dim)

@@ -22,6 +22,7 @@ THE SOFTWARE.
 
 import os
 import time
+import warnings
 import pyopencl as cl
 import pyopencl.clrandom
 import numpy as np
@@ -109,6 +110,10 @@ def get_evaluator(dim, expression, variables=None):
 
 # }}} End evaluation helper
 
+
+# Hide warnings
+warnings.filterwarnings("ignore")
+
 ctx = cl.create_some_context()
 queue = cl.CommandQueue(ctx)
 
@@ -125,7 +130,17 @@ expr = x**2 + y * z + sin(z + x * 10.)
 
 source_eval = get_evaluator(dim=3, expression=expr)
 
+pts = cl.clrandom.rand(queue, (3, 10**8), dtype=np.float64)
+
 knl = source_eval.get_kernel()
+
+# needed for using loopy.statistics
+knl = lp.add_and_infer_dtypes(
+        knl,
+        dict(x0=np.float64, x1=np.float64, x2=np.float64))
+knl = lp.set_options(knl, ignore_boostable_into=True)
+
+# {{{ wall time
 
 knl_l = lp.split_iname(
         knl, split_iname="itgt", inner_length=ncpus,
@@ -134,8 +149,6 @@ knl_l = lp.split_iname(
 knl_g = lp.split_iname(
         knl, split_iname="itgt", inner_length=ncpus,
         inner_tag="g.0")
-
-pts = cl.clrandom.rand(queue, (3, 10**8), dtype=np.float64)
 
 # tagged with local indices
 queue.finish()
@@ -152,5 +165,41 @@ queue.finish()
 t3 = time.clock()
 
 print("Tests run with %d threads." % ncpus)
-print("With tag l.0:", t1 - t0)
-print("With tag g.0:", t3 - t2)
+print("Wall time w/t tag l.0:", t1 - t0)
+print("Wall time w/t tag g.0:", t3 - t2)
+
+# }}} End wall time
+
+# {{{ operation counts
+
+# count the total work
+op_map = lp.get_op_map(knl, subgroup_size=ncpus, count_redundant_work=True,
+        count_within_subscripts=True)
+
+params = dict(n_targets=pts.shape[1])
+print('Operation counts:')
+total_ops = 0
+for op in op_map.keys():
+    sub_count = op_map[op].eval_with_dict(params)
+    total_ops += sub_count
+    print('\t', op.name, op_map[op], sub_count)
+print("Total:", total_ops)
+
+# TODO: weight each operation by running micro-benchmarks
+print("OP throughput w/t tag l.0 = %.2f GFLOPS" %
+        (total_ops / (t1 - t0) * 1e-9)
+        )
+print("OP throughput w/t tag g.0 = %.2f GFLOPS" %
+        (total_ops / (t3 - t2) * 1e-9)
+        )
+
+# }}} End operation counts
+
+# {{{ mem access counts
+
+# FIXME: warnings or write race on expr_val
+# mem_map = lp.get_mem_access_map(knl, count_redundant_work=True,
+#                                subgroup_size=ncpus)
+
+# }}} End mem access counts
+
