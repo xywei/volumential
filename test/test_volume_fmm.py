@@ -298,4 +298,13 @@ def test_volume_fmm_laplace(laplace_problem):
     assert max(abs(direct_pot - fmm_pot)) < 1e-6
 
 
+if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) > 1:
+        exec(sys.argv[1])
+    else:
+        pytest.main([__file__])
+
+
 # vim: filetype=pyopencl:foldmethod=marker

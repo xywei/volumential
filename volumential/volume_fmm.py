@@ -160,12 +160,14 @@ def drive_volume_fmm(
         )
         potentials[0] += ref_pot
 
-        potentials = potentials - wrangler.eval_direct_p2p(
-            traversal.target_boxes,
-            traversal.neighbor_source_boxes_starts,
-            traversal.neighbor_source_boxes_lists,
-            src_weights,
-        )
+        l1_potentials, timing_future = wrangler.eval_direct_p2p(
+                traversal.target_boxes,
+                traversal.neighbor_source_boxes_starts,
+                traversal.neighbor_source_boxes_lists,
+                src_weights,
+                )
+
+        potentials = potentials - l1_potentials
 
         # list 3
         assert traversal.from_sep_close_smaller_starts is None

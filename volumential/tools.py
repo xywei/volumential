@@ -161,13 +161,18 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
 
         return loopy_knl
 
-    def get_optimized_kernel(self, **kwargs):
+    def get_optimized_kernel(self, ncpus=None, **kwargs):
         knl = self.get_kernel(**kwargs)
+        if ncpus is None:
+            import os
+            # NOTE: this detects the number of logical cores, which
+            # may result in suboptimal performance.
+            ncpus = os.cpu_count()
         knl = lp.split_iname(
             knl,
             split_iname="itgt",
-            inner_length=16,
-            inner_tag="g.0")
+            inner_length=ncpus,
+            inner_tag="l.0")
         return knl
 
     def __call__(self, queue, target_points, **kwargs):
