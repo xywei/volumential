@@ -22,13 +22,6 @@ Volumential is under the MIT license.
 
 - `DrosteSum`: Subdivide the box iteratively into layers of "bricks" towards the singular point. The name comes from **Droste effect** ([Wikipedia](https://en.wikipedia.org/wiki/Droste_effect)).
 
-## TODOs
-
-- [x] PEP8 compliant for `volumential/`
-- [ ] PEP8 compliant for all subdirectories.
-- [ ] Add type hints.
-- [ ] Improve docstrings.
-
 ## Notes on meshgen_dealii
 
 A simple way to compile `meshgen_dealii`:
@@ -36,3 +29,7 @@ A simple way to compile `meshgen_dealii`:
 - Install everything in `conda-forge`
 - Download `deal-ii` and compile it with all things disabled (~15min)
 - Build `meshgen11_dealii` under `contrib` in the conda env (`python 3.6` must be used)
+
+## Acknowledgement
+
+The research that lead to the development of `volumential` was supported by the NSF under grant DMS-1654756.
