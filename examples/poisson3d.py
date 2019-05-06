@@ -479,24 +479,14 @@ nftable, _ = tm.get_table(
 
 # {{{ sumpy expansion for laplace kernel
 
+from sumpy.expansion import DefaultExpansionFactory
+
 knl = LaplaceKernel(dim)
 out_kernels = [knl]
 
-if 1:
-    from sumpy.expansion.multipole import (
-        LaplaceConformingVolumeTaylorMultipoleExpansion,
-    )
-    from sumpy.expansion.local import LaplaceConformingVolumeTaylorLocalExpansion
-
-    local_expn_class = LaplaceConformingVolumeTaylorLocalExpansion
-    mpole_expn_class = LaplaceConformingVolumeTaylorMultipoleExpansion
-
-else:
-    from sumpy.expansion.multipole import VolumeTaylorMultipoleExpansion
-    from sumpy.expansion.local import VolumeTaylorLocalExpansion
-
-    local_expn_class = VolumeTaylorLocalExpansion
-    mpole_expn_class = VolumeTaylorMultipoleExpansion
+expn_factory = DefaultExpansionFactory()
+local_expn_class = expn_factory.get_local_expansion_class(knl)
+mpole_expn_class = expn_factory.get_multipole_expansion_class(knl)
 
 exclude_self = True
 from volumential.expansion_wrangler_interface import ExpansionWranglerCodeContainer
