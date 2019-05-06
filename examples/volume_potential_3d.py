@@ -43,6 +43,8 @@ verbose = True
 logger = logging.getLogger(__name__)
 if verbose:
     logging.basicConfig(level=logging.INFO)
+else:
+    logging.basicConfig(level=logging.CRITICAL)
 
 
 print("*************************")
@@ -266,19 +268,18 @@ else:
 
 # {{{ sumpy expansion for laplace kernel
 
+from sumpy.expansion import DefaultExpansionFactory
 from sumpy.kernel import LaplaceKernel
-from sumpy.expansion.multipole import VolumeTaylorMultipoleExpansion
-from sumpy.expansion.local import VolumeTaylorLocalExpansion
-
-from sumpy.expansion.multipole import LaplaceConformingVolumeTaylorMultipoleExpansion
-from sumpy.expansion.local import LaplaceConformingVolumeTaylorLocalExpansion
 
 knl = LaplaceKernel(dim)
 out_kernels = [knl]
+
+local_expn_class = expn_factory.get_local_expansion_class(knl)
+mpole_expn_class = expn_factory.get_multipole_expansion_class(knl)
+
+expn_factory = DefaultExpansionFactory()
 local_expn_class = LaplaceConformingVolumeTaylorLocalExpansion
 mpole_expn_class = LaplaceConformingVolumeTaylorMultipoleExpansion
-# local_expn_class = VolumeTaylorLocalExpansion
-# mpole_expn_class = VolumeTaylorMultipoleExpansion
 
 exclude_self = True
 from volumential.expansion_wrangler_interface import ExpansionWranglerCodeContainer
@@ -320,6 +321,9 @@ print("*************************")
 
 from volumential.volume_fmm import drive_volume_fmm
 
+import time
+queue.finish()
+
 pot, = drive_volume_fmm(
     trav,
     wrangler,
@@ -327,6 +331,13 @@ pot, = drive_volume_fmm(
     source_vals,
     direct_evaluation=force_direct_evaluation,
 )
+
+t1 = time.clock()
+
+print("Finished in %.2f seconds." % (t1 - t0))
+print("(%e points per second)" % (
+    len(q_weights) / (t1 - t0)
+    ))
 
 # }}} End conduct fmm computation
 
