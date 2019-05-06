@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 from abc import ABCMeta, abstractmethod
 
-__doc__="""
+__doc__ = """
 .. autoclass::ExpansionWranglerInterface
 """
 

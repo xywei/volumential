@@ -20,8 +20,8 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
-__doc__="""
-Mesh generation 
+__doc__ = """
+Mesh generation
 
 .. autoclass:: MeshGenBase
    :members:
@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 provider = None
 
 # {{{ meshgen Python provider
+
 
 class MeshGenBase(object):
     """Base class for Meshgen via BoxTree.
