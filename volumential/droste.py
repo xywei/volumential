@@ -632,6 +632,7 @@ class DrosteFull(DrosteBase):
                 "...",
             ],
             name="brick_map",
+            lang_version=(2018, 2),
         )
 
         loopy_knl = lp.fix_parameters(loopy_knl, d=self.dim)
@@ -1072,6 +1073,7 @@ class DrosteReduced(DrosteBase):
                     "...",
                 ],
                 name="brick_map",
+                lang_version=(2018, 2),
             )
 
         elif self.get_kernel_id == 1:
@@ -1093,6 +1095,7 @@ class DrosteReduced(DrosteBase):
                     "...",
                 ],
                 name="brick_map_expansion",
+                lang_version=(2018, 2),
             )
 
         else:
