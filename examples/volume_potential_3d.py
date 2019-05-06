@@ -274,12 +274,9 @@ from sumpy.kernel import LaplaceKernel
 knl = LaplaceKernel(dim)
 out_kernels = [knl]
 
+expn_factory = DefaultExpansionFactory()
 local_expn_class = expn_factory.get_local_expansion_class(knl)
 mpole_expn_class = expn_factory.get_multipole_expansion_class(knl)
-
-expn_factory = DefaultExpansionFactory()
-local_expn_class = LaplaceConformingVolumeTaylorLocalExpansion
-mpole_expn_class = LaplaceConformingVolumeTaylorMultipoleExpansion
 
 exclude_self = True
 from volumential.expansion_wrangler_interface import ExpansionWranglerCodeContainer
