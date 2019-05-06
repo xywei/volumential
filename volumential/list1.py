@@ -35,6 +35,9 @@ logging.basicConfig(level=logging.INFO)
 
 
 class NearFieldEvalBase(KernelCacheWrapper):
+    """Base class of near-field evalulator.
+    """
+    
     def __init__(
         self,
         integral_kernel,
@@ -79,6 +82,9 @@ class NearFieldEvalBase(KernelCacheWrapper):
 
 
 class NearFieldFromCSR(NearFieldEvalBase):
+    """Evaluate the near-field potentials from CSR representation of the tree.
+    """
+    
     default_name = "near_field_from_csr"
 
     def codegen_vec_component(self, d=None):

@@ -22,6 +22,11 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
+__doc__ = """
+.. autofunction:: drive_volume_fmm
+.. autofunction:: interpolate_volume_potential
+"""
+
 import logging
 
 logger = logging.getLogger(__name__)
@@ -47,10 +52,12 @@ def drive_volume_fmm(
     This function, and the interface it utilizes, is adapted from boxtree/fmm.py
 
     The fast multipole method is a two-pass algorithm:
-    - During the fist (upward) pass, the multipole expansions for all boxes
-      at all levels are formed from bottom up.
-    - In the second (downward) pass, the local expansions for all boxes
-      at all levels at formed from top down.
+
+    1. During the fist (upward) pass, the multipole expansions for all boxes
+    at all levels are formed from bottom up.
+
+    2. In the second (downward) pass, the local expansions for all boxes
+    at all levels at formed from top down.
 
     :arg traversal: A :class:`boxtree.traversal.FMMTraversalInfo` instance.
     :arg expansion_wrangler: An object implementing the expansion

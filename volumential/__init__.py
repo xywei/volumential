@@ -45,7 +45,7 @@ except ImportError:
 """
 
 __doc__ = """
-:mod:`volumential` can compute 2/3D volume potentials using FMM
+:mod:`volumential` can compute 2/3D volume potentials using FMM.
 """
 
 # vim: filetype=pyopencl:fdm=marker

@@ -1,6 +1,5 @@
-"""
-    Generate a list 1 that servers as the gallery for all possible list 1
-    interactions with given dimension and order.
+__doc__ = """
+.. autofunction:: generate_list1_gallery
 """
 
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
@@ -168,6 +167,9 @@ def postprocess_interactions(near_neighbor_interactions):
 
 
 def generate_list1_gallery(dim):
+    """Generate a *list1* that servers as the gallery for all possible *list1*
+    interactions with given dimension and order.
+    """
     # contains each sourcebox.center-to-targetbox.center vector
     # source box is 4x4 to make all involved lengths to be integers
     vec_list = postprocess_interactions(generate_interactions(dim))

@@ -28,10 +28,10 @@ import numpy as np
 import scipy.integrate.quadrature as quad
 import scipy as sp
 
-"""
-:mod:
-    The 2D singular integrals are computed using the transform described in
-    http://link.springer.com/10.1007/BF00370482.
+__doc__="""The 2D singular integrals are computed using the transform described in
+http://link.springer.com/10.1007/BF00370482.
+
+.. autofunction:: box_quad
 """
 
 logger = logging.getLogger(__name__)

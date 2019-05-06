@@ -1,7 +1,17 @@
 """Function extension with regularity contraints:
-    1. L^2: extend with constant value
-    2. C^0: harmonic extension
-    3. C^1: biharmonic extension
+
+1. :math:`L^2`: extend with constant value
+
+.. autofunction:: compute_constant_extension
+
+2. :math:`C^0`: harmonic extension
+
+.. autofunction:: compute_harmonic_extension
+
+3. :math:`C^1`: biharmonic extension
+
+.. autofunction:: compute_biharmonic_extension
+
 """
 
 __copyright__ = "Copyright (C) 2018 Xiaoyu Wei"
@@ -119,9 +129,10 @@ def compute_harmonic_extension(queue, target_discr,
         target_association_tolerance=0.05,
         gmres_tolerance=1e-14):
     """Harmonic extension.
-    loc_sign indicates the domain for extension, which
-             equals to the negation of the loc_sign for
-             the original problem.
+
+    :param: loc_sign indicates the domain for extension,
+            which equals to the negation of the loc_sign
+            for the original problem.
     """
     dim = qbx.ambient_dim
     queue = setup_command_queue(queue=queue)
@@ -217,6 +228,9 @@ class ComplexLogKernel(ExpressionKernel):
     has_efficient_scale_adjustment = True
 
     def adjust_for_kernel_scaling(self, expr, rscale, nderivatives):
+        """Efficient rescaling.
+        """
+
         if self.dim == 2:
             if nderivatives == 0:
                 import sumpy.symbolic as sp
@@ -290,6 +304,8 @@ class ComplexLinearKernel(ExpressionKernel):
     has_efficient_scale_adjustment = True
 
     def adjust_for_kernel_scaling(self, expr, rscale, nderivatives):
+        """Efficient rescaling of the kernel.
+        """
         if self.dim == 2:
             return (rscale * expr)
 

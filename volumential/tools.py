@@ -31,6 +31,8 @@ from sumpy.tools import KernelCacheWrapper
 def clean_file(filename, new_name=None):
     """Remove/rename file if exists.
     Fails silently when the file does not exist.
+    Useful for, for example, writing output files that
+    are meant to overwrite existing ones.
     """
     import os
 
@@ -49,6 +51,7 @@ def clean_file(filename, new_name=None):
 class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
     """
     Evaluate a field funciton on a set of D-d points.
+    Useful for imposing analytic conditions efficiently.
     """
 
     def __init__(self, dim, expression, variables=None, function_manglers=None):

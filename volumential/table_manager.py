@@ -2,6 +2,11 @@ from __future__ import division, absolute_import, print_function
 
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
+__doc__ = """
+.. autoclass:: NearFieldInteractionTableManager
+   :members:
+"""
+
 __license__ = """
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -83,6 +88,8 @@ class NearFieldInteractionTableManager(object):
     """
 
     def __init__(self, dataset_filename="nft.hdf5", root_extent=1, dtype=np.float64):
+        """Constructor.
+        """
         self.dtype = dtype
 
         self.filename = dataset_filename
@@ -293,6 +300,8 @@ class NearFieldInteractionTableManager(object):
         compute_method=None,
         **kwargs
     ):
+        """Load a table saved in the hdf5 file.
+        """
 
         if kernel_type not in self.supported_kernels:
             raise NotImplementedError("Kernel type not supported.")
@@ -381,6 +390,10 @@ class NearFieldInteractionTableManager(object):
         return table
 
     def get_kernel_function(self, dim, kernel_type, **kwargs):
+        """Kernel function is needed for building the table. This function
+        provides support for some kernels such that the user can build and
+        use the table without explicitly providing such information.
+        """
 
         if kernel_type == "Laplace":
             # knl = LaplaceKernel(dim)
@@ -401,6 +414,8 @@ class NearFieldInteractionTableManager(object):
         return knl_func
 
     def get_sumpy_kernel(self, dim, kernel_type):
+        """Sumpy (symbolic) version of the kernel.
+        """
 
         if kernel_type == "Laplace":
             from sumpy.kernel import LaplaceKernel
@@ -477,6 +492,9 @@ class NearFieldInteractionTableManager(object):
             raise NotImplementedError("Kernel type not supported.")
 
     def get_kernel_function_type(self, dim, kernel_type):
+        """Determines how and to what extend the table data can be rescaled
+        and reused.
+        """
 
         if kernel_type == "Laplace":
             if dim == 2:
@@ -499,6 +517,8 @@ class NearFieldInteractionTableManager(object):
             raise NotImplementedError("Kernel scaling not supported")
 
     def update_dataset(self, group, dataset_name, data_array):
+        """Update stored data.
+        """
 
         data_array = np.array(data_array)
 
@@ -521,6 +541,8 @@ class NearFieldInteractionTableManager(object):
         queue=None,
         **kwargs
     ):
+        """Performs the precomputation and stores the results.
+        """
 
         if kernel_type not in self.supported_kernels:
             raise NotImplementedError("Kernel type not supported.")

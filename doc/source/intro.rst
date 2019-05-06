@@ -1,8 +1,4 @@
 Introduction
 ============
 
-*Volumential* is ..
-
-.. todo::
-
-   Introduce the package.
+**Volumential** implements algorithms for evaluating volume potentials.

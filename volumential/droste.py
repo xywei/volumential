@@ -29,13 +29,12 @@ import logging
 logger = logging.getLogger(__name__)
 
 __doc__ = """
-
-Droste Method
---------------
-
 .. autoclass:: DrosteBase
+   :members:
 .. autoclass:: DrosteFull
+   :members:
 .. autoclass:: DrosteReduced
+   :members:
 """
 
 # logging.basicConfig(level=logging.INFO)
