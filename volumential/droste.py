@@ -818,7 +818,7 @@ class DrosteReduced(DrosteBase):
         assert base_case_id >= 0
         assert base_case_id < self.nbcases
 
-        # tgt_vars = self.make_tgt_vars()
+        tgt_vars = self.make_tgt_vars()
         quad_vars = self.make_quad_vars()
         basis_vars = self.make_basis_vars()
         basis_eval_vars = self.make_basis_eval_vars()
@@ -882,6 +882,57 @@ class DrosteReduced(DrosteBase):
 
         self.loop_domains[base_case_id] = loop_domain_common_parts & tgt_domain
         return self.loop_domains[base_case_id]
+
+    def make_result_array(self, **kwargs):
+        """Allocate memory space for results.
+        """
+        # by default uses double type returns
+        if "result_dtype" in kwargs:
+            result_dtype = kwargs["result_dtype"]
+        else:
+            result_dtype = np.float64
+
+        # allocate return arrays
+        if self.dim == 1:
+            result_array = (
+                    np.zeros(
+                        (self.nfunctions, self.ntgt_points, self.ncases),
+                        result_dtype
+                        )
+                    + np.nan)
+        elif self.dim == 2:
+            result_array = (
+                    np.zeros(
+                        (
+                            self.nfunctions,
+                            self.nfunctions,
+                            self.ntgt_points,
+                            self.ntgt_points,
+                            1,
+                            ),
+                        result_dtype
+                        )
+                    + np.nan
+                    )
+        elif self.dim == 3:
+            result_array = (
+                    np.zeros(
+                        (
+                            self.nfunctions,
+                            self.nfunctions,
+                            self.nfunctions,
+                            self.ntgt_points,
+                            self.ntgt_points,
+                            self.ntgt_points,
+                            1,
+                            ),
+                        result_dtype
+                        )
+                    + np.nan
+                    )
+        else:
+            raise NotImplementedError
+        return result_array
 
     def get_kernel_expansion_by_symmetry_code(self):
         """

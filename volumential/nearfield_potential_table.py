@@ -754,7 +754,7 @@ class NearFieldInteractionTable(object):
 
         assert alpha >= 0 and alpha < 1
         if "nlevels" in kwargs:
-            nlev = kwargs["nlevels"]
+            nlev = kwargs.pop("nlevels")
         else:
             nlev = 1
 

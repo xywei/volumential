@@ -28,7 +28,13 @@ THE SOFTWARE.
 import logging
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
+
+if 0:
+    # verbose
+    logging.basicConfig(level=logging.INFO)
+else:
+    # clean
+    logging.basicConfig(level=logging.CRITICAL)
 
 import numpy as np
 import pyopencl as cl
@@ -43,16 +49,14 @@ print("* Setting up...")
 print("*************************")
 
 dim = 2
-# table_filename = "nft_adaptive.hdf5"
-table_filename = "nft_laplace2d.hdf5"
 
-# FIXME: get other sizes (say, 2.33) to work
-# table_filename = "nft_2.33.hdf5"
+table_filename = "nft_laplace2d.hdf5"
+root_table_source_extent = 2
 
 print("Using table cache:", table_filename)
 
-q_order = 5  # quadrature order
-n_levels = 9  # 2^(n_levels-1) subintervals in 1D, must be at least 2 if not adaptive
+q_order = 5   # quadrature order
+n_levels = 9  # 2^(n_levels-1) subintervals in 1D
 
 use_multilevel_table = False
 
@@ -64,8 +68,6 @@ rratio_bot = 0.5
 
 dtype = np.float64
 
-# FIXME: high multipole order unstable
-# appears to be some overflow in sumpy/codegen
 m_order = 20  # multipole order
 force_direct_evaluation = False
 
@@ -116,7 +118,6 @@ else:
 # bounding box
 a = -1
 b = 1
-root_table_source_extent = 2
 
 ctx = cl.create_some_context()
 queue = cl.CommandQueue(ctx)
@@ -197,9 +198,6 @@ for ax in axis_names:
     bbox["min_" + ax] = a
     bbox["max_" + ax] = b
 
-import pudb
-
-pu.db
 
 # tune max_particles_in_box to reconstruct the mesh
 # TODO: use points from FieldPlotter are used as target points for better
@@ -287,19 +285,15 @@ else:
 
 # {{{ sumpy expansion for laplace kernel
 
+from sumpy.expansion import DefaultExpansionFactory
 from sumpy.kernel import LaplaceKernel
-from sumpy.expansion.multipole import VolumeTaylorMultipoleExpansion
-from sumpy.expansion.local import VolumeTaylorLocalExpansion
-
-from sumpy.expansion.multipole import LaplaceConformingVolumeTaylorMultipoleExpansion
-from sumpy.expansion.local import LaplaceConformingVolumeTaylorLocalExpansion
 
 knl = LaplaceKernel(dim)
 out_kernels = [knl]
-local_expn_class = LaplaceConformingVolumeTaylorLocalExpansion
-mpole_expn_class = LaplaceConformingVolumeTaylorMultipoleExpansion
-# local_expn_class = VolumeTaylorLocalExpansion
-# mpole_expn_class = VolumeTaylorMultipoleExpansion
+
+expn_factory = DefaultExpansionFactory()
+local_expn_class = expn_factory.get_local_expansion_class(knl)
+mpole_expn_class = expn_factory.get_multipole_expansion_class(knl)
 
 exclude_self = True
 from volumential.expansion_wrangler_interface import ExpansionWranglerCodeContainer
@@ -341,6 +335,11 @@ print("*************************")
 
 from volumential.volume_fmm import drive_volume_fmm
 
+import time
+queue.finish()
+
+t0 = time.clock()
+
 pot, = drive_volume_fmm(
     trav,
     wrangler,
@@ -348,6 +347,14 @@ pot, = drive_volume_fmm(
     source_vals,
     direct_evaluation=force_direct_evaluation,
 )
+queue.finish()
+
+t1 = time.clock()
+
+print("Finished in %.2f seconds." % (t1 - t0))
+print("(%e points per second)" % (
+    len(q_weights) / (t1 - t0)
+    ))
 
 # }}} End conduct fmm computation
 
