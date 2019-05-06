@@ -298,7 +298,7 @@ public:
   }
 
   // Driver function for mesh adaptivity
-  void update_mesh(py::array_t<double> & criteria,
+  int update_mesh(py::array_t<double> & criteria,
                    const double top_fraction_of_cells,
                    const double bottom_fraction_of_cells) {
     py::buffer_info info_crit = criteria.request();
@@ -313,6 +313,8 @@ public:
 
     this->prepare_coarsening_and_refinement();
     this->execute_coarsening_and_refinement();
+
+    return this->n_active_cells();
   }
 
   // Show some info about the mesh

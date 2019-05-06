@@ -285,7 +285,7 @@ public:
   }
 
   // Driver function for mesh adaptivity
-  void update_mesh(np::ndarray const & criteria,
+  int update_mesh(np::ndarray const & criteria,
                    const double top_fraction_of_cells,
                    const double bottom_fraction_of_cells) {
     if (criteria.get_dtype() != np::dtype::get_builtin<double>()) {
@@ -304,6 +304,8 @@ public:
 
     this->prepare_coarsening_and_refinement();
     this->execute_coarsening_and_refinement();
+
+    return this->n_active_cells();
   }
 
   // Show some info about the mesh
