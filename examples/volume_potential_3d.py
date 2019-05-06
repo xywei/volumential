@@ -321,6 +321,8 @@ from volumential.volume_fmm import drive_volume_fmm
 import time
 queue.finish()
 
+t0 = time.clock()
+
 pot, = drive_volume_fmm(
     trav,
     wrangler,
