@@ -57,4 +57,5 @@ OTHER DEALINGS IN THE SOFTWARE.
 
 ## Acknowledgement
 
-The research that lead to the development of `volumential` was supported by the NSF under grant DMS-1654756.
+We would like to thank people and organizations that contributed to or supported the
+Volumential project. See [ACKNOWLEDGEMENTS](./ACKNOWLEDGEMENTS.md) for details.
