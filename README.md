@@ -36,7 +36,7 @@ Volumential is developed and released under the terms of the MIT license,
 though it also makes use of third-party packages under their own licensing
 terms. See the [LICENSE](./LICENSE.md) file for details.
 
-## Acknowledgement
+## Acknowledgements
 
 We would like to thank people and organizations that contributed to or supported the
 Volumential project. See [ACKNOWLEDGEMENTS](./ACKNOWLEDGEMENTS.md) for details.
