@@ -186,10 +186,10 @@ for op in op_map.keys():
 print("Total:", total_ops)
 
 # TODO: weight each operation by running micro-benchmarks
-print("OP throughput w/t tag l.0 = %.2f GFLOPS" %
+print("OP throughput w/t tag l.0 = %.2f GFLOPS/S" %
         (total_ops / (t1 - t0) * 1e-9)
         )
-print("OP throughput w/t tag g.0 = %.2f GFLOPS" %
+print("OP throughput w/t tag g.0 = %.2f GFLOPS/S" %
         (total_ops / (t3 - t2) * 1e-9)
         )
 
