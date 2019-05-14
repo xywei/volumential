@@ -128,8 +128,6 @@ html_sidebars = {
 # Output file base name for HTML help builder.
 htmlhelp_basename = 'Volumentialdoc'
 
-html_baseurl = 'https://xiaoyu-wei.com/docs/volumential/'
-
 # -- Options for LaTeX output ---------------------------------------------
 
 latex_elements = {
