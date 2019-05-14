@@ -13,4 +13,4 @@
 -e git+https://gitlab.tiker.net/inducer/loopy.git#egg=loo.py
 -e git+https://gitlab.tiker.net/inducer/modepy.git#egg=modepy
 
--e .[test]
+-e .[test,doc]

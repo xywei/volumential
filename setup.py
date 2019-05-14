@@ -72,6 +72,7 @@ def main():
             "transform_based_table_builder": ["multiprocess"],
             "gmsh_support": ["gmsh_interop"],
             "test": ["multiprocess", "pytest", "gmsh_interop"],
+            "doc": ["sphinx", "sphinx_rtd_theme"],
         },
         include_package_data=True,
     )
