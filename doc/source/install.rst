@@ -31,7 +31,7 @@ Install dependencies using ``conda`` (after activating the newly created environ
 
    conda install python=3
    conda install pyopencl pocl sympy scipy 
-   conda install matplotlib mayavi pyvtk pyvisfile
+   conda install matplotlib mayavi pyvtk
 
 Install ``dealii`` as well for additional features.
 
