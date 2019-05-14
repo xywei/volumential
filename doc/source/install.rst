@@ -33,11 +33,15 @@ Install dependencies using ``conda`` (after activating the newly created environ
    conda install pyopencl pocl sympy scipy 
    conda install matplotlib mayavi pyvtk pyvisfile
 
+Install ``dealii`` as well for additional features.
+
 .. note::
 
-   Deal.II_ is needed for adaptive mesh refinement. For now, Deal.II has to be manually compiled. It is a work in progress to enable installing Deal.II via conda at https://github.com/conda-forge/staged-recipes/pull/8162.
+   Deal.II_ is used only for adaptive mesh refinement (AMR).
 
-   .. _Deal.II: https://www.dealii.org/
+.. code-block:: bash
+
+   conda install tbb-devel dealii
 
 And here are some optional dependencies. Install these if you intend to develop the library or build this documentation.
 
@@ -79,13 +83,31 @@ Then finish installation by running
    # dependencies not present in conda-forge
    pip install -r requirements.txt
 
-Optionally, if using ``meshgen`` via Deal.II, compile the ``meshgen`` module under ``contrib/meshgen11_dealii``. 
+Compile the AMR Module
+----------------------
+
+The AMR module is implemented based on ``dealii``.
+To use it, compile the ``meshgen`` module under ``contrib/meshgen11_dealii``. 
 
 .. code-block:: bash
 
    cd contrib/meshgen11_dealii
-   DEAL_II_DIR=/path/to/deaii/installation make
+   git submodule update --init --recursive
+   make
+
+If the build process fails with the error message
+``The keyword signature for target_link_libraries has already been used with
+the target ...``, try editing ``CMakeLists.txt`` and change line 52
+from ``if(TRUE)`` to ``if(FALSE)``. Then remove the ``build`` directory
+and re-run ``make``.
+
+If you are using manually compiled ``dealii`` instead of the one from
+``conda-forge``, set the ``DEAL_II_DIR`` environment variable to
+its installation path before calling ``make``.
+
+Alternatively, there is another implementation of the AMR module
+using ``boost::python`` under ``contrib/meshgen_dealii``. The compilation
+process is similar. It is in deprecated status. But if you have troubles
+compiling the ``pybind11`` one, it may worth a try.
 
 After installation, checkout ``examples/`` for example usage.
-
-
