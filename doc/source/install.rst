@@ -111,3 +111,14 @@ process is similar. It is in deprecated status. But if you have troubles
 compiling the ``pybind11`` one, it may worth a try.
 
 After installation, checkout ``examples/`` for example usage.
+
+Update the Installation
+-----------------------
+
+The update process is simple using the ``requirements.txt``.
+
+.. code-block:: bash
+
+   git pull
+   git submodule update --init --recursive
+   pip install -U -r requirements.txt
