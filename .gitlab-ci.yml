@@ -39,6 +39,7 @@ Documentation Sphinx:
   - cd homepage
   - git checkout src
   - cd static && mkdir -p docs
+  - rm -rf docs/volumential
   - cp -r ../../build/html docs/volumential
   - git add -f ./docs/volumential
   - git commit -m "Auto-updated volumential docs"
