@@ -66,7 +66,7 @@ set(NUMPY_LIBRARIES "/home/xywei/apps/lib/libboost_numpy3.so" CACHE STRING "Boos
 set(DEAL_II_DIR "/home/xywei/apps" CACHE STRING "Deal.II dir")
 #FIND_PACKAGE(deal.II 8.5.0 REQUIRED
 FIND_PACKAGE(deal.II 8.4.2 REQUIRED
-  HINTS ${DEAL_II_DIR} ../ ../../ $ENV{DEAL_II_DIR}
+  HINTS ${DEAL_II_DIR} ../ ../../ $ENV{DEAL_II_DIR} $ENV{CONDA_PREFIX}
   )
 DEAL_II_INITIALIZE_CACHED_VARIABLES()
 
