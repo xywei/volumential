@@ -33,6 +33,16 @@ Documentation Sphinx:
   - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/master/build-py-project.sh
   - ". ./build-py-project.sh"
   - cd doc && make html
+  - git config --global user.name "${COMMIT_USER}"
+  - git config --global user.email "${COMMIT_EMAIL}"
+  - git clone https://${GH_USER}:${GH_ACCESS_TOKEN}@${HOMEPAGE_URL} homepage
+  - cd homepage
+  - git checkout src
+  - cd static && mkdir -p docs
+  - cp -r ../../build/html docs/volumential
+  - git add -f ./docs/volumential
+  - git commit -m "Auto-updated volumential docs"
+  - git push
   tags:
   - python3
   - pocl
