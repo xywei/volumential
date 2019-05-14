@@ -37,7 +37,7 @@ Install ``dealii`` as well for additional features.
 
 .. note::
 
-   Deal.II_ is used only for adaptive mesh refinement (AMR).
+   Deal.II is used only for adaptive mesh refinement (AMR).
 
 .. code-block:: bash
 
