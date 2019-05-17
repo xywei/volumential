@@ -444,7 +444,7 @@ class DrosteBase(KernelCacheWrapper):
                                 inner_brick[ibrick_axis, ibrick_side]
                                 - outer_brick[ibrick_axis, ibrick_side])
                                 + outer_brick[ibrick_axis, ibrick_side]) \
-                            {id=mpoint1}
+                            {id=mpoint1,nosync=mpoint2}
                     else
                         <> pre_scale = (
                             point[iaxis]
@@ -453,7 +453,7 @@ class DrosteBase(KernelCacheWrapper):
 
                         mapped_point_tmp[iaxis] = \
                             ob_ext[iaxis] * pre_scale + outer_brick[iaxis, 0] \
-                            {id=mpoint2}
+                            {id=mpoint2,nosync=mpoint1}
                     end
 
                     ... nop {id=mpoint,dep=mpoint1:mpoint2}
@@ -1017,6 +1017,12 @@ class DrosteReduced(DrosteBase):
             ext_tgt_ordering.reverse()
             ext_fun_ordering.reverse()
 
+            ext_instruction_ids = ':'.join([
+                'result_ext_' + str(eid)
+                for eid in range(len(ext_ids))
+                if eid != ext_index
+                ])
+
             expansion_code += [
                 self.make_dim_independent(
                     """
@@ -1024,7 +1030,7 @@ class DrosteReduced(DrosteBase):
                     result[EXT_BASIS_VARS, EXT_TGT_VARS, icase] = (
                         EXT_SIGN *
                         result[REV_BASIS_VARS, REV_TGT_VARS, icase]
-                        ) {id=result_ext_EXT_ID}
+                        ) {id=result_ext_EXT_ID,nosync=EXT_INSN_IDS}
                 end
                 """.replace(
                         "EXT_TGT_VARS", ",".join(ext_tgt_ordering)
@@ -1032,6 +1038,7 @@ class DrosteReduced(DrosteBase):
                     .replace("EXT_BASIS_VARS", ",".join(ext_fun_ordering))
                     .replace("EXT_SIGN", ext_sign)
                     .replace("EXT_ID", str(ext_index))
+                    .replace("EXT_INSN_IDS", ext_instruction_ids)
                 )
             ]
 
