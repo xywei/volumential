@@ -41,7 +41,7 @@ Install ``dealii`` as well for additional features.
 
 .. code-block:: bash
 
-   conda install tbb-devel dealii
+   conda install cmake tbb-devel dealii
 
 And here are some optional dependencies. Install these if you intend to develop the library or build this documentation.
 
