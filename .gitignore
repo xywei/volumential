@@ -18,6 +18,7 @@ a.out
 .cache
 .pytest_cache
 
+src/
 build/
 builds/
 *.so
