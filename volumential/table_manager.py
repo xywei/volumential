@@ -153,9 +153,6 @@ class NearFieldInteractionTableManager(object):
 
         is_recomputed = False
 
-        if kernel_type not in self.supported_kernels:
-            raise NotImplementedError("Kernel type not supported: " + kernel_type)
-
         q_order = int(q_order)
         assert q_order >= 1
 
@@ -303,9 +300,6 @@ class NearFieldInteractionTableManager(object):
         """Load a table saved in the hdf5 file.
         """
 
-        if kernel_type not in self.supported_kernels:
-            raise NotImplementedError("Kernel type not supported.")
-
         q_order = int(q_order)
         assert q_order >= 1
 
@@ -329,11 +323,17 @@ class NearFieldInteractionTableManager(object):
         assert q_order == grp.attrs["quad_order"]
 
         if compute_method == "Transform":
-            knl_func = self.get_kernel_function(dim, kernel_type, **kwargs)
+            if 'knl_func' not in kwargs:
+                knl_func = self.get_kernel_function(dim, kernel_type, **kwargs)
+            else:
+                knl_func = kwargs['knl_func']
             sumpy_knl = None
         elif compute_method == "DrosteSum":
             knl_func = None
-            sumpy_knl = self.get_sumpy_kernel(dim, kernel_type)
+            if 'sumpy_knl' not in kwargs:
+                sumpy_knl = self.get_sumpy_kernel(dim, kernel_type)
+            else:
+                sumpy_knl = kwargs['sumpy_knl']
         else:
             from warnings import warn
 
@@ -510,11 +510,8 @@ class NearFieldInteractionTableManager(object):
             else:
                 raise NotImplementedError("Kernel scaling not supported")
 
-        elif kernel_type in self.supported_kernels:
-            return None
-
         else:
-            raise NotImplementedError("Kernel scaling not supported")
+            return None
 
     def update_dataset(self, group, dataset_name, data_array):
         """Update stored data.
@@ -544,9 +541,6 @@ class NearFieldInteractionTableManager(object):
         """Performs the precomputation and stores the results.
         """
 
-        if kernel_type not in self.supported_kernels:
-            raise NotImplementedError("Kernel type not supported.")
-
         if compute_method is None:
             logger.debug("Using default compute_method (Transform)")
             compute_method = "Transform"
@@ -559,11 +553,17 @@ class NearFieldInteractionTableManager(object):
         assert "Order_" + str(q_order) in self.datafile[str(dim) + "D"][kernel_type]
 
         if compute_method == "Transform":
-            knl_func = self.get_kernel_function(dim, kernel_type, **kwargs)
+            if 'knl_func' not in kwargs:
+                knl_func = self.get_kernel_function(dim, kernel_type, **kwargs)
+            else:
+                knl_func = kwargs['knl_func']
             sumpy_knl = None
         elif compute_method == "DrosteSum":
             knl_func = None
-            sumpy_knl = self.get_sumpy_kernel(dim, kernel_type)
+            if 'sumpy_knl' not in kwargs:
+                sumpy_knl = self.get_sumpy_kernel(dim, kernel_type)
+            else:
+                sumpy_knl = kwargs['sumpy_knl']
         else:
             raise NotImplementedError("Unsupported compute_method.")
 
