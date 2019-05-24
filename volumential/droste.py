@@ -35,6 +35,8 @@ __doc__ = """
    :members:
 .. autoclass:: DrosteReduced
    :members:
+.. autoclass:: InverseDrosteReduced
+   :members:
 """
 
 # logging.basicConfig(level=logging.INFO)
@@ -646,11 +648,14 @@ class DrosteFull(DrosteBase):
 
         return loopy_knl
 
-    def get_optimized_kernel(self, **kwargs):
-        # FIXME
-        # nproc = 16 on porter
+    def get_optimized_kernel(self, ncpus=None, **kwargs):
+        if ncpus is None:
+            import os
+            # NOTE: this detects the number of logical cores, which
+            # may result in suboptimal performance.
+            ncpus = os.cpu_count()
         knl = self.get_kernel(**kwargs)
-        knl = lp.split_iname(knl, "icase", 16, outer_tag="g.0", inner_tag="l.0")
+        knl = lp.split_iname(knl, "icase", ncpus, inner_tag="l.0")
         return knl
 
     def call_loopy_kernel(self, queue, **kwargs):
@@ -1119,18 +1124,18 @@ class DrosteReduced(DrosteBase):
 
         return loopy_knl
 
-    def get_optimized_kernel(self, **kwargs):
-        # FIXME
-        # nproc = 16 on porter
+    def get_optimized_kernel(self, ncpus=None, **kwargs):
         # The returned kernel depends on the state variable
-        # self.current_base_case
-        import multiprocessing
-
-        n_cores = multiprocessing.cpu_count()
+        # self.current_base_case, self.get_kernel_id
+        if ncpus is None:
+            import os
+            # NOTE: this detects the number of logical cores, which
+            # may result in suboptimal performance.
+            ncpus = os.cpu_count()
 
         knl = self.get_kernel(**kwargs)
         knl = lp.join_inames(knl, inames=self.basis_vars, new_iname="func")
-        knl = lp.split_iname(knl, "func", n_cores, outer_tag="g.0", inner_tag="l.0")
+        knl = lp.split_iname(knl, "func", ncpus, inner_tag="l.0")
         return knl
 
     def call_loopy_kernel_case(self, queue, base_case_id, **kwargs):
@@ -1429,3 +1434,53 @@ class DrosteReduced(DrosteBase):
 
 
 # }}} End reduced Droste method
+
+# {{{ inverse Droste method
+
+
+class InverseDrosteReduced(DrosteReduced):
+    """
+    A variant of the Droste method.
+    Instead of computing a volume potential, it computes the "inverse" to a
+    Riesz potential, aka a "fractional Laplacian".
+
+    Specifically, given an integral kernel G(r), this class supports the
+    precomputation for integrals of the form
+    
+    .. math::
+
+       \int_B G(r) (u(x) - u(y)) dy
+
+    For k-dimensional fractional Laplacian, :math:`G(r) = \frac{1}{r^{k+2s}}`.
+    """
+
+    def __init__(
+            self,
+            integral_knl,
+            quad_order,
+            case_vecs,
+            n_brick_quad_points=50,
+            knl_symmetry_tags=None,
+            window_radius=None):
+        """
+        :param window_radius: radius of the support of the windowing function.
+                              Set to None to auto-detect.
+        """
+        super().__init__(
+            integral_knl, quad_order, case_vecs,
+            n_brick_quad_points, knl_symmetry_tags)
+        self.window_radius = window_radius
+
+    def get_cache_key(self):
+        return (
+            type(self).__name__,
+            str(self.dim) + "D",
+            self.integral_knl.__str__(),
+            "quad_order-" + str(self.ntgt_points),
+            "brick_order-" + str(self.nquad_points),
+            "case-" + str(self.current_base_case),
+            "kernel_id-" + str(self.get_kernel_id),
+        )
+
+
+# }}} End inverse Droste method
