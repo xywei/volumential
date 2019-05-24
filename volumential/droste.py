@@ -227,6 +227,8 @@ class DrosteBase(KernelCacheWrapper):
         resknl = resknl.replace("TGT_VARS", ",".join(self.tgt_vars))
         resknl = resknl.replace("QUAD_VARS", ",".join(self.quad_vars))
 
+        resknl = resknl.replace("POSTPROCESS_KNL_VAL", "knl_val")
+
         resknl = resknl.replace(
             "PROD_QUAD_WEIGHT",
             " * ".join(
@@ -490,9 +492,12 @@ class DrosteBase(KernelCacheWrapper):
                 <> jacobian = abs(product(iaxis,
                                           jac_part)) {id=jac,dep=jpart1:jpart2}
 
+                # optional postprocessing of kernel values
+                <> knl_val_post = POSTPROCESS_KNL_VAL {id=pp_kval}
+
                 # in our case 0 * inf = 0
-                <> knl_val_finished = if(abs(knl_val) > 1e16,
-                    0, knl_val) {id=finish_kval}
+                <> knl_val_finished = if(abs(knl_val_post) > 1e16,
+                    0, knl_val_post) {id=finish_kval,dep=pp_kval}
 
                 <> dist[iaxis] = (true_target[iaxis]
                                 - mapped_point_tmp[iaxis]) {dep=mpoint:true_targets}
@@ -1456,6 +1461,30 @@ class InverseDrosteReduced(DrosteReduced):
        \int_B G(r) (u(x) - u(y)) dy
 
     For k-dimensional fractional Laplacian, :math:`G(r) = \frac{1}{r^{k+2s}}`.
+
+    The core part of concern (that is to be modified based on DrosteReduces):
+
+    .. code-block::
+
+        ...
+
+        for BASIS_VARS, TGT_VARS, icase
+            for ilevel
+                for ibrick_axis, ibrick_side, QUAD_VARS
+
+                    PREPARE_BASIS_VALS
+
+                    <> density_val = DENSITY_VAL_ASSIGNMENT \
+                            {id=density,dep=basis_evals}
+
+                end
+            end
+        end
+
+        ...
+
+
+
     """
 
     def __init__(
@@ -1516,6 +1545,89 @@ class InverseDrosteReduced(DrosteReduced):
                     "IAXIS", str(iaxis)
                     )
         return code
+
+    def make_dim_independent(self, knlstring):
+        r"""Produce the correct DENSITY_VAL_ASSIGNMENT = u(x) - u(y).
+        """
+
+        # replace REV_* first
+        resknl = knlstring.replace("REV_BASIS_VARS", ",".join(self.basis_vars[::-1]))
+        resknl = resknl.replace("REV_TGT_VARS", ",".join(self.tgt_vars[::-1]))
+
+        resknl = resknl.replace("BASIS_VARS", ",".join(self.basis_vars))
+        resknl = resknl.replace("TGT_VARS", ",".join(self.tgt_vars))
+        resknl = resknl.replace("QUAD_VARS", ",".join(self.quad_vars))
+
+        resknl = resknl.replace(
+            "PROD_QUAD_WEIGHT",
+            " * ".join(
+                [
+                    "quadrature_weights[QID]".replace("QID", qvar)
+                    for qvar in self.quad_vars
+                ]
+            ),
+        )
+
+        if self.dim == 1:
+            resknl = resknl.replace("TPLTGT_ASSIGNMENT", """target_nodes[t0]""")
+            resknl = resknl.replace("QUAD_PT_ASSIGNMENT", """quadrature_nodes[q0]""")
+            resknl = resknl.replace("DENSITY_VAL_ASSIGNMENT", """basis_eval0""")
+            resknl = resknl.replace(
+                "PREPARE_BASIS_VALS",
+                "\n".join([self.codegen_basis_eval(i) for i in range(self.dim)])
+                + """
+                ... nop {id=basis_evals,dep=basis0}
+                """,
+            )
+
+        elif self.dim == 2:
+            resknl = resknl.replace(
+                "TPLTGT_ASSIGNMENT",
+                """if(iaxis == 0, target_nodes[t0], target_nodes[t1])""",
+            )
+            resknl = resknl.replace(
+                "QUAD_PT_ASSIGNMENT",
+                """if(iaxis == 0, quadrature_nodes[q0], quadrature_nodes[q1])""",
+            )
+            resknl = resknl.replace(
+                "DENSITY_VAL_ASSIGNMENT", """basis_eval0 * basis_eval1"""
+            )
+            resknl = resknl.replace(
+                "PREPARE_BASIS_VALS",
+                "\n".join([self.codegen_basis_eval(i) for i in range(self.dim)])
+                + """
+                ... nop {id=basis_evals,dep=basis0:basis1}
+                """,
+            )
+
+        elif self.dim == 3:
+            resknl = resknl.replace(
+                "TPLTGT_ASSIGNMENT",
+                """if(iaxis == 0, target_nodes[t0], if(
+                          iaxis == 1, target_nodes[t1], target_nodes[t2]))""",
+            )
+            resknl = resknl.replace(
+                "QUAD_PT_ASSIGNMENT",
+                """if(iaxis == 0, quadrature_nodes[q0], if(
+                  iaxis == 1, quadrature_nodes[q1], quadrature_nodes[q2]))""",
+            )
+            resknl = resknl.replace(
+                "DENSITY_VAL_ASSIGNMENT",
+                """basis_eval0 * basis_eval1 * basis_eval2"""
+            )
+            resknl = resknl.replace(
+                "PREPARE_BASIS_VALS",
+                "\n".join([self.codegen_basis_eval(i) for i in range(self.dim)])
+                + """
+                ... nop {id=basis_evals,dep=basis0:basis1:basis2}
+                """,
+            )
+
+        else:
+            raise NotImplementedError
+
+        return resknl
+
 
 
 # }}} End inverse Droste method
