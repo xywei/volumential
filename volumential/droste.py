@@ -39,7 +39,8 @@ __doc__ = """
    :members:
 """
 
-# logging.basicConfig(level=logging.INFO)
+if 0:
+    logging.basicConfig(level=logging.INFO)
 
 # {{{ Droste base class
 
@@ -190,6 +191,9 @@ class DrosteBase(KernelCacheWrapper):
         return quad_kernel_insns + [scaling_assignment]
 
     def codegen_basis_eval(self, iaxis):
+        """Generate instructions to evaluate Chebyshev polynomial basis.
+        (Chebyshev polynomials of the first kind T_n).
+        """
         code = """
             <> T0_IAXIS = 1
             <> T1_IAXIS = template_mapped_point_tmp[IAXIS] {dep=mpoint}
@@ -1439,14 +1443,14 @@ class DrosteReduced(DrosteBase):
 
 
 class InverseDrosteReduced(DrosteReduced):
-    """
+    r"""
     A variant of the Droste method.
     Instead of computing a volume potential, it computes the "inverse" to a
     Riesz potential, aka a "fractional Laplacian".
 
     Specifically, given an integral kernel G(r), this class supports the
     precomputation for integrals of the form
-    
+
     .. math::
 
        \int_B G(r) (u(x) - u(y)) dy
@@ -1481,6 +1485,37 @@ class InverseDrosteReduced(DrosteReduced):
             "case-" + str(self.current_base_case),
             "kernel_id-" + str(self.get_kernel_id),
         )
+
+    def codegen_basis2_eval(self, iaxis):
+        r"""Generate instructions to evaluate Chebyshev polynomial basis.
+        (Chebyshev polynomials of the second kind U_n).
+
+        .. math::
+
+           \frac{d T_n}{dx} = n * U_{n-1}
+        """
+        code = """
+            <> U0_IAXIS = 1
+            <> U1_IAXIS = 2 * template_mapped_point_tmp[IAXIS] {dep=mpoint}
+            <> Uprev_IAXIS = U0_IAXIS {id=u0_IAXIS}
+            <> Ucur_IAXIS = U1_IAXIS {id=u1_IAXIS,dep=u0_IAXIS}
+
+            for pIAXIS
+                <> Unext_IAXIS = (2 * template_mapped_point_tmp[IAXIS] * Ucur_IAXIS
+                                - Uprev_IAXIS) {id=unextIAXIS,dep=u1_IAXIS}
+                Uprev_IAXIS = Ucur_IAXIS {id=uprev_updateIAXIS,dep=unextIAXIS}
+                Ucur_IAXIS = Unext_IAXIS {id=ucur_updateIAXIS,dep=uprev_updateIAXIS}
+            end
+
+            <> basis2_evalIAXIS = (
+                U0_IAXIS * if(fIAXIS == 0, 1, 0)
+                + U1_IAXIS * if(fIAXIS == 1, 1, 0)
+                + sum(pIAXIS, if(fIAXIS == pIAXIS, Ucur_IAXIS, 0))
+                ) {id=basis2IAXIS,dep=ucur_updateIAXIS}
+            """.replace(
+                    "IAXIS", str(iaxis)
+                    )
+        return code
 
 
 # }}} End inverse Droste method
