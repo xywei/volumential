@@ -1567,7 +1567,8 @@ class InverseDrosteReduced(DrosteReduced):
         return '\n'.join(code)
 
     def make_dim_independent(self, knlstring):
-        r"""Produce the correct :math:`DENSITY_VAL_ASSIGNMENT = u(x) - u(y)`.
+        r"""Produce the correct
+        :math:`\text{DENSITY_VAL_ASSIGNMENT} = u(x) - u(y)`.
         """
 
         # replace REV_* first
