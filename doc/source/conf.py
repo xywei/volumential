@@ -49,6 +49,9 @@ extensions = [
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
 
+# Set the mathjax CDN
+mathjax_path = "https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML"
+
 # The suffix(es) of source filenames.
 # You can specify multiple suffix as a list of string:
 #
