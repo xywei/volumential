@@ -49,6 +49,18 @@ class DrosteBase(KernelCacheWrapper):
     """
     Base class for Droste methods.
     It uses sumpy tools to cache the loopy kernel.
+
+    .. attribute:: integral_knl
+
+       The integral kernel of sumpy.kernel type.
+
+    .. attribute:: interaction_case_vecs
+
+       The relative positions of the target box for each case. 
+
+    .. attribute:: interaction_case_scls
+
+       The relative sizes of the target box for each case.
     """
 
     def __init__(self, integral_knl, quad_order, case_vecs, n_brick_quad_points=15):
@@ -495,15 +507,15 @@ class DrosteBase(KernelCacheWrapper):
                 <> jacobian = abs(product(iaxis,
                                           jac_part)) {id=jac,dep=jpart1:jpart2}
 
+                <> dist[iaxis] = (true_target[iaxis]
+                                - mapped_point_tmp[iaxis]) {dep=mpoint:true_targets}
+
                 # optional postprocessing of kernel values
                 POSTPROCESS_KNL_VAL
 
                 # in our case 0 * inf = 0
                 <> knl_val_finished = if(abs(knl_val_post) > 1e16,
                     0, knl_val_post) {id=finish_kval,dep=pp_kval}
-
-                <> dist[iaxis] = (true_target[iaxis]
-                                - mapped_point_tmp[iaxis]) {dep=mpoint:true_targets}
 
             end
 
@@ -1486,8 +1498,6 @@ class InverseDrosteReduced(DrosteReduced):
 
         ...
 
-
-
     """
 
     def __init__(
@@ -1557,8 +1567,12 @@ class InverseDrosteReduced(DrosteReduced):
         If the target point is not in the source box, the concerned instructions
         will return 0.
         """
+        # used inside:
+        # for BASIS_VARS, TGT_VARS, icase, ilevel
 
         # assign basis_tgt_eval0 ...
+        # id tgbasis0 ...
+        # NOTE: duplicate the function eval iname! (set dup=p0...)
 
         raise NotImplementedError()
 
@@ -1577,12 +1591,14 @@ class InverseDrosteReduced(DrosteReduced):
 
            \frac{d T_n}{dx} = n * U_{n-1}
         """
+        # used inside:
+        # for BASIS_VARS, TGT_VARS, icase, ilevel
 
         # assign grad_basis_tgt_eval0 ...
+        # id tggrad0 ...
+        # NOTE: duplicate the function eval iname! (set dup=p0...)
 
         raise NotImplementedError()
-
-
 
     def codegen_windowing_function(self):
         r"""Given :math:`dist = x - y`, compute the windowing function.
@@ -1633,35 +1649,70 @@ class InverseDrosteReduced(DrosteReduced):
                         ])
                     )
 
-        # density evals
+        # {{{ density evals
+
+        basis_eval_insns = (
+                [self.codegen_basis_eval(i) for i in range(self.dim)]
+                + [self.codegen_basis_tgt_eval(i) for i in range(self.dim)]
+                )
+        
         if self.get_kernel_id == 0:
             # u(x) - u(y) + grad(u)(y - x)
-            # FIXME
+            # dist = x - y
+            basis_eval_insns += [self.codegen_grad_basis_tgt_eval(i)
+                                 for i in range(self.dim)]
             if self.dim == 1:
+                resknl = resknl.replace(
+                    "PREPARE_BASIS_VALS",
+                    "\n".join(basis_eval_insns
+                        + [
+                            "... nop {id=basis_evals,dep=%s}"
+                            % ':'.join(['basis0',
+                                        'tgbasis0',
+                                        'tggrad0']),
+                            ])
+                        )
                 resknl = resknl.replace(
                         "DENSITY_VAL_ASSIGNMENT",
                         ' '.join([
                             "basis_tgt_eval0",
                             "- basis_eval0",
-                            "+ grad_basis_tgt_eval0 * ()",
+                            "- grad_basis_tgt_eval0 * dist[0]",
                             ])
                         )
             elif self.dim == 2:
+                resknl = resknl.replace(
+                    "PREPARE_BASIS_VALS",
+                    "\n".join([self.codegen_basis_eval(i) for i in range(self.dim)])
+                    + """
+                    ... nop {id=basis_evals,dep=basis0:basis1}
+                    """,
+                )
                 resknl = resknl.replace(
                         "DENSITY_VAL_ASSIGNMENT",
                         ' '.join([
                             "basis_tgt_eval0 * basis_tgt_eval1",
                             "- basis_eval0 * basis_eval1",
-                            "+ grad_basis_tgt_eval0 * ()",
+                            "- grad_basis_tgt_eval0 * dist[0]",
+                            "- grad_basis_tgt_eval1 * dist[1]",
                             ])
                         )
             elif self.dim == 3:
+                resknl = resknl.replace(
+                    "PREPARE_BASIS_VALS",
+                    "\n".join([self.codegen_basis_eval(i) for i in range(self.dim)])
+                    + """
+                    ... nop {id=basis_evals,dep=basis0:basis1:basis2}
+                    """,
+                )
                 resknl = resknl.replace(  # noqa: E501
                         "DENSITY_VAL_ASSIGNMENT",
                         ' '.join([
                             "basis_tgt_eval0 * basis_tgt_eval1 * basis_tgt_eval2",
                             "- basis_eval0 * basis_eval1 * basis_eval2",
-                            "+ grad_basis_tgt_eval0 * ()",
+                            "- grad_basis_tgt_eval0 * dist[0]",
+                            "- grad_basis_tgt_eval1 * dist[1]",
+                            "- grad_basis_tgt_eval2 * dist[2]",
                             ])
                 )
             else:
@@ -1697,6 +1748,8 @@ class InverseDrosteReduced(DrosteReduced):
             else:
                 raise NotImplementedError()
 
+        # }}} End density evals
+
         resknl = resknl.replace(
             "PROD_QUAD_WEIGHT",
             " * ".join(
@@ -1710,13 +1763,6 @@ class InverseDrosteReduced(DrosteReduced):
         if self.dim == 1:
             resknl = resknl.replace("TPLTGT_ASSIGNMENT", """target_nodes[t0]""")
             resknl = resknl.replace("QUAD_PT_ASSIGNMENT", """quadrature_nodes[q0]""")
-            resknl = resknl.replace(
-                "PREPARE_BASIS_VALS",
-                "\n".join([self.codegen_basis_eval(i) for i in range(self.dim)])
-                + """
-                ... nop {id=basis_evals,dep=basis0}
-                """,
-            )
 
         elif self.dim == 2:
             resknl = resknl.replace(
@@ -1726,13 +1772,6 @@ class InverseDrosteReduced(DrosteReduced):
             resknl = resknl.replace(
                 "QUAD_PT_ASSIGNMENT",
                 """if(iaxis == 0, quadrature_nodes[q0], quadrature_nodes[q1])""",
-            )
-            resknl = resknl.replace(
-                "PREPARE_BASIS_VALS",
-                "\n".join([self.codegen_basis_eval(i) for i in range(self.dim)])
-                + """
-                ... nop {id=basis_evals,dep=basis0:basis1}
-                """,
             )
 
         elif self.dim == 3:
@@ -1745,13 +1784,6 @@ class InverseDrosteReduced(DrosteReduced):
                 "QUAD_PT_ASSIGNMENT",
                 """if(iaxis == 0, quadrature_nodes[q0], if(
                   iaxis == 1, quadrature_nodes[q1], quadrature_nodes[q2]))""",
-            )
-            resknl = resknl.replace(
-                "PREPARE_BASIS_VALS",
-                "\n".join([self.codegen_basis_eval(i) for i in range(self.dim)])
-                + """
-                ... nop {id=basis_evals,dep=basis0:basis1:basis2}
-                """,
             )
 
         else:
