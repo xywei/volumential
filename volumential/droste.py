@@ -1549,6 +1549,41 @@ class InverseDrosteReduced(DrosteReduced):
                     )
         return code
 
+    def codegen_basis_tgt_eval(self, iaxis):
+        """Generate instructions to evaluate Chebyshev polynomial basis
+        at the target point, given that the target point lies in the
+        source box. (Chebyshev polynomials of the first kind T_n).
+
+        If the target point is not in the source box, the concerned instructions
+        will return 0.
+        """
+
+        # assign basis_tgt_eval0 ...
+
+        raise NotImplementedError()
+
+    def codegen_grad_basis_tgt_eval(self, iaxis):
+        r"""Generate instructions to evaluate the gradient of Chebyshev
+        polynomial basis at the target point, given that the target point
+        lies in the source box. (Chebyshev polynomials of the first kind T_n).
+
+        If the target point is not in the source box, the concerned instructions
+        will return 0.
+        
+        The evaluation is based on Chebyshev polynomials of the second kind
+        :math:`U_n`.
+
+        .. math::
+
+           \frac{d T_n}{dx} = n * U_{n-1}
+        """
+
+        # assign grad_basis_tgt_eval0 ...
+
+        raise NotImplementedError()
+
+
+
     def codegen_windowing_function(self):
         r"""Given :math:`dist = x - y`, compute the windowing function.
         """
@@ -1598,6 +1633,70 @@ class InverseDrosteReduced(DrosteReduced):
                         ])
                     )
 
+        # density evals
+        if self.get_kernel_id == 0:
+            # u(x) - u(y) + grad(u)(y - x)
+            # FIXME
+            if self.dim == 1:
+                resknl = resknl.replace(
+                        "DENSITY_VAL_ASSIGNMENT",
+                        ' '.join([
+                            "basis_tgt_eval0",
+                            "- basis_eval0",
+                            "+ grad_basis_tgt_eval0 * ()",
+                            ])
+                        )
+            elif self.dim == 2:
+                resknl = resknl.replace(
+                        "DENSITY_VAL_ASSIGNMENT",
+                        ' '.join([
+                            "basis_tgt_eval0 * basis_tgt_eval1",
+                            "- basis_eval0 * basis_eval1",
+                            "+ grad_basis_tgt_eval0 * ()",
+                            ])
+                        )
+            elif self.dim == 3:
+                resknl = resknl.replace(  # noqa: E501
+                        "DENSITY_VAL_ASSIGNMENT",
+                        ' '.join([
+                            "basis_tgt_eval0 * basis_tgt_eval1 * basis_tgt_eval2",
+                            "- basis_eval0 * basis_eval1 * basis_eval2",
+                            "+ grad_basis_tgt_eval0 * ()",
+                            ])
+                )
+            else:
+                raise NotImplementedError()
+        else:
+            # expansion kernel should not call this function
+            assert self.get_kernel_id == 1
+            # u(x) - u(y)
+            if self.dim == 1:
+                resknl = resknl.replace(
+                        "DENSITY_VAL_ASSIGNMENT",
+                        ' - '.join([
+                            "basis_tgt_eval0",
+                            "basis_eval0",
+                            ])
+                        )
+            elif self.dim == 2:
+                resknl = resknl.replace(
+                        "DENSITY_VAL_ASSIGNMENT",
+                        ' - '.join([
+                            "basis_tgt_eval0 * basis_tgt_eval1",
+                            "basis_eval0 * basis_eval1",
+                            ])
+                        )
+            elif self.dim == 3:
+                resknl = resknl.replace(  # noqa: E501
+                        "DENSITY_VAL_ASSIGNMENT",
+                        ' - '.join([
+                            "basis_tgt_eval0 * basis_tgt_eval1 * basis_tgt_eval2",
+                            "basis_eval0 * basis_eval1 * basis_eval2",
+                            ])
+                )
+            else:
+                raise NotImplementedError()
+
         resknl = resknl.replace(
             "PROD_QUAD_WEIGHT",
             " * ".join(
@@ -1611,7 +1710,6 @@ class InverseDrosteReduced(DrosteReduced):
         if self.dim == 1:
             resknl = resknl.replace("TPLTGT_ASSIGNMENT", """target_nodes[t0]""")
             resknl = resknl.replace("QUAD_PT_ASSIGNMENT", """quadrature_nodes[q0]""")
-            # resknl = resknl.replace("DENSITY_VAL_ASSIGNMENT", """basis_eval0""")
             resknl = resknl.replace(
                 "PREPARE_BASIS_VALS",
                 "\n".join([self.codegen_basis_eval(i) for i in range(self.dim)])
@@ -1628,9 +1726,6 @@ class InverseDrosteReduced(DrosteReduced):
             resknl = resknl.replace(
                 "QUAD_PT_ASSIGNMENT",
                 """if(iaxis == 0, quadrature_nodes[q0], quadrature_nodes[q1])""",
-            )
-            resknl = resknl.replace(
-                #"DENSITY_VAL_ASSIGNMENT", """basis_eval0 * basis_eval1"""
             )
             resknl = resknl.replace(
                 "PREPARE_BASIS_VALS",
@@ -1650,10 +1745,6 @@ class InverseDrosteReduced(DrosteReduced):
                 "QUAD_PT_ASSIGNMENT",
                 """if(iaxis == 0, quadrature_nodes[q0], if(
                   iaxis == 1, quadrature_nodes[q1], quadrature_nodes[q2]))""",
-            )
-            resknl = resknl.replace(
-                #"DENSITY_VAL_ASSIGNMENT",
-                #"""basis_eval0 * basis_eval1 * basis_eval2"""
             )
             resknl = resknl.replace(
                 "PREPARE_BASIS_VALS",
