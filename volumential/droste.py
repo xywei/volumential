@@ -1671,9 +1671,9 @@ class InverseDrosteReduced(DrosteReduced):
         """Get loopy kernel for computation, the get_kernel_id determines
         what task to perform.
 
-        0:    Integrate :math:`W(r) G(r) [u(x) - u(y) + grad(u)(y - x)]`
-        1:    Add the integral of :math:`[1 - W(r)] G(r) [u(x) - u(y)]`
-        2:    Expansion by symmetry.
+        - 0:    Integrate :math:`W(r) G(r) [u(x) - u(y) + grad(u)(y - x)]`
+        - 1:    Add the integral of :math:`[1 - W(r)] G(r) [u(x) - u(y)]`
+        - 2:    Expansion by symmetry.
         """
         domain = self.make_loop_domain(base_case_id=self.current_base_case)
 
