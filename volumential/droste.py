@@ -56,7 +56,7 @@ class DrosteBase(KernelCacheWrapper):
 
     .. attribute:: interaction_case_vecs
 
-       The relative positions of the target box for each case. 
+       The relative positions of the target box for each case.
 
     .. attribute:: interaction_case_scls
 
@@ -368,7 +368,7 @@ class DrosteBase(KernelCacheWrapper):
     def get_kernel_code(self):
         return [
             self.make_dim_independent(
-                """
+                """  # noqa
         for iaxis
             <> root_center[iaxis] = 0.5 * (
                     root_brick[iaxis, 1] + root_brick[iaxis, 0]) {dup=iaxis}
@@ -1528,37 +1528,6 @@ class InverseDrosteReduced(DrosteReduced):
             "kernel_id-" + str(self.get_kernel_id),
         )
 
-    def codegen_basis2_eval(self, iaxis):
-        r"""Generate instructions to evaluate Chebyshev polynomial basis.
-        (Chebyshev polynomials of the second kind U_n).
-
-        .. math::
-
-           \frac{d T_n}{dx} = n * U_{n-1}
-        """
-        code = """
-            <> U0_IAXIS = 1
-            <> U1_IAXIS = 2 * template_mapped_point_tmp[IAXIS] {dep=mpoint}
-            <> Uprev_IAXIS = U0_IAXIS {id=u0_IAXIS}
-            <> Ucur_IAXIS = U1_IAXIS {id=u1_IAXIS,dep=u0_IAXIS}
-
-            for pIAXIS
-                <> Unext_IAXIS = (2 * template_mapped_point_tmp[IAXIS] * Ucur_IAXIS
-                                - Uprev_IAXIS) {id=unextIAXIS,dep=u1_IAXIS}
-                Uprev_IAXIS = Ucur_IAXIS {id=uprev_updateIAXIS,dep=unextIAXIS}
-                Ucur_IAXIS = Unext_IAXIS {id=ucur_updateIAXIS,dep=uprev_updateIAXIS}
-            end
-
-            <> basis2_evalIAXIS = (
-                U0_IAXIS * if(fIAXIS == 0, 1, 0)
-                + U1_IAXIS * if(fIAXIS == 1, 1, 0)
-                + sum(pIAXIS, if(fIAXIS == pIAXIS, Ucur_IAXIS, 0))
-                ) {id=basis2IAXIS,dep=ucur_updateIAXIS}
-            """.replace(
-                    "IAXIS", str(iaxis)
-                    )
-        return code
-
     def codegen_basis_tgt_eval(self, iaxis):
         """Generate instructions to evaluate Chebyshev polynomial basis
         at the target point, given that the target point lies in the
@@ -1567,14 +1536,33 @@ class InverseDrosteReduced(DrosteReduced):
         If the target point is not in the source box, the concerned instructions
         will return 0.
         """
-        # used inside:
-        # for BASIS_VARS, TGT_VARS, icase, ilevel
 
-        # assign basis_tgt_eval0 ...
-        # id tgbasis0 ...
-        # NOTE: duplicate the function eval iname! (set dup=p0...)
+        # only valid for self-interactions
+        assert all([self.reduce_by_symmetry.reduced_vecs[
+            self.current_base_case][d] == 0 for d in range(self.dim)])
 
-        raise NotImplementedError()
+        code = """  # noqa
+            <> T0_tgt_IAXIS = 1
+            <> T1_tgt_IAXIS = true_target[IAXIS] {dep=true_targets}
+            <> Tprev_tgt_IAXIS = T0_tgt_IAXIS {id=t0_tgt_IAXIS}
+            <> Tcur_tgt_IAXIS = T1_tgt_IAXIS {id=t1_tgt_IAXIS,dep=t0_tgt_IAXIS}
+
+            for pIAXIS
+                <> Tnext_tgt_IAXIS = (2 * true_target[IAXIS] * Tcur_tgt_IAXIS
+                                - Tprev_tgt_IAXIS) {id=tnext_tgt_IAXIS,dep=t1_tgt_IAXIS}
+                Tprev_tgt_IAXIS = Tcur_tgt_IAXIS {id=tprev_tgt_updateIAXIS,dep=tnext_tgt_IAXIS}
+                Tcur_tgt_IAXIS = Tnext_tgt_IAXIS {id=tcur_tgt_updateIAXIS,dep=tprev_tgt_updateIAXIS}
+            end
+
+            <> basis_tgt_evalIAXIS = (
+                T0_tgt_IAXIS * if(fIAXIS == 0, 1, 0)
+                + T1_tgt_IAXIS * if(fIAXIS == 1, 1, 0)
+                + sum(pIAXIS, if(fIAXIS == pIAXIS, Tcur_tgt_IAXIS, 0))
+                ) {id=tgtbasisIAXIS,dep=tcur_tgt_updateIAXIS}
+            """.replace(
+            "IAXIS", str(iaxis)
+        )
+        return code
 
     def codegen_grad_basis_tgt_eval(self, iaxis):
         r"""Generate instructions to evaluate the gradient of Chebyshev
@@ -1583,7 +1571,7 @@ class InverseDrosteReduced(DrosteReduced):
 
         If the target point is not in the source box, the concerned instructions
         will return 0.
-        
+
         The evaluation is based on Chebyshev polynomials of the second kind
         :math:`U_n`.
 
@@ -1591,14 +1579,35 @@ class InverseDrosteReduced(DrosteReduced):
 
            \frac{d T_n}{dx} = n * U_{n-1}
         """
-        # used inside:
-        # for BASIS_VARS, TGT_VARS, icase, ilevel
 
-        # assign grad_basis_tgt_eval0 ...
-        # id tggrad0 ...
-        # NOTE: duplicate the function eval iname! (set dup=p0...)
+        # only valid for self-interactions
+        assert all([self.reduce_by_symmetry.reduced_vecs[
+            self.current_base_case][d] == 0 for d in range(self.dim)])
 
-        raise NotImplementedError()
+        code = """
+            <> U0_IAXIS = 1
+            <> U1_IAXIS = 2 * true_target[IAXIS] {dep=true_targets}
+            <> Uprev_IAXIS = U0_IAXIS {id=u0_IAXIS}
+            <> Ucur_IAXIS = U1_IAXIS {id=u1_IAXIS,dep=u0_IAXIS}
+
+            for pIAXIS
+                <> Unext_IAXIS = (2 * true_target[IAXIS] * Ucur_IAXIS
+                                - Uprev_IAXIS) {id=unextIAXIS,dep=u1_IAXIS}
+                Uprev_IAXIS = Ucur_IAXIS {id=uprev_updateIAXIS,dep=unextIAXIS}
+                Ucur_IAXIS = Unext_IAXIS {id=ucur_updateIAXIS,dep=uprev_updateIAXIS}
+            end
+
+            # U_{n-1}
+            <> basis2_evalIAXIS = (
+                U0_IAXIS * if(fIAXIS == 1, 1, 0)
+                + sum(pIAXIS, if(fIAXIS == pIAXIS, Uprev_IAXIS, 0))
+                ) {id=basis2IAXIS,dep=uprev_updateIAXIS}
+
+            <> grad_basis_tgt_evalIAXIS = basis2_evalIAXIS * fIAXIS {id=tggradIAXIS}
+            """.replace(
+                    "IAXIS", str(iaxis)
+                    )
+        return code
 
     def codegen_windowing_function(self):
         r"""Given :math:`dist = x - y`, compute the windowing function.
@@ -1619,8 +1628,16 @@ class InverseDrosteReduced(DrosteReduced):
 
     def make_dim_independent(self, knlstring):
         r"""Produce the correct
-        :math:`\text{DENSITY_VAL_ASSIGNMENT} = u(x) - u(y)`.
+        :math:`\text{DENSITY_VAL_ASSIGNMENT} = u(x) - u(y)`
+        for self-interactions.
         """
+
+        # detect for self-interactions
+        if all([self.reduce_by_symmetry.reduced_vecs[
+                self.current_base_case][d] == 0 for d in range(self.dim)]):
+            target_box_is_source = True
+        else:
+            target_box_is_source = False
 
         # replace REV_* first
         resknl = knlstring.replace("REV_BASIS_VARS", ",".join(self.basis_vars[::-1]))
@@ -1651,102 +1668,125 @@ class InverseDrosteReduced(DrosteReduced):
 
         # {{{ density evals
 
-        basis_eval_insns = (
-                [self.codegen_basis_eval(i) for i in range(self.dim)]
-                + [self.codegen_basis_tgt_eval(i) for i in range(self.dim)]
-                )
-        
+        basis_eval_insns = [self.codegen_basis_eval(i) for i in range(self.dim)]
+
+        if target_box_is_source:
+            basis_eval_insns += [
+                    self.codegen_basis_tgt_eval(i) for i in range(self.dim)]
+
         if self.get_kernel_id == 0:
             # u(x) - u(y) + grad(u)(y - x)
             # dist = x - y
-            basis_eval_insns += [self.codegen_grad_basis_tgt_eval(i)
-                                 for i in range(self.dim)]
-            if self.dim == 1:
+
+            if target_box_is_source:
+                basis_eval_insns += [
+                        self.codegen_grad_basis_tgt_eval(i) for i in range(self.dim)]
+
+            if target_box_is_source:
                 resknl = resknl.replace(
-                    "PREPARE_BASIS_VALS",
-                    "\n".join(basis_eval_insns
-                        + [
+                        "PREPARE_BASIS_VALS",
+                        "\n".join(basis_eval_insns + [
                             "... nop {id=basis_evals,dep=%s}"
-                            % ':'.join(['basis0',
-                                        'tgbasis0',
-                                        'tggrad0']),
+                            % ':'.join(
+                                ['basis%d' % i for i in range(self.dim)]
+                                + ['tgbasis%d' % i for i in range(self.dim)]
+                                + ['tggrad%d' % i for i in range(self.dim)]
+                                ),
                             ])
                         )
-                resknl = resknl.replace(
-                        "DENSITY_VAL_ASSIGNMENT",
-                        ' '.join([
-                            "basis_tgt_eval0",
-                            "- basis_eval0",
-                            "- grad_basis_tgt_eval0 * dist[0]",
-                            ])
-                        )
-            elif self.dim == 2:
-                resknl = resknl.replace(
-                    "PREPARE_BASIS_VALS",
-                    "\n".join([self.codegen_basis_eval(i) for i in range(self.dim)])
-                    + """
-                    ... nop {id=basis_evals,dep=basis0:basis1}
-                    """,
-                )
-                resknl = resknl.replace(
-                        "DENSITY_VAL_ASSIGNMENT",
-                        ' '.join([
-                            "basis_tgt_eval0 * basis_tgt_eval1",
-                            "- basis_eval0 * basis_eval1",
-                            "- grad_basis_tgt_eval0 * dist[0]",
-                            "- grad_basis_tgt_eval1 * dist[1]",
-                            ])
-                        )
-            elif self.dim == 3:
-                resknl = resknl.replace(
-                    "PREPARE_BASIS_VALS",
-                    "\n".join([self.codegen_basis_eval(i) for i in range(self.dim)])
-                    + """
-                    ... nop {id=basis_evals,dep=basis0:basis1:basis2}
-                    """,
-                )
-                resknl = resknl.replace(  # noqa: E501
-                        "DENSITY_VAL_ASSIGNMENT",
-                        ' '.join([
-                            "basis_tgt_eval0 * basis_tgt_eval1 * basis_tgt_eval2",
-                            "- basis_eval0 * basis_eval1 * basis_eval2",
-                            "- grad_basis_tgt_eval0 * dist[0]",
-                            "- grad_basis_tgt_eval1 * dist[1]",
-                            "- grad_basis_tgt_eval2 * dist[2]",
-                            ])
-                )
             else:
-                raise NotImplementedError()
-        else:
+                resknl = resknl.replace(
+                        "PREPARE_BASIS_VALS",
+                        "\n".join(basis_eval_insns + [
+                            "... nop {id=basis_evals,dep=%s}"
+                            % ':'.join(
+                                ['basis%d' % i for i in range(self.dim)]
+                                ),
+                            ])
+                        )
+
+            if self.dim == 1:
+                if target_box_is_source:
+                    resknl = resknl.replace(
+                            "DENSITY_VAL_ASSIGNMENT",
+                            ' '.join([
+                                "basis_tgt_eval0",
+                                "- basis_eval0",
+                                "- grad_basis_tgt_eval0 * dist[0]",
+                                ])
+                            )
+                else:
+                    resknl = resknl.replace(
+                            "DENSITY_VAL_ASSIGNMENT",
+                            "- basis_eval0"
+                            )
+
+            elif self.dim == 2:
+                if target_box_is_source:
+                    resknl = resknl.replace(
+                            "DENSITY_VAL_ASSIGNMENT",
+                            ' '.join([
+                                "basis_tgt_eval0 * basis_tgt_eval1",
+                                "- basis_eval0 * basis_eval1",
+                                "- grad_basis_tgt_eval0 * basis_tgt_eval1 * dist[0]",
+                                "- basis_tgt_eval0 * grad_basis_tgt_eval1 * dist[1]",
+                                ])
+                            )
+                else:
+                    resknl = resknl.replace(
+                            "DENSITY_VAL_ASSIGNMENT",
+                            "- basis_eval0 * basis_eval1"
+                            )
+
+            elif self.dim == 3:
+                if target_box_is_source:
+                    resknl = resknl.replace(  # noqa: E501
+                            "DENSITY_VAL_ASSIGNMENT",
+                            ' '.join([
+                                "basis_tgt_eval0 * basis_tgt_eval1 \
+                                        * basis_tgt_eval2",
+                                "- basis_eval0 * basis_eval1 * basis_eval2",
+                                "- grad_basis_tgt_eval0 * basis_tgt_eval1 \
+                                        * basis_tgt_eval2 * dist[0]",
+                                "- basis_tgt_eval0 * grad_basis_tgt_eval1 \
+                                        * basis_tgt_eval2 * dist[1]",
+                                "- basis_tgt_eval0 * basis_tgt_eval1 * \
+                                        grad_basis_tgt_eval2 * dist[2]",
+                                ])
+                            )
+                else:
+                    resknl = resknl.replace(
+                            "DENSITY_VAL_ASSIGNMENT",
+                            "- basis_eval0 * basis_eval1 * basis_eval2"
+                            )
+
+            else:  # self.dim not in [1, 2, 3]
+                raise NotImplementedError("No support for dimension %d" % self.dim)
+
+        else:  # kernel_id != 0
+
             # expansion kernel should not call this function
             assert self.get_kernel_id == 1
-            # u(x) - u(y)
-            if self.dim == 1:
+
+            if target_box_is_source:
+                # u(x) - u(y)
                 resknl = resknl.replace(
                         "DENSITY_VAL_ASSIGNMENT",
                         ' - '.join([
-                            "basis_tgt_eval0",
-                            "basis_eval0",
+                            ' * '.join(
+                                ["basis_tgt_eval%d" % i for i in range(self.dim)]),
+                            ' * '.join(
+                                ["basis_eval%d" % i for i in range(self.dim)]),
                             ])
                         )
-            elif self.dim == 2:
-                resknl = resknl.replace(
-                        "DENSITY_VAL_ASSIGNMENT",
-                        ' - '.join([
-                            "basis_tgt_eval0 * basis_tgt_eval1",
-                            "basis_eval0 * basis_eval1",
-                            ])
-                        )
-            elif self.dim == 3:
-                resknl = resknl.replace(  # noqa: E501
-                        "DENSITY_VAL_ASSIGNMENT",
-                        ' - '.join([
-                            "basis_tgt_eval0 * basis_tgt_eval1 * basis_tgt_eval2",
-                            "basis_eval0 * basis_eval1 * basis_eval2",
-                            ])
-                )
             else:
-                raise NotImplementedError()
+                # - u(y)
+                resknl = resknl.replace(
+                        "DENSITY_VAL_ASSIGNMENT",
+                        ' - ' + ' * '.join(
+                            ["basis_eval%d" % i for i in range(self.dim)]
+                            )
+                        )
 
         # }}} End density evals
 
