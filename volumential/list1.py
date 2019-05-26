@@ -68,8 +68,16 @@ class NearFieldEvalBase(KernelCacheWrapper):
 
         # Allow user to pass more tables to force using multiple tables
         # instead of performing kernel scaling
-        if not ("infer_kernel_scaling" in self.extra_kwargs):
+        if "infer_kernel_scaling" not in self.extra_kwargs:
             self.extra_kwargs["infer_kernel_scaling"] = self.n_tables == 1
+
+        # Do not infer scaling rules when user defined rules are present
+        if ("kernel_scaling_code" in self.extra_kwargs) or (
+                "kernel_displacement_code" in self.extra_kwargs):
+            self.extra_kwargs["infer_kernel_scaling"] = False
+            # the two codes must be simultaneously given
+            assert ("kernel_scaling_code" in self.extra_kwargs) and (
+                "kernel_displacement_code" in self.extra_kwargs)
 
         self.kname = self.integral_kernel.__repr__()
         self.dim = self.integral_kernel.dim
@@ -90,6 +98,7 @@ class NearFieldEvalBase(KernelCacheWrapper):
 
 class NearFieldFromCSR(NearFieldEvalBase):
     """Evaluate the near-field potentials from CSR representation of the tree.
+    The class supports auto-scaling of simple kernels.
     """
 
     default_name = "near_field_from_csr"
@@ -154,6 +163,13 @@ class NearFieldFromCSR(NearFieldEvalBase):
                     "tree is uniform and only needs one table."
                 )
                 return "1.0"
+        elif "kernel_scaling_code" in self.extra_kwargs:
+            # user-defined scaling rule
+            assert isinstance(self.extra_kwargs['kernel_scaling_code'], str)
+            logger.info("Using scaling rule %s for %s.",
+                        self.extra_kwargs['kernel_scaling_code'], self.kname
+                        )
+            return self.extra_kwargs['kernel_scaling_code']
         else:
             logger.info("not scaling for " + self.kname)
             logger.info("(using multiple tables)")
@@ -192,6 +208,15 @@ class NearFieldFromCSR(NearFieldEvalBase):
                     "tree is uniform and only needs one table."
                 )
                 return "0.0"
+        elif "kernel_displacement_code" in self.extra_kwargs:
+            # user-defined displacement rule
+            assert isinstance(
+                    self.extra_kwargs['kernel_displacement_code'], str)
+            logger.info("Using displacement %s for %s.",
+                        self.extra_kwargs['kernel_displacement_code'],
+                        self.kname
+                        )
+            return self.extra_kwargs['kernel_displacement_code']
         else:
             logger.info("no displacement for " + self.kname)
             logger.info("(using multiple tables)")
