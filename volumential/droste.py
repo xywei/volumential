@@ -1956,14 +1956,18 @@ class InverseDrosteReduced(DrosteReduced):
         else:
             alpha = 0
 
+        # target points in 1D
+        q_points = self.get_target_points()
+        assert len(q_points) == self.ntgt_points ** self.dim
+        t = np.array([pt[-1] for pt in q_points[: self.ntgt_points]])
+
         if ("delta" in kwargs) and (not auto_windowing):
             delta = kwargs["delta"]
             logger.info("Using window radius %f" % delta)
             assert delta > 0 and 2 * delta < source_box_extent
         else:
-            # FIXME: compute delta from quad_order
             assert self.auto_windowing
-            delta = source_box_extent * 0.1
+            delta = 0.48 * (source_box_extent - (np.max(t) - np.min(t)))
             logger.info("Using auto-determined window radius %f" % delta)
 
         if "nlevels" in kwargs:
@@ -1990,11 +1994,6 @@ class InverseDrosteReduced(DrosteReduced):
         # root brick
         root_brick = np.zeros((self.dim, 2))
         root_brick[:, 1] = source_box_extent
-
-        # target points in 1D
-        q_points = self.get_target_points()
-        assert len(q_points) == self.ntgt_points ** self.dim
-        t = np.array([pt[-1] for pt in q_points[: self.ntgt_points]])
 
         base_case_vec = np.array(
             [

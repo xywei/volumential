@@ -241,6 +241,9 @@ class NearFieldFromCSR(NearFieldEvalBase):
                     "tree is uniform and only needs one table."
                 )
                 return "0.0"
+        elif "kernel_scaling_code" in self.extra_kwargs:
+            # Using custom scaling
+            return "0.0"
         else:
             logger.info("computing table level from box size")
             logger.info("(using multiple tables)")
@@ -379,10 +382,14 @@ class NearFieldFromCSR(NearFieldEvalBase):
             "infer_scaling=" + str(self.extra_kwargs["infer_kernel_scaling"]),
         )
 
-    def get_optimized_kernel(self):
-        # FIXME
+    def get_optimized_kernel(self, ncpus=None):
+        if ncpus is None:
+            import os
+            # NOTE: this detects the number of logical cores, which
+            # may result in suboptimal performance.
+            ncpus = os.cpu_count()
         knl = self.get_kernel()
-        knl = loopy.split_iname(knl, "tbox", 16, outer_tag="g.0")
+        knl = loopy.split_iname(knl, "tbox", ncpus, inner_tag="l.0")
         return knl
 
     def __call__(self, queue, **kwargs):
