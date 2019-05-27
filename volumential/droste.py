@@ -2077,7 +2077,7 @@ class InverseDrosteReduced(DrosteReduced):
         except Exception:
             pass
         knl2 = self.get_cached_optimized_kernel()
-        result_array = result_array_0 + result_array_1
+        result_array = res0['result'] + res1['result']
         evt2, res2 = knl2(
             queue,
             result=result_array,

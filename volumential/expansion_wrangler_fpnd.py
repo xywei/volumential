@@ -372,6 +372,9 @@ class FPNDExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrangler):
         # sorted_target_ids=self.tree.user_source_ids,
         # user_source_ids=self.tree.user_source_ids)
 
+        # FIXME: lazy evaluation sometimes returns incorrect results
+        res.finish()
+
         return out_pot, evt
 
     def eval_direct(

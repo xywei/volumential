@@ -130,6 +130,7 @@ def drive_volume_fmm(
         result = wrangler.finalize_potentials(result)
 
         logger.info("fmm complete")
+        logger.warn("only list 1 results are returned")
 
         return result
 
