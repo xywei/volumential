@@ -1507,15 +1507,14 @@ class InverseDrosteReduced(DrosteReduced):
             case_vecs,
             n_brick_quad_points=50,
             knl_symmetry_tags=None,
-            window_radius=None):
+            auto_windowing=True):
         """
-        :param window_radius: radius of the support of the windowing function.
-                              Set to None to auto-detect.
+        :param auto_windowing: auto-detect window radius.
         """
         super().__init__(
             integral_knl, quad_order, case_vecs,
             n_brick_quad_points, knl_symmetry_tags)
-        self.window_radius = window_radius
+        self.auto_windowing = auto_windowing
 
     def get_cache_key(self):
         return (
@@ -1603,7 +1602,8 @@ class InverseDrosteReduced(DrosteReduced):
                 + sum(pIAXIS, if(fIAXIS == pIAXIS, Uprev_IAXIS, 0))
                 ) {id=basis2IAXIS,dep=uprev_updateIAXIS}
 
-            <> grad_basis_tgt_evalIAXIS = basis2_evalIAXIS * fIAXIS {id=tggradIAXIS}
+            <> f_order_IAXIS = fIAXIS
+            <> grad_basis_tgt_evalIAXIS = basis2_evalIAXIS * f_order_IAXIS {id=tggradIAXIS}
             """.replace(
                     "IAXIS", str(iaxis)
                     )
@@ -1655,9 +1655,7 @@ class InverseDrosteReduced(DrosteReduced):
                         "<> knl_val_post = windowing * knl_val {id=pp_kval}"
                         ])
                     )
-        else:
-            # expansion kernel should not call this function
-            assert self.get_kernel_id == 1
+        elif self.get_kernel_id == 1:
             resknl = resknl.replace(
                     "POSTPROCESS_KNL_VAL",
                     '\n'.join([
@@ -1665,6 +1663,8 @@ class InverseDrosteReduced(DrosteReduced):
                         "<> knl_val_post = (1 - windowing) * knl_val {id=pp_kval}"
                         ])
                     )
+        else:
+            pass
 
         # {{{ density evals
 
@@ -1682,14 +1682,13 @@ class InverseDrosteReduced(DrosteReduced):
                 basis_eval_insns += [
                         self.codegen_grad_basis_tgt_eval(i) for i in range(self.dim)]
 
-            if target_box_is_source:
                 resknl = resknl.replace(
                         "PREPARE_BASIS_VALS",
                         "\n".join(basis_eval_insns + [
                             "... nop {id=basis_evals,dep=%s}"
                             % ':'.join(
                                 ['basis%d' % i for i in range(self.dim)]
-                                + ['tgbasis%d' % i for i in range(self.dim)]
+                                + ['tgtbasis%d' % i for i in range(self.dim)]
                                 + ['tggrad%d' % i for i in range(self.dim)]
                                 ),
                             ])
@@ -1763,13 +1762,20 @@ class InverseDrosteReduced(DrosteReduced):
             else:  # self.dim not in [1, 2, 3]
                 raise NotImplementedError("No support for dimension %d" % self.dim)
 
-        else:  # kernel_id != 0
-
-            # expansion kernel should not call this function
-            assert self.get_kernel_id == 1
+        elif self.get_kernel_id == 1:
 
             if target_box_is_source:
                 # u(x) - u(y)
+                resknl = resknl.replace(
+                        "PREPARE_BASIS_VALS",
+                        "\n".join(basis_eval_insns + [
+                            "... nop {id=basis_evals,dep=%s}"
+                            % ':'.join(
+                                ['basis%d' % i for i in range(self.dim)]
+                                + ['tgtbasis%d' % i for i in range(self.dim)]
+                                ),
+                            ])
+                        )
                 resknl = resknl.replace(
                         "DENSITY_VAL_ASSIGNMENT",
                         ' - '.join([
@@ -1781,6 +1787,15 @@ class InverseDrosteReduced(DrosteReduced):
                         )
             else:
                 # - u(y)
+                resknl = resknl.replace(
+                        "PREPARE_BASIS_VALS",
+                        "\n".join(basis_eval_insns + [
+                            "... nop {id=basis_evals,dep=%s}"
+                            % ':'.join(
+                                ['basis%d' % i for i in range(self.dim)]
+                                ),
+                            ])
+                        )
                 resknl = resknl.replace(
                         "DENSITY_VAL_ASSIGNMENT",
                         ' - ' + ' * '.join(
@@ -1903,6 +1918,8 @@ class InverseDrosteReduced(DrosteReduced):
         loopy_knl = lp.set_options(loopy_knl, write_cl=False)
         loopy_knl = lp.set_options(loopy_knl, return_dict=True)
 
+        loopy_knl = lp.make_reduction_inames_unique(loopy_knl)
+
         try:
             loopy_knl = self.integral_knl.prepare_loopy_kernel(loopy_knl)
         except Exception:
@@ -1939,11 +1956,15 @@ class InverseDrosteReduced(DrosteReduced):
         else:
             alpha = 0
 
-        if "delta" in kwargs:
+        if ("delta" in kwargs) and (not auto_windowing):
             delta = kwargs["delta"]
+            logger.info("Using window radius %f" % delta)
             assert delta > 0 and 2 * delta < source_box_extent
         else:
+            # FIXME: compute delta from quad_order
+            assert self.auto_windowing
             delta = source_box_extent * 0.1
+            logger.info("Using auto-determined window radius %f" % delta)
 
         if "nlevels" in kwargs:
             nlevels = kwargs["nlevels"]

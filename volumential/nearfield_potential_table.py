@@ -213,16 +213,20 @@ class NearFieldInteractionTable(object):
         build_method="Transform",
         source_box_extent=1,
         dtype=np.float64,
+        inverse_droste=False
     ):
         """
         kernel_type determines how the kernel is scaled w.r.t. box size.
         build_method can be "Transform" or "DrosteSum".
 
         The source box is [0, source_box_extent]^dim
+
+        :arg inverse_droste True if computing with the fractional Laplacian kernel.
         """
         self.quad_order = quad_order
         self.dim = dim
         self.dtype = dtype
+        self.inverse_droste = inverse_droste
 
         assert source_box_extent > 0
         self.source_box_extent = source_box_extent
@@ -767,17 +771,8 @@ class NearFieldInteractionTable(object):
             for mid in range(self.n_q_points)
         ]
 
-        if not use_symmetry:
-            from volumential.droste import DrosteFull
-
-            drf = DrosteFull(
-                self.integral_knl,
-                self.quad_order,
-                self.interaction_case_vecs,
-                n_brick_quad_points,
-            )
-        else:
-            from volumential.droste import DrosteReduced
+        if self.inverse_droste:
+            from volumential.droste import InverseDrosteReduced
 
             if "knl_symietry_tags" in kwargs:
                 knl_symmetry_tags = kwargs["knl_symmetry_tags"]
@@ -785,13 +780,41 @@ class NearFieldInteractionTable(object):
                 # Maximum symmetry by default
                 knl_symmetry_tags = None
 
-            drf = DrosteReduced(
-                self.integral_knl,
-                self.quad_order,
-                self.interaction_case_vecs,
-                n_brick_quad_points,
-                knl_symmetry_tags,
-            )
+            drf = InverseDrosteReduced(
+                    self.integral_knl,
+                    self.quad_order,
+                    self.interaction_case_vecs,
+                    n_brick_quad_points,
+                    knl_symmetry_tags,
+                    auto_windowing=True
+                    )
+
+        else:
+            if not use_symmetry:
+                from volumential.droste import DrosteFull
+
+                drf = DrosteFull(
+                    self.integral_knl,
+                    self.quad_order,
+                    self.interaction_case_vecs,
+                    n_brick_quad_points,
+                )
+            else:
+                from volumential.droste import DrosteReduced
+
+                if "knl_symietry_tags" in kwargs:
+                    knl_symmetry_tags = kwargs["knl_symmetry_tags"]
+                else:
+                    # Maximum symmetry by default
+                    knl_symmetry_tags = None
+
+                drf = DrosteReduced(
+                    self.integral_knl,
+                    self.quad_order,
+                    self.interaction_case_vecs,
+                    n_brick_quad_points,
+                    knl_symmetry_tags,
+                )
 
         # adaptive level refinement
         data0 = drf(
@@ -849,7 +872,7 @@ class NearFieldInteractionTable(object):
             self.data = data0
 
         # print("Computing normalizers")
-        # NOTE: normalizers are not needed in 3D anyway
+        # NOTE: normalizers are for log kernels and not needed in 3D
         if self.dim == 2:
             self.build_normalizer_table()
             self.has_normalizers = True

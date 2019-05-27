@@ -87,7 +87,8 @@ class NearFieldInteractionTableManager(object):
     e.g., '2D/Laplace/Order_1/Level_0/data'
     """
 
-    def __init__(self, dataset_filename="nft.hdf5", root_extent=1, dtype=np.float64):
+    def __init__(self, dataset_filename="nft.hdf5",
+            root_extent=1, dtype=np.float64, **kwargs):
         """Constructor.
         """
         self.dtype = dtype
@@ -97,6 +98,8 @@ class NearFieldInteractionTableManager(object):
 
         # Read/write if exists, create otherwise
         self.datafile = hdf.File(self.filename, "a")
+
+        self.table_extra_kwargs = kwargs
 
         # If the file exists, it must be for the same root_extent
         if "root_extent" not in self.datafile.attrs:
@@ -350,6 +353,7 @@ class NearFieldInteractionTableManager(object):
             kernel_type=self.get_kernel_function_type(dim, kernel_type),
             sumpy_kernel=sumpy_knl,
             source_box_extent=self.root_extent * (2 ** (-source_box_level)),
+            **self.table_extra_kwargs
         )
 
         assert abs(table.source_box_extent - grp.attrs["source_box_extent"]) < 1e-15
@@ -580,6 +584,7 @@ class NearFieldInteractionTableManager(object):
             sumpy_kernel=sumpy_knl,
             build_method=compute_method,
             source_box_extent=self.root_extent * (2 ** (-source_box_level)),
+            **self.table_extra_kwargs
         )
         table.build_table(queue, **kwargs)
         assert table.is_built
