@@ -1583,7 +1583,7 @@ class InverseDrosteReduced(DrosteReduced):
         assert all([self.reduce_by_symmetry.reduced_vecs[
             self.current_base_case][d] == 0 for d in range(self.dim)])
 
-        code = """
+        code = """  # noqa
             <> U0_IAXIS = 1
             <> U1_IAXIS = 2 * true_target[IAXIS] {dep=true_targets}
             <> Uprev_IAXIS = U0_IAXIS {id=u0_IAXIS}
@@ -1961,7 +1961,7 @@ class InverseDrosteReduced(DrosteReduced):
         assert len(q_points) == self.ntgt_points ** self.dim
         t = np.array([pt[-1] for pt in q_points[: self.ntgt_points]])
 
-        if ("delta" in kwargs) and (not auto_windowing):
+        if ("delta" in kwargs) and (not self.auto_windowing):
             delta = kwargs["delta"]
             logger.info("Using window radius %f" % delta)
             assert delta > 0 and 2 * delta < source_box_extent
