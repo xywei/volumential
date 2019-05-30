@@ -1563,9 +1563,9 @@ class InverseDrosteReduced(DrosteReduced):
         )
         return code
 
-    def codegen_grad_basis_tgt_eval(self, iaxis):
-        r"""Generate instructions to evaluate the gradient of Chebyshev
-        polynomial basis at the target point, given that the target point
+    def codegen_der2_basis_tgt_eval(self, iaxis):
+        r"""Generate instructions to evaluate the second order derivatives
+        of Chebyshev polynomial basis at the target point, given that the target
         lies in the source box. (Chebyshev polynomials of the first kind T_n).
 
         If the target point is not in the source box, the concerned instructions
@@ -1576,7 +1576,7 @@ class InverseDrosteReduced(DrosteReduced):
 
         .. math::
 
-           \frac{d T_n}{dx} = n * U_{n-1}
+           \frac{d^2 T_n}{dx^2} = n \frac{(n+1)T_n - U_n}{x^2 - 1}
         """
 
         # only valid for self-interactions
@@ -1584,26 +1584,31 @@ class InverseDrosteReduced(DrosteReduced):
             self.current_base_case][d] == 0 for d in range(self.dim)])
 
         code = """  # noqa
-            <> U0_IAXIS = 1
-            <> U1_IAXIS = 2 * true_target[IAXIS] {dep=true_targets}
-            <> Uprev_IAXIS = U0_IAXIS {id=u0_IAXIS}
-            <> Ucur_IAXIS = U1_IAXIS {id=u1_IAXIS,dep=u0_IAXIS}
+            <> U0_tgt_IAXIS = 1
+            <> U1_tgt_IAXIS = 2 * true_target[IAXIS] {dep=true_targets}
+            <> Uprev_tgt_IAXIS = U0_tgt_IAXIS {id=u0_tgt_IAXIS}
+            <> Ucur_tgt_IAXIS = U1_tgt_IAXIS {id=u1_tgt_IAXIS,dep=u0_tgt_IAXIS}
 
             for pIAXIS
-                <> Unext_IAXIS = (2 * true_target[IAXIS] * Ucur_IAXIS
-                                - Uprev_IAXIS) {id=unextIAXIS,dep=u1_IAXIS}
-                Uprev_IAXIS = Ucur_IAXIS {id=uprev_updateIAXIS,dep=unextIAXIS}
-                Ucur_IAXIS = Unext_IAXIS {id=ucur_updateIAXIS,dep=uprev_updateIAXIS}
+                <> Unext_tgt_IAXIS = (2 * true_target[IAXIS] * Ucur_tgt_IAXIS
+                                - Uprev_tgt_IAXIS) {id=unext_tgt_IAXIS,dep=u1_tgt_IAXIS}
+                Uprev_tgt_IAXIS = Ucur_tgt_IAXIS {id=uprev_tgt_updateIAXIS,dep=unext_tgt_IAXIS}
+                Ucur_tgt_IAXIS = Unext_tgt_IAXIS {id=ucur_tgt_updateIAXIS,dep=uprev_tgt_updateIAXIS}
             end
 
-            # U_{n-1}
-            <> basis2_evalIAXIS = (
-                U0_IAXIS * if(fIAXIS == 1, 1, 0)
-                + sum(pIAXIS, if(fIAXIS == pIAXIS, Uprev_IAXIS, 0))
-                ) {id=basis2IAXIS,dep=uprev_updateIAXIS}
+            # U_n(target)
+            <> basis2_tgt_evalIAXIS = (
+                U0_tgt_IAXIS * if(fIAXIS == 0, 1, 0)
+                + U1_tgt_IAXIS * if(fIAXIS == 1, 1, 0)
+                + sum(pIAXIS, if(fIAXIS == pIAXIS, Ucur_tgt_IAXIS, 0))
+                ) {id=tgtbasis2IAXIS,dep=ucur_tgt_updateIAXIS}
 
+            # this temp var helps with type deduction
             <> f_order_IAXIS = fIAXIS
-            <> grad_basis_tgt_evalIAXIS = basis2_evalIAXIS * f_order_IAXIS {id=tggradIAXIS}
+            <> der2_basis_tgt_evalIAXIS = f_order_IAXIS * (
+                    ((f_order_IAXIS + 1) * basis_tgt_evalIAXIS - basis2_tgt_evalIAXIS)
+                    / (true_target[IAXIS]**2 - 1)
+                ) {id=tgtd2basisIAXIS,dep=tgtbasisIAXIS:tgtbasis2IAXIS}
             """.replace(
                     "IAXIS", str(iaxis)
                     )
@@ -1621,8 +1626,33 @@ class InverseDrosteReduced(DrosteReduced):
         elif self.dim == 3:
             code.append("<> distsq = dist[0]*dist[0] + \
                                      dist[1]*dist[1] + dist[2]*dist[2]")
+        # renormalized distance
+        code.append("<> rndist = sqrt(distsq) / delta")
 
-        code.append("<> windowing = exp(-(1/(1 - (distsq / (delta*delta)))))")
+        if True:
+            # polynomial windowing
+            logger.info("Using polynomial windowing function.")
+            code.append(r"""
+                <> windowing = if(rndist >= 1,
+                                  0,
+                                  (1 - 35 * (rndist**4)
+                                  + 84 * (rndist**5)
+                                  - 70 * (rndist**6)
+                                  + 20 * (rndist**7)
+                                  )
+                                 )
+                """)
+        elif False:
+            # classical bump function
+            logger.info("Using bump windowing function.")
+            code.append(
+                "<> windowing = exp(1) * exp(-(1/(1 - (distsq / (delta*delta)))))")
+        else:
+            # smooth transitions of 0-->1-->0
+            logger.info("Using smooth transition windowing function.")
+            code.append("<> fv = if(rndist > 0, exp(-1 / rndist), 0)")
+            code.append("<> fc = if(1 - rndist > 0, exp(-1 / (1 - rndist)), 0)")
+            code.append("<> windowing = 1 - fv / (fv + fc)")
 
         return '\n'.join(code)
 
@@ -1675,9 +1705,9 @@ class InverseDrosteReduced(DrosteReduced):
                     self.codegen_basis_tgt_eval(i) for i in range(self.dim)]
 
         if self.get_kernel_id == 0:
-            # u(x) - u(y) + grad(u)(y - x)
-            # dist = x - y
-
+            # Given target x,
+            # u(x) - u(y) p.v. integrated around a small region symmetric to x,
+            # truncated to second order 0.5 * [(x - y)' * diag(Hess(u)(x)) * (x - y)]
             if target_box_is_source:
                 basis_eval_insns += [
                         self.codegen_grad_basis_tgt_eval(i) for i in range(self.dim)]
@@ -1689,7 +1719,7 @@ class InverseDrosteReduced(DrosteReduced):
                             % ':'.join(
                                 ['basis%d' % i for i in range(self.dim)]
                                 + ['tgtbasis%d' % i for i in range(self.dim)]
-                                + ['tggrad%d' % i for i in range(self.dim)]
+                                + ['tgtd2basis%d' % i for i in range(self.dim)]
                                 ),
                             ])
                         )
@@ -1709,9 +1739,7 @@ class InverseDrosteReduced(DrosteReduced):
                     resknl = resknl.replace(
                             "DENSITY_VAL_ASSIGNMENT",
                             ' '.join([
-                                "basis_tgt_eval0",
-                                "- basis_eval0",
-                                "- grad_basis_tgt_eval0 * dist[0]",
+                                "0.5 * der2_basis_tgt_eval0 * (dist[0]**2)",
                                 ])
                             )
                 else:
@@ -1725,10 +1753,8 @@ class InverseDrosteReduced(DrosteReduced):
                     resknl = resknl.replace(
                             "DENSITY_VAL_ASSIGNMENT",
                             ' '.join([
-                                "basis_tgt_eval0 * basis_tgt_eval1",
-                                "- basis_eval0 * basis_eval1",
-                                "- grad_basis_tgt_eval0 * basis_tgt_eval1 * dist[0]",
-                                "- basis_tgt_eval0 * grad_basis_tgt_eval1 * dist[1]",
+                                "  0.5 * der2_basis_tgt_eval0 * basis_tgt_eval1 * (dist[0]**2)",  # noqa: E501
+                                "+ 0.5 * basis_tgt_eval0 * der2_basis_tgt_eval1 * (dist[1]**2)",  # noqa: E501
                                 ])
                             )
                 else:
@@ -1739,18 +1765,12 @@ class InverseDrosteReduced(DrosteReduced):
 
             elif self.dim == 3:
                 if target_box_is_source:
-                    resknl = resknl.replace(  # noqa: E501
+                    resknl = resknl.replace(
                             "DENSITY_VAL_ASSIGNMENT",
                             ' '.join([
-                                "basis_tgt_eval0 * basis_tgt_eval1 \
-                                        * basis_tgt_eval2",
-                                "- basis_eval0 * basis_eval1 * basis_eval2",
-                                "- grad_basis_tgt_eval0 * basis_tgt_eval1 \
-                                        * basis_tgt_eval2 * dist[0]",
-                                "- basis_tgt_eval0 * grad_basis_tgt_eval1 \
-                                        * basis_tgt_eval2 * dist[1]",
-                                "- basis_tgt_eval0 * basis_tgt_eval1 * \
-                                        grad_basis_tgt_eval2 * dist[2]",
+                                "  0.5 * der2_basis_tgt_eval0 * basis_tgt_eval1 * basis_tgt_eval2 * (dist[0]**2)",  # noqa: E501
+                                "+ 0.5 * basis_tgt_eval0 * der2_basis_tgt_eval1 * basis_tgt_eval2 * (dist[1]**2)",  # noqa: E501
+                                "+ 0.5 * basis_tgt_eval0 * basis_tgt_eval1 * der2_basis_tgt_eval2 * (dist[2]**2)",  # noqa: E501
                                 ])
                             )
                 else:
