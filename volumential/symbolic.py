@@ -61,7 +61,6 @@ for fname in CL_MATH_FUNCS:
     code = clmath_decl_code.replace(
             'FUNC_NAME', fname).replace(
                     'CL_MATH_URL', CL_MATH_URL)
-    print(code)
     exec(code)
 
 # }}} End math functions
