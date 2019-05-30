@@ -1710,7 +1710,7 @@ class InverseDrosteReduced(DrosteReduced):
             # truncated to second order 0.5 * [(x - y)' * diag(Hess(u)(x)) * (x - y)]
             if target_box_is_source:
                 basis_eval_insns += [
-                        self.codegen_grad_basis_tgt_eval(i) for i in range(self.dim)]
+                        self.codegen_der2_basis_tgt_eval(i) for i in range(self.dim)]
 
                 resknl = resknl.replace(
                         "PREPARE_BASIS_VALS",
