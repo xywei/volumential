@@ -20,10 +20,9 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
+import numpy as np
 import loopy as lp
 import pymbolic as pmbl
-import pymbolic.primitives as primitives
-# from pymbolic.functions import sin, cos, exp, tan, log
 from volumential.tools import ScalarFieldExpressionEvaluation
 
 # {{{ math functions
@@ -53,8 +52,9 @@ CL_MATH_FUNCS = [
 clmath_decl_code = r"""
 def FUNC_NAME(x):
     "CL math function FUNC_NAME.\n\nSee CL_MATH_URL for details."
-    return primitives.Call(
-            primitives.Lookup(primitives.Variable("math"), "FUNC_NAME"), (x,))
+    return pmbl.primitives.Call(
+            pmbl.primitives.Lookup(pmbl.primitives.Variable("math"), "FUNC_NAME"),
+            (x,))
 """
 
 for fname in CL_MATH_FUNCS:
@@ -68,6 +68,7 @@ for fname in CL_MATH_FUNCS:
 x = pmbl.var("x")
 y = pmbl.var("y")
 z = pmbl.var("z")
+
 
 def der_laplacian(func, coord_vars=["x", "y", "z"]):
     return sum(pmbl.diff(pmbl.diff(func, var), var)

@@ -220,9 +220,10 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
 
 # {{{ import code
 
+
 def import_code(code, name, add_to_sys_modules=True):
     """Dynamically generates a module.
-    
+
     :arg code: can be any object containing code -- string, file object, or
     compiled code object. Returns a new module object initialized
     by dynamically importing the given code and optionally adds it
