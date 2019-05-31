@@ -244,7 +244,7 @@ class NearFieldInteractionTable(object):
             self.kernel_type = kernel_type
             self.integral_knl = sumpy_kernel
 
-        if dim == 2:
+        elif dim == 2:
 
             # Constant kernel can be used for fun/testing
             if kernel_func is None:
