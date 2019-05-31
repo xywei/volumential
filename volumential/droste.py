@@ -926,7 +926,7 @@ class DrosteReduced(DrosteBase):
         if self.dim == 1:
             result_array = (
                     np.zeros(
-                        (self.nfunctions, self.ntgt_points, self.ncases),
+                        (self.nfunctions, self.ntgt_points, 1),
                         result_dtype
                         )
                     + np.nan)
