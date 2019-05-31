@@ -235,6 +235,15 @@ class NearFieldInteractionTable(object):
 
         self.build_method = build_method
 
+        if dim == 1:
+
+            if build_method == "Transform":
+                raise NotImplementedError("Use DrosteSum for 1d")
+
+            self.kernel_func = kernel_func
+            self.kernel_type = kernel_type
+            self.integral_knl = sumpy_kernel
+
         if dim == 2:
 
             # Constant kernel can be used for fun/testing
@@ -259,7 +268,6 @@ class NearFieldInteractionTable(object):
                 raise NotImplementedError("Use DrosteSum for 3d")
 
             self.kernel_func = kernel_func
-
             self.kernel_type = kernel_type
             self.integral_knl = sumpy_kernel
 
@@ -879,6 +887,11 @@ class NearFieldInteractionTable(object):
         else:
             self.has_normalizers = False
 
+        if self.inverse_droste:
+            self.build_kernel_exterior_normalizer_table()
+        else:
+            self.kernel_exterior_normalizers = None
+
         self.is_built = True
 
     # }}} End build table via adding up a Droste of bricks
@@ -897,6 +910,109 @@ class NearFieldInteractionTable(object):
             raise NotImplementedError()
 
     # }}} End build table (driver)
+
+    # {{{ build kernel exterior normalizer table
+
+    def build_kernel_exterior_normalizer_table(self, cl_ctx, queue,
+            pool=None,
+            mesh_order=5, quad_order=10, mesh_size=0.03,
+            remove_tmp_files=True):
+        r"""Build the kernel exterior normalizer table.
+
+        An exterior normalizer for kernel :math:`G(r)` and target
+        :math:`x` is defined as
+
+        .. math::
+
+            \int_{B^c} G(\lVert x - y \rVert) dy
+
+        where :math:`B` is the source box.
+        """
+        if pool is None:
+            from multiprocessing import Pool, cpu_count
+            pool = Pool(cpu_count)
+
+        from meshmode.mesh.io import read_gmsh
+        from meshmode.discretization import Discretization
+        from meshmode.discretization.poly_element import \
+            PolynomialWarpAndBlendGroupFactory
+
+        # from pytential import bind, sym
+        import gmsh
+
+        # {{{ gmsh processing
+
+        gmsh.initialize()
+        gmsh.option.setNumber("General.Terminal", 1)
+
+        # meshmode does not support other versions
+        gmsh.option.setNumber("Mesh.MshFileVersion", 2)
+        gmsh.option.setNumber("Mesh.CharacteristicLengthMax", mesh_size)
+
+        gmsh.option.setNumber("Mesh.ElementOrder", mesh_order)
+        if mesh_order > 1:
+            gmsh.option.setNumber(
+                "Mesh.CharacteristicLengthFromCurvature", 1)
+
+        # radius of source box
+        hs = self.source_box_extent / 2
+        # radius of bouding sphere
+        r = hs * np.sqrt(self.dim)
+
+        if self.dim == 2:
+            tag_box = gmsh.model.occ.addRectangle(x=0, y=0, z=0,
+                    dx=2*hs, dy=2*hs, tag=-1)
+        elif self.dim == 3:
+            tag_box = gmsh.model.occ.addBox(x=0, y=0, z=0,
+                    dx=2*hs, dy=2*hs, dz=2*hs, tag=-1)
+        else:
+            raise NotImplementedError()
+
+        if self.dim == 2:
+            tag_ball = gmsh.model.occ.addDisk(xc=hs, yc=hs, zc=0,
+                    rx=r, ry=r, tag=-1)
+        elif self.dim == 3:
+            tag_sphere = gmsh.model.occ.addSphere(xc=hs, yc=hs, zc=hs,
+                    radius=r, tag=-1)
+            tag_ball = gmsh.model.occ.addVolume([tag_sphere], tag=-1)
+        else:
+            raise NotImplementedError()
+
+        dimtags_ints, dimtags_map_ints = gmsh.model.occ.cut(
+                objectDimTags=[(self.dim, tag_ball)],
+                toolDimTags=[(self.dim, tag_box)],
+                tag=-1, removeObject=True, removeTool=True)
+        gmsh.model.occ.synchronize()
+        gmsh.model.mesh.generate(self.dim)
+
+        from tempfile import mkdtemp
+        from os.path import join
+        temp_dir = mkdtemp(prefix="tmp_volumential_nft")
+        msh_filename = join(temp_dir, 'chinese_lucky_coin.msh')
+        gmsh.write(msh_filename)
+        gmsh.finalize()
+
+        mesh = read_gmsh(msh_filename)
+        if remove_tmp_files:
+            import shutil
+            shutil.rmtree(temp_dir)
+
+        # }}} End gmsh processing
+
+        discr = Discretization(cl_ctx, mesh,
+                PolynomialWarpAndBlendGroupFactory(order=quad_order))
+
+        # nodes = discr.nodes().with_queue(queue)[:self.dim]
+        # weights = discr.quad_weights(queue).with_queue(queue)
+
+        # TODO: evaluate kernel on nodes
+        raise NotImplementedError(
+                "Coming soon: this part of the code is under construction.")
+        self.integral_knl
+
+        self.kernel_exterior_normalizers = None
+
+    # }}} End kernel exterior normalizer table
 
     # {{{ query table and transform to actual box
 
