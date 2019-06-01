@@ -120,6 +120,9 @@ class NearFieldInteractionTableManager(object):
 
         self.supported_kernels = [
             "Laplace",
+            "Laplace-Dx",
+            "Laplace-Dy",
+            "Laplace-Dz",
             "Constant",
             "Yukawa",
             "Yukawa-Dx",
@@ -425,6 +428,22 @@ class NearFieldInteractionTableManager(object):
             from sumpy.kernel import LaplaceKernel
 
             return LaplaceKernel(dim)
+
+        if kernel_type == "Laplace-Dx":
+            from sumpy.kernel import LaplaceKernel, AxisTargetDerivative
+
+            return AxisTargetDerivative(0, LaplaceKernel(dim))
+
+        if kernel_type == "Laplace-Dy":
+            from sumpy.kernel import LaplaceKernel
+
+            return AxisTargetDerivative(1, LaplaceKernel(dim))
+
+        if kernel_type == "Laplace-Dz":
+            from sumpy.kernel import LaplaceKernel
+
+            assert dim >= 3
+            return AxisTargetDerivative(2, LaplaceKernel(dim))
 
         elif kernel_type == "Constant":
             return ConstantKernel(dim)
