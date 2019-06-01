@@ -435,12 +435,12 @@ class NearFieldInteractionTableManager(object):
             return AxisTargetDerivative(0, LaplaceKernel(dim))
 
         if kernel_type == "Laplace-Dy":
-            from sumpy.kernel import LaplaceKernel
+            from sumpy.kernel import LaplaceKernel, AxisTargetDerivative
 
             return AxisTargetDerivative(1, LaplaceKernel(dim))
 
         if kernel_type == "Laplace-Dz":
-            from sumpy.kernel import LaplaceKernel
+            from sumpy.kernel import LaplaceKernel, AxisTargetDerivative
 
             assert dim >= 3
             return AxisTargetDerivative(2, LaplaceKernel(dim))

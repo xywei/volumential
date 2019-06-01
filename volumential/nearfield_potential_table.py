@@ -786,6 +786,12 @@ class NearFieldInteractionTable(object):
                 knl_symmetry_tags = kwargs["knl_symmetry_tags"]
             else:
                 # Maximum symmetry by default
+                logger.warn(
+                        "use_symmetry is set to True, but knl_symmetry_tags is not "
+                        "set. Using the default maximum symmetry. (Using maximum "
+                        "symmetry for some kernels (e.g. derivatives of "
+                        "LaplaceKernel will yield incorrect results)."
+                        )
                 knl_symmetry_tags = None
 
             drf = InverseDrosteReduced(
@@ -814,6 +820,12 @@ class NearFieldInteractionTable(object):
                     knl_symmetry_tags = kwargs["knl_symmetry_tags"]
                 else:
                     # Maximum symmetry by default
+                    logger.warn(
+                        "use_symmetry is set to True, but knl_symmetry_tags is not "
+                        "set. Using the default maximum symmetry. (Using maximum "
+                        "symmetry for some kernels (e.g. derivatives of "
+                        "LaplaceKernel will yield incorrect results)."
+                        )
                     knl_symmetry_tags = None
 
                 drf = DrosteReduced(

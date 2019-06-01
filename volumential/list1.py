@@ -61,9 +61,9 @@ class NearFieldEvalBase(KernelCacheWrapper):
         self.n_q_points = table_data_shapes["n_q_points"]
         self.n_table_entries = table_data_shapes["n_table_entries"]
 
-        assert isinstance(self.n_tables, int)
-        assert isinstance(self.n_q_points, int)
-        assert isinstance(self.n_table_entries, int)
+        assert np.isreal(self.n_tables)
+        assert np.isreal(self.n_q_points)
+        assert np.isreal(self.n_table_entries)
 
         self.options = options
         self.name = name or self.default_name
