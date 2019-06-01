@@ -664,19 +664,22 @@ class NearFieldInteractionTable(object):
 
     def compute_nmlz(self, mode_id):
         mode_func = self.get_mode(mode_id)
-        nmlz, _ = squad.qquad(
+        nmlz, err = squad.qquad(
             func=mode_func,
             a=0,
             b=self.source_box_extent,
             c=0,
             d=self.source_box_extent,
-            tol=1e-15,
-            rtol=1e-15,
+            tol=1.,
+            rtol=1.,
             minitero=25,
             miniteri=25,
             maxitero=100,
             maxiteri=100,
         )
+        if err > 1e-15:
+            logger.debug("Normalizer %d quad error is %e" % (
+                mode_id, err))
         return (mode_id, nmlz)
 
     def build_normalizer_table(self, pool=None, pb=None):
