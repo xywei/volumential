@@ -55,10 +55,10 @@ root_table_source_extent = 2
 
 print("Using table cache:", table_filename)
 
-q_order = 3   # quadrature order
-n_levels = 9  # 2^(n_levels-1) subintervals in 1D
+q_order = 2   # quadrature order
+n_levels = 8  # 2^(n_levels-1) subintervals in 1D
 
-use_multilevel_table = True
+use_multilevel_table = False
 
 adaptive_mesh = False
 n_refinement_loops = 100
@@ -247,6 +247,11 @@ tm = NearFieldInteractionTableManager(
     table_filename, root_extent=root_table_source_extent
 )
 
+if q_order < 5:
+    n_brick_levels = 15
+else:
+    n_brick_levels = 14
+
 if use_multilevel_table:
     assert (
         abs(
@@ -264,7 +269,7 @@ if use_multilevel_table:
                 source_box_level=l, compute_method="DrosteSum",
                 queue=queue, n_brick_quad_poitns=100,
                 adaptive_level=False, use_symmetry=True,
-                alpha=0.1, nlevels=15)
+                alpha=0.1, nlevels=n_brick_levels)
             nftable_list.append(tb)
 
         if 1:
@@ -273,7 +278,7 @@ if use_multilevel_table:
                 source_box_level=l, compute_method="DrosteSum",
                 queue=queue, n_brick_quad_poitns=100,
                 adaptive_level=False, use_symmetry=False,
-                alpha=0.1, nlevels=15)
+                alpha=0.1, nlevels=n_brick_levels)
             nftable_dx_list.append(tb)
 
         if 1:
@@ -282,7 +287,7 @@ if use_multilevel_table:
                 source_box_level=l, compute_method="DrosteSum",
                 queue=queue, n_brick_quad_poitns=100,
                 adaptive_level=False, use_symmetry=False,
-                alpha=0.1, nlevels=15)
+                alpha=0.1, nlevels=n_brick_levels)
             nftable_dy_list.append(tb)
 
     print("Using table list of length", len(nftable_list))
@@ -293,7 +298,35 @@ if use_multilevel_table:
             }
 
 else:
-    1/0
+        if 1:
+            print("Getting table")
+            tb, _ = tm.get_table(dim, "Laplace", q_order,
+                compute_method="DrosteSum",
+                queue=queue, n_brick_quad_poitns=100,
+                adaptive_level=False, use_symmetry=True,
+                alpha=0.1, nlevels=n_brick_levels)
+
+        if 1:
+            print("Getting table Dx")
+            tb_dx, _ = tm.get_table(dim, "Laplace-Dx", q_order,
+                compute_method="DrosteSum",
+                queue=queue, n_brick_quad_poitns=100,
+                adaptive_level=False, use_symmetry=False,
+                alpha=0.1, nlevels=n_brick_levels)
+
+        if 1:
+            print("Getting table Dy")
+            tb_dy, _ = tm.get_table(dim, "Laplace-Dy", q_order,
+                compute_method="DrosteSum",
+                queue=queue, n_brick_quad_poitns=100,
+                adaptive_level=False, use_symmetry=False,
+                alpha=0.1, nlevels=n_brick_levels)
+
+        nftable = {
+                tb.integral_knl.__repr__(): tb,
+                tb_dx.integral_knl.__repr__(): tb_dx,
+                tb_dy.integral_knl.__repr__(): tb_dy,
+                }
 
 # }}} End build near field potential table
 
