@@ -999,7 +999,7 @@ class NearFieldInteractionTable(object):
 
         # }}} End gmsh processing
 
-        discr = Discretization(cl_ctx, mesh,
+        discr = Discretization(cl_ctx, mesh,  # noqa
                 PolynomialWarpAndBlendGroupFactory(order=quad_order))
 
         # nodes = discr.nodes().with_queue(queue)[:self.dim]

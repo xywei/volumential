@@ -88,6 +88,7 @@ class FPNDExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrangler):
         self.tree = tree
 
         self.near_field_table = {}
+        # list of tables for a single out kernel
         if isinstance(near_field_table, list):
             assert len(self.code.out_kernels) == 1
             self.near_field_table[
@@ -95,7 +96,7 @@ class FPNDExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrangler):
             ] = near_field_table
             self.n_tables = len(near_field_table)
 
-        # FIXME
+        # single table
         elif isinstance(near_field_table, NearFieldInteractionTable):
             assert len(self.code.out_kernels) == 1
             self.near_field_table[self.code.out_kernels[0].__repr__()] = [
@@ -103,33 +104,36 @@ class FPNDExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrangler):
             ]
             self.n_tables = 1
 
+        # dictionary of lists of tables
         elif isinstance(near_field_table, dict):
-            assert len(self.code.out_kernels) <= len(near_field_table)
-            self.near_field_table = near_field_table
-            self.n_tables = len(
-                    near_field_table[self.code.out_kernels[0].__repr__()])
+            self.n_tables = dict()
+            for out_knl in self.code.out_kernels:
+                if repr(out_knl) not in near_field_table:
+                    raise RuntimeError(
+                            "Missing nearfield table for %s." % repr(out_knl))
+                if isinstance(near_field_table[repr(out_knl)],
+                        NearFieldInteractionTable):
+                    near_field_table[repr(out_knl)] = [
+                            near_field_table[repr(out_knl)]]
+                else:
+                    assert isinstance(near_field_table[repr(out_knl)], list)
 
+                self.n_tables[repr(out_knl)] = len(near_field_table[repr(out_knl)])
+
+            self.near_field_table = near_field_table
         else:
             raise RuntimeError("Table type unrecognized.")
 
-        # table -- kernel consistency check
-        for kid in range(len(self.code.out_kernels)):
-            kname = self.code.out_kernels[kid].__repr__()
-            assert kname in self.near_field_table
-            # n_tables = minimum length
-            if len(self.near_field_table[kname]) < self.n_tables:
-                self.n_tables = len(self.near_field_table[kname])
-            assert self.n_tables > 0
-
         self.quad_order = quad_order
 
-        self.root_table_source_box_extent = self.near_field_table[kname][
-            0
-        ].source_box_extent
+        # TODO: make all parameters table-specific (allow using inhomogeneous tables)
+        kname = repr(self.code.out_kernels[0])
+        self.root_table_source_box_extent = (
+                self.near_field_table[kname][0].source_box_extent)
         table_starting_level = np.round(
             np.log(self.tree.root_extent / self.root_table_source_box_extent)
             / np.log(2)
-        )
+            )
         for kid in range(len(self.code.out_kernels)):
             kname = self.code.out_kernels[kid].__repr__()
             for lev, table in zip(
@@ -153,7 +157,7 @@ class FPNDExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrangler):
                 # If the kernel cannot be scaled,
                 # - tree_root_extent must be integral times of table_root_extent
                 # - n_tables must be sufficient
-                if self.n_tables > 1:
+                if not isinstance(self.n_tables, dict) and self.n_tables > 1:
                     if (
                         not abs(
                             int(self.tree.root_extent / table_root_extent)
@@ -168,7 +172,7 @@ class FPNDExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrangler):
                             "divide the bounding box's extent by an integer."
                         )
 
-            if self.n_tables > 1:
+            if not isinstance(self.n_tables, dict) and self.n_tables > 1:
                 # this checks that the boxes at the highest level are covered
                 if (
                     not tree.nlevels
@@ -276,7 +280,14 @@ class FPNDExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrangler):
 
         kname = out_kernel.__repr__()
 
-        if self.n_tables > 1:
+        if isinstance(self.n_tables, int) and self.n_tables > 1:
+            use_multilevel_tables = True
+        elif isinstance(self.n_tables, dict) and self.n_tables[kname] > 1:
+            use_multilevel_tables = True
+        else:
+            use_multilevel_tables = False
+
+        if use_multilevel_tables:
             # this checks that the boxes at the coarsest level
             # and allows for some round-off error
             min_lev = np.min(
@@ -330,7 +341,7 @@ class FPNDExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrangler):
 
         # The loop domain needs to know some info about the tables being used
         table_data_shapes = {
-            "n_tables": self.n_tables,
+            "n_tables": len(self.near_field_table[kname]),
             "n_q_points": self.near_field_table[kname][0].n_q_points,
             "n_table_entries": len(self.near_field_table[kname][0].data),
         }
