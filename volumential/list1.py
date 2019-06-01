@@ -142,6 +142,12 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 return "sbox_extent * sbox_extent / \
                         (table_root_extent * table_root_extent)"
 
+            elif self.kname in (
+                    "AxisTargetDerivative(0, LapKnl2D)",
+                    "AxisTargetDerivative(1, LapKnl2D)"):
+                logger.info("scaling for Grad(LapKnl2D)")
+                return "sbox_extent / table_root_extent"
+
             # Constant 2D
             elif self.kname == "CstKnl2D":
                 logger.info("scaling for CstKnl2D")
@@ -151,6 +157,14 @@ class NearFieldFromCSR(NearFieldEvalBase):
             # Laplace 3D
             elif self.kname == "LapKnl3D":
                 logger.info("scaling for Lapknl3D")
+                return "sbox_extent * sbox_extent / \
+                        (table_root_extent * table_root_extent)"
+
+            elif self.kname in (
+                    "AxisTargetDerivative(0, LapKnl3D)",
+                    "AxisTargetDerivative(1, LapKnl3D)",
+                    "AxisTargetDerivative(2, LapKnl3D)"):
+                logger.info("scaling for Grad(LapKnl3D)")
                 return "sbox_extent * sbox_extent / \
                         (table_root_extent * table_root_extent)"
 
@@ -208,7 +222,8 @@ class NearFieldFromCSR(NearFieldEvalBase):
             else:
                 logger.warn(
                     "Kernel not scalable and not using multiple tables, "
-                    "to get correct results, please make sure that your "
+                    "to get correct results, please make sure that either "
+                    "no displacement is needed, or the box "
                     "tree is uniform and only needs one table."
                 )
                 return "0.0"
