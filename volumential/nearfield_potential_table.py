@@ -782,7 +782,7 @@ class NearFieldInteractionTable(object):
         if self.inverse_droste:
             from volumential.droste import InverseDrosteReduced
 
-            if "knl_symietry_tags" in kwargs:
+            if "knl_symmetry_tags" in kwargs:
                 knl_symmetry_tags = kwargs["knl_symmetry_tags"]
             else:
                 # Maximum symmetry by default
@@ -816,7 +816,7 @@ class NearFieldInteractionTable(object):
             else:
                 from volumential.droste import DrosteReduced
 
-                if "knl_symietry_tags" in kwargs:
+                if "knl_symmetry_tags" in kwargs:
                     knl_symmetry_tags = kwargs["knl_symmetry_tags"]
                 else:
                     # Maximum symmetry by default
