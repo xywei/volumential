@@ -165,8 +165,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
                     "AxisTargetDerivative(1, LapKnl3D)",
                     "AxisTargetDerivative(2, LapKnl3D)"):
                 logger.info("scaling for Grad(LapKnl3D)")
-                return "sbox_extent * sbox_extent / \
-                        (table_root_extent * table_root_extent)"
+                return "sbox_extent / table_root_extent"
 
             # Constant 3D
             elif self.kname == "CstKnl3D":
