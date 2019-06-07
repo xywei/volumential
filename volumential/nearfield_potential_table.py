@@ -803,7 +803,7 @@ class NearFieldInteractionTable(object):
                     self.interaction_case_vecs,
                     n_brick_quad_points,
                     knl_symmetry_tags,
-                    auto_windowing=True
+                    auto_windowing=False
                     )
 
         else:
@@ -903,7 +903,7 @@ class NearFieldInteractionTable(object):
             self.has_normalizers = False
 
         if self.inverse_droste:
-            self.build_kernel_exterior_normalizer_table()
+            self.build_kernel_exterior_normalizer_table(cl_ctx, queue)
         else:
             self.kernel_exterior_normalizers = None
 
@@ -929,7 +929,7 @@ class NearFieldInteractionTable(object):
     # {{{ build kernel exterior normalizer table
 
     def build_kernel_exterior_normalizer_table(self, cl_ctx, queue,
-            pool=None,
+            pool=None, ncpus=None,
             mesh_order=5, quad_order=10, mesh_size=0.03,
             remove_tmp_files=True):
         r"""Build the kernel exterior normalizer table.
@@ -943,9 +943,19 @@ class NearFieldInteractionTable(object):
 
         where :math:`B` is the source box.
         """
+        if ncpus is None:
+            import os
+            ncpus = os.cpu_count()
+
         if pool is None:
-            from multiprocessing import Pool, cpu_count
-            pool = Pool(cpu_count)
+            from multiprocessing import Pool
+            pool = Pool(ncpus)
+
+        # Directly compute and return in 1D
+        if self.dim == 1:
+            # TODO
+            self.kernel_exterior_normalizers = None
+            return
 
         from meshmode.mesh.io import read_gmsh
         from meshmode.discretization import Discretization

@@ -222,7 +222,7 @@ class DrosteBase(KernelCacheWrapper):
             <> basis_evalIAXIS = (
                 T0_IAXIS * if(fIAXIS == 0, 1, 0)
                 + T1_IAXIS * if(fIAXIS == 1, 1, 0)
-                + sum(pIAXIS, if(fIAXIS == pIAXIS, Tcur_IAXIS, 0))
+                + simul_reduce(sum, pIAXIS, if(fIAXIS == pIAXIS, Tcur_IAXIS, 0))
                 ) {id=basisIAXIS,dep=tcur_updateIAXIS}
             """.replace(
             "IAXIS", str(iaxis)
@@ -394,6 +394,10 @@ class DrosteBase(KernelCacheWrapper):
                             * root_extent[iaxis]
                          ) {id=true_targets,dup=iaxis,dep=tplt_tgt_pre}
 
+                # Re-map the mapped points to [-1,1]^dim for Chebyshev evals
+                <> template_true_target[iaxis] = 0.0 + (
+                        true_target[iaxis] - root_center[iaxis]
+                        ) / root_extent[iaxis] * 2 {id=template_true_targets,dup=iaxis,dep=true_targets}
             end
 
             # Projected targets are used for brick construction
@@ -1542,12 +1546,12 @@ class InverseDrosteReduced(DrosteReduced):
 
         code = """  # noqa
             <> T0_tgt_IAXIS = 1
-            <> T1_tgt_IAXIS = true_target[IAXIS] {dep=true_targets}
+            <> T1_tgt_IAXIS = template_true_target[IAXIS] {dep=template_true_targets}
             <> Tprev_tgt_IAXIS = T0_tgt_IAXIS {id=t0_tgt_IAXIS}
             <> Tcur_tgt_IAXIS = T1_tgt_IAXIS {id=t1_tgt_IAXIS,dep=t0_tgt_IAXIS}
 
             for pIAXIS
-                <> Tnext_tgt_IAXIS = (2 * true_target[IAXIS] * Tcur_tgt_IAXIS
+                <> Tnext_tgt_IAXIS = (2 * template_true_target[IAXIS] * Tcur_tgt_IAXIS
                                 - Tprev_tgt_IAXIS) {id=tnext_tgt_IAXIS,dep=t1_tgt_IAXIS}
                 Tprev_tgt_IAXIS = Tcur_tgt_IAXIS {id=tprev_tgt_updateIAXIS,dep=tnext_tgt_IAXIS}
                 Tcur_tgt_IAXIS = Tnext_tgt_IAXIS {id=tcur_tgt_updateIAXIS,dep=tprev_tgt_updateIAXIS}
@@ -1556,7 +1560,7 @@ class InverseDrosteReduced(DrosteReduced):
             <> basis_tgt_evalIAXIS = (
                 T0_tgt_IAXIS * if(fIAXIS == 0, 1, 0)
                 + T1_tgt_IAXIS * if(fIAXIS == 1, 1, 0)
-                + sum(pIAXIS, if(fIAXIS == pIAXIS, Tcur_tgt_IAXIS, 0))
+                + simul_reduce(sum, pIAXIS, if(fIAXIS == pIAXIS, Tcur_tgt_IAXIS, 0))
                 ) {id=tgtbasisIAXIS,dep=tcur_tgt_updateIAXIS}
             """.replace(
             "IAXIS", str(iaxis)
@@ -1585,12 +1589,12 @@ class InverseDrosteReduced(DrosteReduced):
 
         code = """  # noqa
             <> U0_tgt_IAXIS = 1
-            <> U1_tgt_IAXIS = 2 * true_target[IAXIS] {dep=true_targets}
+            <> U1_tgt_IAXIS = 2 * template_true_target[IAXIS] {dep=template_true_targets}
             <> Uprev_tgt_IAXIS = U0_tgt_IAXIS {id=u0_tgt_IAXIS}
             <> Ucur_tgt_IAXIS = U1_tgt_IAXIS {id=u1_tgt_IAXIS,dep=u0_tgt_IAXIS}
 
             for pIAXIS
-                <> Unext_tgt_IAXIS = (2 * true_target[IAXIS] * Ucur_tgt_IAXIS
+                <> Unext_tgt_IAXIS = (2 * template_true_target[IAXIS] * Ucur_tgt_IAXIS
                                 - Uprev_tgt_IAXIS) {id=unext_tgt_IAXIS,dep=u1_tgt_IAXIS}
                 Uprev_tgt_IAXIS = Ucur_tgt_IAXIS {id=uprev_tgt_updateIAXIS,dep=unext_tgt_IAXIS}
                 Ucur_tgt_IAXIS = Unext_tgt_IAXIS {id=ucur_tgt_updateIAXIS,dep=uprev_tgt_updateIAXIS}
@@ -1600,14 +1604,14 @@ class InverseDrosteReduced(DrosteReduced):
             <> basis2_tgt_evalIAXIS = (
                 U0_tgt_IAXIS * if(fIAXIS == 0, 1, 0)
                 + U1_tgt_IAXIS * if(fIAXIS == 1, 1, 0)
-                + sum(pIAXIS, if(fIAXIS == pIAXIS, Ucur_tgt_IAXIS, 0))
+                + simul_reduce(sum, pIAXIS, if(fIAXIS == pIAXIS, Ucur_tgt_IAXIS, 0))
                 ) {id=tgtbasis2IAXIS,dep=ucur_tgt_updateIAXIS}
 
             # this temp var helps with type deduction
             <> f_order_IAXIS = fIAXIS
             <> der2_basis_tgt_evalIAXIS = f_order_IAXIS * (
                     ((f_order_IAXIS + 1) * basis_tgt_evalIAXIS - basis2_tgt_evalIAXIS)
-                    / (true_target[IAXIS]**2 - 1)
+                    / (template_true_target[IAXIS]**2 - 1)
                 ) {id=tgtd2basisIAXIS,dep=tgtbasisIAXIS:tgtbasis2IAXIS}
             """.replace(
                     "IAXIS", str(iaxis)
@@ -1880,6 +1884,10 @@ class InverseDrosteReduced(DrosteReduced):
         if "extra_kernel_kwarg_types" in kwargs:
             extra_kernel_kwarg_types = kwargs["extra_kernel_kwarg_types"]
 
+        extra_loopy_kernel_kwargs = {}
+        if "extra_loopy_kernel_kwargs" in kwargs:
+            extra_loopy_kernel_kwargs = kwargs["extra_loopy_kernel_kwargs"]
+
         if self.get_kernel_id == 0 or self.get_kernel_id == 1:
             loopy_knl = lp.make_kernel(  # NOQA
                 [domain],
@@ -1907,6 +1915,7 @@ class InverseDrosteReduced(DrosteReduced):
                 ],
                 name="brick_map_%d" % self.get_kernel_id,
                 lang_version=(2018, 2),
+                **extra_loopy_kernel_kwargs
             )
 
         elif self.get_kernel_id == 2:
@@ -1929,6 +1938,7 @@ class InverseDrosteReduced(DrosteReduced):
                 ],
                 name="brick_map_expansion",
                 lang_version=(2018, 2),
+                **extra_loopy_kernel_kwargs
             )
 
         else:
@@ -1938,7 +1948,7 @@ class InverseDrosteReduced(DrosteReduced):
         loopy_knl = lp.set_options(loopy_knl, write_cl=False)
         loopy_knl = lp.set_options(loopy_knl, return_dict=True)
 
-        loopy_knl = lp.make_reduction_inames_unique(loopy_knl)
+        # loopy_knl = lp.make_reduction_inames_unique(loopy_knl)
 
         try:
             loopy_knl = self.integral_knl.prepare_loopy_kernel(loopy_knl)
@@ -2097,6 +2107,7 @@ class InverseDrosteReduced(DrosteReduced):
             pass
         knl2 = self.get_cached_optimized_kernel()
         result_array = res0['result'] + res1['result']
+
         evt2, res2 = knl2(
             queue,
             result=result_array,
