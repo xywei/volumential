@@ -1612,7 +1612,7 @@ class InverseDrosteReduced(DrosteReduced):
             <> der2_basis_tgt_evalIAXIS = f_order_IAXIS * (
                     ((f_order_IAXIS + 1) * basis_tgt_evalIAXIS - basis2_tgt_evalIAXIS)
                     / (template_true_target[IAXIS]**2 - 1)
-                ) * (2**2) / (root_extent[iaxis]**2) {id=tgtd2basisIAXIS,dep=tgtbasisIAXIS:tgtbasis2IAXIS}
+                ) * (2**2) / (root_extent[IAXIS]**2) {id=tgtd2basisIAXIS,dep=tgtbasisIAXIS:tgtbasis2IAXIS}
             """.replace(
                     "IAXIS", str(iaxis)
                     )
