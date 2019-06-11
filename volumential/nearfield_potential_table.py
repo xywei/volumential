@@ -942,7 +942,7 @@ class NearFieldInteractionTable(object):
             mesh_order=5, quad_order=10, mesh_size=0.03,
             remove_tmp_files=True,
             **kwargs):
-        r"""Build the kernel exterior normalizer table.
+        r"""Build the kernel exterior normalizer table for fractional Laplacians.
 
         An exterior normalizer for kernel :math:`G(r)` and target
         :math:`x` is defined as
@@ -961,18 +961,19 @@ class NearFieldInteractionTable(object):
             from multiprocessing import Pool
             pool = Pool(ncpus)
 
+        def fl_scaling(k, s):
+            # scaling constant
+            from scipy.special import gamma
+            return (
+                    2**(2 * s) * s * gamma(s + k / 2)
+                    ) / (
+                            np.pi**(k / 2) * gamma(1 - s)
+                            )
+
         # Directly compute and return in 1D
         if self.dim == 1:
             s = self.integral_knl.s
 
-            def fl_scaling(k, s):
-                # scaling constant
-                from scipy.special import gamma
-                return (
-                        2**(2 * s) * s * gamma(s + k / 2)
-                        ) / (
-                                np.pi**(k / 2) * gamma(1 - s)
-                                )
             targets = np.array(self.q_points).reshape(-1)
             r1 = targets
             r2 = self.source_box_extent - targets
@@ -1006,6 +1007,7 @@ class NearFieldInteractionTable(object):
         hs = self.source_box_extent / 2
         # radius of bouding sphere
         r = hs * np.sqrt(self.dim)
+        logger.info("r_inner = %f, r_outer = %f" % (hs, r))
 
         if self.dim == 2:
             tag_box = gmsh.model.occ.addRectangle(x=0, y=0, z=0,
@@ -1112,6 +1114,7 @@ class NearFieldInteractionTable(object):
         int_vals_coins = np.array(int_vals)
 
         int_vals_inf = np.zeros(self.n_q_points)
+
         # {{{ integrate over the exterior of the ball
 
         import scipy.integrate.quadrature as quad
@@ -1146,15 +1149,19 @@ class NearFieldInteractionTable(object):
                 target = [0, 0]
                 s = 0.5
                 radius = 1
+                scaling = fl_scaling(k=self.dim, s=s)
                 val = compute_ext_inf_integral(target, s, radius)
-                assert np.abs(
+                test_err = np.abs(
                         val
-                        - radius**(-2 * s) * 2 * np.pi * (1 / (2 * s))
-                        ) < 1e-12
+                        - radius**(-2 * s) * 2 * np.pi * (1 / (2 * s)) * scaling
+                        ) / (radius**(-2 * s) * 2 * np.pi * (1 / (2 * s)) * scaling)
+                if test_err > 1e-12:
+                    logger.warn("Error evaluating at origin = %f" % test_err)
 
             for tid, target in enumerate(self.q_points):
+                # The formula assumes that the source box is centered at origin
                 int_vals_inf[tid] = compute_ext_inf_integral(
-                        target=target, s=self.integral_knl.s, radius=r)
+                        target=target - hs, s=self.integral_knl.s, radius=r)
 
         elif self.dim == 3:
             # FIXME
