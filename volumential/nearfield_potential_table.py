@@ -25,6 +25,8 @@ THE SOFTWARE.
 import numpy as np
 from scipy.interpolate import BarycentricInterpolator as Interpolator
 
+from functools import partial
+
 import volumential.list1_gallery as gallery
 import volumential.singular_integral_2d as squad
 
@@ -1107,7 +1109,63 @@ class NearFieldInteractionTable(object):
             queue.finish()
             int_vals.append(integ)
 
-        self.kernel_exterior_normalizers = np.array(int_vals)
+        int_vals_coins = np.array(int_vals)
+
+        int_vals_inf = np.zeros(self.n_q_points)
+        # {{{ integrate over the exterior of the ball
+
+        import scipy.integrate.quadrature as quad
+
+        if self.dim == 2:
+
+            def rho_0(theta, target, radius):
+                rho_x = np.linalg.norm(target, ord=2)
+                return (
+                    -1 * rho_x * np.cos(theta)
+                    + np.sqrt(radius**2 - rho_x**2 * (np.sin(theta)**2))
+                )
+
+            def ext_inf_integrand(theta, s, target, radius):
+                _rho_0 = rho_0(theta, target=target, radius=radius)
+                return _rho_0**(-2 * s)
+
+            def compute_ext_inf_integral(target, s, radius):
+                # target: target point
+                # s: fractional order
+                # radius: radius of the circle
+                val, _ = quad(
+                    partial(ext_inf_integrand,
+                        s=s, target=target, radius=radius),
+                    a=0,
+                    b=2*np.pi
+                )
+                return val * (1 / (2 * s)) * fl_scaling(k=self.dim, s=s)
+
+            if 1:
+                # optional test
+                target = [0, 0]
+                s = 0.5
+                radius = 1
+                val = compute_ext_inf_integral(target, s, radius)
+                assert np.abs(
+                        val
+                        - radius**(-2 * s) * 2 * np.pi * (1 / (2 * s))
+                        ) < 1e-12
+
+            for tid, target in enumerate(self.q_points):
+                int_vals_inf[tid] = compute_ext_inf_integral(
+                        target=target, s=self.integral_knl.s, radius=r)
+
+        elif self.dim == 3:
+            # FIXME
+            raise NotImplementedError("3D not yet implemented.")
+
+        else:
+            raise NotImplementedError("Unsupported dimension")
+
+        # }}} End integrate over the exterior of the ball
+
+        self.kernel_exterior_normalizers = int_vals_coins + int_vals_inf
         return
 
     # }}} End kernel exterior normalizer table
