@@ -282,6 +282,9 @@ class NearFieldInteractionTable(object):
         # Needed only when we want to rescale log type kernels
         self.mode_normalizers = np.zeros(self.n_q_points, dtype=self.dtype)
 
+        # Exterior normalizers for hypersingular kernels
+        self.kernel_exterior_normalizers = np.zeros(self.n_q_points, dtype=self.dtype)
+
         # number of (source_mode, target_point) pairs between two boxes
         self.n_pairs = self.n_q_points ** 2
 

@@ -1986,12 +1986,16 @@ class InverseDrosteReduced(DrosteReduced):
         else:
             alpha = 0
 
-        # target points in 1D
+        # (template) target points in 1D over [0, 1]
         q_points = self.get_target_points()
         assert len(q_points) == self.ntgt_points ** self.dim
         t = np.array([pt[-1] for pt in q_points[: self.ntgt_points]])
 
-        delta_max = (source_box_extent - (np.max(t) - np.min(t))) * 0.5
+        tt = t * source_box_extent
+        delta_max = min(np.min(tt), source_box_extent - np.max(tt))
+        assert delta_max > 0
+        if delta_max < 1e-6:
+            logger.warn("Severe delta constraint (< %f)" % delta_max)
 
         if ("delta" in kwargs) and (not self.auto_windowing):
             delta = kwargs["delta"]
