@@ -1991,14 +1991,20 @@ class InverseDrosteReduced(DrosteReduced):
         assert len(q_points) == self.ntgt_points ** self.dim
         t = np.array([pt[-1] for pt in q_points[: self.ntgt_points]])
 
+        delta_max = (source_box_extent - (np.max(t) - np.min(t))) * 0.5
+
         if ("delta" in kwargs) and (not self.auto_windowing):
             delta = kwargs["delta"]
             logger.info("Using window radius %f" % delta)
             assert delta > 0 and 2 * delta < source_box_extent
         else:
             assert self.auto_windowing
-            delta = 0.48 * (source_box_extent - (np.max(t) - np.min(t)))
+            delta = 0.9 * delta_max
             logger.info("Using auto-determined window radius %f" % delta)
+
+        if delta > delta_max:
+            delta = min(delta, delta_max)
+            logger.info("Shrinked delta to %f to fit inside the source box" % delta)
 
         if "nlevels" in kwargs:
             nlevels = kwargs["nlevels"]

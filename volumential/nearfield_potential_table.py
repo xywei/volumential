@@ -755,6 +755,7 @@ class NearFieldInteractionTable(object):
         self,
         n_brick_quad_points=50,
         alpha=0,
+        cl_ctx=None,
         queue=None,
         adaptive_level=True,
         use_symmetry=False,
@@ -903,7 +904,8 @@ class NearFieldInteractionTable(object):
             self.has_normalizers = False
 
         if self.inverse_droste:
-            self.build_kernel_exterior_normalizer_table(cl_ctx, queue)
+            assert cl_ctx
+            self.build_kernel_exterior_normalizer_table(cl_ctx, queue, **kwargs)
         else:
             self.kernel_exterior_normalizers = None
 
@@ -913,14 +915,15 @@ class NearFieldInteractionTable(object):
 
     # {{{ build table (driver)
 
-    def build_table(self, queue=None, **kwargs):
+    def build_table(self, cl_ctx=None, queue=None, **kwargs):
         method = self.build_method
         if method == "Transform":
             logger.info("Building table with transform method")
             self.build_table_via_transform()
         elif method == "DrosteSum":
             logger.info("Building table with Droste method")
-            self.build_table_via_droste_bricks(queue=queue, **kwargs)
+            self.build_table_via_droste_bricks(cl_ctx=cl_ctx,
+                    queue=queue, **kwargs)
         else:
             raise NotImplementedError()
 
@@ -931,7 +934,8 @@ class NearFieldInteractionTable(object):
     def build_kernel_exterior_normalizer_table(self, cl_ctx, queue,
             pool=None, ncpus=None,
             mesh_order=5, quad_order=10, mesh_size=0.03,
-            remove_tmp_files=True):
+            remove_tmp_files=True,
+            **kwargs):
         r"""Build the kernel exterior normalizer table.
 
         An exterior normalizer for kernel :math:`G(r)` and target
@@ -953,8 +957,22 @@ class NearFieldInteractionTable(object):
 
         # Directly compute and return in 1D
         if self.dim == 1:
-            # TODO
-            self.kernel_exterior_normalizers = None
+            s = self.integral_knl.s
+
+            def fl_scaling(k, s):
+                # scaling constant
+                from scipy.special import gamma
+                return (
+                        2**(2 * s) * s * gamma(s + k / 2)
+                        ) / (
+                                np.pi**(k / 2) * gamma(1 - s)
+                                )
+            targets = np.array(self.q_points).reshape(-1)
+            r1 = targets
+            r2 = self.source_box_extent - targets
+            self.kernel_exterior_normalizers = 1/(2*s) * (
+                    1 / r1**(2*s) + 1 / r2**(2*s)
+                    ) * fl_scaling(k=self.dim, s=s)
             return
 
         from meshmode.mesh.io import read_gmsh
@@ -962,10 +980,9 @@ class NearFieldInteractionTable(object):
         from meshmode.discretization.poly_element import \
             PolynomialWarpAndBlendGroupFactory
 
-        # from pytential import bind, sym
-        import gmsh
-
         # {{{ gmsh processing
+
+        import gmsh
 
         gmsh.initialize()
         gmsh.option.setNumber("General.Terminal", 1)
@@ -1027,15 +1044,67 @@ class NearFieldInteractionTable(object):
         discr = Discretization(cl_ctx, mesh,  # noqa
                 PolynomialWarpAndBlendGroupFactory(order=quad_order))
 
-        # nodes = discr.nodes().with_queue(queue)[:self.dim]
-        # weights = discr.quad_weights(queue).with_queue(queue)
+        from pytential import bind, sym
 
-        # TODO: evaluate kernel on nodes
-        raise NotImplementedError(
-                "Coming soon: this part of the code is under construction.")
-        self.integral_knl
+        # {{{ optional checks
 
-        self.kernel_exterior_normalizers = None
+        if 1:
+            if self.dim == 2:
+                arerr = np.abs(
+                        (np.pi * r**2 - (2 * hs)**2)
+                        - bind(discr, sym.integral(self.dim, self.dim, 1))(queue)
+                        ) / (np.pi * r**2 - (2 * hs)**2)
+                if arerr > 1e-12:
+                    logger.warn("Error when computing the area is %f" % arerr)
+
+            elif self.dim == 3:
+                arerr = np.abs(
+                        (4 / 3 * np.pi * r**3 - (2 * hs)**3)
+                        - bind(discr, sym.integral(self.dim, self.dim, 1))(queue)
+                        ) / (4 / 3 * np.pi * r**3 - (2 * hs)**3)
+                if arerr > 1e-12:
+                    logger.warn("Error when computing the area is %f" % arerr)
+
+        # }}} End optional checks
+
+        # {{{ kernel evaluation
+
+        # FIXME: the evaluation should be done on the device
+        # FIXME: the scaling constant should be evaluated with knl.scl
+
+        from pymbolic.compiler import CompiledExpression
+
+        knl = self.integral_knl
+        scl = knl.get_global_scaling_const().evalf()
+        val = CompiledExpression(knl.expression)
+
+        def eval_knl(dist):
+            # dist = [dx, dy, dz]
+            return scl * val(dist, np.sqrt)
+
+        # }}} End kernel evaluation
+
+        nodes = discr.nodes().with_queue(queue)[:self.dim]
+        nodes = nodes.get()
+
+        int_vals = []
+
+        for target in self.q_points:
+            dist = [target[i] - nodes[i] for i in range(self.dim)]
+            knl_vals = eval_knl(dist)
+
+            import pyopencl as cl
+            integ = bind(discr,
+                    sym.integral(self.dim, self.dim, sym.var("integrand")))(
+                            queue,
+                            integrand=cl.array.to_device(
+                                queue, knl_vals.astype(np.float64))
+                            )
+            queue.finish()
+            int_vals.append(integ)
+
+        self.kernel_exterior_normalizers = np.array(int_vals)
+        return
 
     # }}} End kernel exterior normalizer table
 

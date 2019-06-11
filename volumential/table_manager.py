@@ -366,6 +366,7 @@ class NearFieldInteractionTableManager(object):
         table.q_points[...] = grp["q_points"]
         table.data[...] = grp["data"]
         table.mode_normalizers[...] = grp["mode_normalizers"]
+        table.kernel_exterior_normalizers[...] = grp["kernel_exterior_normalizers"]
 
         tmp_case_vecs = np.array(table.interaction_case_vecs)
         tmp_case_vecs[...] = grp["interaction_case_vecs"]
@@ -558,6 +559,7 @@ class NearFieldInteractionTableManager(object):
         q_order,
         source_box_level=0,
         compute_method=None,
+        cl_ctx=None,
         queue=None,
         **kwargs
     ):
@@ -605,7 +607,14 @@ class NearFieldInteractionTableManager(object):
             source_box_extent=self.root_extent * (2 ** (-source_box_level)),
             **self.table_extra_kwargs
         )
-        table.build_table(queue, **kwargs)
+
+        if 0:
+            # self-similarly shrink delta
+            if 'delta' in kwargs:
+                delta = kwargs.pop('delta') * (2 ** (-source_box_level))
+                kwargs['delta'] = delta
+
+        table.build_table(cl_ctx, queue, **kwargs)
         assert table.is_built
 
         # update database
@@ -630,6 +639,8 @@ class NearFieldInteractionTableManager(object):
         self.update_dataset(grp, "q_points", table.q_points)
         self.update_dataset(grp, "data", table.data)
         self.update_dataset(grp, "mode_normalizers", table.mode_normalizers)
+        self.update_dataset(grp, "kernel_exterior_normalizers",
+                table.kernel_exterior_normalizers)
         self.update_dataset(grp, "interaction_case_vecs",
                 table.interaction_case_vecs)
         self.update_dataset(grp, "case_indices", table.case_indices)
