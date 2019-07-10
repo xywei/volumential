@@ -1410,7 +1410,7 @@ class DrosteReduced(DrosteBase):
                                     continue
                                 sign_slice = full_slice
                                 sign_slice[self.dim - 1 - iaxis] = basis_id
-                                np.multiply.at(tmp_table_part, sign_slice, -1)
+                                np.multiply.at(tmp_table_part, tuple(sign_slice), -1)
 
                         tmp_table_part = np.flip(
                             tmp_table_part, (self.dim - 1 - iaxis) + self.dim
