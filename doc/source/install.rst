@@ -43,6 +43,12 @@ Install ``dealii`` as well for additional features.
 
    conda install cmake tbb-devel dealii
 
+Also, to use ``gmsh`` via its Python API,
+
+.. code-block:: bash
+
+   conda install gmsh python-gmsh
+
 And here are some optional dependencies. Install these if you intend to develop the library or build this documentation.
 
 .. code-block:: bash
