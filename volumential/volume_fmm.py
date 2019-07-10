@@ -44,6 +44,7 @@ def drive_volume_fmm(
     src_func,
     direct_evaluation=False,
     timing_data=None,
+    **kwargs
 ):
     """
     Top-level driver routine for volume potential calculation
@@ -122,18 +123,21 @@ def drive_volume_fmm(
     recorder.add("eval_direct", timing_future)
 
     # Return list 1 only, for debugging
-    if False:
+    if 'list1_only' in kwargs and kwargs['list1_only']:
         logger.debug("reorder potentials")
         result = wrangler.reorder_potentials(potentials)
 
         logger.debug("finalize potentials")
         result = wrangler.finalize_potentials(result)
 
-        logger.info("fmm complete")
+        logger.info("fmm complete with list 1 only")
 
         return result
 
-    # potentials = wrangler.output_zeros()
+    # Do not include list 1
+    if 'exclude_list1' in kwargs and kwargs['exclude_list1']:
+        logger.info("Using zeros for list 1")
+        potentials = wrangler.output_zeros()
 
     # these potentials are called alpha in [1]
 
