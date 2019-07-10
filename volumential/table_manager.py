@@ -87,7 +87,8 @@ class NearFieldInteractionTableManager(object):
     e.g., '2D/Laplace/Order_1/Level_0/data'
     """
 
-    def __init__(self, dataset_filename="nft.hdf5", root_extent=1, dtype=np.float64):
+    def __init__(self, dataset_filename="nft.hdf5",
+            root_extent=1, dtype=np.float64, **kwargs):
         """Constructor.
         """
         self.dtype = dtype
@@ -97,6 +98,8 @@ class NearFieldInteractionTableManager(object):
 
         # Read/write if exists, create otherwise
         self.datafile = hdf.File(self.filename, "a")
+
+        self.table_extra_kwargs = kwargs
 
         # If the file exists, it must be for the same root_extent
         if "root_extent" not in self.datafile.attrs:
@@ -117,6 +120,9 @@ class NearFieldInteractionTableManager(object):
 
         self.supported_kernels = [
             "Laplace",
+            "Laplace-Dx",
+            "Laplace-Dy",
+            "Laplace-Dz",
             "Constant",
             "Yukawa",
             "Yukawa-Dx",
@@ -152,9 +158,6 @@ class NearFieldInteractionTableManager(object):
             compute_method = "Transform"
 
         is_recomputed = False
-
-        if kernel_type not in self.supported_kernels:
-            raise NotImplementedError("Kernel type not supported: " + kernel_type)
 
         q_order = int(q_order)
         assert q_order >= 1
@@ -303,9 +306,6 @@ class NearFieldInteractionTableManager(object):
         """Load a table saved in the hdf5 file.
         """
 
-        if kernel_type not in self.supported_kernels:
-            raise NotImplementedError("Kernel type not supported.")
-
         q_order = int(q_order)
         assert q_order >= 1
 
@@ -329,11 +329,17 @@ class NearFieldInteractionTableManager(object):
         assert q_order == grp.attrs["quad_order"]
 
         if compute_method == "Transform":
-            knl_func = self.get_kernel_function(dim, kernel_type, **kwargs)
+            if 'knl_func' not in kwargs:
+                knl_func = self.get_kernel_function(dim, kernel_type, **kwargs)
+            else:
+                knl_func = kwargs['knl_func']
             sumpy_knl = None
         elif compute_method == "DrosteSum":
             knl_func = None
-            sumpy_knl = self.get_sumpy_kernel(dim, kernel_type)
+            if 'sumpy_knl' not in kwargs:
+                sumpy_knl = self.get_sumpy_kernel(dim, kernel_type)
+            else:
+                sumpy_knl = kwargs['sumpy_knl']
         else:
             from warnings import warn
 
@@ -350,6 +356,7 @@ class NearFieldInteractionTableManager(object):
             kernel_type=self.get_kernel_function_type(dim, kernel_type),
             sumpy_kernel=sumpy_knl,
             source_box_extent=self.root_extent * (2 ** (-source_box_level)),
+            **self.table_extra_kwargs
         )
 
         assert abs(table.source_box_extent - grp.attrs["source_box_extent"]) < 1e-15
@@ -359,6 +366,7 @@ class NearFieldInteractionTableManager(object):
         table.q_points[...] = grp["q_points"]
         table.data[...] = grp["data"]
         table.mode_normalizers[...] = grp["mode_normalizers"]
+        table.kernel_exterior_normalizers[...] = grp["kernel_exterior_normalizers"]
 
         tmp_case_vecs = np.array(table.interaction_case_vecs)
         tmp_case_vecs[...] = grp["interaction_case_vecs"]
@@ -421,6 +429,22 @@ class NearFieldInteractionTableManager(object):
             from sumpy.kernel import LaplaceKernel
 
             return LaplaceKernel(dim)
+
+        if kernel_type == "Laplace-Dx":
+            from sumpy.kernel import LaplaceKernel, AxisTargetDerivative
+
+            return AxisTargetDerivative(0, LaplaceKernel(dim))
+
+        if kernel_type == "Laplace-Dy":
+            from sumpy.kernel import LaplaceKernel, AxisTargetDerivative
+
+            return AxisTargetDerivative(1, LaplaceKernel(dim))
+
+        if kernel_type == "Laplace-Dz":
+            from sumpy.kernel import LaplaceKernel, AxisTargetDerivative
+
+            assert dim >= 3
+            return AxisTargetDerivative(2, LaplaceKernel(dim))
 
         elif kernel_type == "Constant":
             return ConstantKernel(dim)
@@ -510,11 +534,8 @@ class NearFieldInteractionTableManager(object):
             else:
                 raise NotImplementedError("Kernel scaling not supported")
 
-        elif kernel_type in self.supported_kernels:
-            return None
-
         else:
-            raise NotImplementedError("Kernel scaling not supported")
+            return None
 
     def update_dataset(self, group, dataset_name, data_array):
         """Update stored data.
@@ -538,14 +559,12 @@ class NearFieldInteractionTableManager(object):
         q_order,
         source_box_level=0,
         compute_method=None,
+        cl_ctx=None,
         queue=None,
         **kwargs
     ):
         """Performs the precomputation and stores the results.
         """
-
-        if kernel_type not in self.supported_kernels:
-            raise NotImplementedError("Kernel type not supported.")
 
         if compute_method is None:
             logger.debug("Using default compute_method (Transform)")
@@ -559,11 +578,17 @@ class NearFieldInteractionTableManager(object):
         assert "Order_" + str(q_order) in self.datafile[str(dim) + "D"][kernel_type]
 
         if compute_method == "Transform":
-            knl_func = self.get_kernel_function(dim, kernel_type, **kwargs)
+            if 'knl_func' not in kwargs:
+                knl_func = self.get_kernel_function(dim, kernel_type, **kwargs)
+            else:
+                knl_func = kwargs['knl_func']
             sumpy_knl = None
         elif compute_method == "DrosteSum":
             knl_func = None
-            sumpy_knl = self.get_sumpy_kernel(dim, kernel_type)
+            if 'sumpy_knl' not in kwargs:
+                sumpy_knl = self.get_sumpy_kernel(dim, kernel_type)
+            else:
+                sumpy_knl = kwargs['sumpy_knl']
         else:
             raise NotImplementedError("Unsupported compute_method.")
 
@@ -580,8 +605,16 @@ class NearFieldInteractionTableManager(object):
             sumpy_kernel=sumpy_knl,
             build_method=compute_method,
             source_box_extent=self.root_extent * (2 ** (-source_box_level)),
+            **self.table_extra_kwargs
         )
-        table.build_table(queue, **kwargs)
+
+        if 0:
+            # self-similarly shrink delta
+            if 'delta' in kwargs:
+                delta = kwargs.pop('delta') * (2 ** (-source_box_level))
+                kwargs['delta'] = delta
+
+        table.build_table(cl_ctx, queue, **kwargs)
         assert table.is_built
 
         # update database
@@ -606,6 +639,8 @@ class NearFieldInteractionTableManager(object):
         self.update_dataset(grp, "q_points", table.q_points)
         self.update_dataset(grp, "data", table.data)
         self.update_dataset(grp, "mode_normalizers", table.mode_normalizers)
+        self.update_dataset(grp, "kernel_exterior_normalizers",
+                table.kernel_exterior_normalizers)
         self.update_dataset(grp, "interaction_case_vecs",
                 table.interaction_case_vecs)
         self.update_dataset(grp, "case_indices", table.case_indices)

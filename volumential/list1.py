@@ -20,6 +20,13 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
+__doc__ = """
+.. autoclass:: NearFieldEvalBase
+   :members:
+.. autoclass:: NearFieldFromCSR
+   :members:
+"""
+
 import numpy as np
 import loopy
 
@@ -54,6 +61,10 @@ class NearFieldEvalBase(KernelCacheWrapper):
         self.n_q_points = table_data_shapes["n_q_points"]
         self.n_table_entries = table_data_shapes["n_table_entries"]
 
+        assert np.isreal(self.n_tables)
+        assert np.isreal(self.n_q_points)
+        assert np.isreal(self.n_table_entries)
+
         self.options = options
         self.name = name or self.default_name
         self.divice = device
@@ -61,8 +72,16 @@ class NearFieldEvalBase(KernelCacheWrapper):
 
         # Allow user to pass more tables to force using multiple tables
         # instead of performing kernel scaling
-        if not ("infer_kernel_scaling" in self.extra_kwargs):
+        if "infer_kernel_scaling" not in self.extra_kwargs:
             self.extra_kwargs["infer_kernel_scaling"] = self.n_tables == 1
+
+        # Do not infer scaling rules when user defined rules are present
+        if ("kernel_scaling_code" in self.extra_kwargs) or (
+                "kernel_displacement_code" in self.extra_kwargs):
+            self.extra_kwargs["infer_kernel_scaling"] = False
+            # the two codes must be simultaneously given
+            assert ("kernel_scaling_code" in self.extra_kwargs) and (
+                "kernel_displacement_code" in self.extra_kwargs)
 
         self.kname = self.integral_kernel.__repr__()
         self.dim = self.integral_kernel.dim
@@ -83,6 +102,7 @@ class NearFieldEvalBase(KernelCacheWrapper):
 
 class NearFieldFromCSR(NearFieldEvalBase):
     """Evaluate the near-field potentials from CSR representation of the tree.
+    The class supports auto-scaling of simple kernels.
     """
 
     default_name = "near_field_from_csr"
@@ -122,6 +142,12 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 return "sbox_extent * sbox_extent / \
                         (table_root_extent * table_root_extent)"
 
+            elif self.kname in (
+                    "AxisTargetDerivative(0, LapKnl2D)",
+                    "AxisTargetDerivative(1, LapKnl2D)"):
+                logger.info("scaling for Grad(LapKnl2D)")
+                return "sbox_extent / table_root_extent"
+
             # Constant 2D
             elif self.kname == "CstKnl2D":
                 logger.info("scaling for CstKnl2D")
@@ -133,6 +159,13 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 logger.info("scaling for Lapknl3D")
                 return "sbox_extent * sbox_extent / \
                         (table_root_extent * table_root_extent)"
+
+            elif self.kname in (
+                    "AxisTargetDerivative(0, LapKnl3D)",
+                    "AxisTargetDerivative(1, LapKnl3D)",
+                    "AxisTargetDerivative(2, LapKnl3D)"):
+                logger.info("scaling for Grad(LapKnl3D)")
+                return "sbox_extent / table_root_extent"
 
             # Constant 3D
             elif self.kname == "CstKnl3D":
@@ -147,6 +180,13 @@ class NearFieldFromCSR(NearFieldEvalBase):
                     "tree is uniform and only needs one table."
                 )
                 return "1.0"
+        elif "kernel_scaling_code" in self.extra_kwargs:
+            # user-defined scaling rule
+            assert isinstance(self.extra_kwargs['kernel_scaling_code'], str)
+            logger.info("Using scaling rule %s for %s.",
+                        self.extra_kwargs['kernel_scaling_code'], self.kname
+                        )
+            return self.extra_kwargs['kernel_scaling_code']
         else:
             logger.info("not scaling for " + self.kname)
             logger.info("(using multiple tables)")
@@ -181,10 +221,20 @@ class NearFieldFromCSR(NearFieldEvalBase):
             else:
                 logger.warn(
                     "Kernel not scalable and not using multiple tables, "
-                    "to get correct results, please make sure that your "
+                    "to get correct results, please make sure that either "
+                    "no displacement is needed, or the box "
                     "tree is uniform and only needs one table."
                 )
                 return "0.0"
+        elif "kernel_displacement_code" in self.extra_kwargs:
+            # user-defined displacement rule
+            assert isinstance(
+                    self.extra_kwargs['kernel_displacement_code'], str)
+            logger.info("Using displacement %s for %s.",
+                        self.extra_kwargs['kernel_displacement_code'],
+                        self.kname
+                        )
+            return self.extra_kwargs['kernel_displacement_code']
         else:
             logger.info("no displacement for " + self.kname)
             logger.info("(using multiple tables)")
@@ -209,6 +259,9 @@ class NearFieldFromCSR(NearFieldEvalBase):
                     "tree is uniform and only needs one table."
                 )
                 return "0.0"
+        elif "kernel_scaling_code" in self.extra_kwargs:
+            # Using custom scaling
+            return "0.0"
         else:
             logger.info("computing table level from box size")
             logger.info("(using multiple tables)")
@@ -347,10 +400,14 @@ class NearFieldFromCSR(NearFieldEvalBase):
             "infer_scaling=" + str(self.extra_kwargs["infer_kernel_scaling"]),
         )
 
-    def get_optimized_kernel(self):
-        # FIXME
+    def get_optimized_kernel(self, ncpus=None):
+        if ncpus is None:
+            import os
+            # NOTE: this detects the number of logical cores, which
+            # may result in suboptimal performance.
+            ncpus = os.cpu_count()
         knl = self.get_kernel()
-        knl = loopy.split_iname(knl, "tbox", 16, outer_tag="g.0")
+        knl = loopy.split_iname(knl, "tbox", ncpus, inner_tag="l.0")
         return knl
 
     def __call__(self, queue, **kwargs):

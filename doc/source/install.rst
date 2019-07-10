@@ -55,7 +55,7 @@ Note that if you are using ``jupyterlab`` or ``jupyter`` notebook, you need to a
 .. code-block:: bash
 
    # nodejs is needed for installing extensions
-   conda install jupyter jupyterlab nodejs
+   conda install jupyter jupyterlab jupytext nodejs
 
    jupyter-labextension install jupyterlab-jupytext
    jupyter-labextension install jupyterlab_vim

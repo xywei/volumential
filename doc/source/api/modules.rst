@@ -85,6 +85,8 @@ the total runtime.
 
 .. automodule:: volumential.volume_fmm
 
+.. automodule:: volumential.list1
+
 Function Extension
 ------------------
 

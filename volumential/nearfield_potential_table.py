@@ -25,6 +25,8 @@ THE SOFTWARE.
 import numpy as np
 from scipy.interpolate import BarycentricInterpolator as Interpolator
 
+from functools import partial
+
 import volumential.list1_gallery as gallery
 import volumential.singular_integral_2d as squad
 
@@ -213,16 +215,20 @@ class NearFieldInteractionTable(object):
         build_method="Transform",
         source_box_extent=1,
         dtype=np.float64,
+        inverse_droste=False
     ):
         """
         kernel_type determines how the kernel is scaled w.r.t. box size.
         build_method can be "Transform" or "DrosteSum".
 
         The source box is [0, source_box_extent]^dim
+
+        :arg inverse_droste True if computing with the fractional Laplacian kernel.
         """
         self.quad_order = quad_order
         self.dim = dim
         self.dtype = dtype
+        self.inverse_droste = inverse_droste
 
         assert source_box_extent > 0
         self.source_box_extent = source_box_extent
@@ -231,7 +237,16 @@ class NearFieldInteractionTable(object):
 
         self.build_method = build_method
 
-        if dim == 2:
+        if dim == 1:
+
+            if build_method == "Transform":
+                raise NotImplementedError("Use DrosteSum for 1d")
+
+            self.kernel_func = kernel_func
+            self.kernel_type = kernel_type
+            self.integral_knl = sumpy_kernel
+
+        elif dim == 2:
 
             # Constant kernel can be used for fun/testing
             if kernel_func is None:
@@ -255,7 +270,6 @@ class NearFieldInteractionTable(object):
                 raise NotImplementedError("Use DrosteSum for 3d")
 
             self.kernel_func = kernel_func
-
             self.kernel_type = kernel_type
             self.integral_knl = sumpy_kernel
 
@@ -269,6 +283,10 @@ class NearFieldInteractionTable(object):
         # Normalizers for polynomial modes
         # Needed only when we want to rescale log type kernels
         self.mode_normalizers = np.zeros(self.n_q_points, dtype=self.dtype)
+
+        # Exterior normalizers for hypersingular kernels
+        self.kernel_exterior_normalizers = np.zeros(
+                self.n_q_points, dtype=self.dtype)
 
         # number of (source_mode, target_point) pairs between two boxes
         self.n_pairs = self.n_q_points ** 2
@@ -652,19 +670,22 @@ class NearFieldInteractionTable(object):
 
     def compute_nmlz(self, mode_id):
         mode_func = self.get_mode(mode_id)
-        nmlz, _ = squad.qquad(
+        nmlz, err = squad.qquad(
             func=mode_func,
             a=0,
             b=self.source_box_extent,
             c=0,
             d=self.source_box_extent,
-            tol=1e-15,
-            rtol=1e-15,
+            tol=1.,
+            rtol=1.,
             minitero=25,
             miniteri=25,
             maxitero=100,
             maxiteri=100,
         )
+        if err > 1e-15:
+            logger.debug("Normalizer %d quad error is %e" % (
+                mode_id, err))
         return (mode_id, nmlz)
 
     def build_normalizer_table(self, pool=None, pb=None):
@@ -740,6 +761,7 @@ class NearFieldInteractionTable(object):
         self,
         n_brick_quad_points=50,
         alpha=0,
+        cl_ctx=None,
         queue=None,
         adaptive_level=True,
         use_symmetry=False,
@@ -767,31 +789,62 @@ class NearFieldInteractionTable(object):
             for mid in range(self.n_q_points)
         ]
 
-        if not use_symmetry:
-            from volumential.droste import DrosteFull
+        if self.inverse_droste:
+            from volumential.droste import InverseDrosteReduced
 
-            drf = DrosteFull(
-                self.integral_knl,
-                self.quad_order,
-                self.interaction_case_vecs,
-                n_brick_quad_points,
-            )
-        else:
-            from volumential.droste import DrosteReduced
-
-            if "knl_symietry_tags" in kwargs:
+            if "knl_symmetry_tags" in kwargs:
                 knl_symmetry_tags = kwargs["knl_symmetry_tags"]
             else:
                 # Maximum symmetry by default
+                logger.warn(
+                        "use_symmetry is set to True, but knl_symmetry_tags is not "
+                        "set. Using the default maximum symmetry. (Using maximum "
+                        "symmetry for some kernels (e.g. derivatives of "
+                        "LaplaceKernel will yield incorrect results)."
+                        )
                 knl_symmetry_tags = None
 
-            drf = DrosteReduced(
-                self.integral_knl,
-                self.quad_order,
-                self.interaction_case_vecs,
-                n_brick_quad_points,
-                knl_symmetry_tags,
-            )
+            drf = InverseDrosteReduced(
+                    self.integral_knl,
+                    self.quad_order,
+                    self.interaction_case_vecs,
+                    n_brick_quad_points,
+                    knl_symmetry_tags,
+                    auto_windowing=False
+                    )
+
+        else:
+            if not use_symmetry:
+                from volumential.droste import DrosteFull
+
+                drf = DrosteFull(
+                    self.integral_knl,
+                    self.quad_order,
+                    self.interaction_case_vecs,
+                    n_brick_quad_points,
+                )
+            else:
+                from volumential.droste import DrosteReduced
+
+                if "knl_symmetry_tags" in kwargs:
+                    knl_symmetry_tags = kwargs["knl_symmetry_tags"]
+                else:
+                    # Maximum symmetry by default
+                    logger.warn(
+                        "use_symmetry is set to True, but knl_symmetry_tags is not "
+                        "set. Using the default maximum symmetry. (Using maximum "
+                        "symmetry for some kernels (e.g. derivatives of "
+                        "LaplaceKernel will yield incorrect results)."
+                        )
+                    knl_symmetry_tags = None
+
+                drf = DrosteReduced(
+                    self.integral_knl,
+                    self.quad_order,
+                    self.interaction_case_vecs,
+                    n_brick_quad_points,
+                    knl_symmetry_tags,
+                )
 
         # adaptive level refinement
         data0 = drf(
@@ -849,12 +902,18 @@ class NearFieldInteractionTable(object):
             self.data = data0
 
         # print("Computing normalizers")
-        # NOTE: normalizers are not needed in 3D anyway
+        # NOTE: normalizers are for log kernels and not needed in 3D
         if self.dim == 2:
             self.build_normalizer_table()
             self.has_normalizers = True
         else:
             self.has_normalizers = False
+
+        if self.inverse_droste:
+            assert cl_ctx
+            self.build_kernel_exterior_normalizer_table(cl_ctx, queue, **kwargs)
+        else:
+            self.kernel_exterior_normalizers = None
 
         self.is_built = True
 
@@ -862,18 +921,261 @@ class NearFieldInteractionTable(object):
 
     # {{{ build table (driver)
 
-    def build_table(self, queue=None, **kwargs):
+    def build_table(self, cl_ctx=None, queue=None, **kwargs):
         method = self.build_method
         if method == "Transform":
             logger.info("Building table with transform method")
             self.build_table_via_transform()
         elif method == "DrosteSum":
             logger.info("Building table with Droste method")
-            self.build_table_via_droste_bricks(queue=queue, **kwargs)
+            self.build_table_via_droste_bricks(cl_ctx=cl_ctx,
+                    queue=queue, **kwargs)
         else:
             raise NotImplementedError()
 
     # }}} End build table (driver)
+
+    # {{{ build kernel exterior normalizer table
+
+    def build_kernel_exterior_normalizer_table(self, cl_ctx, queue,
+            pool=None, ncpus=None,
+            mesh_order=5, quad_order=10, mesh_size=0.03,
+            remove_tmp_files=True,
+            **kwargs):
+        r"""Build the kernel exterior normalizer table for fractional Laplacians.
+
+        An exterior normalizer for kernel :math:`G(r)` and target
+        :math:`x` is defined as
+
+        .. math::
+
+            \int_{B^c} G(\lVert x - y \rVert) dy
+
+        where :math:`B` is the source box.
+        """
+        if ncpus is None:
+            import os
+            ncpus = os.cpu_count()
+
+        if pool is None:
+            from multiprocessing import Pool
+            pool = Pool(ncpus)
+
+        def fl_scaling(k, s):
+            # scaling constant
+            from scipy.special import gamma
+            return (
+                    2**(2 * s) * s * gamma(s + k / 2)
+                    ) / (
+                            np.pi**(k / 2) * gamma(1 - s)
+                            )
+
+        # Directly compute and return in 1D
+        if self.dim == 1:
+            s = self.integral_knl.s
+
+            targets = np.array(self.q_points).reshape(-1)
+            r1 = targets
+            r2 = self.source_box_extent - targets
+            self.kernel_exterior_normalizers = 1/(2*s) * (
+                    1 / r1**(2*s) + 1 / r2**(2*s)
+                    ) * fl_scaling(k=self.dim, s=s)
+            return
+
+        from meshmode.mesh.io import read_gmsh
+        from meshmode.discretization import Discretization
+        from meshmode.discretization.poly_element import \
+            PolynomialWarpAndBlendGroupFactory
+
+        # {{{ gmsh processing
+
+        import gmsh
+
+        gmsh.initialize()
+        gmsh.option.setNumber("General.Terminal", 1)
+
+        # meshmode does not support other versions
+        gmsh.option.setNumber("Mesh.MshFileVersion", 2)
+        gmsh.option.setNumber("Mesh.CharacteristicLengthMax", mesh_size)
+
+        gmsh.option.setNumber("Mesh.ElementOrder", mesh_order)
+        if mesh_order > 1:
+            gmsh.option.setNumber(
+                "Mesh.CharacteristicLengthFromCurvature", 1)
+
+        # radius of source box
+        hs = self.source_box_extent / 2
+        # radius of bouding sphere
+        r = hs * np.sqrt(self.dim)
+        logger.info("r_inner = %f, r_outer = %f" % (hs, r))
+
+        if self.dim == 2:
+            tag_box = gmsh.model.occ.addRectangle(x=0, y=0, z=0,
+                    dx=2*hs, dy=2*hs, tag=-1)
+        elif self.dim == 3:
+            tag_box = gmsh.model.occ.addBox(x=0, y=0, z=0,
+                    dx=2*hs, dy=2*hs, dz=2*hs, tag=-1)
+        else:
+            raise NotImplementedError()
+
+        if self.dim == 2:
+            tag_ball = gmsh.model.occ.addDisk(xc=hs, yc=hs, zc=0,
+                    rx=r, ry=r, tag=-1)
+        elif self.dim == 3:
+            tag_sphere = gmsh.model.occ.addSphere(xc=hs, yc=hs, zc=hs,
+                    radius=r, tag=-1)
+            tag_ball = gmsh.model.occ.addVolume([tag_sphere], tag=-1)
+        else:
+            raise NotImplementedError()
+
+        dimtags_ints, dimtags_map_ints = gmsh.model.occ.cut(
+                objectDimTags=[(self.dim, tag_ball)],
+                toolDimTags=[(self.dim, tag_box)],
+                tag=-1, removeObject=True, removeTool=True)
+        gmsh.model.occ.synchronize()
+        gmsh.model.mesh.generate(self.dim)
+
+        from tempfile import mkdtemp
+        from os.path import join
+        temp_dir = mkdtemp(prefix="tmp_volumential_nft")
+        msh_filename = join(temp_dir, 'chinese_lucky_coin.msh')
+        gmsh.write(msh_filename)
+        gmsh.finalize()
+
+        mesh = read_gmsh(msh_filename)
+        if remove_tmp_files:
+            import shutil
+            shutil.rmtree(temp_dir)
+
+        # }}} End gmsh processing
+
+        discr = Discretization(cl_ctx, mesh,  # noqa
+                PolynomialWarpAndBlendGroupFactory(order=quad_order))
+
+        from pytential import bind, sym
+
+        # {{{ optional checks
+
+        if 1:
+            if self.dim == 2:
+                arerr = np.abs(
+                        (np.pi * r**2 - (2 * hs)**2)
+                        - bind(discr, sym.integral(self.dim, self.dim, 1))(queue)
+                        ) / (np.pi * r**2 - (2 * hs)**2)
+                if arerr > 1e-12:
+                    logger.warn("Error when computing the area is %f" % arerr)
+
+            elif self.dim == 3:
+                arerr = np.abs(
+                        (4 / 3 * np.pi * r**3 - (2 * hs)**3)
+                        - bind(discr, sym.integral(self.dim, self.dim, 1))(queue)
+                        ) / (4 / 3 * np.pi * r**3 - (2 * hs)**3)
+                if arerr > 1e-12:
+                    logger.warn("Error when computing the area is %f" % arerr)
+
+        # }}} End optional checks
+
+        # {{{ kernel evaluation
+
+        # FIXME: the evaluation should be done on the device
+        # FIXME: the scaling constant should be evaluated with knl.scl
+
+        from pymbolic.compiler import CompiledExpression
+
+        knl = self.integral_knl
+        scl = knl.get_global_scaling_const().evalf()
+        val = CompiledExpression(knl.expression)
+
+        def eval_knl(dist):
+            # dist = [dx, dy, dz]
+            return scl * val(dist, np.sqrt)
+
+        # }}} End kernel evaluation
+
+        nodes = discr.nodes().with_queue(queue)[:self.dim]
+        nodes = nodes.get()
+
+        int_vals = []
+
+        for target in self.q_points:
+            dist = [target[i] - nodes[i] for i in range(self.dim)]
+            knl_vals = eval_knl(dist)
+
+            import pyopencl as cl
+            integ = bind(discr,
+                    sym.integral(self.dim, self.dim, sym.var("integrand")))(
+                            queue,
+                            integrand=cl.array.to_device(
+                                queue, knl_vals.astype(np.float64))
+                            )
+            queue.finish()
+            int_vals.append(integ)
+
+        int_vals_coins = np.array(int_vals)
+
+        int_vals_inf = np.zeros(self.n_q_points)
+
+        # {{{ integrate over the exterior of the ball
+
+        import scipy.integrate.quadrature as quad
+
+        if self.dim == 2:
+
+            def rho_0(theta, target, radius):
+                rho_x = np.linalg.norm(target, ord=2)
+                return (
+                    -1 * rho_x * np.cos(theta)
+                    + np.sqrt(radius**2 - rho_x**2 * (np.sin(theta)**2))
+                )
+
+            def ext_inf_integrand(theta, s, target, radius):
+                _rho_0 = rho_0(theta, target=target, radius=radius)
+                return _rho_0**(-2 * s)
+
+            def compute_ext_inf_integral(target, s, radius):
+                # target: target point
+                # s: fractional order
+                # radius: radius of the circle
+                val, _ = quad(
+                    partial(ext_inf_integrand,
+                        s=s, target=target, radius=radius),
+                    a=0,
+                    b=2*np.pi
+                )
+                return val * (1 / (2 * s)) * fl_scaling(k=self.dim, s=s)
+
+            if 1:
+                # optional test
+                target = [0, 0]
+                s = 0.5
+                radius = 1
+                scaling = fl_scaling(k=self.dim, s=s)
+                val = compute_ext_inf_integral(target, s, radius)
+                test_err = np.abs(
+                        val
+                        - radius**(-2 * s) * 2 * np.pi * (1 / (2 * s)) * scaling
+                        ) / (radius**(-2 * s) * 2 * np.pi * (1 / (2 * s)) * scaling)
+                if test_err > 1e-12:
+                    logger.warn("Error evaluating at origin = %f" % test_err)
+
+            for tid, target in enumerate(self.q_points):
+                # The formula assumes that the source box is centered at origin
+                int_vals_inf[tid] = compute_ext_inf_integral(
+                        target=target - hs, s=self.integral_knl.s, radius=r)
+
+        elif self.dim == 3:
+            # FIXME
+            raise NotImplementedError("3D not yet implemented.")
+
+        else:
+            raise NotImplementedError("Unsupported dimension")
+
+        # }}} End integrate over the exterior of the ball
+
+        self.kernel_exterior_normalizers = int_vals_coins + int_vals_inf
+        return
+
+    # }}} End kernel exterior normalizer table
 
     # {{{ query table and transform to actual box
 

@@ -27,6 +27,8 @@ from pymbolic.primitives import Variable as VariableType
 from pymbolic.primitives import Expression as ExpressionType
 from sumpy.tools import KernelCacheWrapper
 
+# {{{ clean files
+
 
 def clean_file(filename, new_name=None):
     """Remove/rename file if exists.
@@ -46,6 +48,10 @@ def clean_file(filename, new_name=None):
             os.rename(filename, new_name)
         except OSError:
             pass
+
+# }}} End clean files
+
+# {{{ scalar field expression eval
 
 
 class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
@@ -209,3 +215,29 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
         )
 
         return res["result"]
+
+# }}} End scalar field expression eval
+
+# {{{ import code
+
+
+def import_code(code, name, add_to_sys_modules=True):
+    """Dynamically generates a module.
+
+    :arg code: can be any object containing code -- string, file object, or
+    compiled code object. Returns a new module object initialized
+    by dynamically importing the given code and optionally adds it
+    to sys.modules under the given name.
+    """
+    import imp
+    module = imp.new_module(name)
+
+    if add_to_sys_modules:
+        import sys
+        sys.modules[name] = module
+
+    exec(code, module.__dict__)
+
+    return module
+
+# }}} End import code
