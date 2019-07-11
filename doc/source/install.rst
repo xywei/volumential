@@ -118,6 +118,23 @@ compiling the ``pybind11`` one, it may worth a try.
 
 After installation, checkout ``examples/`` for example usage.
 
+Run Tests
+---------
+
+``volumential`` supports testing using ``pytest``. To test the installation,
+``cd`` into ``test/`` and run
+
+.. code-block:: bash
+
+   pytest
+
+By default, some slow tests are skipped for CI efficiency. To include those in
+the testing, use instead
+
+.. code-block:: bash
+
+   pytest --longrun
+
 Update the Installation
 -----------------------
 
