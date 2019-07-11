@@ -542,6 +542,9 @@ class NearFieldInteractionTableManager(object):
     def update_dataset(self, group, dataset_name, data_array):
         """Update stored data.
         """
+        if data_array is None:
+            logger.debug("No data to save for %s" % dataset_name)
+            return
 
         data_array = np.array(data_array)
 
