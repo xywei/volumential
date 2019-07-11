@@ -135,6 +135,12 @@ class NearFieldInteractionTableManager(object):
             "Cahn-Hilliard-Laplacian-Dy",
         ]
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exception_type, exception_value, traceback):
+        self.datafile.__exit__(exception_type, exception_value, traceback)
+
     def get_table(
         self,
         dim,
