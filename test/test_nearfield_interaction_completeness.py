@@ -32,9 +32,7 @@ LONGRUN = pytest.mark.skipif(not pytest.config.option.longrun,
                              reason="needs --longrun option to run")
 
 
-def drive_test_completeness(q_order):
-
-    dim = 2
+def drive_test_completeness(dim, q_order):
 
     n_levels = 2  # 2^(n_levels-1) subintervals in 1D, must be at least 2
 
@@ -56,7 +54,7 @@ def drive_test_completeness(q_order):
     import volumential.meshgen as mg
 
     q_points, q_weights, q_radii = mg.make_uniform_cubic_grid(
-        degree=q_order, level=n_levels
+        degree=q_order, level=n_levels, dim=dim
     )
 
     assert len(q_points) == len(q_weights)
@@ -114,7 +112,7 @@ def drive_test_completeness(q_order):
         particles=q_points,
         targets=q_points,
         bbox=bbox,
-        max_particles_in_box=q_order ** 2 * 4 - 1,
+        max_particles_in_box=q_order ** dim * (2 ** dim) - 1,
         kind="adaptive-level-restricted",
     )
 
@@ -127,8 +125,12 @@ def drive_test_completeness(q_order):
 
     from volumential.table_manager import NearFieldInteractionTableManager
 
-    tm = NearFieldInteractionTableManager("nft.hdf5")
-    nft, _ = tm.get_table(dim, "Constant", q_order)
+    with NearFieldInteractionTableManager("nft.hdf5") as tm:
+        nft, _ = tm.get_table(dim, "Constant", q_order,
+                queue=queue, n_levels=1, alpha=0,
+                compute_method="DrosteSum",
+                n_brick_quad_points=50,
+                adaptive_level=False, use_symmetry=True)
 
     # {{{ expansion wrangler
 
@@ -173,14 +175,16 @@ def drive_test_completeness(q_order):
     )
     pot = pot[0]
     for p in pot[0]:
-        assert(abs(p - 4) < 1e-8)
+        assert(abs(p - 2**dim) < 1e-8)
 
 
 def test_completeness_1():
-    drive_test_completeness(1)
+    drive_test_completeness(2, 1)
+    drive_test_completeness(3, 1)
 
 
 @LONGRUN
 def test_completeness():
     for q in range(2, 4):
-        drive_test_completeness(q)
+        drive_test_completeness(2, q)
+        drive_test_completeness(3, q)
