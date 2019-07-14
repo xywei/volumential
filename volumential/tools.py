@@ -352,7 +352,7 @@ class DiscreteLegendreTransform(KernelCacheWrapper):
                                               func[box_node_beg + nid]
                                               * weight[nid]
                                               * vandermonde[nid, mid]
-                                              )
+                                              ) * filter_multiplier[nid]
                                              ) / normalizer[mid]
                     end
                 end
@@ -361,7 +361,8 @@ class DiscreteLegendreTransform(KernelCacheWrapper):
                 [
                     lp.ValueArg("n_box_nodes, n_boxes", np.int32),
                     lp.ValueArg("root_extent", np.float64),
-                    lp.GlobalArg("weight, normalizer", np.float64, "n_box_nodes"),
+                    lp.GlobalArg("weight, normalizer, filter_multiplier",
+                        np.float64, "n_box_nodes"),
                     lp.GlobalArg("vandermonde", np.float64,
                         "n_box_nodes, n_box_nodes"),
                     lp.GlobalArg("func", np.float64, "n_box_nodes * n_boxes"),
@@ -388,11 +389,22 @@ class DiscreteLegendreTransform(KernelCacheWrapper):
             inner_tag="l.0")
         return knl
 
-    def __call__(self, queue, traversal, nodal_vals, **kwargs):
+    def __call__(self, queue, traversal, nodal_vals, filtering=None, **kwargs):
         """
         :arg traversal
-        :arg nodal_vals
+        :arg nodal_vals CL array of nodal values.
+        :arg filtering Box-wide filter given by an CL array or None.
         """
+
+        if not filtering:
+            filter_multiplier = 1 + cl.array.zeros(queue,
+                    self.degree**self.dim, np.float64)
+        elif isinstance(filtering, cl.array.Array):
+            assert filtering.shape == (self.degree**self.dim,)
+            filter_multiplier = filtering
+        else:
+            raise RuntimeError("Invalid filtering argument: %s"
+                    % str(filtering))
 
         knl = self.get_cached_optimized_kernel()
 
@@ -408,6 +420,7 @@ class DiscreteLegendreTransform(KernelCacheWrapper):
             normalizer=cl.array.to_device(queue, self.I),
             n_box_nodes=self.degree**self.dim,
             n_boxes=traversal.target_boxes.shape[0],
+            filter_multiplier=filter_multiplier,
             result=cl.array.zeros_like(nodal_vals),
         )
 
