@@ -374,7 +374,8 @@ class NearFieldInteractionTableManager(object):
         if 'mode_normalizers' in grp:
             table.mode_normalizers[...] = grp["mode_normalizers"]
         if 'kernel_exterior_normalizers' in grp:
-            table.kernel_exterior_normalizers[...] = grp["kernel_exterior_normalizers"]
+            table.kernel_exterior_normalizers[...] = \
+                    grp["kernel_exterior_normalizers"]
 
         tmp_case_vecs = np.array(table.interaction_case_vecs)
         tmp_case_vecs[...] = grp["interaction_case_vecs"]

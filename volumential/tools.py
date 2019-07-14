@@ -304,7 +304,8 @@ class DiscreteLegendreTransform(KernelCacheWrapper):
         assert self.W.shape == (self.degree**self.dim,)
 
         # Normalizers
-        self.I = np.ascontiguousarray(np.diag(self.V.T * self.W @ self.V))
+        self.I = np.ascontiguousarray(  # noqa: E741
+                np.diag(self.V.T * self.W @ self.V))
         assert self.I.shape == (self.degree**self.dim,)
 
         # Fix strides for loopy
@@ -347,7 +348,11 @@ class DiscreteLegendreTransform(KernelCacheWrapper):
                         <> mode_id = box_node_beg + mid
                         result[mode_id] = sum(
                                               nid,
-                                              func[box_node_beg + nid] * weight[nid] * vandermonde[nid, mid]
+                                              (
+                                              func[box_node_beg + nid]
+                                              * weight[nid]
+                                              * vandermonde[nid, mid]
+                                              )
                                              ) / normalizer[mid]
                     end
                 end
@@ -357,7 +362,8 @@ class DiscreteLegendreTransform(KernelCacheWrapper):
                     lp.ValueArg("n_box_nodes, n_boxes", np.int32),
                     lp.ValueArg("root_extent", np.float64),
                     lp.GlobalArg("weight, normalizer", np.float64, "n_box_nodes"),
-                    lp.GlobalArg("vandermonde", np.float64, "n_box_nodes, n_box_nodes"),
+                    lp.GlobalArg("vandermonde", np.float64,
+                        "n_box_nodes, n_box_nodes"),
                     lp.GlobalArg("func", np.float64, "n_box_nodes * n_boxes"),
                     "...",
                     ],
