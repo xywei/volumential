@@ -264,7 +264,9 @@ class BoxSpecificMap(KernelCacheWrapper):
 class DiscreteLegendreTransform(BoxSpecificMap):
     """
     Transform from nodal values to Legendre polynomial coefficients
-    for all cells (leaf boxes of a boxtree Tree object)
+    for all cells (leaf boxes of a boxtree Tree object).
+    It is assumed that the traversal is built over a tree where the
+    sources and targets coincide.
     """
 
     def __init__(self, dim, degree):
@@ -361,11 +363,17 @@ class DiscreteLegendreTransform(BoxSpecificMap):
                     # <> weight_rscl  = (box_extent / 2.0)**dim
 
                     for mid
+
                         <> mode_id = box_node_beg + mid
+
+                        for nid
+                            <> user_node_id = user_node_ids[box_node_beg + nid]
+                        end
+
                         result[mode_id] = sum(
                                               nid,
                                               (
-                                              func[box_node_beg + nid]
+                                              func[user_node_id]
                                               * weight[nid]
                                               * vandermonde[nid, mid]
                                               ) * filter_multiplier[nid]
@@ -428,6 +436,7 @@ class DiscreteLegendreTransform(BoxSpecificMap):
             queue,
             boxes=traversal.target_boxes,
             box_node_starts=traversal.tree.box_target_starts,
+            user_node_ids=traversal.tree.user_source_ids,
             # box_levels=traversal.tree.box_levels,
             # root_extent=traversal.tree.root_extent,
             func=nodal_vals,
