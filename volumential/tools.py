@@ -247,10 +247,21 @@ def import_code(code, name, add_to_sys_modules=True):
 
 # }}} End import code
 
+# {{{ box-specific maps
+
+
+class BoxSpecificMap(KernelCacheWrapper):
+    """
+    Box-specific transform that maps between datum defined on quadrature
+    nodes. Being box-specific means that the transform for each box is
+    independent from the rest of the boxes.
+    """
+    pass
+
 # {{{ discrete Legendre transform
 
 
-class DiscreteLegendreTransform(KernelCacheWrapper):
+class DiscreteLegendreTransform(BoxSpecificMap):
     """
     Transform from nodal values to Legendre polynomial coefficients
     for all cells (leaf boxes of a boxtree Tree object)
@@ -341,8 +352,13 @@ class DiscreteLegendreTransform(KernelCacheWrapper):
                     <> box_id       = boxes[bid]
                     <> box_node_beg = box_node_starts[box_id]
 
-                    <> box_level    = box_levels[box_id]
-                    <> box_extent   = root_extent * (1.0 / (2**box_level))
+                    # Rescale weights based on template interval sizes.
+                    # Not needed since the rscl in both the numerator and
+                    # the denominator and is canceled.
+                    #
+                    # <> box_level    = box_levels[box_id]
+                    # <> box_extent   = root_extent * (1.0 / (2**box_level))
+                    # <> weight_rscl  = (box_extent / 2.0)**dim
 
                     for mid
                         <> mode_id = box_node_beg + mid
@@ -360,7 +376,7 @@ class DiscreteLegendreTransform(KernelCacheWrapper):
                 ],
                 [
                     lp.ValueArg("n_box_nodes, n_boxes", np.int32),
-                    lp.ValueArg("root_extent", np.float64),
+                    # lp.ValueArg("root_extent", np.float64),
                     lp.GlobalArg("weight, normalizer, filter_multiplier",
                         np.float64, "n_box_nodes"),
                     lp.GlobalArg("vandermonde", np.float64,
@@ -396,7 +412,7 @@ class DiscreteLegendreTransform(KernelCacheWrapper):
         :arg filtering Box-wide filter given by an CL array or None.
         """
 
-        if not filtering:
+        if filtering is None:
             filter_multiplier = 1 + cl.array.zeros(queue,
                     self.degree**self.dim, np.float64)
         elif isinstance(filtering, cl.array.Array):
@@ -412,8 +428,8 @@ class DiscreteLegendreTransform(KernelCacheWrapper):
             queue,
             boxes=traversal.target_boxes,
             box_node_starts=traversal.tree.box_target_starts,
-            box_levels=traversal.tree.box_levels,
-            root_extent=traversal.tree.root_extent,
+            # box_levels=traversal.tree.box_levels,
+            # root_extent=traversal.tree.root_extent,
             func=nodal_vals,
             weight=cl.array.to_device(queue, self.W),
             vandermonde=cl.array.to_device(queue, self.V),
@@ -427,3 +443,161 @@ class DiscreteLegendreTransform(KernelCacheWrapper):
         return res["result"]
 
 # }}} End discrete Legendre transform
+
+# }}} End box-specific maps
+
+# {{{ box-specific reductions
+
+
+class BoxSpecificReduction(KernelCacheWrapper):
+    """
+    Box-specific reduction that maps for each box a data vector defined
+    on the quadrature nodes to a scalar.
+    Being box-specific means that the reductions for each box is
+    independent from the rest of the boxes.
+    """
+    pass
+
+# {{{ sum
+
+
+class BoxSum(BoxSpecificReduction):
+    """
+    Adds up nodal values within each box.
+    """
+
+    def __init__(self, dim, degree):
+        """
+        :arg dim
+        :arg degree Number of nodes in each axis direction.
+        """
+        assert dim > 0
+        self.dim = dim
+        assert degree > 0
+        self.degree = degree
+
+        self.name = "BoxSum"
+
+    def get_cache_key(self):
+        return (
+            type(self).__name__,
+            str(self.dim) + "D",
+            "degree=%d" % self.degree
+        )
+
+    def get_kernel(self, **kwargs):
+
+        loopy_knl = lp.make_kernel(  # NOQA
+                [
+                    "{ [ bid ] : 0 <= bid < n_boxes }",
+                    "{ [ nid ] : 0 <= nid < n_box_nodes }"
+                    ],
+                [
+                    """
+                for bid
+                    <> box_id       = boxes[bid]
+                    <> box_node_beg = box_node_starts[box_id]
+
+                    result[bid] = sum(nid,
+                                      func[box_node_beg + nid]
+                                      * filter_multiplier[nid])
+                end
+                """
+                ],
+                [
+                    lp.ValueArg("n_box_nodes, n_boxes", np.int32),
+                    lp.GlobalArg("filter_multiplier", np.float64, "n_box_nodes"),
+                    lp.GlobalArg("func", np.float64, "n_box_nodes * n_boxes"),
+                    "...",
+                    ],
+                name="box_filtered_sum",
+                lang_version=(2018, 2),
+                )
+
+        loopy_knl = lp.set_options(loopy_knl, write_cl=False)
+        loopy_knl = lp.set_options(loopy_knl, return_dict=True)
+
+        return loopy_knl
+
+    def get_optimized_kernel(self, ncpus=None, **kwargs):
+        knl = self.get_kernel(**kwargs)
+        if ncpus is None:
+            import os
+            ncpus = os.cpu_count()
+        knl = lp.split_iname(
+            knl,
+            split_iname="bid",
+            inner_length=ncpus,
+            inner_tag="l.0")
+        return knl
+
+    def __call__(self, queue, traversal, nodal_vals, filtering=None, **kwargs):
+        """
+        :arg traversal
+        :arg nodal_vals CL array of nodal values.
+        :arg filtering Box-wide filter given by an CL array or None.
+        """
+
+        if filtering is None:
+            filter_multiplier = 1 + cl.array.zeros(queue,
+                    self.degree**self.dim, np.float64)
+        elif isinstance(filtering, cl.array.Array):
+            assert filtering.shape == (self.degree**self.dim,)
+            filter_multiplier = filtering
+        else:
+            raise RuntimeError("Invalid filtering argument: %s"
+                    % str(filtering))
+
+        knl = self.get_cached_optimized_kernel()
+        n_boxes = traversal.target_boxes.shape[0]
+
+        evt, res = knl(
+            queue,
+            boxes=traversal.target_boxes,
+            box_node_starts=traversal.tree.box_target_starts,
+            func=nodal_vals,
+            n_box_nodes=self.degree**self.dim,
+            n_boxes=n_boxes,
+            filter_multiplier=filter_multiplier,
+            result=cl.array.zeros(queue, n_boxes, nodal_vals.dtype),
+        )
+
+        return res["result"]
+
+# }}} End sum
+
+# }}} End box-specific reductions
+
+# {{{ filters for box-specific operators
+
+
+def generate_leading_order_filtering(dim, n_dofs):
+    """Returns a filtering vector that is an indicator function of the node
+    that corresponds to the leading order modal values in the Fourier space.
+    """
+
+    mask1d = np.zeros(n_dofs)
+    mask1d[-1] = 1
+
+    if dim == 1:
+        return mask1d
+
+    elif dim == 2:
+        return (
+            mask1d[:, None] + mask1d[None, :]
+            - mask1d[:, None] * mask1d[None, :]
+        ).reshape(-1)
+
+    elif dim == 3:
+        return (
+            mask1d[:, None, None] + mask1d[None, :, None] + mask1d[None, None, :]
+            - mask1d[:, None, None] * mask1d[None, :, None]
+            - mask1d[:, None, None] * mask1d[None, None, :]
+            - mask1d[None, :, None] * mask1d[None, None, :]
+            + mask1d[:, None, None] * mask1d[None, :, None] * mask1d[None, None, :]
+        ).reshape(-1)
+
+    else:
+        raise NotImplementedError("Dimension %d not supported" % dim)
+
+# }}} End filters for box-specific operators
