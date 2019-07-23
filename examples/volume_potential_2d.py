@@ -41,7 +41,9 @@ import pyopencl as cl
 import boxtree as bt
 import sumpy as sp
 import volumential as vm
+from volumential.tools import ScalarFieldExpressionEvaluation as Eval
 
+import pymbolic as pmbl
 from functools import partial
 
 print("*************************")
@@ -73,54 +75,28 @@ force_direct_evaluation = False
 
 print("Multipole order =", m_order)
 
-if 0:
-    # source 1 in a small region, to test for missing interation
-    n_subintervals = 2 ** (n_levels - 1)
-    h = 2 / n_subintervals
-    kk = 0
-    # RHS
-    def source_field(x):
-        assert len(x) == dim
-        return 0
-        if (
-            x[0] > -kk * h
-            and x[0] < max(kk, 1) * h
-            and x[1] > -kk * h
-            and x[1] < max(kk, 1) * h
-        ):
-            return -1
-        else:
-            return 0
+alpha = 160
 
-    # analytical solution, up to a harmonic function
-    def exact_solu(x, y):
-        return 0.25 * (x ** 2 + y ** 2)
+x = pmbl.var("x")
+y = pmbl.var("y")
+expp = pmbl.var("exp")
 
+norm2 = x ** 2 + y ** 2
+source_expr = -(4 * alpha ** 2 * norm2 - 4 * alpha) * expp(-alpha * norm2)
+solu_expr = expp(-alpha * norm2)
 
-else:
-    # a solution that is nearly zero at the boundary
-
-    # alpha = 160 on [-0.5,0.5]^2 is a good choice
-    alpha = 160
-
-    def source_field(x):
-        assert len(x) == dim
-        assert dim == 2
-        norm2 = x[0] ** 2 + x[1] ** 2
-        lap_u = (4 * alpha ** 2 * norm2 - 4 * alpha) * np.exp(-alpha * norm2)
-        return -lap_u
-
-    def exact_solu(x, y):
-        norm2 = x ** 2 + y ** 2
-        return np.exp(-alpha * norm2)
-
+logger.info("Source expr: " + str(source_expr))
+logger.info("Solu expr: " + str(solu_expr))
 
 # bounding box
-a = -1
-b = 1
+a = -0.5
+b = 0.5
+root_table_source_extent = 2
 
 ctx = cl.create_some_context()
 queue = cl.CommandQueue(ctx)
+
+source_eval = Eval(dim, source_expr, [x, y])
 
 # {{{ generate quad points
 
@@ -174,7 +150,7 @@ q_weights = cl.array.to_device(queue, q_weights)
 # {{{ discretize the source field
 
 source_vals = cl.array.to_device(
-    queue, np.array([source_field(qp) for qp in q_points_org])
+    queue, source_eval(queue, np.array([coords.get() for coords in q_points]))
 )
 
 # particle_weigt = source_val * q_weight
@@ -366,9 +342,11 @@ print("*************************")
 
 # print(pot)
 
+solu_eval = Eval(dim, solu_expr, [x, y])
+
 x = q_points[0].get()
 y = q_points[1].get()
-ze = exact_solu(x, y)
+ze = solu_eval(queue, np.array([x, y]))
 zs = pot.get()
 
 print_error = True
@@ -465,7 +443,7 @@ if 0:
 
     x = q_points[0].get()
     y = q_points[1].get()
-    ze = exact_solu(x, y)
+    ze = solu_eval(queue, np.array([x, y]))
     zs = pot.get()
 
     plt3d = plt.figure()
