@@ -87,7 +87,7 @@ class DrosteBase(KernelCacheWrapper):
             ]
         )
 
-        self.nfunctions = max(quad_order, 3)
+        self.nfunctions = quad_order
         self.ntgt_points = quad_order
         self.nquad_points = n_brick_quad_points
         self.n_q_points = quad_order ** self.dim
@@ -1078,6 +1078,10 @@ class DrosteReduced(DrosteBase):
         return expansion_code
 
     def get_kernel(self, **kwargs):
+        """Reduced Droste is a 2-staged algorithm. The first stage uses the
+        kernel from DrosteBase to build part of the table. In the second
+        stage, an expansion kernel is called to fill the empty entries.
+        """
 
         domain = self.make_loop_domain(base_case_id=self.current_base_case)
 
