@@ -66,31 +66,42 @@ class DrosteBase(KernelCacheWrapper):
     def __init__(self, integral_knl, quad_order, case_vecs, n_brick_quad_points=15):
         from sumpy.kernel import Kernel
 
-        assert isinstance(integral_knl, Kernel)
-        self.integral_knl = integral_knl
+        if integral_knl is not None:
+            assert isinstance(integral_knl, Kernel)
+            self.integral_knl = integral_knl
+            self.dim = integral_knl.dim
+        else:
+            self.integral_knl = None
+            self.dim = None
 
-        self.dim = integral_knl.dim
-        self.ncases = len(case_vecs)
-
-        for cvec in case_vecs:
-            assert len(cvec) == self.dim
-        self.interaction_case_vecs = np.array(
-            [[v[d] for v in case_vecs] for d in range(self.dim)]
-        )
+        if case_vecs is not None:
+            self.ncases = len(case_vecs)
+            for cvec in case_vecs:
+                assert len(cvec) == self.dim
+            self.interaction_case_vecs = np.array(
+                [[v[d] for v in case_vecs] for d in range(self.dim)]
+            )
+        else:
+            self.ncases = 0
+            self.interaction_case_vecs = list()
 
         self.interaction_case_scls = np.array(
             [
                 1
                 if int(max(abs(np.array(vec)))) == 0
                 else max([abs(l) - 0.5 for l in np.array(vec) / 4]) * 2
-                for vec in case_vecs
+                for vec in self.interaction_case_vecs
             ]
         )
 
         self.nfunctions = quad_order
         self.ntgt_points = quad_order
         self.nquad_points = n_brick_quad_points
-        self.n_q_points = quad_order ** self.dim
+
+        if self.dim is not None:
+            self.n_q_points = quad_order ** self.dim
+        else:
+            self.n_q_points = None
 
         self.name = "DrosteBase"
 
@@ -820,15 +831,19 @@ class DrosteReduced(DrosteBase):
 
     def __init__(
         self,
-        integral_knl,
-        quad_order,
-        case_vecs,
+        integral_knl=None,
+        quad_order=None,
+        case_vecs=None,
         n_brick_quad_points=50,
         knl_symmetry_tags=None,
     ):
         super().__init__(integral_knl, quad_order, case_vecs, n_brick_quad_points)
 
         from volumential.list1_symmetry import CaseVecReduction
+
+        # by default only self-interaction is counted
+        if case_vecs is None:
+            case_vecs = [np.array([0, 0, 0]), ]
 
         self.reduce_by_symmetry = CaseVecReduction(case_vecs, knl_symmetry_tags)
         logger.info(

@@ -68,7 +68,11 @@ class CaseVecReduction(object):
         sym_tags is [] if no symmetry can be used.
         sym_tags is None if maximum symmetry can be used.
         """
-        assert len(vecs) >= 1
+        if isinstance(vecs, list):
+            assert len(vecs) >= 1
+        else:
+            raise RuntimeError("Invalid list of case vecs.")
+
         self.dim = len(vecs[0])
         for vec in vecs:
             assert len(vec) == self.dim
