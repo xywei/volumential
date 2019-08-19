@@ -83,14 +83,15 @@ class DrosteBase(KernelCacheWrapper):
             )
         else:
             self.ncases = 0
-            self.interaction_case_vecs = list()
+            case_vecs = list()
+            self.interaction_case_vecs = np.array([])
 
         self.interaction_case_scls = np.array(
             [
                 1
                 if int(max(abs(np.array(vec)))) == 0
                 else max([abs(l) - 0.5 for l in np.array(vec) / 4]) * 2
-                for vec in self.interaction_case_vecs
+                for vec in case_vecs
             ]
         )
 
