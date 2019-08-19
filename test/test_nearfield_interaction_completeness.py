@@ -22,6 +22,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
+import subprocess
 import numpy as np
 import pyopencl as cl
 import pytest
@@ -125,12 +126,17 @@ def drive_test_completeness(dim, q_order):
 
     from volumential.table_manager import NearFieldInteractionTableManager
 
+    subprocess.check_call(['rm', '-f', 'nft.hdf5'])
+
     with NearFieldInteractionTableManager("nft.hdf5") as tm:
+
         nft, _ = tm.get_table(dim, "Constant", q_order,
                 queue=queue, n_levels=1, alpha=0,
                 compute_method="DrosteSum",
                 n_brick_quad_points=50,
                 adaptive_level=False, use_symmetry=True)
+
+    subprocess.check_call(['rm', 'nft.hdf5'])
 
     # {{{ expansion wrangler
 

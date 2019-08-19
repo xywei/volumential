@@ -222,7 +222,7 @@ class DrosteBase(KernelCacheWrapper):
             <> basis_evalIAXIS = (
                 T0_IAXIS * if(fIAXIS == 0, 1, 0)
                 + T1_IAXIS * if(fIAXIS == 1, 1, 0)
-                + simul_reduce(sum, pIAXIS, if(fIAXIS == pIAXIS, Tcur_IAXIS, 0))
+                + simul_reduce(sum, pIAXIS, if(fIAXIS > 2 and fIAXIS == pIAXIS, Tcur_IAXIS, 0))
                 ) {id=basisIAXIS,dep=tcur_updateIAXIS}
             """.replace(
             "IAXIS", str(iaxis)
@@ -623,7 +623,7 @@ class DrosteFull(DrosteBase):
             self.make_brick_domain(tgt_vars, self.ntgt_points)
             & self.make_brick_domain(quad_vars, self.nquad_points)
             & self.make_brick_domain(basis_vars, self.nfunctions)
-            & self.make_brick_domain(basis_eval_vars, self.nfunctions, lbound=1)
+            & self.make_brick_domain(basis_eval_vars, self.nfunctions)
             & self.make_brick_domain(["iside"], 2)
             & self.make_brick_domain(["iaxis"], self.dim)
             & self.make_brick_domain(["ibrick_side"], 2)
@@ -860,7 +860,7 @@ class DrosteReduced(DrosteBase):
         loop_domain_common_parts = (
             self.make_brick_domain(quad_vars, self.nquad_points)
             & self.make_brick_domain(basis_vars, self.nfunctions)
-            & self.make_brick_domain(basis_eval_vars, self.nfunctions, lbound=1)
+            & self.make_brick_domain(basis_eval_vars, self.nfunctions)
             & self.make_brick_domain(["iside"], 2)
             & self.make_brick_domain(["iaxis"], self.dim)
             & self.make_brick_domain(["ibrick_side"], 2)
@@ -1564,7 +1564,7 @@ class InverseDrosteReduced(DrosteReduced):
             <> basis_tgt_evalIAXIS = (
                 T0_tgt_IAXIS * if(fIAXIS == 0, 1, 0)
                 + T1_tgt_IAXIS * if(fIAXIS == 1, 1, 0)
-                + simul_reduce(sum, pIAXIS, if(fIAXIS == pIAXIS, Tcur_tgt_IAXIS, 0))
+                + simul_reduce(sum, pIAXIS, if(fIAXIS > 2 and fIAXIS == pIAXIS, Tcur_tgt_IAXIS, 0))
                 ) {id=tgtbasisIAXIS,dep=tcur_tgt_updateIAXIS}
             """.replace(
             "IAXIS", str(iaxis)
@@ -1608,7 +1608,7 @@ class InverseDrosteReduced(DrosteReduced):
             <> basis2_tgt_evalIAXIS = (
                 U0_tgt_IAXIS * if(fIAXIS == 0, 1, 0)
                 + U1_tgt_IAXIS * if(fIAXIS == 1, 1, 0)
-                + simul_reduce(sum, pIAXIS, if(fIAXIS == pIAXIS, Ucur_tgt_IAXIS, 0))
+                + simul_reduce(sum, pIAXIS, if(fIAXIS > 2 and fIAXIS == pIAXIS, Ucur_tgt_IAXIS, 0))
                 ) {id=tgtbasis2IAXIS,dep=ucur_tgt_updateIAXIS}
 
             # this temp var helps with type deduction
