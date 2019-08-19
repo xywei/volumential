@@ -197,7 +197,7 @@ class DrosteBase(KernelCacheWrapper):
             id=None,
             assignee="knl_scaling",
             expression=sympy_conv(self.integral_knl.get_global_scaling_const()),
-            temp_var_type=None,
+            temp_var_type=lp.Optional(),
         )
 
         return quad_kernel_insns + [scaling_assignment]
