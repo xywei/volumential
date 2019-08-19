@@ -235,7 +235,7 @@ class DrosteBase(KernelCacheWrapper):
                 T0_IAXIS * if(fIAXIS == 0, 1, 0)
                 + T1_IAXIS * if(fIAXIS == 1, 1, 0)
                 + simul_reduce(sum, pIAXIS,
-                               if(fIAXIS >= 2 and fIAXIS == pIAXIS + 2, Tcur_IAXIS, 0))
+                    if(fIAXIS >= 2 and fIAXIS == pIAXIS + 2, Tcur_IAXIS, 0))
                 ) {id=basisIAXIS,dep=tcur_updateIAXIS}
             """.replace(
             "IAXIS", str(iaxis)
