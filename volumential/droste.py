@@ -623,7 +623,7 @@ class DrosteFull(DrosteBase):
             self.make_brick_domain(tgt_vars, self.ntgt_points)
             & self.make_brick_domain(quad_vars, self.nquad_points)
             & self.make_brick_domain(basis_vars, self.nfunctions)
-            & self.make_brick_domain(basis_eval_vars, self.nfunctions, lbound=2)
+            & self.make_brick_domain(basis_eval_vars, self.nfunctions, lbound=1)
             & self.make_brick_domain(["iside"], 2)
             & self.make_brick_domain(["iaxis"], self.dim)
             & self.make_brick_domain(["ibrick_side"], 2)
