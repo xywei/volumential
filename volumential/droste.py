@@ -235,7 +235,7 @@ class DrosteBase(KernelCacheWrapper):
                 T0_IAXIS * if(fIAXIS == 0, 1, 0)
                 + T1_IAXIS * if(fIAXIS == 1, 1, 0)
                 + simul_reduce(sum, pIAXIS,
-                               if(fIAXIS > 2 and fIAXIS == pIAXIS, Tcur_IAXIS, 0))
+                               if(fIAXIS >= 2 and fIAXIS == pIAXIS + 2, Tcur_IAXIS, 0))
                 ) {id=basisIAXIS,dep=tcur_updateIAXIS}
             """.replace(
             "IAXIS", str(iaxis)
@@ -1581,7 +1581,9 @@ class InverseDrosteReduced(DrosteReduced):
             <> basis_tgt_evalIAXIS = (
                 T0_tgt_IAXIS * if(fIAXIS == 0, 1, 0)
                 + T1_tgt_IAXIS * if(fIAXIS == 1, 1, 0)
-                + simul_reduce(sum, pIAXIS, if(fIAXIS > 2 and fIAXIS == pIAXIS, Tcur_tgt_IAXIS, 0))
+                + simul_reduce(sum, pIAXIS,
+                    if(fIAXIS >= 2 and fIAXIS == pIAXIS + 2, Tcur_tgt_IAXIS, 0))
+
                 ) {id=tgtbasisIAXIS,dep=tcur_tgt_updateIAXIS}
             """.replace(
             "IAXIS", str(iaxis)
@@ -1625,7 +1627,8 @@ class InverseDrosteReduced(DrosteReduced):
             <> basis2_tgt_evalIAXIS = (
                 U0_tgt_IAXIS * if(fIAXIS == 0, 1, 0)
                 + U1_tgt_IAXIS * if(fIAXIS == 1, 1, 0)
-                + simul_reduce(sum, pIAXIS, if(fIAXIS > 2 and fIAXIS == pIAXIS, Ucur_tgt_IAXIS, 0))
+                + simul_reduce(sum, pIAXIS,
+                    if(fIAXIS >= 2 and fIAXIS == pIAXIS + 2, Ucur_tgt_IAXIS, 0))
                 ) {id=tgtbasis2IAXIS,dep=ucur_tgt_updateIAXIS}
 
             # this temp var helps with type deduction
