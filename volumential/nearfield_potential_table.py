@@ -830,7 +830,7 @@ class NearFieldInteractionTable(object):
                     knl_symmetry_tags = kwargs["knl_symmetry_tags"]
                 else:
                     # Maximum symmetry by default
-                    logger.warn(
+                    logger.warning(
                         "use_symmetry is set to True, but knl_symmetry_tags is not "
                         "set. Using the default maximum symmetry. (Using maximum "
                         "symmetry for some kernels (e.g. derivatives of "
