@@ -785,7 +785,7 @@ class NearFieldInteractionTable(object):
         #     extra_kernel_kwargs = kwargs["extra_kernel_kwargs"]
 
         cheb_coefs = [
-            self.get_mode_cheb_coeffs(mid, max(self.quad_order, 3))
+            self.get_mode_cheb_coeffs(mid, self.quad_order)
             for mid in range(self.n_q_points)
         ]
 
