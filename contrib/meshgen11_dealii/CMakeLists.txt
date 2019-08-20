@@ -34,7 +34,8 @@ IF(NOT CMAKE_BUILD_TYPE)
 ENDIF()
 
 # set(DEAL_II_DIR "/home/xywei/apps" CACHE STRING "Deal.II dir")
-FIND_PACKAGE(deal.II 8.4.1 REQUIRED
+# deal.II >= 8.4.1
+FIND_PACKAGE(deal.II REQUIRED
   HINTS ${DEAL_II_DIR} ../ ../../ $ENV{DEAL_II_DIR} $ENV{CONDA_PREFIX}
   )
 
