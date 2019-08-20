@@ -23,11 +23,7 @@ THE SOFTWARE.
 """
 
 import numpy as np
-import pytest
 import volumential.singular_integral_2d as sint
-
-LONGRUN = pytest.mark.skipif(not pytest.config.option.longrun,
-                             reason="needs --longrun option to run")
 
 
 def test_quadrature_1d_interval():
@@ -229,8 +225,7 @@ def test_box_quad_2():
     assert np.isclose(err, 0, atol=1e-8)
 
 
-@LONGRUN
-def test_box_quad_3():
+def test_box_quad_3(longrun):
     def greens_func(x, y, x0, y0):
         return -1 / (2 * np.pi) * np.log((x - x0) ** 2 + (y - y0) ** 2) * 0.5
 

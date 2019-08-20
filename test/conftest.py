@@ -31,3 +31,9 @@ def pytest_addoption(parser):
     """
     parser.addoption('--longrun', action='store_true', dest="longrun",
                      default=False, help="enable longrundecorated tests")
+
+
+@pytest.fixture(scope='session')
+def longrun(request):
+    if not request.config.option.longrun:
+        pytest.skip("needs --longrun option to run")

@@ -21,12 +21,9 @@ THE SOFTWARE.
 """
 
 import numpy as np
-import pytest
 import volumential as vm
 from volumential.table_manager import NearFieldInteractionTableManager
 
-LONGRUN = pytest.mark.skipif(not pytest.config.option.longrun,
-                             reason="needs --longrun option to run")
 
 dim = 2
 table_manager = NearFieldInteractionTableManager()
@@ -110,8 +107,7 @@ def interp_func(q_order, coef):
     return func
 
 
-@LONGRUN
-def test_interp_func():
+def test_interp_func(longrun):
     q_order = 3
     coef = np.ones(q_order ** 2)
 
@@ -172,8 +168,7 @@ def drive_test_direct_quad_same_box(q_order):
         assert np.abs(v1 - v2) < 2e-6
 
 
-@LONGRUN
-def test_direct_quad():
+def test_direct_quad(longrun):
     for q in range(1, 5):
         drive_test_direct_quad_same_box(q)
 

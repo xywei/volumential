@@ -21,12 +21,9 @@ THE SOFTWARE.
 """
 
 import numpy as np
-import pytest
 import volumential as vm
 from volumential.table_manager import NearFieldInteractionTableManager
 
-LONGRUN = pytest.mark.skipif(not pytest.config.option.longrun,
-                             reason="needs --longrun option to run")
 
 dim = 2
 table_manager = NearFieldInteractionTableManager()
@@ -133,8 +130,7 @@ def drive_test_direct_quad_neighbor_box(q_order, case_id):
         assert np.abs(v1 - v2) < 2e-6
 
 
-@LONGRUN
-def test_direct_quad_neighbor_box():
+def test_direct_quad_neighbor_box(longrun):
     q_order = 4
     for case_id in range(len(table.interaction_case_vecs)):
         drive_test_direct_quad_neighbor_box(q_order, case_id)

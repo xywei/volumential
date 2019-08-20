@@ -25,12 +25,8 @@ THE SOFTWARE.
 import subprocess
 import numpy as np
 import pyopencl as cl
-import pytest
 import pyopencl.array  # NOQA
 from functools import partial
-
-LONGRUN = pytest.mark.skipif(not pytest.config.option.longrun,
-                             reason="needs --longrun option to run")
 
 
 def drive_test_completeness(dim, q_order):
@@ -189,8 +185,7 @@ def test_completeness_1():
     drive_test_completeness(3, 1)
 
 
-@LONGRUN
-def test_completeness():
+def test_completeness(longrun):
     for q in range(2, 4):
         drive_test_completeness(2, q)
         drive_test_completeness(3, q)
