@@ -42,7 +42,7 @@ Documentation Sphinx:
   - rm -rf docs/volumential
   - cp -r ../../build/html docs/volumential
   - git add -f ./docs/volumential
-  - git commit -m "Auto-updated volumential docs"
+  - (git commit -m "Auto-updated volumential docs") || (echo "Docs are up to date")
   - git push
   tags:
   - python3
