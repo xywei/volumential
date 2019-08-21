@@ -240,7 +240,7 @@ class NearFieldInteractionTable(object):
         if dim == 1:
 
             if build_method == "Transform":
-                raise NotImplementedError("Use DrosteSum for 1d")
+                raise NotImplementedError("Use build_method=DrosteSum for 1d")
 
             self.kernel_func = kernel_func
             self.kernel_type = kernel_type
@@ -267,7 +267,7 @@ class NearFieldInteractionTable(object):
         elif dim == 3:
 
             if build_method == "Transform":
-                raise NotImplementedError("Use DrosteSum for 3d")
+                raise NotImplementedError("Use build_method=DrosteSum for 3d")
 
             self.kernel_func = kernel_func
             self.kernel_type = kernel_type
