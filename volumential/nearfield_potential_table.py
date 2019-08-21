@@ -508,9 +508,10 @@ class NearFieldInteractionTable(object):
             [np.sum(mvals * basis) for basis in basis_set]
         ) * _self_tp(coef_scale, self.dim).reshape(-1)
 
-        # purge small coeffs that are 15 digits away
-        mm = np.max(np.abs(mode_cheb_coeffs))
-        mode_cheb_coeffs[np.abs(mode_cheb_coeffs) < mm * 1e-15] = 0
+        # purge small coeffs whose magnitude are less than 8 times machine epsilon
+        mode_cheb_coeffs[
+                np.abs(mode_cheb_coeffs) < 8 * np.finfo(mode_cheb_coeffs.dtype).eps
+                ] = 0
 
         return mode_cheb_coeffs
 
