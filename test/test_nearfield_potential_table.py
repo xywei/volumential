@@ -26,21 +26,21 @@ from numpy.polynomial.chebyshev import chebval, chebval2d, chebval3d
 
 
 def test_const_order_1():
-    table = npt.NearFieldInteractionTable(quad_order=1, kernel_func=None)
+    table = npt.NearFieldInteractionTable(quad_order=1, build_method='Transform')
     table.build_table()
     for ary in table.data:
         assert np.allclose(ary, 1)
 
 
 def test_const_order_2(longrun):
-    table = npt.NearFieldInteractionTable(quad_order=2, kernel_func=None)
+    table = npt.NearFieldInteractionTable(quad_order=2, build_method='Transform')
     table.build_table()
     for ary in table.data:
         assert np.allclose(ary, 0.25)
 
 
 def interp_modes(q_order):
-    table = npt.NearFieldInteractionTable(quad_order=q_order, kernel_func=None)
+    table = npt.NearFieldInteractionTable(quad_order=q_order, build_method='Transform')
 
     modes = [table.get_mode(i) for i in range(table.n_q_points)]
 
