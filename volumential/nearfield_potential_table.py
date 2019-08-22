@@ -443,7 +443,7 @@ class NearFieldInteractionTable(object):
             if isinstance(coords[0], (int, float, complex)):
                 fvals = np.ones(1)
             else:
-                fvals = np.ones(len(np.array(coords[0])))
+                fvals = np.ones(np.array(coords[0]).shape)
             for d, coord in zip(range(self.dim), coords):
                 fvals = np.multiply(fvals, axis_interp[d](np.array(coord)))
             return fvals
@@ -465,6 +465,7 @@ class NearFieldInteractionTable(object):
         cheby_weights = cheby_weights * (window[1] - window[0]) / 2
 
         mode = self.get_template_mode(mode_index)
+        # FIXME: meshgrid has seemingly WRONG ordering!
         grid = np.meshgrid(*[cheby_nodes for d in range(self.dim)])
         mvals = mode(*grid)
 
