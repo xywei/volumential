@@ -22,7 +22,7 @@ THE SOFTWARE.
 
 import volumential.nearfield_potential_table as npt
 import numpy as np
-from numpy.polynomial.chebyshev import Chebyshev
+from numpy.polynomial.chebyshev import chebval, chebval2d, chebval3d
 
 
 def test_const_order_1():
@@ -69,30 +69,69 @@ def test_modes():
         assert np.allclose(val, 1)
 
 
-def test_modes_cheb_coeffs():
-    q = 5
-    cheb_order = 10
-    sample_mode = 14
-    window = [0, 1]
-    table = npt.NearFieldInteractionTable(quad_order=q, kernel_func=None)
-    # mode = table.get_mode(sample_mode)
+def cheb_eval(dim, coefs, coords):
+    if dim == 1:
+        return chebval(*coords, coefs)
+    elif dim == 2:
+        return chebval2d(*coords, coefs)
+    elif dim == 3:
+        return chebval3d(*coords, coefs)
+    else:
+        raise NotImplementedError('dimension %d not supported' % dim)
+
+
+def drive_test_modes_cheb_coeffs(dim, q, cheb_order):
+    if not cheb_order >= q:
+        raise RuntimeError('Insufficient cheb_order to fully resolve the modes')
+
+    sample_mode = np.random.randint(q**dim)
+    table = npt.NearFieldInteractionTable(quad_order=q, dim=dim)
     ccoefs = table.get_mode_cheb_coeffs(sample_mode, cheb_order)
-    ccoefs = ccoefs.reshape(cheb_order, cheb_order)
+    shape = (cheb_order, ) * dim
+    ccoefs = ccoefs.reshape(*shape)
 
-    for itq, q_point in zip(range(table.n_q_points), table.q_points):
+    # Evaluate the mode at the interpolation nodes via
+    # inverse Chebyshev transform.
+    #
+    # NOTE: table.q_points are over [0, 1]^dim,
+    # while cheb_eval assumes points are over [-1, 1]^dim
+    targets = np.array([
+        [q[i] for q in table.q_points]
+        for i in range(dim)]) * 2 - 1
 
-        # First reverse in x direction
-        tmpc = np.zeros(cheb_order)
-        for f0 in range(cheb_order):
-            tmpc[f0] = Chebyshev(ccoefs[f0], window)(q_point[0])
+    mode_vals = cheb_eval(dim, ccoefs, targets)
+    mode_vals[np.abs(mode_vals) < 8 * np.finfo(mode_vals.dtype).eps] = 0
 
-        # Then in y direction
-        sval = Chebyshev(tmpc, window)(q_point[1])
+    mode_interp_vals = np.zeros(q**dim)
+    mode_interp_vals[sample_mode] = 1
 
-        if itq == sample_mode:
-            assert abs(sval - 1) < 1e-10
-        else:
-            assert abs(sval - 0) < 1e-10
+    assert np.allclose(mode_vals, mode_interp_vals)
 
+
+def test_modes_cheb_coeffs():
+    drive_test_modes_cheb_coeffs(1, 5, 5)
+    drive_test_modes_cheb_coeffs(1, 5, 10)
+    drive_test_modes_cheb_coeffs(1, 10, 10)
+    drive_test_modes_cheb_coeffs(1, 15, 15)
+
+    drive_test_modes_cheb_coeffs(2, 5, 5)
+    drive_test_modes_cheb_coeffs(2, 5, 10)
+    drive_test_modes_cheb_coeffs(2, 10, 10)
+    drive_test_modes_cheb_coeffs(2, 15, 15)
+
+    drive_test_modes_cheb_coeffs(3, 5, 5)
+    drive_test_modes_cheb_coeffs(3, 5, 10)
+    drive_test_modes_cheb_coeffs(3, 10, 10)
+
+
+if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) > 1:
+        exec(sys.argv[1])
+    else:
+        from py.test.cmdline import main
+
+        main([__file__])
 
 # vim: foldmethod=marker:filetype=pyopencl
