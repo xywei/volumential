@@ -300,7 +300,6 @@ class NearFieldInteractionTable(object):
             # quad points in [-1,1]
             import volumential.meshgen as mg
 
-            # FIXME: 3D support
             q_points, _, _ = mg.make_uniform_cubic_grid(
                 degree=quad_order, level=1, dim=self.dim
             )
@@ -413,7 +412,7 @@ class NearFieldInteractionTable(object):
             if isinstance(coords[0], (int, float, complex)):
                 fvals = np.ones(1)
             else:
-                fvals = np.ones(len(np.array(coords[0])))
+                fvals = np.ones(np.array(coords[0]).shape)
             for d, coord in zip(range(self.dim), coords):
                 fvals = np.multiply(fvals, axis_interp[d](np.array(coord)))
             return fvals
