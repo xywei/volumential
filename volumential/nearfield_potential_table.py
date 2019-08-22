@@ -464,8 +464,9 @@ class NearFieldInteractionTable(object):
         cheby_weights = cheby_weights * (window[1] - window[0]) / 2
 
         mode = self.get_template_mode(mode_index)
-        # FIXME: meshgrid has seemingly WRONG ordering!
-        grid = np.meshgrid(*[cheby_nodes for d in range(self.dim)])
+        grid = np.meshgrid(
+                *[cheby_nodes for d in range(self.dim)],
+                indexing='ij')
         mvals = mode(*grid)
 
         from numpy.polynomial.chebyshev import Chebyshev

@@ -590,24 +590,26 @@ class DrosteBase(KernelCacheWrapper):
         return mapped_q_points[q_points_ordering]
 
     def postprocess_cheb_table(self, cheb_table, cheb_coefs):
-        # Cheb table is indexed by f0, f1, t0, t1, icase
         nfp_table = np.zeros([self.n_q_points, *cheb_table.shape[self.dim:]])
+
         # transform to interpolatory basis functions
+        # NOTE: the reversed order of indices, e.g.,
+        #       mccoefs[f0, f1, f2], and cheb_table[f2, f1, f0]
         concat_axes = [iaxis for iaxis in range(self.dim)]
         for mid in range(self.n_q_points):
             mccoefs = cheb_coefs[mid]
             nfp_table[mid] = np.tensordot(
                 mccoefs.reshape([self.nfunctions for iaxis in range(self.dim)]),
                 cheb_table,
-                axes=(concat_axes, concat_axes),
+                axes=(concat_axes, concat_axes[::-1]),
             )
 
-        # transform to self.data format
+        # transform to self.data format (icase, source_id, target_id)
+        # NOTE: the directions of target_id are reversed since cheb_table
+        #       is indexed by, e.g. cheb_table[t2, t1, t0]
         transpose_axes = (self.dim + 1, 0) + tuple(
             self.dim - i for i in range(self.dim)
         )
-        if self.dim == 2:
-            assert transpose_axes == (3, 0, 2, 1)
 
         return nfp_table.transpose(transpose_axes).reshape(-1, order="C")
 
