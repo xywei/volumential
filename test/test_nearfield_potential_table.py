@@ -40,7 +40,8 @@ def test_const_order_2(longrun):
 
 
 def interp_modes(q_order):
-    table = npt.NearFieldInteractionTable(quad_order=q_order, build_method='Transform')
+    table = npt.NearFieldInteractionTable(
+            quad_order=q_order, build_method='Transform')
 
     modes = [table.get_mode(i) for i in range(table.n_q_points)]
 
