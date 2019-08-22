@@ -212,7 +212,7 @@ class NearFieldInteractionTable(object):
         kernel_func=None,
         kernel_type=None,
         sumpy_kernel=None,
-        build_method="Transform",
+        build_method=None,
         source_box_extent=1,
         dtype=np.float64,
         inverse_droste=False
