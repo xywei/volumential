@@ -21,7 +21,6 @@ THE SOFTWARE.
 """
 
 import time
-import numpy as np
 import pyopencl as cl
 from volumential.table_manager import NearFieldInteractionTableManager
 

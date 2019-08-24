@@ -29,12 +29,14 @@ import numpy as np
 import loopy as lp
 import pymbolic as pmbl
 import pymbolic.primitives as primitives
-from pymbolic.functions import sin, cos, exp, tan, log
+from pymbolic.functions import sin, cos, exp, tan, log  # noqa: F401
 from volumential.tools import ScalarFieldExpressionEvaluation
 
 # {{{ math functions
 
-# cf. https://www.khronos.org/registry/OpenCL/sdk/1.0/docs/man/xhtml/mathFunctions.html
+# cf.
+# https://www.khronos.org/registry/OpenCL/sdk/1.0/docs/man/xhtml/mathFunctions.html
+
 
 def sqrt(x):
     return primitives.Call(
@@ -187,11 +189,9 @@ print("Total:", total_ops)
 
 # TODO: weight each operation by running micro-benchmarks
 print("OP throughput w/t tag l.0 = %.2f GFLOPS/S" %
-        (total_ops / (t1 - t0) * 1e-9)
-        )
+      (total_ops / (t1 - t0) * 1e-9))
 print("OP throughput w/t tag g.0 = %.2f GFLOPS/S" %
-        (total_ops / (t3 - t2) * 1e-9)
-        )
+      (total_ops / (t3 - t2) * 1e-9))
 
 # }}} End operation counts
 
@@ -202,4 +202,3 @@ print("OP throughput w/t tag g.0 = %.2f GFLOPS/S" %
 #                                subgroup_size=ncpus)
 
 # }}} End mem access counts
-
