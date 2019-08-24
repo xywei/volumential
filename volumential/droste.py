@@ -698,7 +698,7 @@ class DrosteFull(DrosteBase):
             # may result in suboptimal performance.
             ncpus = os.cpu_count()
         knl = self.get_kernel(**kwargs)
-        knl = lp.split_iname(knl, "icase", ncpus, inner_tag="l.0")
+        knl = lp.split_iname(knl, "icase", ncpus, inner_tag="g.0")
         return knl
 
     def call_loopy_kernel(self, queue, **kwargs):
@@ -1186,7 +1186,7 @@ class DrosteReduced(DrosteBase):
 
         knl = self.get_kernel(**kwargs)
         knl = lp.join_inames(knl, inames=self.basis_vars, new_iname="func")
-        knl = lp.split_iname(knl, "func", ncpus, inner_tag="l.0")
+        knl = lp.split_iname(knl, "func", ncpus, inner_tag="g.0")
         return knl
 
     def call_loopy_kernel_case(self, queue, base_case_id, **kwargs):

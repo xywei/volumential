@@ -152,17 +152,17 @@ knl_g = lp.split_iname(
 
 # tagged with local indices
 queue.finish()
-t0 = time.clock()
+t0 = time.time()
 evt, vals = knl_l(queue, target_points=pts)
 queue.finish()
-t1 = time.clock()
+t1 = time.time()
 
 # tagged with group indices
 queue.finish()
-t2 = time.clock()
+t2 = time.time()
 evt, vals = knl_g(queue, target_points=pts)
 queue.finish()
-t3 = time.clock()
+t3 = time.time()
 
 print("Tests run with %d threads." % ncpus)
 print("Wall time w/t tag l.0:", t1 - t0)

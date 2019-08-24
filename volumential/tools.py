@@ -187,7 +187,7 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
             knl,
             split_iname="itgt",
             inner_length=ncpus,
-            inner_tag="l.0")
+            inner_tag="g.0")
         return knl
 
     def __call__(self, queue, target_points, **kwargs):
@@ -410,7 +410,7 @@ class DiscreteLegendreTransform(BoxSpecificMap):
             knl,
             split_iname="bid",
             inner_length=ncpus,
-            inner_tag="l.0")
+            inner_tag="g.0")
         return knl
 
     def __call__(self, queue, traversal, nodal_vals, filtering=None, **kwargs):
@@ -537,7 +537,7 @@ class BoxSum(BoxSpecificReduction):
             knl,
             split_iname="bid",
             inner_length=ncpus,
-            inner_tag="l.0")
+            inner_tag="g.0")
         return knl
 
     def __call__(self, queue, traversal, nodal_vals, filtering=None, **kwargs):
