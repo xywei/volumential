@@ -24,12 +24,15 @@ import time
 import pyopencl as cl
 from volumential.table_manager import NearFieldInteractionTableManager
 
+import logging
+logging.basicConfig(format='%(name)s:%(levelname)s: %(message)s')
+
 
 def bench_table_build(queue):
 
     dim = 3
     root_table_source_extent = 2
-    q_order = 2
+    q_order = 1
     force_recompute = True
 
     table_filename = "nft.hdf5"
@@ -48,7 +51,8 @@ def bench_table_build(queue):
         compute_method="DrosteSum",
         queue=queue,
         n_brick_quad_points=120,
-        adaptive_level=False,
+        adaptive_level=True,
+        adaptive_quadrature=True,
         use_symmetry=True,
         alpha=0, n_levels=1,
     )

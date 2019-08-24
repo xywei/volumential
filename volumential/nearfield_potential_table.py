@@ -22,6 +22,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
+import logging
 import numpy as np
 from scipy.interpolate import BarycentricInterpolator as Interpolator
 
@@ -30,14 +31,12 @@ from functools import partial
 import volumential.list1_gallery as gallery
 import volumential.singular_integral_2d as squad
 
-import logging
-
-logger = logging.getLogger(__name__)
-
 # NOTE: Cannot use sumpy kernels for "Transform" since they
 # do not work with multiprocess.
 # e.g. with LaplaceKernel it will complain "AttributeError:
 # 'LaplaceKernel' object has no attribute 'expression'"
+
+logger = logging.getLogger('NearFieldInteractionTable')
 
 
 def _self_tp(vec, tpd=2):
@@ -685,6 +684,7 @@ class NearFieldInteractionTable(object):
             maxitero=100,
             maxiteri=100,
         )
+        # FIXME: cannot pickle logger
         if err > 1e-15:
             logger.debug("Normalizer %d quad error is %e" % (
                 mode_id, err))
@@ -766,6 +766,7 @@ class NearFieldInteractionTable(object):
         cl_ctx=None,
         queue=None,
         adaptive_level=True,
+        adaptive_quadrature=True,
         use_symmetry=False,
         **kwargs
     ):
@@ -789,7 +790,9 @@ class NearFieldInteractionTable(object):
         cheb_coefs = [
             self.get_mode_cheb_coeffs(mid, self.quad_order)
             for mid in range(self.n_q_points)
-        ]
+            ]
+
+        # {{{ get the table builder
 
         if self.inverse_droste:
             from volumential.droste import InverseDrosteReduced
@@ -848,7 +851,9 @@ class NearFieldInteractionTable(object):
                     knl_symmetry_tags,
                 )
 
-        # adaptive level refinement
+        # }}} End get the table builder
+
+        # compute an initial table
         data0 = drf(
             queue,
             source_box_extent=self.source_box_extent,
@@ -858,12 +863,27 @@ class NearFieldInteractionTable(object):
             cheb_coefs=cheb_coefs,
             **kwargs
         )
-        resid = -1
 
-        if not adaptive_level:
-            self.data = data0
-        else:
-            while alpha ** nlev > 1e-6:
+        # {{{ adaptively determine number of levels
+
+        resid = -1
+        missing_measure = 1
+        if adaptive_level:
+            table_tol = np.finfo(self.dtype).eps * 64
+            logger.warn("Searching for nlevels since adaptive_level=True")
+
+            while True:
+
+                missing_measure = (
+                        alpha ** nlev * self.source_box_extent
+                        ) ** self.dim
+                if missing_measure < np.finfo(self.dtype).eps * 128:
+                    logger.warn(
+                            "Adaptive level refinement terminated "
+                            "at %d since missing measure is minuscule "
+                            "(%e)" % (nlev, missing_measure))
+                    break
+
                 nlev = nlev + 1
                 data1 = drf(
                     queue,
@@ -876,35 +896,92 @@ class NearFieldInteractionTable(object):
                 )
 
                 resid = np.max(np.abs(data1 - data0)) / np.max(np.abs(data1))
-
                 data0 = data1
 
-                if resid < 1e-12 and resid > 0:
-                    self.data = data0
-                    logger.info(
+                if resid < table_tol and resid >= 0:
+                    logger.warn(
                         "Adaptive level refinement "
-                        "converged at level %d" % (nlev - 1)
-                    )
+                        "converged at level %d with residual %e" % (
+                            nlev - 1, resid))
                     break
 
                 if np.isnan(resid):
-                    logger.info(
+                    logger.warn(
                         "Adaptive level refinement terminated "
-                        "at %d before converging due to NaNs" % nlev
-                    )
+                        "at %d before converging due to NaNs" % nlev)
                     break
 
-            if resid >= 1e-12:
-                logger.info("Adaptive level refinement failed to converge.")
-                logger.info("Residual at level %d equals to %d" % (nlev, resid))
+            if resid >= table_tol:
+                logger.warn("Adaptive level refinement failed to converge.")
+                logger.warn("Residual at level %d equals to %d" % (nlev, resid))
+
+        # }}} End adaptively determine number of levels
+
+        # {{{ adaptively determine brick quad order
+
+        resid = -1
+        if adaptive_quadrature:
+            table_tol = np.finfo(self.dtype).eps * 64
+            logger.warn(
+                "Searching for n_brick_quad_points since "
+                "adaptive_quadrature=True")
+
+            max_n_quad_pts = 200
+
+            while True:
+
+                n_brick_quad_points = n_brick_quad_points + 3
+                if n_brick_quad_points > max_n_quad_pts:
+                    logger.warn(
+                            "Adaptive quadrature refinement terminated "
+                            "since order %d exceeds the max order "
+                            "allowed (%d)" % (
+                                n_brick_quad_points - 1,
+                                max_n_quad_pts - 1))
+                    break
+
+                data1 = drf(
+                    queue,
+                    source_box_extent=self.source_box_extent,
+                    alpha=alpha,
+                    nlevels=nlev,
+                    n_brick_quad_points=n_brick_quad_points,
+                    # extra_kernel_kwargs=extra_kernel_kwargs,
+                    cheb_coefs=cheb_coefs,
+                    **kwargs
+                )
+
+                resid = np.max(np.abs(data1 - data0)) / np.max(np.abs(data1))
+                data0 = data1
+
+                if resid < table_tol and resid >= 0:
+                    logger.warn(
+                        "Adaptive quadrature "
+                        "converged at order %d with residual %e" % (
+                            n_brick_quad_points - 1, resid))
+                    break
+
+                if np.isnan(resid):
+                    logger.warn(
+                        "Adaptive quadrature terminated "
+                        "at %d before converging due to NaNs" % nlev)
+                    break
+
+            if resid >= table_tol:
+                logger.warn("Adaptive quadrature failed to converge.")
+                logger.warn("Residual at order %d equals to %d" % (
+                    n_brick_quad_points, resid))
 
             if resid < 0:
-                logger.info("No need for adaptive level refinement.")
+                logger.warn("Failed to perform quadrature order refinement.")
 
-            self.data = data0
+        # }}} End adaptively determine brick quad order
 
-        # print("Computing normalizers")
+        self.data = data0
+
+        # {{{ (only for 2D) compute normalizers
         # NOTE: normalizers are for log kernels and not needed in 3D
+
         if self.dim == 2:
             self.build_normalizer_table()
             self.has_normalizers = True
@@ -916,6 +993,8 @@ class NearFieldInteractionTable(object):
             self.build_kernel_exterior_normalizer_table(cl_ctx, queue, **kwargs)
         else:
             self.kernel_exterior_normalizers = None
+
+        # }}} End Compute normalizers
 
         self.is_built = True
 
@@ -1158,7 +1237,8 @@ class NearFieldInteractionTable(object):
                         - radius**(-2 * s) * 2 * np.pi * (1 / (2 * s)) * scaling
                         ) / (radius**(-2 * s) * 2 * np.pi * (1 / (2 * s)) * scaling)
                 if test_err > 1e-12:
-                    logger.warn("Error evaluating at origin = %f" % test_err)
+                    logger.warn(
+                            "Error evaluating at origin = %f" % test_err)
 
             for tid, target in enumerate(self.q_points):
                 # The formula assumes that the source box is centered at origin
