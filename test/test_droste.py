@@ -27,11 +27,6 @@ import pyopencl as cl
 from volumential.droste import DrosteReduced
 from numpy.polynomial.chebyshev import chebval
 
-# setup ctx_getter fixture
-from pyopencl.tools import (  # NOQA
-    pytest_generate_tests_for_pyopencl as pytest_generate_tests,
-)
-
 
 def drive_test_cheb_poly(queue, deg, nnodes):
 
@@ -78,6 +73,80 @@ def test_cheb_poly(ctx_getter):
     drive_test_cheb_poly(queue, 15, nnodes)
     drive_test_cheb_poly(queue, 25, nnodes)
     drive_test_cheb_poly(queue, 35, nnodes)
+
+
+def drive_test_cheb_table(
+        queue, integral_kernel, q_order, source_box_r,
+        n_brick_q_points=120, kernel_symmetry_tags=None):
+
+    from pypvfmm import cheb_utils
+    dtype = np.float64
+    cheb_degree = q_order
+    assert integral_kernel.dim == 3  # PvFMM only supports 3D
+
+    droster = DrosteReduced(
+            integral_kernel, cheb_degree,
+            [(0, 0, 0), ], n_brick_q_points, kernel_symmetry_tags)
+
+    q_points = droster.get_target_points()
+    assert len(q_points) == droster.ntgt_points ** droster.dim
+    t = np.array([pt[-1] for pt in q_points[: droster.ntgt_points]])
+
+    # table via droste
+    cheb_table = droster.build_cheb_table(
+            queue,
+            source_box_extent=source_box_r,
+            alpha=0, nlevels=1,
+            n_brick_quad_points=n_brick_q_points,
+            adaptive_level=False, adaptive_quadrature=False)
+
+    print(cheb_table)
+
+    from itertools import product
+    for t0, t1, t2 in product(range(cheb_degree), repeat=3):
+        target = np.array([t[t0], t[t1], t[t2]], dtype=dtype) * source_box_r
+
+        # table via pypvfmm
+        uu = cheb_utils.integ(cheb_degree * 3, target,
+                source_box_r, n_brick_q_points, integral_kernel)
+
+        err = 0.  # l_inf error for the target (t0, t1, t2)
+        for f0, f1, f2 in product(range(cheb_degree), repeat=3):
+            resid = abs(
+                    (uu[f2 * (cheb_degree * 3)**2 + f1 * (cheb_degree * 3) + f0])
+                    - (cheb_table[f2, f1, f0, t2, t1, t0, 0])
+                    ) / (source_box_r ** 3)
+            err = max(err, resid)
+            if resid > 1e-12:
+                print("Error found at (%d, %d, %d): %f" % (f0, f1, f2, resid))
+        assert err < 1e-12
+
+
+def drive_test_cheb_tables_laplace3d(requires_pypvfmm, ctx_getter, q_order):
+    """Test Chebyshev table vs PvFMM's computation for
+    box-self interactions.
+    """
+    from sumpy.kernel import LaplaceKernel
+
+    cl_ctx = ctx_getter()
+    queue = cl.CommandQueue(cl_ctx)
+
+    kernel = LaplaceKernel(3)
+    source_box_r = 3.14
+
+    drive_test_cheb_table(
+            queue, kernel, q_order, source_box_r,
+            n_brick_q_points=120, kernel_symmetry_tags=None)
+
+
+@pytest.mark.parametrize("q_order", [1, 2])
+def test_cheb_tables_laplace3d_quick(requires_pypvfmm, ctx_getter, q_order):
+    drive_test_cheb_tables_laplace3d(requires_pypvfmm, ctx_getter, q_order)
+
+
+@pytest.mark.parametrize("q_order", [3, 4, 5, 6])
+def test_cheb_tables_laplace3d_slow(longrun, requires_pypvfmm, ctx_getter, q_order):
+    drive_test_cheb_tables_laplace3d(requires_pypvfmm, ctx_getter, q_order)
 
 
 if __name__ == "__main__":

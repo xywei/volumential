@@ -22,6 +22,11 @@ THE SOFTWARE.
 
 import pytest  # noqa: F401
 
+# setup ctx_getter fixture
+from pyopencl.tools import (  # NOQA
+    pytest_generate_tests_for_pyopencl as pytest_generate_tests,
+)
+
 
 def pytest_addoption(parser):
     """Add extra command line options.
@@ -37,3 +42,11 @@ def pytest_addoption(parser):
 def longrun(request):
     if not request.config.option.longrun:
         pytest.skip("needs --longrun option to run")
+
+
+@pytest.fixture(scope='session')
+def requires_pypvfmm(request):
+    try:
+        import pypvfmm  # noqa: F401
+    except ImportError:
+        pytest.skip("needs pypvfmm to run")

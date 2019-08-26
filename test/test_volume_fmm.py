@@ -34,10 +34,6 @@ import pyopencl as cl
 
 from functools import partial
 
-from pyopencl.tools import (  # NOQA
-    pytest_generate_tests_for_pyopencl as pytest_generate_tests,
-)
-
 import logging
 
 logger = logging.getLogger(__name__)
