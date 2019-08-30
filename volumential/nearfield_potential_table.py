@@ -898,7 +898,7 @@ class NearFieldInteractionTable(object):
                 resid = np.max(np.abs(data1 - data0)) / np.max(np.abs(data1))
                 data0 = data1
 
-                if resid < table_tol and resid >= 0:
+                if abs(resid) < table_tol:
                     logger.warn(
                         "Adaptive level refinement "
                         "converged at level %d with residual %e" % (
@@ -954,7 +954,7 @@ class NearFieldInteractionTable(object):
                 resid = np.max(np.abs(data1 - data0)) / np.max(np.abs(data1))
                 data0 = data1
 
-                if resid < table_tol and resid >= 0:
+                if abs(resid) < table_tol:
                     logger.warn(
                         "Adaptive quadrature "
                         "converged at order %d with residual %e" % (
