@@ -407,7 +407,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
             # may result in suboptimal performance.
             ncpus = os.cpu_count()
         knl = self.get_kernel()
-        knl = loopy.split_iname(knl, "tbox", ncpus, inner_tag="l.0")
+        knl = loopy.split_iname(knl, "tbox", ncpus, inner_tag="g.0")
         return knl
 
     def __call__(self, queue, **kwargs):
