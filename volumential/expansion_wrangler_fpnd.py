@@ -25,6 +25,7 @@ THE SOFTWARE.
 import numpy as np
 import logging
 import pyopencl as cl
+from pytools.obj_array import make_obj_array
 
 # from pytools import memoize_method
 from volumential.nearfield_potential_table import NearFieldInteractionTable
@@ -974,7 +975,7 @@ class FPNDFMMLibExpansionWrangler(
     ):
         pot = self.output_zeros()
         if len(pot.shape) == 1:
-            pot = [pot, ]
+            pot = make_obj_array([pot, ])
         events = []
         for i in range(len(self.code.out_kernels)):
             # print("processing near-field of out_kernel", i)
@@ -992,7 +993,8 @@ class FPNDFMMLibExpansionWrangler(
             if isinstance(out_pot, cl.array.Array):
                 out_pot.finish()
 
-        # single out_kernel
+        # boxtree.pyfmmlib_integration handles things diffferently
+        # when out_kernels has only one element
         if len(pot) == 1:
             pot = pot[0]
 

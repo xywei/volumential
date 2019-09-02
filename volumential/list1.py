@@ -474,6 +474,8 @@ class NearFieldFromCSR(NearFieldEvalBase):
             assert isinstance(result, np.ndarray)
             result = res['result'].get(queue)
 
+        logger.info("list1 evaluation finished")
+
         # check for data integrity
         # if not (np.max(np.abs(out_pot.get()))) < 100:
         #    import pudb; pu.db

@@ -82,9 +82,13 @@ def drive_volume_fmm(
     if isinstance(expansion_wrangler, FPNDSumpyExpansionWrangler):
         assert isinstance(src_weights, cl.array.Array)
         assert isinstance(src_func, cl.array.Array)
+
     elif isinstance(expansion_wrangler, FPNDFMMLibExpansionWrangler):
+
+        traversal = traversal.get(wrangler.queue)
+
         if isinstance(src_weights, cl.array.Array):
-            src_weights = src_weights.get()
+            src_weights = src_weights.get(wrangler.queue)
         if isinstance(src_func, cl.array.Array):
             src_func = src_func.get()
 
