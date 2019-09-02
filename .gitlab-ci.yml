@@ -11,7 +11,7 @@ Python 3 POCL:
   script:
   - export PY_EXE=python3
   - export PYOPENCL_TEST=portable
-  - export EXTRA_INSTALL="pybind11 numpy pytest scipy mako wheel"
+  - export EXTRA_INSTALL="pybind11 cython numpy pytest scipy mako wheel"
   - git submodule sync && git submodule update --init --recursive --remote
   - ((cd contrib/meshgen11_dealii/; ./build.sh) && echo "Using meshgen11_dealii.") || (echo "Using boxtree for meshgen.")
   - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/master/build-and-test-py-project.sh
@@ -27,7 +27,7 @@ Documentation Sphinx:
   script:
   - export PY_EXE=python3
   - export PYOPENCL_TEST=portable
-  - export EXTRA_INSTALL="pybind11 numpy pytest scipy mako wheel"
+  - export EXTRA_INSTALL="pybind11 cython numpy pytest scipy mako wheel"
   - git submodule sync && git submodule update --init --recursive --remote
   - ((cd contrib/meshgen11_dealii/; ./build.sh) && echo "Using meshgen11_dealii.") || (echo "Using boxtree for meshgen.")
   - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/master/build-py-project.sh
