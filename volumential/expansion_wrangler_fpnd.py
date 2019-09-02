@@ -512,8 +512,7 @@ class FPNDSumpyExpansionWrangler(
             self, target_boxes, source_box_starts, source_box_lists, src_weights
         )
 
-
-# }}} End direct evaluation of p2p interactions
+    # }}} End direct evaluation of p2p interactions
 
 # }}} End sumpy backend
 
@@ -567,16 +566,24 @@ class FPNDFMMLibExpansionWrangler(
 
     Much of this class is borrowed from pytential.qbx.fmmlib.
     """
-    def __init__(self, code_container, queue, tree, dtype,
+    # {{{ constructor
+    
+    def __init__(self, code_container, queue, tree,
+            near_field_table, dtype,
             fmm_level_to_order,
-            source_extra_kwargs,
+            quad_order,
+            source_extra_kwargs=None,
             kernel_extra_kwargs=None,
+            self_extra_kwargs=None,
             *args, **kwargs):
         self.code = code_container
         self.queue = queue
 
+        tree = tree.get(queue)
         self.tree = tree
+
         self.dtype = dtype
+        self.quad_order = quad_order
 
         # {{{ digest out_kernels
 
@@ -634,6 +641,120 @@ class FPNDFMMLibExpansionWrangler(
 
         # }}}
 
+        # {{{ table setup
+        # TODO put this part into the inteferce class
+        
+        self.near_field_table = {}
+        # list of tables for a single out kernel
+        if isinstance(near_field_table, list):
+            assert len(self.code.out_kernels) == 1
+            self.near_field_table[
+                self.code.out_kernels[0].__repr__()
+            ] = near_field_table
+            self.n_tables = len(near_field_table)
+
+        # single table
+        elif isinstance(near_field_table, NearFieldInteractionTable):
+            assert len(self.code.out_kernels) == 1
+            self.near_field_table[self.code.out_kernels[0].__repr__()] = [
+                near_field_table
+            ]
+            self.n_tables = 1
+
+        # dictionary of lists of tables
+        elif isinstance(near_field_table, dict):
+            self.n_tables = dict()
+            for out_knl in self.code.out_kernels:
+                if repr(out_knl) not in near_field_table:
+                    raise RuntimeError(
+                            "Missing nearfield table for %s." % repr(out_knl))
+                if isinstance(near_field_table[repr(out_knl)],
+                        NearFieldInteractionTable):
+                    near_field_table[repr(out_knl)] = [
+                            near_field_table[repr(out_knl)]]
+                else:
+                    assert isinstance(near_field_table[repr(out_knl)], list)
+
+                self.n_tables[repr(out_knl)] = len(near_field_table[repr(out_knl)])
+
+            self.near_field_table = near_field_table
+        else:
+            raise RuntimeError("Table type unrecognized.")
+
+        # TODO: make all parameters table-specific (allow using inhomogeneous tables)
+        kname = repr(self.code.out_kernels[0])
+        self.root_table_source_box_extent = (
+                self.near_field_table[kname][0].source_box_extent)
+        table_starting_level = np.round(
+            np.log(self.tree.root_extent / self.root_table_source_box_extent)
+            / np.log(2)
+            )
+        for kid in range(len(self.code.out_kernels)):
+            kname = self.code.out_kernels[kid].__repr__()
+            for lev, table in zip(
+                    range(len(self.near_field_table[kname])),
+                    self.near_field_table[kname]
+                    ):
+                assert table.quad_order == self.quad_order
+
+                if not table.is_built:
+                    raise RuntimeError(
+                        "Near field interaction table needs to be built "
+                        "prior to being used"
+                    )
+
+                table_root_extent = table.source_box_extent * 2 ** lev
+                assert (
+                    abs(self.root_table_source_box_extent - table_root_extent)
+                    < 1e-15
+                )
+
+                # If the kernel cannot be scaled,
+                # - tree_root_extent must be integral times of table_root_extent
+                # - n_tables must be sufficient
+                if not isinstance(self.n_tables, dict) and self.n_tables > 1:
+                    if (
+                        not abs(
+                            int(self.tree.root_extent / table_root_extent)
+                            * table_root_extent
+                            - self.tree.root_extent
+                        )
+                        < 1e-15
+                    ):
+                        raise RuntimeError(
+                            "Incompatible list of tables: the "
+                            "source_box_extent of the root table must "
+                            "divide the bounding box's extent by an integer."
+                        )
+
+            if not isinstance(self.n_tables, dict) and self.n_tables > 1:
+                # this checks that the boxes at the highest level are covered
+                if (
+                    not tree.nlevels
+                    <= len(self.near_field_table[kname]) + table_starting_level
+                ):
+                    raise RuntimeError(
+                        "Insufficient list of tables: the "
+                        "finest level mesh cells at level "
+                        + str(tree.nlevels)
+                        + " are not covered."
+                    )
+
+                # the check that the boxes at the coarsest level are covered is
+                # deferred until trav.target_boxes is passed when invoking
+                # eval_direct
+
+        if source_extra_kwargs is None:
+            source_extra_kwargs = {}
+
+        if kernel_extra_kwargs is None:
+            kernel_extra_kwargs = {}
+
+        if self_extra_kwargs is None:
+            self_extra_kwargs = {}
+
+        # }}} End table setup
+
         if not callable(fmm_level_to_order):
             raise TypeError("fmm_level_to_order not passed")
 
@@ -674,6 +795,284 @@ class FPNDFMMLibExpansionWrangler(
                 rotation_data=rotation_data,
 
                 ifgrad=ifgrad)
+
+    # }}} End constructor
+
+    # {{{ data vector utilities
+
+    def multipole_expansion_zeros(self):
+        return FMMLibExpansionWrangler.multipole_expansion_zeros(self)
+
+    def local_expansion_zeros(self):
+        return FMMLibExpansionWrangler.local_expansion_zeros(self)
+
+    def output_zeros(self):
+        return FMMLibExpansionWrangler.output_zeros(self)
+
+    def reorder_sources(self, source_array):
+        return FMMLibExpansionWrangler.reorder_sources(self, source_array)
+
+    def reorder_potentials(self, potentials):
+        return FMMLibExpansionWrangler.reorder_potentials(self, potentials)
+
+    def finalize_potentials(self, potentials):
+        # return potentials
+        return FMMLibExpansionWrangler.finalize_potentials(self, potentials)
+
+    # }}} End data vector utilities
+
+    # {{{ formation & coarsening of multipoles
+
+    def form_multipoles(self, level_start_source_box_nrs, source_boxes, src_weights):
+        return FMMLibExpansionWrangler.form_multipoles(
+            self, level_start_source_box_nrs, source_boxes, src_weights
+        )
+
+    def coarsen_multipoles(
+        self, level_start_source_parent_box_nrs, source_parent_boxes, mpoles
+    ):
+        return FMMLibExpansionWrangler.coarsen_multipoles(
+            self, level_start_source_parent_box_nrs, source_parent_boxes, mpoles
+        )
+
+    # }}} End formation & coarsening of multipoles
+
+    # {{{ direct evaluation of near field interactions
+
+    def eval_direct_single_out_kernel(
+        self,
+        out_pot,
+        out_kernel,
+        target_boxes,
+        neighbor_source_boxes_starts,
+        neighbor_source_boxes_lists,
+        mode_coefs,
+    ):
+
+        # NOTE: mode_coefs are similar to source_weights BUT
+        # do not include quadrature weights (purely function
+        # expansiona coefficients)
+
+        # NOTE: inputs should be all on the device main memory (cl.Arrays)
+
+        kname = out_kernel.__repr__()
+
+        if isinstance(self.n_tables, int) and self.n_tables > 1:
+            use_multilevel_tables = True
+        elif isinstance(self.n_tables, dict) and self.n_tables[kname] > 1:
+            use_multilevel_tables = True
+        else:
+            use_multilevel_tables = False
+
+        if use_multilevel_tables:
+            # this checks that the boxes at the coarsest level
+            # and allows for some round-off error
+            min_lev = np.min(
+                self.tree.box_levels.get(self.queue)[target_boxes.get(self.queue)]
+            )
+            largest_cell_extent = self.tree.root_extent * 0.5 ** min_lev
+            if not self.near_field_table[kname][0].source_box_extent >= (
+                largest_cell_extent - 1e-15
+            ):
+                raise RuntimeError(
+                    "Insufficient list of tables: the "
+                    "coarsest level mesh cells at level "
+                    + str(min_lev)
+                    + " are not covered."
+                )
+
+        # table.case_encode
+        distinct_numbers = set()
+        for vec in self.near_field_table[kname][0].interaction_case_vecs:
+            for l in vec:
+                distinct_numbers.add(l)
+        base = len(range(min(distinct_numbers), max(distinct_numbers) + 1))
+        shift = -min(distinct_numbers)
+
+        case_indices_dev = cl.array.to_device(
+            self.queue, self.near_field_table[kname][0].case_indices
+        )
+
+        # table.data
+        table_data_combined = np.zeros(
+            (
+                len(self.near_field_table[kname]),
+                len(self.near_field_table[kname][0].data),
+            )
+        )
+        mode_nmlz_combined = np.zeros(
+            (
+                len(self.near_field_table[kname]),
+                len(self.near_field_table[kname][0].mode_normalizers),
+            )
+        )
+        for lev in range(len(self.near_field_table[kname])):
+            table_data_combined[lev, :] = self.near_field_table[kname][lev].data
+            mode_nmlz_combined[lev, :] = self.near_field_table[kname][
+                lev
+            ].mode_normalizers
+
+        logger.info(
+                "Table data for kernel "
+                + out_kernel.__repr__() + " congregated")
+
+        # The loop domain needs to know some info about the tables being used
+        table_data_shapes = {
+            "n_tables": len(self.near_field_table[kname]),
+            "n_q_points": self.near_field_table[kname][0].n_q_points,
+            "n_table_entries": len(self.near_field_table[kname][0].data),
+        }
+        assert table_data_shapes["n_q_points"] == len(
+            self.near_field_table[kname][0].mode_normalizers
+        )
+
+        from volumential.list1 import NearFieldFromCSR
+
+        near_field = NearFieldFromCSR(out_kernel, table_data_shapes)
+
+        res, evt = near_field(
+            self.queue,
+            result=out_pot,
+            box_centers=self.tree.box_centers,
+            box_levels=self.tree.box_levels,
+            box_source_counts_cumul=self.tree.box_source_counts_cumul,
+            box_source_starts=self.tree.box_source_starts,
+            box_target_counts_cumul=self.tree.box_target_counts_cumul,
+            box_target_starts=self.tree.box_target_starts,
+            case_indices=case_indices_dev,
+            encoding_base=base,
+            encoding_shift=shift,
+            mode_nmlz_combined=mode_nmlz_combined,
+            neighbor_source_boxes_starts=neighbor_source_boxes_starts,
+            root_extent=self.tree.root_extent,
+            neighbor_source_boxes_lists=neighbor_source_boxes_lists,
+            mode_coefs=mode_coefs,
+            table_data_combined=table_data_combined,
+            target_boxes=target_boxes,
+            table_root_extent=self.root_table_source_box_extent,
+        )
+
+        if isinstance(out_pot, cl.array.Array):
+            assert res is out_pot
+            # FIXME: lazy evaluation sometimes returns incorrect results
+            res.finish()
+        else:
+            assert isinstance(out_pot, np.ndarray)
+            out_pot = res
+
+        # sorted_target_ids=self.tree.user_source_ids,
+        # user_source_ids=self.tree.user_source_ids)
+
+        return out_pot, evt
+
+    def eval_direct(
+        self,
+        target_boxes,
+        neighbor_source_boxes_starts,
+        neighbor_source_boxes_lists,
+        mode_coefs,
+    ):
+        pot = self.output_zeros()
+        if len(pot.shape) == 1:
+            pot = [pot, ]
+        events = []
+        for i in range(len(self.code.out_kernels)):
+            # print("processing near-field of out_kernel", i)
+            pot[i], evt = self.eval_direct_single_out_kernel(
+                pot[i],
+                self.code.out_kernels[i],
+                target_boxes,
+                neighbor_source_boxes_starts,
+                neighbor_source_boxes_lists,
+                mode_coefs,
+            )
+            events.append(evt)
+
+        for out_pot in pot:
+            if isinstance(out_pot, cl.array.Array):
+                out_pot.finish()
+
+        # single out_kernel
+        if len(pot) == 1:
+            pot = pot[0]
+
+        return (pot, SumpyTimingFuture(self.queue, events))
+
+    # }}} End direct evaluation of near field interactions
+
+    # {{{ downward pass of fmm
+
+    def multipole_to_local(
+        self,
+        level_start_target_box_nrs,
+        target_boxes,
+        src_box_starts,
+        src_box_lists,
+        mpole_exps,
+    ):
+        return FMMLibExpansionWrangler.multipole_to_local(
+            self,
+            level_start_target_box_nrs,
+            target_boxes,
+            src_box_starts,
+            src_box_lists,
+            mpole_exps,
+        )
+
+    def eval_multipoles(
+        self, target_boxes_by_source_level, source_boxes_by_level, mpole_exps
+    ):
+        return FMMLibExpansionWrangler.eval_multipoles(
+            self, target_boxes_by_source_level, source_boxes_by_level, mpole_exps
+        )
+
+    def form_locals(
+        self,
+        level_start_target_or_target_parent_box_nrs,
+        target_or_target_parent_boxes,
+        starts,
+        lists,
+        src_weights,
+    ):
+        return FMMLibExpansionWrangler.form_locals(
+            self,
+            level_start_target_or_target_parent_box_nrs,
+            target_or_target_parent_boxes,
+            starts,
+            lists,
+            src_weights,
+        )
+
+    def refine_locals(
+        self,
+        level_start_target_or_target_parent_box_nrs,
+        target_or_target_parent_boxes,
+        local_exps,
+    ):
+        return FMMLibExpansionWrangler.refine_locals(
+            self,
+            level_start_target_or_target_parent_box_nrs,
+            target_or_target_parent_boxes,
+            local_exps,
+        )
+
+    def eval_locals(self, level_start_target_box_nrs, target_boxes, local_exps):
+        return FMMLibExpansionWrangler.eval_locals(
+            self, level_start_target_box_nrs, target_boxes, local_exps
+        )
+
+    # }}} End downward pass of fmm
+
+    # {{{ direct evaluation of p2p (discrete) interactions
+
+    def eval_direct_p2p(
+        self, target_boxes, source_box_starts, source_box_lists, src_weights
+    ):
+        return FMMLibExpansionWrangler.eval_direct(
+            self, target_boxes, source_box_starts, source_box_lists, src_weights
+        )
+
+    # }}} End direct evaluation of p2p interactions
 
     @staticmethod
     def is_supported_helmknl(knl):

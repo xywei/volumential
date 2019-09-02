@@ -31,8 +31,11 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+import pyopencl as cl
 from boxtree.fmm import TimingRecorder
 from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
+from volumential.expansion_wrangler_fpnd import (
+        FPNDSumpyExpansionWrangler, FPNDFMMLibExpansionWrangler)
 
 import numpy as np
 
@@ -75,6 +78,15 @@ def drive_volume_fmm(
 
     recorder = TimingRecorder()
     logger.info("start fmm")
+
+    if isinstance(expansion_wrangler, FPNDSumpyExpansionWrangler):
+        assert isinstance(src_weights, cl.array.Array)
+        assert isinstance(src_func, cl.array.Array)
+    elif isinstance(expansion_wrangler, FPNDFMMLibExpansionWrangler):
+        if isinstance(src_weights, cl.array.Array):
+            src_weights = src_weights.get()
+        if isinstance(src_func, cl.array.Array):
+            src_func = src_func.get()
 
     logger.debug("reorder source weights")
 
@@ -359,6 +371,11 @@ def interpolate_volume_potential(
     dtype = wrangler.dtype
     coord_dtype = tree.coord_dtype
     n_points = len(target_points[0])
+
+    from volumential.expansion_wrangler_fpnd import FPNDFMMLibExpansionWrangler
+    if isinstance(wrangler, FPNDFMMLibExpansionWrangler):
+        tree = tree.to_device(queue)
+        traversal = traversal.to_device(queue)
 
     assert dim == len(target_points)
 

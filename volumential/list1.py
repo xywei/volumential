@@ -29,6 +29,7 @@ __doc__ = """
 
 import numpy as np
 import loopy
+import pyopencl as cl
 
 from sumpy.tools import KernelCacheWrapper
 
@@ -466,8 +467,12 @@ class NearFieldFromCSR(NearFieldEvalBase):
             table_root_extent=table_root_extent,
         )
 
-        assert result is res["result"]
-        result.add_event(evt)
+        res['result'].add_event(evt)
+        if isinstance(result, cl.array.Array):
+            assert result is res["result"]
+        else:
+            assert isinstance(result, np.ndarray)
+            result = res['result'].get(queue)
 
         # check for data integrity
         # if not (np.max(np.abs(out_pot.get()))) < 100:
