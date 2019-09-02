@@ -34,6 +34,10 @@ from sumpy.fmm import SumpyExpansionWrangler, \
         SumpyTimingFuture, SumpyExpansionWranglerCodeContainer
 from boxtree.pyfmmlib_integration import FMMLibExpansionWrangler
 
+from sumpy.kernel import (
+        LaplaceKernel, HelmholtzKernel, AxisTargetDerivative,
+        DirectionalSourceDerivative)
+
 logger = logging.getLogger(__name__)
 
 
@@ -516,6 +520,35 @@ class FPNDSumpyExpansionWrangler(
 # {{{ fmmlib backend (for laplace, helmholtz)
 
 
+class FPNDFMMLibExpansionWranglerCodeContainer(
+        ExpansionWranglerCodeContainerInterface,
+        ):
+    """Objects of this type serve as a place to keep the code needed
+    for ExpansionWrangler if it is using fmmlib to perform multipole
+    expansion and manipulations.
+
+    The interface is augmented with unecessary arguments acting as
+    placeholders, such that it can be a drop-in replacement of sumpy
+    backend.
+    """
+    def __init__(self, cl_context,
+            multipole_expansion_factory, local_expansion_factory,
+            out_kernels, *args, **kwargs):
+        self.cl_context = cl_context
+        self.multipole_expansion_factory = multipole_expansion_factory
+        self.local_expansion_factory = local_expansion_factory
+
+        self.out_kernels = out_kernels
+
+    def get_wrangler(self, queue, tree, dtype, fmm_level_to_order,
+            source_extra_kwargs={}, kernel_extra_kwargs=None,
+            *args, **kwargs,):
+        return FPNDFMMLibExpansionWrangler(self, queue, tree,
+                dtype, fmm_level_to_order,
+                source_extra_kwargs, kernel_extra_kwargs,
+                *args, **kwargs)
+
+
 class FPNDFMMLibExpansionWrangler(
         ExpansionWranglerInterface, FMMLibExpansionWrangler):
     """This expansion wrangler uses "fpnd" strategy. That is, Far field is
@@ -532,11 +565,123 @@ class FPNDFMMLibExpansionWrangler(
         Keyword arguments to be passed to interactions that involve
         expansions, but not the source field.
 
-    .. attribute:: self_extra_kwargs
-
-        Keyword arguments to be passed for handling
-        self interactions (singular integrals)
+    Much of this class is borrowed from pytential.qbx.fmmlib.
     """
+    def __init__(self, code_container, queue, tree, dtype,
+            fmm_level_to_order,
+            source_extra_kwargs,
+            kernel_extra_kwargs=None,
+            *args, **kwargs):
+        self.code = code_container
+        self.queue = queue
+
+        self.tree = tree
+        self.dtype = dtype
+
+        # {{{ digest out_kernels
+
+        ifgrad = False
+        outputs = []
+        source_deriv_names = []
+        k_names = []
+
+        for out_knl in self.code.out_kernels:
+
+            if self.is_supported_helmknl(out_knl):
+                outputs.append(())
+                no_target_deriv_knl = out_knl
+
+            elif (isinstance(out_knl, AxisTargetDerivative)
+                    and self.is_supported_helmknl(out_knl.inner_kernel)):
+                outputs.append((out_knl.axis,))
+                ifgrad = True
+                no_target_deriv_knl = out_knl.inner_kernel
+
+            else:
+                raise ValueError(
+                        "only the 2/3D Laplace and Helmholtz kernel "
+                        "and their derivatives are supported")
+
+            source_deriv_names.append(no_target_deriv_knl.dir_vec_name
+                    if isinstance(no_target_deriv_knl, DirectionalSourceDerivative)
+                    else None)
+
+            base_knl = out_knl.get_base_kernel()
+            k_names.append(base_knl.helmholtz_k_name
+                    if isinstance(base_knl, HelmholtzKernel)
+                    else None)
+
+        self.outputs = outputs
+
+        from pytools import is_single_valued
+
+        if not is_single_valued(source_deriv_names):
+            raise ValueError("not all kernels passed are the same in "
+                    "whether they represent a source derivative")
+
+        source_deriv_name = source_deriv_names[0]
+
+        if not is_single_valued(k_names):
+            raise ValueError("not all kernels passed have the same "
+                    "Helmholtz parameter")
+
+        k_name = k_names[0]
+
+        if k_name is None:
+            helmholtz_k = 0
+        else:
+            helmholtz_k = kernel_extra_kwargs[k_name]
+
+        # }}}
+
+        if not callable(fmm_level_to_order):
+            raise TypeError("fmm_level_to_order not passed")
+
+        dipole_vec = None
+        if source_deriv_name is not None:
+            dipole_vec = np.array([
+                    d_i.get(queue=queue)
+                    for d_i in source_extra_kwargs[source_deriv_name]],
+                    order="F")
+
+        def inner_fmm_level_to_nterms(tree, level):
+            if helmholtz_k == 0:
+                return fmm_level_to_order(
+                        LaplaceKernel(tree.dimensions),
+                        frozenset(), tree, level)
+            else:
+                return fmm_level_to_order(
+                        HelmholtzKernel(tree.dimensions),
+                        frozenset([("k", helmholtz_k)]), tree, level)
+
+        rotation_data = None
+        if 'traversal' in kwargs:
+            # add rotation data if traversal is passed as a keyword argument
+            from boxtree.pyfmmlib_integration import FMMLibRotationData
+            rotation_data = FMMLibRotationData(self.queue, kwargs['traversal'])
+        else:
+            logger.warning("Rotation data is not utilized since traversal is "
+                           "not known to FPNDFMMLibExpansionWrangler.")
+
+        FMMLibExpansionWrangler.__init__(
+                self, tree,
+
+                helmholtz_k=helmholtz_k,
+                dipole_vec=dipole_vec,
+                dipoles_already_reordered=True,
+
+                fmm_level_to_nterms=inner_fmm_level_to_nterms,
+                rotation_data=rotation_data,
+
+                ifgrad=ifgrad)
+
+    @staticmethod
+    def is_supported_helmknl(knl):
+        if isinstance(knl, DirectionalSourceDerivative):
+            knl = knl.inner_kernel
+
+        return (isinstance(knl, (LaplaceKernel, HelmholtzKernel))
+                and knl.dim in (2, 3))
 
 
 # }}} End fmmlib backend (for laplace, helmholtz)
