@@ -236,10 +236,11 @@ def laplace_problem(ctx_getter):
     # mpole_expn_class = VolumeTaylorMultipoleExpansion
 
     exclude_self = True
-    from volumential.expansion_wrangler_interface \
-            import ExpansionWranglerCodeContainer
+    from volumential.expansion_wrangler_fpnd import (
+            FPNDExpansionWranglerCodeContainer, 
+            FPNDExpansionWrangler)
 
-    wcc = ExpansionWranglerCodeContainer(
+    wcc = FPNDExpansionWranglerCodeContainer(
         ctx,
         partial(mpole_expn_class, knl),
         partial(local_expn_class, knl),
@@ -252,8 +253,6 @@ def laplace_problem(ctx_getter):
         self_extra_kwargs = {"target_to_source": target_to_source}
     else:
         self_extra_kwargs = {}
-
-    from volumential.expansion_wrangler_fpnd import FPNDExpansionWrangler
 
     wrangler = FPNDExpansionWrangler(
         code_container=wcc,

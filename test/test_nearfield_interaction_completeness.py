@@ -145,18 +145,17 @@ def drive_test_completeness(dim, q_order):
     local_expn_class = VolumeTaylorLocalExpansion
     mpole_expn_class = VolumeTaylorMultipoleExpansion
 
-    from volumential.expansion_wrangler_interface \
-            import ExpansionWranglerCodeContainer
+    from volumential.expansion_wrangler_fpnd import(
+            FPNDExpansionWranglerCodeContainer,
+            FPNDExpansionWrangler)
 
-    wcc = ExpansionWranglerCodeContainer(
+    wcc = FPNDExpansionWranglerCodeContainer(
         ctx,
         partial(mpole_expn_class, knl),
         partial(local_expn_class, knl),
         out_kernels,
         exclude_self=True,
     )
-
-    from volumential.expansion_wrangler_fpnd import FPNDExpansionWrangler
 
     wrangler = FPNDExpansionWrangler(
         code_container=wcc,

@@ -23,13 +23,16 @@ THE SOFTWARE.
 """
 
 import numpy as np
+import logging
 import pyopencl as cl
 
 # from pytools import memoize_method
 from volumential.nearfield_potential_table import NearFieldInteractionTable
-from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
-
-import logging
+from volumential.expansion_wrangler_interface import (
+        ExpansionWranglerInterface, ExpansionWranglerCodeContainerInterface)
+from sumpy.fmm import SumpyExpansionWrangler, \
+        SumpyTimingFuture, SumpyExpansionWranglerCodeContainer
+from boxtree.pyfmmlib_integration import FMMLibExpansionWrangler
 
 logger = logging.getLogger(__name__)
 
@@ -38,12 +41,29 @@ def level_to_rscale(tree, level):
     return tree.root_extent * (2 ** -level)
 
 
-from sumpy.fmm import SumpyExpansionWrangler, SumpyTimingFuture
+# {{{ sumpy backend
 
 
-class FPNDExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrangler):
+class FPNDSumpyExpansionWranglerCodeContainer(
+        ExpansionWranglerCodeContainerInterface,
+        SumpyExpansionWranglerCodeContainer):
+    """Objects of this type serve as a place to keep the code needed
+    for ExpansionWrangler if it is using sumpy to perform multipole
+    expansion and manipulations.
+
+    Since :class:`SumpyExpansionWrangler` necessarily must have a
+    :class:`pyopencl.CommandQueue`, but this queue is allowed to be
+    more ephemeral than the code, the code's lifetime
+    is decoupled by storing it in this object.
+    """
+    get_wrangler = SumpyExpansionWranglerCodeContainer.get_wrangler
+
+
+class FPNDSumpyExpansionWrangler(
+        ExpansionWranglerInterface, SumpyExpansionWrangler):
     """This expansion wrangler uses "fpnd" strategy. That is, Far field is
     computed via Particle approximation and Near field is computed Directly.
+    The FMM is performed using sumpy backend.
 
     .. attribute:: source_extra_kwargs
 
@@ -490,5 +510,45 @@ class FPNDExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrangler):
 
 
 # }}} End direct evaluation of p2p interactions
+
+# }}} End sumpy backend
+
+# {{{ fmmlib backend (for laplace, helmholtz)
+
+
+class FPNDFMMLibExpansionWrangler(
+        ExpansionWranglerInterface, FMMLibExpansionWrangler):
+    """This expansion wrangler uses "fpnd" strategy. That is, Far field is
+    computed via Particle approximation and Near field is computed Directly.
+    The FMM is performed using FMMLib backend.
+
+    .. attribute:: source_extra_kwargs
+
+        Keyword arguments to be passed to interactions that involve
+        the source field.
+
+    .. attribute:: kernel_extra_kwargs
+
+        Keyword arguments to be passed to interactions that involve
+        expansions, but not the source field.
+
+    .. attribute:: self_extra_kwargs
+
+        Keyword arguments to be passed for handling
+        self interactions (singular integrals)
+    """
+
+
+# }}} End fmmlib backend (for laplace, helmholtz)
+
+
+class FPNDExpansionWranglerCodeContainer(FPNDSumpyExpansionWranglerCodeContainer):
+    """The default code container.
+    """
+
+
+class FPNDExpansionWrangler(FPNDSumpyExpansionWrangler):
+    """The default wrangler class.
+    """
 
 # vim: filetype=pyopencl:foldmethod=marker

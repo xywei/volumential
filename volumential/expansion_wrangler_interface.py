@@ -203,28 +203,20 @@ class ExpansionWranglerInterface(metaclass=ABCMeta):
 
 # }}} End expansion wrangler interface
 
-# {{{ sumpy based expansion wrangler code container
-
-# from sumpy import (P2EFromSingleBox, P2EFromCSR, E2PFromSingleBox, E2PFromCSR,
-# P2PFromCSR, E2EFromCSR, E2EFromChildren, E2EFromParent)
-
-# from pytools import memoize_method
-
-from sumpy.fmm import SumpyExpansionWranglerCodeContainer
+# {{{ code container interface
 
 
-class ExpansionWranglerCodeContainer(SumpyExpansionWranglerCodeContainer):
-    """Objects of this type serve as a place to keep the code needed
-    for ExpansionWrangler if it is using sumpy to perform multipole
-    expansion and manipulations.
-
-    Since :class:`SumpyExpansionWrangler` necessarily must have a
-    :class:`pyopencl.CommandQueue`, but this queue is allowed to be
-    more ephemeral than the code, the code's lifetime
-    is decoupled by storing it in this object.
+class ExpansionWranglerCodeContainerInterface(metaclass=ABCMeta):
     """
+        Abstract expansion code container interface.
+        The interface is adapted from, and stays compatible with boxtree/fmm.
+    """
+    @abstractmethod
+    def get_wrangler(self, *args, **kwargs):
+        """Makes a wrangler object.
+        """
+        pass
 
-
-# }}} End sumpy based expansion wrangler code container
+# }}} End code container interface
 
 # vim: filetype=pyopencl:fdm=marker
