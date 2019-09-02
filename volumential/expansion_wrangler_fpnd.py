@@ -567,7 +567,7 @@ class FPNDFMMLibExpansionWrangler(
     Much of this class is borrowed from pytential.qbx.fmmlib.
     """
     # {{{ constructor
-    
+
     def __init__(self, code_container, queue, tree,
             near_field_table, dtype,
             fmm_level_to_order,
@@ -643,7 +643,7 @@ class FPNDFMMLibExpansionWrangler(
 
         # {{{ table setup
         # TODO put this part into the inteferce class
-        
+
         self.near_field_table = {}
         # list of tables for a single out kernel
         if isinstance(near_field_table, list):
