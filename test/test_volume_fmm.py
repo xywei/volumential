@@ -237,7 +237,7 @@ def laplace_problem(ctx_getter):
 
     exclude_self = True
     from volumential.expansion_wrangler_fpnd import (
-            FPNDExpansionWranglerCodeContainer, 
+            FPNDExpansionWranglerCodeContainer,
             FPNDExpansionWrangler)
 
     wcc = FPNDExpansionWranglerCodeContainer(
