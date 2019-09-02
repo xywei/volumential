@@ -272,9 +272,13 @@ local_expn_class = expn_factory.get_local_expansion_class(knl)
 mpole_expn_class = expn_factory.get_multipole_expansion_class(knl)
 
 exclude_self = True
-from volumential.expansion_wrangler_interface import ExpansionWranglerCodeContainer
 
-wcc = ExpansionWranglerCodeContainer(
+from volumential.expansion_wrangler_fpnd import (
+        FPNDExpansionWranglerCodeContainer,
+        FPNDExpansionWrangler
+        )
+
+wcc = FPNDExpansionWranglerCodeContainer(
     ctx,
     partial(mpole_expn_class, knl),
     partial(local_expn_class, knl),
@@ -287,8 +291,6 @@ if exclude_self:
     self_extra_kwargs = {"target_to_source": target_to_source}
 else:
     self_extra_kwargs = {}
-
-from volumential.expansion_wrangler_fpnd import FPNDExpansionWrangler
 
 wrangler = FPNDExpansionWrangler(
     code_container=wcc,
