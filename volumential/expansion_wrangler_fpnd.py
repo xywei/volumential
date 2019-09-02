@@ -301,7 +301,10 @@ class FPNDSumpyExpansionWrangler(
         # do not include quadrature weights (purely function
         # expansiona coefficients)
 
-        # NOTE: inputs should be all on the device main memory (cl.Arrays)
+        if 0:
+            print("Returns range for list1")
+            out_pot[:] = cl.array.to_device(self.queue, np.arange(len(out_pot)))
+            return out_pot, None
 
         kname = out_kernel.__repr__()
 
@@ -799,6 +802,25 @@ class FPNDFMMLibExpansionWrangler(
 
     # }}} End constructor
 
+# {{{ scale factor for fmmlib
+
+    def get_scale_factor(self):
+        if self.eqn_letter == "l" and self.dim == 2:
+            scale_factor = -1/(2*np.pi)
+        elif self.eqn_letter == "h" and self.dim == 2:
+            scale_factor = 1
+        elif self.eqn_letter in ["l", "h"] and self.dim == 3:
+            scale_factor = 1/(4*np.pi)
+        else:
+            raise NotImplementedError(
+                    "scale factor for pyfmmlib %s for %d dimensions" % (
+                        self.eqn_letter,
+                        self.dim))
+
+        return scale_factor
+
+# }}} End scale factor for fmmlib
+
     # {{{ data vector utilities
 
     def multipole_expansion_zeros(self):
@@ -854,7 +876,10 @@ class FPNDFMMLibExpansionWrangler(
         # do not include quadrature weights (purely function
         # expansiona coefficients)
 
-        # NOTE: inputs should be all on the device main memory (cl.Arrays)
+        if 0:
+            print("Returns range for list1")
+            out_pot[:] = np.arange(len(out_pot))
+            return out_pot, None
 
         kname = out_kernel.__repr__()
 
@@ -964,7 +989,8 @@ class FPNDFMMLibExpansionWrangler(
         # sorted_target_ids=self.tree.user_source_ids,
         # user_source_ids=self.tree.user_source_ids)
 
-        return out_pot, evt
+        scale_factor = self.get_scale_factor()
+        return out_pot / scale_factor, evt
 
     def eval_direct(
         self,

@@ -139,7 +139,9 @@ def drive_volume_fmm(
     recorder.add("eval_direct", timing_future)
 
     # Return list 1 only, for debugging
+    # 'list1_only' takes precedence over 'exclude_list1'
     if 'list1_only' in kwargs and kwargs['list1_only']:
+
         logger.debug("reorder potentials")
         result = wrangler.reorder_potentials(potentials)
 
