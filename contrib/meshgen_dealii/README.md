@@ -1,5 +1,7 @@
 # Mesh generation via Deal.II
 
+**This module is deprecated and no longer maintained. Use `meshgen11\_dealii` instead**
+
 `meshgen` generates a set of quadrature points and weights using `Deal.II`
 
 ## Build
