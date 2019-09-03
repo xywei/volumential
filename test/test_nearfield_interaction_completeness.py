@@ -23,7 +23,6 @@ THE SOFTWARE.
 """
 
 import subprocess
-import pytest
 import numpy as np
 import pyopencl as cl
 import pyopencl.array  # NOQA
