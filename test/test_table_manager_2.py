@@ -20,6 +20,8 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
+import subprocess
+import pytest
 import numpy as np
 import volumential as vm
 from volumential.table_manager import NearFieldInteractionTableManager
@@ -120,7 +122,7 @@ def drive_test_direct_quad_neighbor_box(q_order, case_id):
         v3 = 0
         for ids in range(nft.n_q_points):
             mode = nft.get_mode(ids)
-            vv = direct_quad(mode, nft.q_points[it])
+            vv = direct_quad(mode, target)
             print(ids, it, vv)
             v3 += vv
 
@@ -129,10 +131,21 @@ def drive_test_direct_quad_neighbor_box(q_order, case_id):
         assert np.abs(v1 - v3) < 1e-6
 
 
-def test_direct_quad_neighbor_box(longrun):
-    q_order = 4
+@pytest.mark.parametrize("q_order", [1, ])
+def test_direct_quad_neighbor_box(q_order):
+    subprocess.check_call(['rm', '-f', 'nft.hdf5'])
     for case_id in range(len(table.interaction_case_vecs)):
         drive_test_direct_quad_neighbor_box(q_order, case_id)
+
+
+@pytest.mark.parametrize("q_order", [2, 3])
+def test_direct_quad_neighbor_box_longrun(longrun, q_order):
+    subprocess.check_call(['rm', '-f', 'nft.hdf5'])
+    for case_id in range(len(table.interaction_case_vecs)):
+        drive_test_direct_quad_neighbor_box(q_order, case_id)
+
+
+# fdm=marker:ft=pyopencl
 
 
 # fdm=marker:ft=pyopencl

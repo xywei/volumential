@@ -20,7 +20,9 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
+import subprocess
 import numpy as np
+import pytest
 import volumential as vm
 from volumential.table_manager import NearFieldInteractionTableManager
 
@@ -158,7 +160,7 @@ def drive_test_direct_quad_same_box(q_order):
         v3 = 0
         for ids in range(nft.n_q_points):
             mode = nft.get_mode(ids)
-            vv = direct_quad(mode, nft.q_points[it])
+            vv = direct_quad(mode, target)
             print(ids, it, vv)
             v3 += vv
 
@@ -167,9 +169,16 @@ def drive_test_direct_quad_same_box(q_order):
         assert np.abs(v1 - v3) < 1e-6
 
 
-def test_direct_quad(longrun):
-    for q in range(1, 5):
-        drive_test_direct_quad_same_box(q)
+@pytest.mark.parametrize("q_order", [1, 2])
+def test_direct_quad(q_order):
+    subprocess.check_call(['rm', '-f', 'nft.hdf5'])
+    drive_test_direct_quad_same_box(q_order)
+
+
+@pytest.mark.parametrize("q_order", [3, 4, 5])
+def test_direct_quad_longrun(longrun, q_order):
+    subprocess.check_call(['rm', '-f', 'nft.hdf5'])
+    drive_test_direct_quad_same_box(q_order)
 
 
 # fdm=marker:ft=pyopencl
