@@ -155,7 +155,6 @@ def drive_test_direct_quad_same_box(q_order):
         target = nft.q_points[it]
         v1 = func(target[0], target[1])
         v2 = direct_quad(const_one_source_func, target)
-        """
         v3 = 0
         for ids in range(nft.n_q_points):
             mode = nft.get_mode(ids)
@@ -164,8 +163,8 @@ def drive_test_direct_quad_same_box(q_order):
             v3 += vv
 
         print(target, v1, v2, v3)
-        """
         assert np.abs(v1 - v2) < 2e-6
+        assert np.abs(v1 - v3) < 1e-6
 
 
 def test_direct_quad(longrun):
