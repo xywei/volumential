@@ -32,6 +32,9 @@ Mesh generation
 """
 
 import logging
+import numpy as np
+import pyopencl as cl
+from pytools.obj_array import make_obj_array
 
 logger = logging.getLogger(__name__)
 
@@ -188,8 +191,6 @@ except ImportError as e:
         # {{{ Meshgen via BoxTree
         logger.info("Using Meshgen via BoxTree interface.")
         from boxtree.tree_interactive_build import BoxTree, QuadratureOnBoxTree
-        import pyopencl as cl
-        import numpy as np
 
         def greet():
             return "Hello from Meshgen via BoxTree!"
@@ -264,3 +265,67 @@ else:
         MeshGen3D,
         make_uniform_cubic_grid,
     )
+
+
+# {{{ mesh utils
+
+def build_geometry_info(ctx, queue, dim, q_order, mesh,
+                             bbox=None, a=None, b=None):
+    """Build tree, traversal and other geo info for FMM computation,
+    given the box mesh over/encompassing the domain.
+
+    The bouding box can be specified in one of two ways:
+    1. via scalars a, b, dim-homogeneous ([a, b]^dim)
+    2. via bbox (e.g. np.array([[a1, b1], [a2, b2], [a3, b3]]))
+    """
+
+    if dim == 1:
+        if not isinstance(mesh, MeshGen1D):
+            raise ValueError()
+
+    if dim == 2:
+        if not isinstance(mesh, MeshGen2D):
+            raise ValueError()
+
+    elif dim == 3:
+        if not isinstance(mesh, MeshGen3D):
+            raise ValueError()
+
+    else:
+        raise ValueError("only supports 1 <= dim <= 3")
+
+    q_points = mesh.get_q_points()
+    q_weights = mesh.get_q_weights()
+    q_points_org = q_points  # noqa: F841
+    q_points = np.ascontiguousarray(np.transpose(q_points))
+
+    q_points = make_obj_array(
+            [cl.array.to_device(queue, q_points[i])
+                for i in range(dim)])
+    q_weights = cl.array.to_device(queue, q_weights)
+
+    if bbox is None:
+        assert np.isscalar(a) and np.isscalar(b)
+        bbox = np.array([[a, b], ] * dim)
+
+    from boxtree import TreeBuilder
+    tb = TreeBuilder(ctx)
+
+    tree, _ = tb(
+        queue,
+        particles=q_points,
+        targets=q_points,
+        bbox=bbox,
+        max_particles_in_box=q_order**dim * (2**dim) - 1,
+        kind="adaptive-level-restricted",
+    )
+
+    from boxtree.traversal import FMMTraversalBuilder
+    tg = FMMTraversalBuilder(ctx)
+    trav, _ = tg(queue, tree)
+
+    return q_points, q_weights, tree, trav
+
+# }}} End mesh utils
+
+# vim: ft=pyopencl
