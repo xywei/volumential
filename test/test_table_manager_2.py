@@ -117,7 +117,6 @@ def drive_test_direct_quad_neighbor_box(q_order, case_id):
         target = nft.find_target_point(it, case_id)
         v1 = u[it]
         v2 = direct_quad(const_one_source_func, target)
-        """
         v3 = 0
         for ids in range(nft.n_q_points):
             mode = nft.get_mode(ids)
@@ -126,8 +125,8 @@ def drive_test_direct_quad_neighbor_box(q_order, case_id):
             v3 += vv
 
         print(target, v1, v2, v3)
-        """
         assert np.abs(v1 - v2) < 2e-6
+        assert np.abs(v1 - v3) < 1e-6
 
 
 def test_direct_quad_neighbor_box(longrun):
