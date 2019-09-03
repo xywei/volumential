@@ -138,7 +138,7 @@ def test_direct_quad_neighbor_box(q_order):
         drive_test_direct_quad_neighbor_box(q_order, case_id)
 
 
-@pytest.mark.parametrize("q_order", [2, 3])
+@pytest.mark.parametrize("q_order", [2, ])
 def test_direct_quad_neighbor_box_longrun(longrun, q_order):
     subprocess.check_call(['rm', '-f', 'nft.hdf5'])
     for case_id in range(len(table.interaction_case_vecs)):

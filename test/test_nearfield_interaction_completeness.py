@@ -23,13 +23,14 @@ THE SOFTWARE.
 """
 
 import subprocess
+import pytest
 import numpy as np
 import pyopencl as cl
 import pyopencl.array  # NOQA
 from functools import partial
 
 
-def drive_test_completeness(dim, q_order):
+def drive_test_completeness(ctx, queue, dim, q_order):
 
     n_levels = 2  # 2^(n_levels-1) subintervals in 1D, must be at least 2
 
@@ -42,9 +43,6 @@ def drive_test_completeness(dim, q_order):
     def source_field(x):
         assert len(x) == dim
         return 1
-
-    ctx = cl.create_some_context()
-    queue = cl.CommandQueue(ctx)
 
     # {{{ generate quad points
 
@@ -179,12 +177,20 @@ def drive_test_completeness(dim, q_order):
         assert(abs(p - 2**dim) < 1e-8)
 
 
-def test_completeness_1():
-    drive_test_completeness(2, 1)
-    drive_test_completeness(3, 1)
+def test_completeness_1(ctx_getter):
+
+    ctx = ctx_getter()
+    queue = cl.CommandQueue(ctx)
+
+    drive_test_completeness(ctx, queue, 2, 1)
+    drive_test_completeness(ctx, queue, 3, 1)
 
 
-def test_completeness(longrun):
+def test_completeness(longrun, ctx_getter):
+
+    ctx = ctx_getter()
+    queue = cl.CommandQueue(ctx)
+
     for q in range(2, 4):
-        drive_test_completeness(2, q)
-        drive_test_completeness(3, q)
+        drive_test_completeness(ctx, queue, 2, q)
+        drive_test_completeness(ctx, queue, 3, q)
