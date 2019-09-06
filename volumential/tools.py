@@ -195,9 +195,16 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
         :arg target_points
         :arg extra_kernel_kwargs
         """
+        # handle target_points given as an obj_array of coords
+        if (isinstance(target_points, np.ndarray)
+                and target_points.dtype == np.object
+                and isinstance(target_points[0], cl.array.Array)):
+            target_points = cl.array.concatenate(
+                    target_points).reshape([self.dim, -1])
 
-        assert len(target_points) == self.dim
-        n_tgt_points = len(target_points[0])
+        assert target_points.shape[0] == self.dim
+
+        n_tgt_points = target_points[0].shape[0]
         for tgt_d in target_points:
             assert len(tgt_d) == n_tgt_points
 
