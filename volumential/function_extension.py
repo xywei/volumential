@@ -186,11 +186,22 @@ def compute_harmonic_extension(queue, target_discr,
 
     qbx_stick_out = qbx.copy(target_stick_out_factor=target_association_tolerance)
 
+    debugging_info['qbx'] = qbx_stick_out
+    debugging_info['representation'] = representation_sym
+    debugging_info['density'] = sigma
+
     ext_f = bind(
             (qbx_stick_out, target_discr),
             representation_sym)(queue, sigma=sigma).real
 
     # }}}
+
+    def eval_ext_f(target_discr):
+        return bind(
+            (qbx_stick_out, target_discr),
+            representation_sym)(queue, sigma=sigma).real
+
+    debugging_info['eval_ext_f'] = eval_ext_f
 
     return ext_f, debugging_info
 
