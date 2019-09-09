@@ -542,7 +542,7 @@ class FPNDFMMLibExpansionWranglerCodeContainer(
         self.local_expansion_factory = local_expansion_factory
 
         self.out_kernels = out_kernels
-        self.exclude_self=True
+        self.exclude_self = True
 
     def get_wrangler(self, queue, tree, dtype, fmm_level_to_order,
             source_extra_kwargs={}, kernel_extra_kwargs=None,
