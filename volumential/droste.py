@@ -1454,6 +1454,15 @@ class DrosteReduced(DrosteBase):
         return cheb_table
 
     def get_cache_key(self):
+        if self.reduce_by_symmetry.symmetry_tags is None:
+            # Bn: the full n-dimensional hyperoctahedral group
+            symmetry_info = 'B%d' % self.dim
+        else:
+            symmetry_info = "Span{%s}" % ",".join([
+                repr(tag) for tag in
+                sorted(self.reduce_by_symmetry.symmetry_tags)
+                ])
+
         return (
             type(self).__name__,
             str(self.dim) + "D",
@@ -1462,6 +1471,7 @@ class DrosteReduced(DrosteBase):
             "brick_order-" + str(self.nquad_points),
             "case-" + str(self.current_base_case),
             "kernel_id-" + str(self.get_kernel_id),
+            "symmetry-" + symmetry_info,
         )
 
     def __call__(self, queue, **kwargs):

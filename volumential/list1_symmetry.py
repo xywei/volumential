@@ -27,7 +27,12 @@ import math
 
 
 class SymmetryOperationBase(object):
-    pass
+    def __lt__(self, other):
+        if type(self) == type(other):
+            return self._index < other._index
+
+        # differnt operations in lexicographical order
+        return repr(self) < repr(other)
 
 
 class Flip(SymmetryOperationBase):
@@ -37,6 +42,7 @@ class Flip(SymmetryOperationBase):
 
     def __init__(self, iaxis):
         self.axis = iaxis
+        self._index = iaxis
 
     def __repr__(self):
         return "Flip(%d)" % self.axis
@@ -49,9 +55,10 @@ class Swap(SymmetryOperationBase):
 
     def __init__(self, iaxis, jaxis):
         self.axes = (iaxis, jaxis)
+        self._index = sorted(self.axes)
 
     def __repr__(self):
-        return "Swap(%d,%d)" % self.axes
+        return "Swap(%d,%d)" % tuple(sorted(self.axes))
 
 
 # }}} End symmetry operations
