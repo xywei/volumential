@@ -196,10 +196,32 @@ def compute_harmonic_extension(queue, target_discr,
 
     # }}}
 
+    # NOTE: matching is needed if using
+    # pytential.symbolic.pde.scalar.DirichletOperator
+    # but here we are using a representation that does not have null
+    # space for exterior Dirichlet problem
+    if loc_sign == 1 and False:
+        bdry_measure = bind(density_discr, sym.integral(dim, dim - 1, 1))(queue)
+
+        int_func_bdry = bind(qbx, sym.integral(dim, dim - 1, var("integrand")))(
+                queue, integrand=f)
+
+        solu_bdry = bind((qbx, density_discr),
+                representation_sym)(queue, sigma=sigma).real
+        int_solu_bdry = bind(qbx, sym.integral(dim, dim - 1, var("integrand")))(
+                queue, integrand=solu_bdry)
+
+        matching_const = (int_func_bdry - int_solu_bdry) / bdry_measure
+
+    else:
+        matching_const = 0.
+
+    ext_f = ext_f + matching_const
+
     def eval_ext_f(target_discr):
         return bind(
             (qbx_stick_out, target_discr),
-            representation_sym)(queue, sigma=sigma).real
+            representation_sym)(queue, sigma=sigma).real + matching_const
 
     debugging_info['eval_ext_f'] = eval_ext_f
 
