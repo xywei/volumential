@@ -1001,7 +1001,7 @@ class FPNDFMMLibExpansionWrangler(
         mode_coefs,
     ):
         pot = self.output_zeros()
-        if len(pot.shape) == 1:
+        if pot.dtype != np.object:
             pot = make_obj_array([pot, ])
         events = []
         for i in range(len(self.code.out_kernels)):
