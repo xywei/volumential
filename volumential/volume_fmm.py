@@ -363,7 +363,7 @@ def interpolate_volume_potential(
     target_points, traversal, wrangler, potential, target_radii=None, lbl_lookup=None
 ):
     """
-    Interpolate the volume potential.
+    Interpolate the volume potential, only works for tensor-product quadrature formulae.
     target_points and potential should be an cl array.
 
     wrangler is used only for general info (nothing sumpy kernel specific)
