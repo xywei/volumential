@@ -262,7 +262,8 @@ class NearFieldInteractionTableManager(object):
                                     + ")"
                                 )
                         else:
-                            assert isinstance(tbval, (float, complex))
+                            assert isinstance(kval, (float, complex))
+                            tbval = kval.__class__(tbval)
                             if not abs(kval - tbval) < 1e-12:
                                 from warnings import warn
 

@@ -102,6 +102,14 @@ def drive_test_cheb_table(
 
     print(cheb_table)
 
+    # handle AxisTargetDerivative to extract the component of interest
+    # (pvfmm returns the full gradient)
+    from sumpy.kernel import AxisTargetDerivative
+    if isinstance(integral_kernel, AxisTargetDerivative):
+        uu_offset = integral_kernel.axis * (cheb_degree * 3)**3
+    else:
+        uu_offset = 0
+
     from itertools import product
     for t0, t1, t2 in product(range(cheb_degree), repeat=3):
         target = np.array([t[t0], t[t1], t[t2]], dtype=dtype) * source_box_r
@@ -113,7 +121,10 @@ def drive_test_cheb_table(
         err = 0.  # l_inf error for the target (t0, t1, t2)
         for f0, f1, f2 in product(range(cheb_degree), repeat=3):
             resid = abs(
-                    (uu[f2 * (cheb_degree * 3)**2 + f1 * (cheb_degree * 3) + f0])
+                    (uu[
+                        uu_offset + f2 * (cheb_degree * 3)**2
+                        + f1 * (cheb_degree * 3) + f0
+                        ])
                     - (cheb_table[f2, f1, f0, t2, t1, t0, 0])
                     ) / (source_box_r ** 3)
             err = max(err, resid)
@@ -139,14 +150,52 @@ def drive_test_cheb_tables_laplace3d(requires_pypvfmm, ctx_getter, q_order):
             n_brick_q_points=120, kernel_symmetry_tags=None)
 
 
+def drive_test_cheb_tables_grad_laplace3d(
+        requires_pypvfmm, ctx_getter, q_order, axis):
+    from sumpy.kernel import LaplaceKernel, AxisTargetDerivative
+    from volumential.list1_symmetry import Flip, Swap
+
+    cl_ctx = ctx_getter()
+    queue = cl.CommandQueue(cl_ctx)
+
+    kernel = AxisTargetDerivative(axis, LaplaceKernel(3))
+    source_box_r = 1.69
+
+    from itertools import product
+    symmetry_tags = [Flip(iaxis) for iaxis in range(3) if iaxis != axis] + \
+            [Swap(iaxis, jaxis) for iaxis, jaxis in product(range(3), repeat=2)
+                    if (iaxis < jaxis and iaxis != axis and jaxis != axis)]
+    print(symmetry_tags)
+
+    drive_test_cheb_table(
+            queue, kernel, q_order, source_box_r,
+            n_brick_q_points=120, kernel_symmetry_tags=symmetry_tags)
+
+
 @pytest.mark.parametrize("q_order", [1, 2])
 def test_cheb_tables_laplace3d_quick(requires_pypvfmm, ctx_getter, q_order):
     drive_test_cheb_tables_laplace3d(requires_pypvfmm, ctx_getter, q_order)
 
 
+@pytest.mark.parametrize("q_order", [1, 2])
+@pytest.mark.parametrize("axis", [0, 1, 2])
+def test_cheb_tables_grad_laplace3d_quick(
+        requires_pypvfmm, ctx_getter, q_order, axis):
+    drive_test_cheb_tables_grad_laplace3d(
+            requires_pypvfmm, ctx_getter, q_order, axis)
+
+
 @pytest.mark.parametrize("q_order", [3, 4, 5, 6])
 def test_cheb_tables_laplace3d_slow(longrun, requires_pypvfmm, ctx_getter, q_order):
     drive_test_cheb_tables_laplace3d(requires_pypvfmm, ctx_getter, q_order)
+
+
+@pytest.mark.parametrize("q_order", [3, 4, 5, 6])
+@pytest.mark.parametrize("axis", [0, 1, 2])
+def test_cheb_tables_grad_laplace3d_slow(
+        longrun, requires_pypvfmm, ctx_getter, q_order, axis):
+    drive_test_cheb_tables_grad_laplace3d(
+            requires_pypvfmm, ctx_getter, q_order, axis)
 
 
 if __name__ == "__main__":

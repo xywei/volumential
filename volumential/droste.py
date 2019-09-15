@@ -798,7 +798,6 @@ class DrosteFull(DrosteBase):
             str(self.dim) + "D",
             self.integral_knl.__str__(),
             "quad_order-" + str(self.ntgt_points),
-            "brick_order-" + str(self.nquad_points),
         )
 
     def __call__(self, queue, **kwargs):
@@ -1226,11 +1225,10 @@ class DrosteReduced(DrosteBase):
 
         missing_measure = (alpha ** nlevels * source_box_extent) ** self.dim
         if abs(missing_measure) > 1e-6:
-            from warnings import warn
 
-            warn(
-                "Droste probably has too few levels, missing measure = "
-                + str(missing_measure)
+            logger.warn(
+                "Droste probably has too few levels, missing measure = %e"
+                % missing_measure
             )
 
         if "result_array" in kwargs:
@@ -1454,14 +1452,23 @@ class DrosteReduced(DrosteBase):
         return cheb_table
 
     def get_cache_key(self):
+        if self.reduce_by_symmetry.symmetry_tags is None:
+            # Bn: the full n-dimensional hyperoctahedral group
+            symmetry_info = 'B%d' % self.dim
+        else:
+            symmetry_info = "Span{%s}" % ",".join([
+                repr(tag) for tag in
+                sorted(self.reduce_by_symmetry.symmetry_tags)
+                ])
+
         return (
             type(self).__name__,
             str(self.dim) + "D",
             self.integral_knl.__str__(),
             "quad_order-" + str(self.ntgt_points),
-            "brick_order-" + str(self.nquad_points),
             "case-" + str(self.current_base_case),
             "kernel_id-" + str(self.get_kernel_id),
+            "symmetry-" + symmetry_info,
         )
 
     def __call__(self, queue, **kwargs):
@@ -1549,7 +1556,6 @@ class InverseDrosteReduced(DrosteReduced):
             str(self.dim) + "D",
             self.integral_knl.__str__(),
             "quad_order-" + str(self.ntgt_points),
-            "brick_order-" + str(self.nquad_points),
             "case-" + str(self.current_base_case),
             "kernel_id-" + str(self.get_kernel_id),
         )

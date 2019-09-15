@@ -536,12 +536,13 @@ class FPNDFMMLibExpansionWranglerCodeContainer(
     """
     def __init__(self, cl_context,
             multipole_expansion_factory, local_expansion_factory,
-            out_kernels, *args, **kwargs):
+            out_kernels, exclude_self=True, *args, **kwargs):
         self.cl_context = cl_context
         self.multipole_expansion_factory = multipole_expansion_factory
         self.local_expansion_factory = local_expansion_factory
 
         self.out_kernels = out_kernels
+        self.exclude_self = True
 
     def get_wrangler(self, queue, tree, dtype, fmm_level_to_order,
             source_extra_kwargs={}, kernel_extra_kwargs=None,
@@ -1000,7 +1001,7 @@ class FPNDFMMLibExpansionWrangler(
         mode_coefs,
     ):
         pot = self.output_zeros()
-        if len(pot.shape) == 1:
+        if pot.dtype != np.object:
             pot = make_obj_array([pot, ])
         events = []
         for i in range(len(self.code.out_kernels)):
