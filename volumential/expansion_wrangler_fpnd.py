@@ -364,7 +364,7 @@ class FPNDSumpyExpansionWrangler(
             ].mode_normalizers
 
         logger.info(
-                "Table data for kernel "
+                "table data for kernel "
                 + out_kernel.__repr__() + " congregated")
 
         # The loop domain needs to know some info about the tables being used
@@ -380,6 +380,13 @@ class FPNDSumpyExpansionWrangler(
         from volumential.list1 import NearFieldFromCSR
 
         near_field = NearFieldFromCSR(out_kernel, table_data_shapes)
+
+        table_data_combined = cl.array.to_device(self.queue,
+                table_data_combined)
+        mode_nmlz_combined = cl.array.to_device(self.queue,
+                mode_nmlz_combined)
+        self.queue.finish()
+        logger.info("sent table data to device")
 
         res, evt = near_field(
             self.queue,

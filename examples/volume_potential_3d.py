@@ -329,6 +329,7 @@ pot, = drive_volume_fmm(
     source_vals * q_weights,
     source_vals,
     direct_evaluation=force_direct_evaluation,
+    list1_only=True
 )
 
 t1 = time.clock()
