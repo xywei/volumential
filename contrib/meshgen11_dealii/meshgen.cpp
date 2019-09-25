@@ -128,22 +128,26 @@ public:
 
   double box_a, box_b;
 
+  unsigned int max_n_cells;
   unsigned int min_grid_level, max_grid_level;
 
   // q: quad order
   // level: initial (uniform) level
   MeshGenerator(
       int q, int level,
+      unsigned int max_n_cells = std::numeric_limits<unsigned int>::max(),
       unsigned int min_grid_level = std::numeric_limits<unsigned int>::min(),
       unsigned int max_grid_level = std::numeric_limits<unsigned int>::max())
       : triangulation(d::Triangulation<dimension>::maximum_smoothing), fe(q),
         dof_handler(triangulation), quadrature_formula(q), box_a(a), box_b(b),
-        min_grid_level(min_grid_level), max_grid_level(max_grid_level) {
+        max_n_cells(max_n_cells), min_grid_level(min_grid_level),
+        max_grid_level(max_grid_level) {
     d::GridGenerator::hyper_cube(triangulation, box_a, box_b);
 
     // initial number of levels must be compatible
     assert(level > self.min_grid_level);
     assert(level <= self.max_grid_level + 1);
+    assert(std::pow(std::pow(2, dimension), level - 1) <= self.max_n_cells);
 
     if (level > 1) {
       triangulation.refine_global(level - 1);
@@ -154,16 +158,19 @@ public:
   // customized bounding box
   MeshGenerator(
       int q, int level, double aa, double bb,
+      unsigned int max_n_cells = std::numeric_limits<unsigned int>::max(),
       unsigned int min_grid_level = std::numeric_limits<unsigned int>::min(),
       unsigned int max_grid_level = std::numeric_limits<unsigned int>::max())
       : triangulation(d::Triangulation<dimension>::maximum_smoothing), fe(q),
         dof_handler(triangulation), quadrature_formula(q), box_a(aa), box_b(bb),
-        min_grid_level(min_grid_level), max_grid_level(max_grid_level) {
+        max_n_cells(max_n_cells), min_grid_level(min_grid_level),
+        max_grid_level(max_grid_level) {
     d::GridGenerator::hyper_cube(triangulation, box_a, box_b);
 
     // initial number of levels must be compatible
     assert(level > self.min_grid_level);
     assert(level <= self.max_grid_level + 1);
+    assert(std::pow(std::pow(2, dimension), level - 1) <= self.max_n_cells);
 
     if (level > 1) {
       triangulation.refine_global(level - 1);
@@ -379,17 +386,32 @@ public:
   }
 
   // Interface for dealii::GridRefinement::refine_and_coarsen_fixed_number
-  int refine_and_coarsen_fixed_number(
-      py::array_t<double> &criteria, const double top_fraction_of_cells,
-      const double bottom_fraction_of_cells,
-      const unsigned int max_n_cells =
-          std::numeric_limits<unsigned int>::max()) {
+  int refine_and_coarsen_fixed_number(py::array_t<double> &criteria,
+                                      const double top_fraction_of_cells,
+                                      const double bottom_fraction_of_cells) {
 
     auto ctr = pyarr_to_dvec<double>(criteria);
 
     d::GridRefinement::refine_and_coarsen_fixed_number(
         this->triangulation, ctr, top_fraction_of_cells,
-        bottom_fraction_of_cells, max_n_cells);
+        bottom_fraction_of_cells, this->max_n_cells);
+
+    this->prepare_coarsening_and_refinement();
+    this->execute_coarsening_and_refinement();
+
+    return this->n_active_cells();
+  }
+
+  // Interface for dealii::GridRefinement::refine_and_coarsen_fixed_fraction
+  int refine_and_coarsen_fixed_fraction(
+      py::array_t<double> &criteria, const double top_fraction_of_errors,
+      const double bottom_fraction_of_errors) {
+
+    auto ctr = pyarr_to_dvec<double>(criteria);
+
+    d::GridRefinement::refine_and_coarsen_fixed_fraction(
+        this->triangulation, ctr, top_fraction_of_errors,
+        bottom_fraction_of_errors, this->max_n_cells);
 
     this->prepare_coarsening_and_refinement();
     this->execute_coarsening_and_refinement();
