@@ -419,6 +419,59 @@ public:
     return this->n_active_cells();
   }
 
+  // Interface for dealii::GridRefinement::refine_and_coarsen_optimize
+  // NOTE: this function does not repsect max_n_cells!
+  int refine_and_coarsen_optimize(py::array_t<double> &criteria,
+                                  const unsigned int order) {
+
+    auto ctr = pyarr_to_dvec<double>(criteria);
+
+    d::GridRefinement::refine_and_coarsen_optimize(this->triangulation, ctr,
+                                                   order);
+
+    this->prepare_coarsening_and_refinement();
+    this->execute_coarsening_and_refinement();
+
+    if (this->n_active_cells() > this->max_n_cells) {
+      std::cout << "Warning: max_n_cells has been exceeded!" << std::endl;
+    }
+
+    return this->n_active_cells();
+  }
+
+  // Interface for dealii::GridRefinement::refine
+  // NOTE: this function does not repsect max_n_cells!
+  int refine(py::array_t<double> &criteria, const double threshold,
+             const unsigned int max_to_mark =
+                 std::numeric_limits<unsigned int>::max()) {
+
+    auto ctr = pyarr_to_dvec<double>(criteria);
+
+    d::GridRefinement::refine(this->triangulation, ctr, threshold, max_to_mark);
+
+    this->prepare_coarsening_and_refinement();
+    this->execute_coarsening_and_refinement();
+
+    if (this->n_active_cells() > this->max_n_cells) {
+      std::cout << "Warning: max_n_cells has been exceeded!" << std::endl;
+    }
+
+    return this->n_active_cells();
+  }
+
+  // Interface for dealii::GridRefinement::coarsen
+  int coarsen(py::array_t<double> &criteria, const double threshold) {
+
+    auto ctr = pyarr_to_dvec<double>(criteria);
+
+    d::GridRefinement::coarsen(this->triangulation, ctr, threshold);
+
+    this->prepare_coarsening_and_refinement();
+    this->execute_coarsening_and_refinement();
+
+    return this->n_active_cells();
+  }
+
   // }}}
 
   // Show some info about the mesh
@@ -596,6 +649,12 @@ PYBIND11_MODULE(meshgen_dealii, m) {
       .def("update_mesh", &MeshGen1D::update_mesh)
       .def("refine_and_coarsen_fixed_number",
            &MeshGen1D::refine_and_coarsen_fixed_number)
+      .def("refine_and_coarsen_fixed_fraction",
+           &MeshGen1D::refine_and_coarsen_fixed_fraction)
+      .def("refine_and_coarsen_optimize",
+           &MeshGen1D::refine_and_coarsen_optimize)
+      .def("refine", &MeshGen1D::refine)
+      .def("coarsen", &MeshGen1D::coarsen)
       .def("print_info", &MeshGen1D::print_info)
       .def("generate_gmsh", &MeshGen1D::generate_gmsh);
 
@@ -617,6 +676,12 @@ PYBIND11_MODULE(meshgen_dealii, m) {
       .def("update_mesh", &MeshGen2D::update_mesh)
       .def("refine_and_coarsen_fixed_number",
            &MeshGen2D::refine_and_coarsen_fixed_number)
+      .def("refine_and_coarsen_fixed_fraction",
+           &MeshGen2D::refine_and_coarsen_fixed_fraction)
+      .def("refine_and_coarsen_optimize",
+           &MeshGen2D::refine_and_coarsen_optimize)
+      .def("refine", &MeshGen2D::refine)
+      .def("coarsen", &MeshGen2D::coarsen)
       .def("print_info", &MeshGen2D::print_info)
       .def("generate_gmsh", &MeshGen2D::generate_gmsh);
 
@@ -638,6 +703,12 @@ PYBIND11_MODULE(meshgen_dealii, m) {
       .def("update_mesh", &MeshGen3D::update_mesh)
       .def("refine_and_coarsen_fixed_number",
            &MeshGen3D::refine_and_coarsen_fixed_number)
+      .def("refine_and_coarsen_fixed_fraction",
+           &MeshGen3D::refine_and_coarsen_fixed_fraction)
+      .def("refine_and_coarsen_optimize",
+           &MeshGen3D::refine_and_coarsen_optimize)
+      .def("refine", &MeshGen3D::refine)
+      .def("coarsen", &MeshGen3D::coarsen)
       .def("print_info", &MeshGen3D::print_info)
       .def("generate_gmsh", &MeshGen3D::generate_gmsh);
 }
