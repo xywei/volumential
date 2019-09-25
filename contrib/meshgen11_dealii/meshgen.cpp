@@ -128,12 +128,23 @@ public:
 
   double box_a, box_b;
 
+  unsigned int min_grid_level, max_grid_level;
+
   // q: quad order
   // level: initial (uniform) level
-  MeshGenerator(int q, int level)
+  MeshGenerator(
+      int q, int level,
+      unsigned int min_grid_level = std::numeric_limits<unsigned int>::min(),
+      unsigned int max_grid_level = std::numeric_limits<unsigned int>::max())
       : triangulation(d::Triangulation<dimension>::maximum_smoothing), fe(q),
-        dof_handler(triangulation), quadrature_formula(q), box_a(a), box_b(b) {
+        dof_handler(triangulation), quadrature_formula(q), box_a(a), box_b(b),
+        min_grid_level(min_grid_level), max_grid_level(max_grid_level) {
     d::GridGenerator::hyper_cube(triangulation, box_a, box_b);
+
+    // initial number of levels must be compatible
+    assert(level > self.min_grid_level);
+    assert(level <= self.max_grid_level + 1);
+
     if (level > 1) {
       triangulation.refine_global(level - 1);
     }
@@ -141,11 +152,19 @@ public:
   }
 
   // customized bounding box
-  MeshGenerator(int q, int level, double aa, double bb)
+  MeshGenerator(
+      int q, int level, double aa, double bb,
+      unsigned int min_grid_level = std::numeric_limits<unsigned int>::min(),
+      unsigned int max_grid_level = std::numeric_limits<unsigned int>::max())
       : triangulation(d::Triangulation<dimension>::maximum_smoothing), fe(q),
-        dof_handler(triangulation), quadrature_formula(q), box_a(aa),
-        box_b(bb) {
+        dof_handler(triangulation), quadrature_formula(q), box_a(aa), box_b(bb),
+        min_grid_level(min_grid_level), max_grid_level(max_grid_level) {
     d::GridGenerator::hyper_cube(triangulation, box_a, box_b);
+
+    // initial number of levels must be compatible
+    assert(level > self.min_grid_level);
+    assert(level <= self.max_grid_level + 1);
+
     if (level > 1) {
       triangulation.refine_global(level - 1);
     }
@@ -319,7 +338,25 @@ public:
   // smoothing. The function returns whether some cells' flagging has been
   // changed in the process.
   bool prepare_coarsening_and_refinement() {
-    return this->triangulation.prepare_coarsening_and_refinement();
+
+    bool flagging_changed = false;
+
+    if (this->triangulation.n_levels() > this->max_grid_level) {
+      flagging_changed = true;
+      for (const auto &cell :
+           this->triangulation.active_cell_iterators_on_level(max_grid_level))
+        cell->clear_refine_flag();
+    }
+
+    for (const auto &cell :
+         triangulation.active_cell_iterators_on_level(min_grid_level))
+      if (cell->coarsen_flag_set()) {
+        flagging_changed = true;
+        cell->clear_coarsen_flag();
+      }
+
+    return (flagging_changed &&
+            this->triangulation.prepare_coarsening_and_refinement());
   }
 
   void execute_coarsening_and_refinement() {
