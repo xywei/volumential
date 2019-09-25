@@ -26,6 +26,8 @@ CMAKE_MINIMUM_REQUIRED(VERSION 3.5.0)
 set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 PROJECT(meshgen_dealii)
 
+message(FATAL_ERROR "meshgen_dealii is deprecated, use meshgen11_dealii instead.")
+
 IF(NOT CMAKE_BUILD_TYPE)
   SET(CMAKE_BUILD_TYPE "DEBUG")
   #SET(CMAKE_BUILD_TYPE "RELEASE")
