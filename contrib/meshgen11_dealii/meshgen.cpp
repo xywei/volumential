@@ -189,6 +189,14 @@ public:
     std::string filename = fn;
     std::ofstream output_file(filename);
     d::GridOut().write_msh(this->triangulation, output_file);
+    std::cout << "Mesh written in " << filename << std::endl;
+  }
+
+  void write_vtu(const std::string fn) {
+    std::string filename = fn;
+    std::ofstream output_file(filename);
+    d::GridOut().write_vtu(this->triangulation, output_file);
+    std::cout << "Mesh written in " << filename << std::endl;
   }
 
   py::array get_q_points() {
@@ -656,7 +664,8 @@ PYBIND11_MODULE(meshgen_dealii, m) {
       .def("refine", &MeshGen1D::refine)
       .def("coarsen", &MeshGen1D::coarsen)
       .def("print_info", &MeshGen1D::print_info)
-      .def("generate_gmsh", &MeshGen1D::generate_gmsh);
+      .def("generate_gmsh", &MeshGen1D::generate_gmsh)
+      .def("write_vtu", &MeshGen1D::write_vtu);
 
   py::class_<MeshGen2D>(m, "MeshGen2D")
       .def(py::init<int, int>(), py::arg("degree"), py::arg("level"))
@@ -683,7 +692,8 @@ PYBIND11_MODULE(meshgen_dealii, m) {
       .def("refine", &MeshGen2D::refine)
       .def("coarsen", &MeshGen2D::coarsen)
       .def("print_info", &MeshGen2D::print_info)
-      .def("generate_gmsh", &MeshGen2D::generate_gmsh);
+      .def("generate_gmsh", &MeshGen2D::generate_gmsh)
+      .def("write_vtu", &MeshGen2D::write_vtu);
 
   py::class_<MeshGen3D>(m, "MeshGen3D")
       .def(py::init<int, int>(), py::arg("degree"), py::arg("level"))
@@ -710,5 +720,6 @@ PYBIND11_MODULE(meshgen_dealii, m) {
       .def("refine", &MeshGen3D::refine)
       .def("coarsen", &MeshGen3D::coarsen)
       .def("print_info", &MeshGen3D::print_info)
-      .def("generate_gmsh", &MeshGen3D::generate_gmsh);
+      .def("generate_gmsh", &MeshGen3D::generate_gmsh)
+      .def("write_vtu", &MeshGen3D::write_vtu);
 }
