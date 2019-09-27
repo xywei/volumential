@@ -138,7 +138,7 @@ public:
       unsigned int max_n_cells = std::numeric_limits<unsigned int>::max(),
       unsigned int min_grid_level = std::numeric_limits<unsigned int>::min(),
       unsigned int max_grid_level = std::numeric_limits<unsigned int>::max())
-      : triangulation(d::Triangulation<dimension>::maximum_smoothing), fe(q),
+      : triangulation(d::Triangulation<dimension>::limit_level_difference_at_vertices), fe(q),
         dof_handler(triangulation), quadrature_formula(q), box_a(a), box_b(b),
         max_n_cells(max_n_cells), min_grid_level(min_grid_level),
         max_grid_level(max_grid_level) {
@@ -161,7 +161,7 @@ public:
       unsigned int max_n_cells = std::numeric_limits<unsigned int>::max(),
       unsigned int min_grid_level = std::numeric_limits<unsigned int>::min(),
       unsigned int max_grid_level = std::numeric_limits<unsigned int>::max())
-      : triangulation(d::Triangulation<dimension>::maximum_smoothing), fe(q),
+      : triangulation(d::Triangulation<dimension>::limit_level_difference_at_vertices), fe(q),
         dof_handler(triangulation), quadrature_formula(q), box_a(aa), box_b(bb),
         max_n_cells(max_n_cells), min_grid_level(min_grid_level),
         max_grid_level(max_grid_level) {
