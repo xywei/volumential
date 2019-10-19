@@ -1215,7 +1215,8 @@ class NearFieldInteractionTable(object):
                 """
                 for iqpt
                     for iaxis
-                        <> dist[iaxis] = quad_points[iaxis, iqpt] - target_point[iaxis]
+                        <> dist[iaxis] = (quad_points[iaxis, iqpt]
+                            - target_point[iaxis])
                     end
                 end
                 """
@@ -1251,7 +1252,6 @@ class NearFieldInteractionTable(object):
         int_vals = []
 
         for target in self.q_points:
-            import pyopencl as cl
             evt, res = lpknl(queue, quad_points=nodes, target_point=target)
             knl_vals = res['result']
 
