@@ -993,8 +993,6 @@ class NearFieldInteractionTable(object):
         if self.inverse_droste:
             assert cl_ctx
             self.build_kernel_exterior_normalizer_table(cl_ctx, queue, **kwargs)
-        else:
-            self.kernel_exterior_normalizers = None
 
         # }}} End Compute normalizers
 
