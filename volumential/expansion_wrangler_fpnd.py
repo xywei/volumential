@@ -97,9 +97,11 @@ class FPNDSumpyExpansionWrangler(
         dtype,
         fmm_level_to_order,
         quad_order,
+        potential_kind=1,
         source_extra_kwargs=None,
         kernel_extra_kwargs=None,
         self_extra_kwargs=None,
+        list1_extra_kwargs=None,
     ):
         """
         near_field_table can either one of three things:
@@ -150,6 +152,7 @@ class FPNDSumpyExpansionWrangler(
             raise RuntimeError("Table type unrecognized.")
 
         self.quad_order = quad_order
+        self.potential_kind = potential_kind
 
         # TODO: make all parameters table-specific (allow using inhomogeneous tables)
         kname = repr(self.code.out_kernels[0])
@@ -225,6 +228,9 @@ class FPNDSumpyExpansionWrangler(
         if self_extra_kwargs is None:
             self_extra_kwargs = {}
 
+        if list1_extra_kwargs is None:
+            list1_extra_kwargs = {}
+
         if not callable(fmm_level_to_order):
             raise TypeError("fmm_level_to_order not passed")
 
@@ -240,6 +246,7 @@ class FPNDSumpyExpansionWrangler(
         self.source_extra_kwargs = source_extra_kwargs
         self.kernel_extra_kwargs = kernel_extra_kwargs
         self.self_extra_kwargs = self_extra_kwargs
+        self.list1_extra_kwargs = list1_extra_kwargs
 
         self.extra_kwargs = source_extra_kwargs.copy()
         self.extra_kwargs.update(self.kernel_extra_kwargs)
@@ -357,12 +364,20 @@ class FPNDSumpyExpansionWrangler(
                 len(self.near_field_table[kname][0].mode_normalizers),
             )
         )
+        exterior_mode_nmlz_combined = np.zeros(
+            (
+                len(self.near_field_table[kname]),
+                len(self.near_field_table[kname][0].kernel_exterior_normalizers),
+            )
+        )
         for lev in range(len(self.near_field_table[kname])):
             table_data_combined[lev, :] = self.near_field_table[kname][lev].data
-            mode_nmlz_combined[lev, :] = self.near_field_table[kname][
-                lev
-            ].mode_normalizers
+            mode_nmlz_combined[lev, :] = \
+                self.near_field_table[kname][lev].mode_normalizers
+            exterior_mode_nmlz_combined[lev, :] = \
+                self.near_field_table[kname][lev].kernel_exterior_normalizers
 
+        self.queue.finish()
         logger.info(
                 "table data for kernel "
                 + out_kernel.__repr__() + " congregated")
@@ -379,12 +394,16 @@ class FPNDSumpyExpansionWrangler(
 
         from volumential.list1 import NearFieldFromCSR
 
-        near_field = NearFieldFromCSR(out_kernel, table_data_shapes)
+        near_field = NearFieldFromCSR(out_kernel, table_data_shapes,
+            potential_kind=self.potential_kind,
+            **self.list1_extra_kwargs)
 
         table_data_combined = cl.array.to_device(self.queue,
                 table_data_combined)
         mode_nmlz_combined = cl.array.to_device(self.queue,
                 mode_nmlz_combined)
+        exterior_mode_nmlz_combined = cl.array.to_device(self.queue,
+            exterior_mode_nmlz_combined)
         self.queue.finish()
         logger.info("sent table data to device")
 
@@ -401,6 +420,7 @@ class FPNDSumpyExpansionWrangler(
             encoding_base=base,
             encoding_shift=shift,
             mode_nmlz_combined=mode_nmlz_combined,
+            exterior_mode_nmlz_combined=exterior_mode_nmlz_combined,
             neighbor_source_boxes_starts=neighbor_source_boxes_starts,
             root_extent=self.tree.root_extent,
             neighbor_source_boxes_lists=neighbor_source_boxes_lists,
@@ -584,9 +604,11 @@ class FPNDFMMLibExpansionWrangler(
             near_field_table, dtype,
             fmm_level_to_order,
             quad_order,
+            potential_kind=1,
             source_extra_kwargs=None,
             kernel_extra_kwargs=None,
             self_extra_kwargs=None,
+            list1_extra_kwargs=None,
             *args, **kwargs):
         self.code = code_container
         self.queue = queue
@@ -596,6 +618,7 @@ class FPNDFMMLibExpansionWrangler(
 
         self.dtype = dtype
         self.quad_order = quad_order
+        self.potential_kind = potential_kind
 
         # {{{ digest out_kernels
 
@@ -764,6 +787,11 @@ class FPNDFMMLibExpansionWrangler(
 
         if self_extra_kwargs is None:
             self_extra_kwargs = {}
+
+        if list1_extra_kwargs is None:
+            list1_extra_kwargs = {}
+
+        self.list1_extra_kwargs = list1_extra_kwargs
 
         # }}} End table setup
 
@@ -962,7 +990,9 @@ class FPNDFMMLibExpansionWrangler(
 
         from volumential.list1 import NearFieldFromCSR
 
-        near_field = NearFieldFromCSR(out_kernel, table_data_shapes)
+        near_field = NearFieldFromCSR(out_kernel, table_data_shapes,
+            potential_kind=self.potential_kind,
+            **self.list1_extra_kwargs)
 
         res, evt = near_field(
             self.queue,
