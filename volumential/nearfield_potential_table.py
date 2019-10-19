@@ -24,6 +24,7 @@ THE SOFTWARE.
 
 import logging
 import numpy as np
+import loopy as lp
 from scipy.interpolate import BarycentricInterpolator as Interpolator
 
 from functools import partial
@@ -1032,8 +1033,13 @@ class NearFieldInteractionTable(object):
 
             \int_{B^c} G(\lVert x - y \rVert) dy
 
-        where :math:`B` is the source box.
+        where :math:`B` is the source box :math:`[0, source_box_extent]^dim`.
         """
+        logger.warn("this method is currently under construction.")
+
+        if not self.inverse_droste:
+            raise ValueError()
+
         if ncpus is None:
             import os
             ncpus = os.cpu_count()
@@ -1088,7 +1094,7 @@ class NearFieldInteractionTable(object):
         hs = self.source_box_extent / 2
         # radius of bouding sphere
         r = hs * np.sqrt(self.dim)
-        logger.info("r_inner = %f, r_outer = %f" % (hs, r))
+        logger.debug("r_inner = %f, r_outer = %f" % (hs, r))
 
         if self.dim == 2:
             tag_box = gmsh.model.occ.addRectangle(x=0, y=0, z=0,
@@ -1144,7 +1150,11 @@ class NearFieldInteractionTable(object):
                         - bind(discr, sym.integral(self.dim, self.dim, 1))(queue)
                         ) / (np.pi * r**2 - (2 * hs)**2)
                 if arerr > 1e-12:
-                    logger.warn("Error when computing the area is %f" % arerr)
+                    log_to = logger.warn
+                else:
+                    log_to = logger.debug
+                log_to("the numerical error when computing the measure of a "
+                    "unit ball is %e" % arerr)
 
             elif self.dim == 3:
                 arerr = np.abs(
@@ -1152,37 +1162,100 @@ class NearFieldInteractionTable(object):
                         - bind(discr, sym.integral(self.dim, self.dim, 1))(queue)
                         ) / (4 / 3 * np.pi * r**3 - (2 * hs)**3)
                 if arerr > 1e-12:
-                    logger.warn("Error when computing the area is %f" % arerr)
+                    log_to = logger.warn
+                else:
+                    log_to = logger.debug
+                logger.warn("The numerical error when computing the measure of a "
+                    "unit ball is %e" % arerr)
 
         # }}} End optional checks
 
         # {{{ kernel evaluation
 
-        # FIXME: the evaluation should be done on the device
-        # FIXME: the scaling constant should be evaluated with knl.scl
+        # TODO: take advantage of symmetry if this is too slow
 
-        from pymbolic.compiler import CompiledExpression
+        from volumential.droste import InverseDrosteReduced
 
-        knl = self.integral_knl
-        scl = knl.get_global_scaling_const().evalf()
-        val = CompiledExpression(knl.expression)
+        # only for getting kernel evaluation related stuff
+        drf = InverseDrosteReduced(
+                self.integral_knl,
+                self.quad_order,
+                self.interaction_case_vecs,
+                n_brick_quad_points=0,
+                knl_symmetry_tags=[],
+                auto_windowing=False
+                )
 
-        def eval_knl(dist):
-            # dist = [dx, dy, dz]
-            return scl * val(dist, np.sqrt)
+        # uses "dist[dim]", assigned to "knl_val"
+        knl_insns = drf.get_sumpy_kernel_insns()
+
+        eval_kernel_insns = [
+            insn.copy(within_inames=insn.within_inames | frozenset(["iqpt"]))
+            for insn in knl_insns
+        ]
+
+        from sumpy.symbolic import SympyToPymbolicMapper
+        sympy_conv = SympyToPymbolicMapper()
+
+        scaling_assignment = lp.Assignment(
+            id=None,
+            assignee="knl_scaling",
+            expression=sympy_conv(self.integral_knl.get_global_scaling_const()),
+            temp_var_type=lp.Optional(),
+        )
+
+        extra_kernel_kwarg_types = ()
+        if "extra_kernel_kwarg_types" in kwargs:
+            extra_kernel_kwarg_types = kwargs["extra_kernel_kwarg_types"]
+
+        lpknl = lp.make_kernel(  # NOQA
+            "{ [iqpt, iaxis]: 0<=iqpt<n_q_points and 0<=iaxis<dim }",
+            [
+                """
+                for iqpt
+                    for iaxis
+                        <> dist[iaxis] = quad_points[iaxis, iqpt] - target_point[iaxis]
+                    end
+                end
+                """
+            ]
+            + eval_kernel_insns
+            + [scaling_assignment]
+            + [
+                """
+                for iqpt
+                    result[iqpt] = knl_val * knl_scaling
+                end
+                """
+            ],
+            [
+                lp.ValueArg("dim, n_q_points", np.int32),
+                lp.GlobalArg("quad_points", np.float64, "dim, n_q_points"),
+                lp.GlobalArg("target_point", np.float64, "dim"),
+                *extra_kernel_kwarg_types,
+                "...",
+            ],
+            name="eval_kernel_lucky_coin",
+            lang_version=(2018, 2),
+        )
+
+        lpknl = lp.fix_parameters(lpknl, dim=self.dim)
+        lpknl = lp.set_options(lpknl, write_cl=False)
+        lpknl = lp.set_options(lpknl, return_dict=True)
 
         # }}} End kernel evaluation
 
         nodes = discr.nodes().with_queue(queue)[:self.dim]
-        nodes = nodes.get()
 
         int_vals = []
 
         for target in self.q_points:
-            dist = [target[i] - nodes[i] for i in range(self.dim)]
-            knl_vals = eval_knl(dist)
-
             import pyopencl as cl
+            knl_vals = lpknl(queue, quad_points=nodes, target_point=target)
+            print(knl_vals)
+            1/0
+            knl_vals = cl.array.to_devic(queue, eval_knl(dist))
+
             integ = bind(discr,
                     sym.integral(self.dim, self.dim, sym.var("integrand")))(
                             queue,
