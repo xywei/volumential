@@ -693,7 +693,8 @@ class NearFieldInteractionTable(object):
 
     def build_normalizer_table(self, pool=None, pb=None):
         """
-        Build normalizers only
+        Build normalizers, used for log-scaled kernels,
+        currently only supported in 2D.
         """
         assert self.dim == 2
         if pool is None:
@@ -1251,17 +1252,13 @@ class NearFieldInteractionTable(object):
 
         for target in self.q_points:
             import pyopencl as cl
-            knl_vals = lpknl(queue, quad_points=nodes, target_point=target)
-            print(knl_vals)
-            1/0
-            knl_vals = cl.array.to_devic(queue, eval_knl(dist))
+            evt, res = lpknl(queue, quad_points=nodes, target_point=target)
+            knl_vals = res['result']
 
             integ = bind(discr,
                     sym.integral(self.dim, self.dim, sym.var("integrand")))(
                             queue,
-                            integrand=cl.array.to_device(
-                                queue, knl_vals.astype(np.float64))
-                            )
+                            integrand=knl_vals)
             queue.finish()
             int_vals.append(integ)
 
