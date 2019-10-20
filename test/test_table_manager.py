@@ -33,7 +33,7 @@ def make_tmp_table_manager():
     from uuid import uuid4
     import os
     return NearFieldInteractionTableManager(
-            os.path.join('/tmp', str(uuid4()) + '.hdf5'))   
+            os.path.join('/tmp', str(uuid4()) + '.hdf5'))
 
 
 def test_case_id():
@@ -266,23 +266,6 @@ def laplace_const_source_neighbor_box(q_order, case_id):
             pot[target_point_index] += 1.0 * nft.data[entry_id]
 
     return pot
-
-
-def direct_quad(source_func, target_point):
-
-    dim = 2
-    knl_func = vm.nearfield_potential_table.get_laplace(dim)
-
-    def integrand(x, y):
-        return source_func(x, y) * knl_func(x - target_point[0], y - target_point[1])
-
-    import volumential.singular_integral_2d as squad
-
-    integral, error = squad.box_quad(
-        func=integrand, a=0, b=1, c=0, d=1, singular_point=target_point, maxiter=1000
-    )
-
-    return integral
 
 
 def drive_test_direct_quad_neighbor_box(q_order, case_id):
