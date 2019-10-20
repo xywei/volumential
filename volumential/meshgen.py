@@ -150,7 +150,7 @@ class MeshGenBase(object):
         # TODO
         raise NotImplementedError
 
-    def print_info(self, logging_func=print):
+    def print_info(self, logging_func=logger.info):
         logging_func("Number of cells: " + str(self.n_cells()))
         logging_func("Number of active cells: " + str(self.n_active_cells()))
         logging_func("Number of quad points per cell: "
