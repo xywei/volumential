@@ -90,3 +90,4 @@ Documentation Sphinx:
   - dealii
   except:
   - tags
+  allow_failure: true
