@@ -103,7 +103,7 @@ def qquad(
     :type maxitero: int, optional.
     :param maxiteri: Maximum order of inner Gaussian quadrature.
     :type maxiteri: int, optional.
-    :param vec_func: True if func handles arrays as arguments (is a “vector”
+    :param vec_func: True if func handles arrays as arguments (is a "vector"
                 function). Default is True.
     :type vec_func: bool, optional.
     :param minitero: Minimum order of outer Gaussian quadrature.
@@ -390,7 +390,7 @@ def tria_quad(
     :param maxiter: Maximum order of Gaussian quadrature.
     :type maxiter: int, optional.
     :param vec_func: True if func handles arrays as arguments
-        (is a “vector” function). Default is True.
+        (is a "vector" function). Default is True.
     :type vec_func: bool, optional.
     :param miniter: Minimum order of Gaussian quadrature.
     :type miniter: int, optional.
@@ -516,7 +516,7 @@ def box_quad(
     :type rtol: float, optional.
     :param maxiter: Maximum order of Gaussian quadrature.
     :type maxiter: int, optional.
-    :param vec_func: True if func handles arrays as arguments (is a “vector”
+    :param vec_func: True if func handles arrays as arguments (is a "vector"
                 function). Default is True.
     :type vec_func: bool, optional.
     :param miniter: Minimum order of Gaussian quadrature.
@@ -579,7 +579,7 @@ def quadri_quad(
     :type rtol: float, optional.
     :param maxiter: Maximum order of Gaussian quadrature.
     :type maxiter: int, optional.
-    :param vec_func: True if func handles arrays as arguments (is a “vector”
+    :param vec_func: True if func handles arrays as arguments (is a "vector"
                 function). Default is True.
     :type vec_func: bool, optional.
     :param miniter: Minimum order of Gaussian quadrature.
