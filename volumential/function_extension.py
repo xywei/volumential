@@ -1,3 +1,5 @@
+from __future__ import absolute_import, division, print_function
+
 """Function extension with regularity contraints:
 
 1. :math:`L^2`: extend with constant value

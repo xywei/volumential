@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# -*- encoding: utf-8 -*-
 
 __copyright__ = "Copyright (C) 2017 Xiaoyu Wei"
 
