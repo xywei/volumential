@@ -1227,14 +1227,13 @@ class NearFieldInteractionTable(object):
                     result[iqpt] = knl_val * knl_scaling
                 end
                 """
-            ],
+                ],
             [
                 lp.ValueArg("dim, n_q_points", np.int32),
                 lp.GlobalArg("quad_points", np.float64, "dim, n_q_points"),
-                lp.GlobalArg("target_point", np.float64, "dim"),
-                *extra_kernel_kwarg_types,
-                "...",
-            ],
+                lp.GlobalArg("target_point", np.float64, "dim")
+                ] + list(extra_kernel_kwarg_types)
+            + ["...", ],
             name="eval_kernel_lucky_coin",
             lang_version=(2018, 2),
         )
