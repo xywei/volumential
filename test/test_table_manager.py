@@ -29,25 +29,26 @@ import volumential as vm
 from volumential.table_manager import NearFieldInteractionTableManager
 
 
-dim = 2
-table_manager = NearFieldInteractionTableManager()
-table, _ = table_manager.get_table(dim, "Laplace", q_order=1, force_recompute=False)
-
-case_same_box = len(table.interaction_case_vecs) // 2
-
-
 def test_case_id():
+    dim = 2
+    table_manager = NearFieldInteractionTableManager()
     table1, _ = table_manager.get_table(
         dim, "Laplace", q_order=1, force_recompute=False
     )
+    case_same_box = len(table1.interaction_case_vecs) // 2
     assert table1.interaction_case_vecs[case_same_box] == [0, 0]
 
 
 def test_get_table():
+    dim = 2
+    table_manager = NearFieldInteractionTableManager()
+    table, _ = table_manager.get_table(dim, "Laplace", q_order=1, force_recompute=False)
     assert table.dim == dim
 
 
 def laplace_const_source_same_box(q_order):
+    dim = 2
+    table_manager = NearFieldInteractionTableManager()
     nft, _ = table_manager.get_table(
         dim, "Laplace", q_order=q_order, force_recompute=False
     )
@@ -55,6 +56,8 @@ def laplace_const_source_same_box(q_order):
     n_pairs = nft.n_pairs
     n_q_points = nft.n_q_points
     pot = np.zeros(n_q_points)
+
+    case_same_box = len(nft.interaction_case_vecs) // 2
 
     for source_mode_index in range(n_q_points):
         for target_point_index in range(n_q_points):
@@ -68,6 +71,8 @@ def laplace_const_source_same_box(q_order):
 
 
 def laplace_cons_source_neighbor_box(q_order, case_id):
+    dim = 2
+    table_manager = NearFieldInteractionTableManager()
     nft, _ = table_manager.get_table(
         dim, "Laplace", q_order=q_order, force_recompute=False
     )
@@ -93,6 +98,8 @@ def test_lcssb_1():
 
 
 def interp_func(q_order, coef):
+    dim = 2
+    table_manager = NearFieldInteractionTableManager()
     nft, _ = table_manager.get_table(
         dim, "Laplace", q_order=q_order, force_recompute=False
     )
@@ -127,6 +134,7 @@ def test_interp_func(longrun):
 
 def direct_quad(source_func, target_point):
 
+    dim = 2
     knl_func = vm.nearfield_potential_table.get_laplace(dim)
 
     def integrand(x, y):
@@ -142,9 +150,11 @@ def direct_quad(source_func, target_point):
 
 
 def drive_test_direct_quad_same_box(q_order):
+    dim = 2
     u = laplace_const_source_same_box(q_order)
     func = interp_func(q_order, u)
 
+    table_manager = NearFieldInteractionTableManager()
     nft, _ = table_manager.get_table(
         dim, "Laplace", q_order=q_order, force_recompute=False
     )

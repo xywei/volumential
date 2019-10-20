@@ -1,5 +1,3 @@
-from __future__ import absolute_import, division, print_function
-
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
 __license__ = """
@@ -29,22 +27,20 @@ import volumential as vm
 from volumential.table_manager import NearFieldInteractionTableManager
 
 
-dim = 2
-subprocess.check_call(['rm', '-f', 'nft.hdf5'])
-table_manager = NearFieldInteractionTableManager()
-table, _ = table_manager.get_table(dim, "Laplace", q_order=1, force_recompute=False)
 
-case_same_box = len(table.interaction_case_vecs) // 2
 
 
 def test_case_ids():
+    dim = 2
+    table_manager = NearFieldInteractionTableManager()
+    table, _ = table_manager.get_table(
+            dim, "Laplace", q_order=1, force_recompute=False)
     for i in range(len(table.interaction_case_vecs)):
         code = table.case_encode(table.interaction_case_vecs[i])
         assert table.case_indices[code] == i
 
 
-def get_target_point(case_id, target_id):
-    assert case_id != case_same_box
+def get_target_point(case_id, target_id, table):
     case_vec = table.interaction_case_vecs[case_id]
     center = np.array([0.5, 0.5]) + np.array(case_vec) * 0.25
     dist = np.max(np.abs(case_vec)) - 2
@@ -62,6 +58,13 @@ def get_target_point(case_id, target_id):
 
 def test_get_neighbor_target_point():
 
+    dim = 2
+    table_manager = NearFieldInteractionTableManager()
+    table, _ = table_manager.get_table(
+            dim, "Laplace", q_order=1, force_recompute=False)
+
+    case_same_box = len(table.interaction_case_vecs) // 2
+
     for cid in range(len(table.interaction_case_vecs)):
 
         if cid == case_same_box:
@@ -69,12 +72,14 @@ def test_get_neighbor_target_point():
 
         for tpid in range(table.n_q_points):
             pt = table.find_target_point(tpid, cid)
-            pt2 = get_target_point(cid, tpid)
+            pt2 = get_target_point(cid, tpid, table)
 
         assert np.allclose(pt, pt2)
 
 
 def laplace_const_source_neighbor_box(q_order, case_id):
+    dim = 2
+    table_manager = NearFieldInteractionTableManager()
     nft, _ = table_manager.get_table(
         dim, "Laplace", q_order=q_order, force_recompute=False
     )
@@ -94,6 +99,7 @@ def laplace_const_source_neighbor_box(q_order, case_id):
 
 def direct_quad(source_func, target_point):
 
+    dim = 2
     knl_func = vm.nearfield_potential_table.get_laplace(dim)
 
     def integrand(x, y):
@@ -111,6 +117,8 @@ def direct_quad(source_func, target_point):
 def drive_test_direct_quad_neighbor_box(q_order, case_id):
     u = laplace_const_source_neighbor_box(q_order, case_id)
 
+    dim = 2
+    table_manager = NearFieldInteractionTableManager()
     nft, _ = table_manager.get_table(
         dim, "Laplace", q_order=q_order, force_recompute=False
     )
@@ -137,6 +145,12 @@ def drive_test_direct_quad_neighbor_box(q_order, case_id):
 @pytest.mark.parametrize("q_order", [1, ])
 def test_direct_quad_neighbor_box(q_order):
     subprocess.check_call(['rm', '-f', 'nft.hdf5'])
+
+    dim = 2
+    table_manager = NearFieldInteractionTableManager()
+    table, _ = table_manager.get_table(
+            dim, "Laplace", q_order=1, force_recompute=False)
+
     for case_id in range(len(table.interaction_case_vecs)):
         drive_test_direct_quad_neighbor_box(q_order, case_id)
 
@@ -144,6 +158,10 @@ def test_direct_quad_neighbor_box(q_order):
 @pytest.mark.parametrize("q_order", [2, ])
 def test_direct_quad_neighbor_box_longrun(longrun, q_order):
     subprocess.check_call(['rm', '-f', 'nft.hdf5'])
+
+    table, _ = table_manager.get_table(
+            dim, "Laplace", q_order=1, force_recompute=False)
+
     for case_id in range(len(table.interaction_case_vecs)):
         drive_test_direct_quad_neighbor_box(q_order, case_id)
 
