@@ -27,9 +27,6 @@ import volumential as vm
 from volumential.table_manager import NearFieldInteractionTableManager
 
 
-
-
-
 def test_case_ids():
     dim = 2
     table_manager = NearFieldInteractionTableManager()
@@ -159,6 +156,8 @@ def test_direct_quad_neighbor_box(q_order):
 def test_direct_quad_neighbor_box_longrun(longrun, q_order):
     subprocess.check_call(['rm', '-f', 'nft.hdf5'])
 
+    dim = 2
+    table_manager = NearFieldInteractionTableManager()
     table, _ = table_manager.get_table(
             dim, "Laplace", q_order=1, force_recompute=False)
 

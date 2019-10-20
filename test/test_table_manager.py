@@ -42,7 +42,8 @@ def test_case_id():
 def test_get_table():
     dim = 2
     table_manager = NearFieldInteractionTableManager()
-    table, _ = table_manager.get_table(dim, "Laplace", q_order=1, force_recompute=False)
+    table, _ = table_manager.get_table(
+            dim, "Laplace", q_order=1, force_recompute=False)
     assert table.dim == dim
 
 
