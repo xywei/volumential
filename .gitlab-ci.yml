@@ -7,6 +7,42 @@ Flake8:
     except:
     - tags
 
+Pylint:
+  script:
+  # Needed to avoid name shadowing issues when running from source directory.
+  # Pylint won't find the Cython bits without this
+  - PROJECT_INSTALL_FLAGS="--editable"
+  - export PY_EXE=python3
+  # Pin to numpy 1.15
+  # See https://github.com/PyCQA/pylint/issues/2721
+  - EXTRA_INSTALL="Cython pybind11 numpy==1.15 mako matplotlib"
+  - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/master/prepare-and-run-pylint.sh
+  - ". ./prepare-and-run-pylint.sh pytential test"
+  tags:
+  - python3
+  except:
+  - tags
+
+Python 2.7 POCL:
+  script:
+  - export PY_EXE=python2.7
+  - export PYOPENCL_TEST=portable:pthread
+  - export PYTEST_ADDOPTS=${PYTEST_ADDOPTS:--k-slowtest}
+  - export EXTRA_INSTALL="pybind11 cython numpy pytest scipy mako wheel"
+  - git submodule sync && git submodule update --init --recursive --remote
+  - ((cd contrib/meshgen11_dealii/; ./build.sh) && echo "Using meshgen11_dealii.") || (echo "Using boxtree for meshgen.")
+  - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/master/build-and-test-py-project.sh
+  - ". ./build-and-test-py-project.sh"
+  tags:
+  - python2.7
+  - pocl
+  - large-node
+  except:
+  - tags
+  artifacts:
+    reports:
+      junit: test/pytest.xml
+
 Python 3 POCL:
   script:
   - export PY_EXE=python3
@@ -20,8 +56,12 @@ Python 3 POCL:
   - python3
   - pocl
   - dealii
+  - large-node
   except:
   - tags
+  artifacts:
+    reports:
+      junit: test/pytest.xml
 
 Documentation Sphinx:
   script:
