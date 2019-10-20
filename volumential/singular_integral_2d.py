@@ -26,6 +26,7 @@ import logging
 
 import numpy as np
 import scipy.integrate as sint
+import scipy.integrate.quadrautre as quad  # noqa
 import scipy as sp
 
 __doc__ = """The 2D singular integrals are computed using the transform
