@@ -674,10 +674,9 @@ class DrosteFull(DrosteBase):
                         + ["quad_order" for d in range(self.dim)]
                     )
                     + ", n_cases",
-                ),
-                *extra_kernel_kwarg_types,
-                "...",
-            ],
+                ), ]
+                + extra_kernel_kwarg_types
+                + ["...", ],
             name="brick_map",
             lang_version=(2018, 2),
         )

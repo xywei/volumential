@@ -208,11 +208,14 @@ class ExpansionWranglerInterface(object):
 # {{{ code container interface
 
 
-class ExpansionWranglerCodeContainerInterface(metaclass=ABCMeta):
+class ExpansionWranglerCodeContainerInterface(object):
     """
         Abstract expansion code container interface.
         The interface is adapted from, and stays compatible with boxtree/fmm.
     """
+
+    __metaclass__ = ABCMeta
+
     @abstractmethod
     def get_wrangler(self, *args, **kwargs):
         """Makes a wrangler object.
