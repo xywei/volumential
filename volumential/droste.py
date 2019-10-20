@@ -627,7 +627,8 @@ class DrosteFull(DrosteBase):
     """
 
     def __init__(self, integral_knl, quad_order, case_vecs, n_brick_quad_points=50):
-        super().__init__(integral_knl, quad_order, case_vecs, n_brick_quad_points)
+        super(DrosteFull, self).__init__(
+                integral_knl, quad_order, case_vecs, n_brick_quad_points)
         self.name = "DrosteFull"
 
     def make_loop_domain(self):
@@ -675,7 +676,7 @@ class DrosteFull(DrosteBase):
                     )
                     + ", n_cases",
                 ), ]
-                + extra_kernel_kwarg_types
+                + list(extra_kernel_kwarg_types)
                 + ["...", ],
             name="brick_map",
             lang_version=(2018, 2),
@@ -694,10 +695,10 @@ class DrosteFull(DrosteBase):
 
     def get_optimized_kernel(self, ncpus=None, **kwargs):
         if ncpus is None:
-            import os
+            import multiprocessing
             # NOTE: this detects the number of logical cores, which
             # may result in suboptimal performance.
-            ncpus = os.cpu_count()
+            ncpus = multiprocessing.cpu_count()
         knl = self.get_kernel(**kwargs)
         knl = lp.split_iname(knl, "icase", ncpus, inner_tag="g.0")
         return knl
@@ -842,7 +843,8 @@ class DrosteReduced(DrosteBase):
         n_brick_quad_points=50,
         knl_symmetry_tags=None,
     ):
-        super().__init__(integral_knl, quad_order, case_vecs, n_brick_quad_points)
+        super(DrosteReduced, self).__init__(
+                integral_knl, quad_order, case_vecs, n_brick_quad_points)
 
         from volumential.list1_symmetry import CaseVecReduction
 
@@ -1044,8 +1046,8 @@ class DrosteReduced(DrosteBase):
 
         expansion_code = []
         for ext_index, ext_id in zip(range(len(ext_ids)), ext_ids):
-            ext_tgt_ordering = base_tgt_ordering.copy()
-            ext_fun_ordering = base_fun_ordering.copy()
+            ext_tgt_ordering = list(base_tgt_ordering)
+            ext_fun_ordering = list(base_fun_ordering)
             # apply s
             for swap in ext_id[1:]:
                 ns = len(swap)
@@ -1133,7 +1135,7 @@ class DrosteReduced(DrosteBase):
                             + ["quad_order" for d in range(self.dim)]
                         )
                         + ", n_cases",
-                    ), ] + extra_kernel_kwarg_types
+                    ), ] + list(extra_kernel_kwarg_types)
                     + ["...", ],
                 name="brick_map",
                 lang_version=(2018, 2),
@@ -1153,10 +1155,8 @@ class DrosteReduced(DrosteBase):
                             + ["quad_order" for d in range(self.dim)]
                         )
                         + ", n_cases",
-                    ),
-                    *extra_kernel_kwarg_types,
-                    "...",
-                ],
+                    ), ] + list(extra_kernel_kwarg_types)
+                    + ["...", ],
                 name="brick_map_expansion",
                 lang_version=(2018, 2),
             )
@@ -1179,10 +1179,10 @@ class DrosteReduced(DrosteBase):
         # The returned kernel depends on the state variable
         # self.current_base_case, self.get_kernel_id
         if ncpus is None:
-            import os
+            import multiprocessing
             # NOTE: this detects the number of logical cores, which
             # may result in suboptimal performance.
-            ncpus = os.cpu_count()
+            ncpus = multiprocessing.cpu_count()
 
         knl = self.get_kernel(**kwargs)
         knl = lp.join_inames(knl, inames=self.basis_vars, new_iname="func")
@@ -1547,7 +1547,7 @@ class InverseDrosteReduced(DrosteReduced):
         """
         :param auto_windowing: auto-detect window radius.
         """
-        super().__init__(
+        super(InverseDrosteReduced, self).__init__(
             integral_knl, quad_order, case_vecs,
             n_brick_quad_points, knl_symmetry_tags)
         self.auto_windowing = auto_windowing
@@ -1944,10 +1944,8 @@ class InverseDrosteReduced(DrosteReduced):
                             + ["quad_order" for d in range(self.dim)]
                         )
                         + ", n_cases",
-                    ),
-                    *extra_kernel_kwarg_types,
-                    "...",
-                ],
+                    ), ] + list(extra_kernel_kwarg_types)
+                    + ["...", ],
                 name="brick_map_%d" % self.get_kernel_id,
                 lang_version=(2018, 2),
                 **extra_loopy_kernel_kwargs
@@ -1967,10 +1965,8 @@ class InverseDrosteReduced(DrosteReduced):
                             + ["quad_order" for d in range(self.dim)]
                         )
                         + ", n_cases",
-                    ),
-                    *extra_kernel_kwarg_types,
-                    "...",
-                ],
+                    ), ] + list(extra_kernel_kwarg_types)
+                    + ["...", ],
                 name="brick_map_expansion",
                 lang_version=(2018, 2),
                 **extra_loopy_kernel_kwargs

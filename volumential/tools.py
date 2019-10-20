@@ -159,9 +159,9 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
             [
                 lp.ValueArg("dim, n_targets", np.int32),
                 lp.GlobalArg("target_points", np.float64, "dim, n_targets"),
-                *extra_kernel_kwarg_types,
-                "...",
-            ],
+                ]
+                + list(extra_kernel_kwarg_types)
+                + ["...", ],
             name="eval_expr",
             lang_version=(2018, 2),
         )
@@ -181,10 +181,10 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
     def get_optimized_kernel(self, ncpus=None, **kwargs):
         knl = self.get_kernel(**kwargs)
         if ncpus is None:
-            import os
+            import multiprocessing
             # NOTE: this detects the number of logical cores, which
             # may result in suboptimal performance.
-            ncpus = os.cpu_count()
+            ncpus = multiprocessing.cpu_count()
         knl = lp.split_iname(
             knl,
             split_iname="itgt",
@@ -413,8 +413,8 @@ class DiscreteLegendreTransform(BoxSpecificMap):
     def get_optimized_kernel(self, ncpus=None, **kwargs):
         knl = self.get_kernel(**kwargs)
         if ncpus is None:
-            import os
-            ncpus = os.cpu_count()
+            import multiprocessing
+            ncpus = multiprocessing.cpu_count()
         knl = lp.split_iname(
             knl,
             split_iname="bid",
@@ -540,8 +540,8 @@ class BoxSum(BoxSpecificReduction):
     def get_optimized_kernel(self, ncpus=None, **kwargs):
         knl = self.get_kernel(**kwargs)
         if ncpus is None:
-            import os
-            ncpus = os.cpu_count()
+            import multiprocessing
+            ncpus = multiprocessing.cpu_count()
         knl = lp.split_iname(
             knl,
             split_iname="bid",

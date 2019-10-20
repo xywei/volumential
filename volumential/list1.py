@@ -449,10 +449,10 @@ class NearFieldFromCSR(NearFieldEvalBase):
 
     def get_optimized_kernel(self, ncpus=None):
         if ncpus is None:
-            import os
+            import multiprocessing
             # NOTE: this detects the number of logical cores, disable hyperthreading
             # for the optimal performance.
-            ncpus = os.cpu_count()
+            ncpus = multiprocessing.cpu_count()
         knl = self.get_kernel()
         knl = loopy.split_iname(knl, "tbox", ncpus, inner_tag="g.0")
         return knl

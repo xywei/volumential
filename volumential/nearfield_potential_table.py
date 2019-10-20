@@ -1040,8 +1040,8 @@ class NearFieldInteractionTable(object):
             raise ValueError()
 
         if ncpus is None:
-            import os
-            ncpus = os.cpu_count()
+            import multiprocessing
+            ncpus = multiprocessing.cpu_count()
 
         if pool is None:
             from multiprocessing import Pool

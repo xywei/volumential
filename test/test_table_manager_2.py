@@ -1,3 +1,5 @@
+from __future__ import absolute_import, division, print_function
+
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
 __license__ = """
@@ -28,6 +30,7 @@ from volumential.table_manager import NearFieldInteractionTableManager
 
 
 dim = 2
+subprocess.check_call(['rm', '-f', 'nft.hdf5'])
 table_manager = NearFieldInteractionTableManager()
 table, _ = table_manager.get_table(dim, "Laplace", q_order=1, force_recompute=False)
 
