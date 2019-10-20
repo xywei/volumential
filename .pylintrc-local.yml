@@ -4,6 +4,7 @@
   val:
     - scipy.*
     - multiprocess
+    - gmsh
 - arg: disable
   val: all
 - arg: enable
