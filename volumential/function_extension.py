@@ -266,8 +266,7 @@ class ComplexLogKernel(ExpressionKernel):
 
         if self.dim == 2:
             if nderivatives == 0:
-                import sumpy.symbolic as sp
-                return (expr + sp.log(rscale))
+                return expr + var("log")(rscale)
             else:
                 return expr
 

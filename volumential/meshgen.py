@@ -95,6 +95,9 @@ class MeshGenBase(object):
             self.boxtree, self.quadrature_formula
         )
 
+    def dimension_specific_setup(self):
+        pass
+
     def get_q_points_dev(self):
         return self.quadrature.get_q_points(self.queue)
 

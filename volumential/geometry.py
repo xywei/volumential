@@ -161,6 +161,9 @@ class BoxFMMGeometryFactory():
             from volumential.meshgen import MeshGen3D
             self._engine_class = MeshGen3D
 
+        self.dim = dim
+        self.quadrature_formula = quadrature_formula
+
         self.bbox_getter = bbox_getter
 
         self.cl_context = cl_ctx

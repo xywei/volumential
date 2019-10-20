@@ -46,6 +46,8 @@ class NearFieldEvalBase(KernelCacheWrapper):
     """Base class of near-field evalulator.
     """
 
+    default_name = "near_field_eval_base"
+
     def __init__(
         self,
         integral_kernel,

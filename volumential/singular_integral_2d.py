@@ -25,7 +25,7 @@ THE SOFTWARE.
 import logging
 
 import numpy as np
-import scipy.integrate.quadrature as quad
+import scipy.integrate as sint
 import scipy as sp
 
 __doc__ = """The 2D singular integrals are computed using the transform
@@ -127,7 +127,7 @@ def qquad(
 
         # Using lambda for readability
         def outer_integrand(y):
-            return quad(  # NOQA
+            return sint.quadrature(  # NOQA
                 lambda x: func(x, y, *args),
                 a,
                 b,
@@ -143,7 +143,7 @@ def qquad(
 
         # Is there a simple way to retrieve err info from the inner quad calls?
 
-        val, err = quad(
+        val, err = sint.quadrature(
             outer_integrand, c, d, (), tol, rtol, maxitero, vec_func, minitero
         )
 

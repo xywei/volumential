@@ -1266,8 +1266,6 @@ class NearFieldInteractionTable(object):
 
         # {{{ integrate over the exterior of the ball
 
-        import scipy.integrate.quadrature as quad
-
         if self.dim == 2:
 
             def rho_0(theta, target, radius):
@@ -1285,7 +1283,8 @@ class NearFieldInteractionTable(object):
                 # target: target point
                 # s: fractional order
                 # radius: radius of the circle
-                val, _ = quad(
+                import scipy.integrate as sint
+                val, _ = sint.quadrature(
                     partial(ext_inf_integrand,
                         s=s, target=target, radius=radius),
                     a=0,

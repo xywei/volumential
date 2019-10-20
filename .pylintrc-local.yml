@@ -1,0 +1,10 @@
+- arg: extension-pkg-whitelist
+  val: numpy
+- arg: ignored-modules
+  val:
+    - scipy.*
+    - multiprocess
+- arg: disable
+  val: all
+- arg: enable
+  val: E
