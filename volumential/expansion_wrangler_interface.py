@@ -37,12 +37,14 @@ __doc__ = """
 # NOTE: abstractmethod's signatures (arguement lists) are not enforced
 
 
-class ExpansionWranglerInterface(metaclass=ABCMeta):
+class ExpansionWranglerInterface(object):
     """
         Abstract expansion handling interface.
         The interface is adapted from, and stays compatible with boxtree/fmm.
         TODO: Update docstrings
     """
+
+    __metaclass__ = ABCMeta
 
     @abstractmethod
     def multipole_expansion_zeros(self):

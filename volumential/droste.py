@@ -590,7 +590,7 @@ class DrosteBase(KernelCacheWrapper):
         return mapped_q_points[q_points_ordering]
 
     def postprocess_cheb_table(self, cheb_table, cheb_coefs):
-        nfp_table = np.zeros([self.n_q_points, *cheb_table.shape[self.dim:]])
+        nfp_table = np.zeros([self.n_q_points, ] + list(cheb_table.shape[self.dim:]))
 
         # transform to interpolatory basis functions
         # NOTE: the reversed order of indices, e.g.,

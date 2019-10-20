@@ -72,11 +72,11 @@ def test_modes():
 
 def cheb_eval(dim, coefs, coords):
     if dim == 1:
-        return chebval(*coords, coefs)
+        return chebval(coords[0], coefs)
     elif dim == 2:
-        return chebval2d(*coords, coefs)
+        return chebval2d(coords[0], coords[1], coefs)
     elif dim == 3:
-        return chebval3d(*coords, coefs)
+        return chebval3d(coords[0], coords[1], coords[2], coefs)
     else:
         raise NotImplementedError('dimension %d not supported' % dim)
 
