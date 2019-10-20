@@ -293,7 +293,6 @@ class NearFieldFromCSR(NearFieldEvalBase):
         inverse-type potentials like the fractional Laplacian.
         """
         if self.potential_kind == 1:
-            # NOTE: will the unused ext_nmlz be auto eliminated by the compiler?
             return "0.0"
         elif self.potential_kind == 2:
             return "source_coefs[target_id] * ext_nmlz"
@@ -342,16 +341,17 @@ class NearFieldFromCSR(NearFieldEvalBase):
 
                     <> scaling = COMPUTE_SCALING
 
-                    <> tgt_scaling = COMPUTE_TGT_SCALING
-                    <> tgt_displacement = COMPUTE_TGT_DISPLACEMENT
-                    tgt_table_lev_tmp = GET_TGT_TABLE_LEVEL {id=tgttab_lev_tmp}
-                    tgt_table_lev = round(tgt_table_lev_tmp) \
-                            {id=tgttab_lev,dep=tgttab_lev_tmp}
-                    <> ext_nmlz = exterior_mode_nmlz[tgt_table_lev, tid] \
-                            * tgt_scaling + tgt_displacement \
-                            {id=extnmlz,dep=tgttab_lev}
-
                     for sid
+
+                        <> tgt_scaling = COMPUTE_TGT_SCALING
+                        <> tgt_displacement = COMPUTE_TGT_DISPLACEMENT
+                        tgt_table_lev_tmp = GET_TGT_TABLE_LEVEL {id=tgttab_lev_tmp}
+                        tgt_table_lev = round(tgt_table_lev_tmp) \
+                                {id=tgttab_lev,dep=tgttab_lev_tmp}
+                        <> ext_nmlz = exterior_mode_nmlz[tgt_table_lev, tid] \
+                                * tgt_scaling + tgt_displacement \
+                                {id=extnmlz,dep=tgttab_lev}
+
                         <> source_id = box_source_beg + sid
                         <> pair_id = sid * n_box_targets + tid
                         <> entry_id = case_id * \
@@ -382,10 +382,10 @@ class NearFieldFromCSR(NearFieldEvalBase):
                     result[target_id] = sum((sbox, sid),
                         coef * integ) + EXTERIOR_PART {dep=integ:coef:extnmlz}
 
-                # Try inspecting case_id if something goes wrong
-                # (like segmentation fault) and look for -1's
-                # result[target_id] = min((sbox, sid), case_id)
-                # result[target_id] = vec_id_tmp
+                    # Try inspecting case_id if something goes wrong
+                    # (like segmentation fault) and look for -1's
+                    # result[target_id] = min((sbox, sid), case_id)
+                    # result[target_id] = vec_id_tmp
 
                 end
             end
