@@ -293,8 +293,8 @@ def drive_test_direct_quad_neighbor_box(queue, q_order, case_id, ctx_factory, di
 def test_direct_quad_neighbor_box(ctx_factory, q_order):
     cl_ctx = ctx_factory()
     queue = cl.CommandQueue(cl_ctx)
-
-    for case_id in range(len(pytest.table.interaction_case_vecs)):
+    table_manager, table = get_tmp_table_manager_and_data(queue)
+    for case_id in range(len(table.interaction_case_vecs)):
         drive_test_direct_quad_neighbor_box(queue, q_order, case_id)
 
 
@@ -302,8 +302,8 @@ def test_direct_quad_neighbor_box(ctx_factory, q_order):
 def test_direct_quad_neighbor_box_longrun(longrun, ctx_factory, q_order):
     cl_ctx = ctx_factory()
     queue = cl.CommandQueue(cl_ctx)
-
-    for case_id in range(len(pytest.table.interaction_case_vecs)):
+    table_manager, table = get_tmp_table_manager_and_data(queue)
+    for case_id in range(len(table.interaction_case_vecs)):
         drive_test_direct_quad_neighbor_box(queue, q_order, case_id)
 
 
