@@ -99,7 +99,7 @@ def drive_test_modes_cheb_coeffs(dim, q, cheb_order):
     # NOTE: table.q_points are over [0, 1]^dim,
     # while cheb_eval assumes points are over [-1, 1]^dim
     targets = np.array([
-        [q[i] for q in table.q_points]
+        [qpt[i] for qpt in table.q_points]
         for i in range(dim)]) * 2 - 1
 
     mode_vals = cheb_eval(dim, ccoefs, targets)
