@@ -669,8 +669,7 @@ class DrosteFull(DrosteBase):
                 lp.GlobalArg("interaction_case_vecs", np.float64, "dim, n_cases"),
                 lp.GlobalArg("interaction_case_scls", np.float64, "n_cases"),
                 lp.GlobalArg(
-                    "result",
-                    lp.auto,
+                    "result", None,
                     ", ".join(
                         ["nfunctions" for d in range(self.dim)]
                         + ["quad_order" for d in range(self.dim)]
@@ -1129,8 +1128,7 @@ class DrosteReduced(DrosteBase):
                     lp.GlobalArg("interaction_case_scls", np.float64, "n_cases"),
                     lp.GlobalArg("target_nodes", np.float64, "quad_order"),
                     lp.GlobalArg(
-                        "result",
-                        lp.auto,
+                        "result", None,
                         ", ".join(
                             ["nfunctions" for d in range(self.dim)]
                             + ["quad_order" for d in range(self.dim)]
@@ -1149,8 +1147,7 @@ class DrosteReduced(DrosteBase):
                 [
                     lp.ValueArg("n_cases, nfunctions, quad_order, dim", np.int32),
                     lp.GlobalArg(
-                        "result",
-                        lp.auto,
+                        "result", None,
                         ", ".join(
                             ["nfunctions" for d in range(self.dim)]
                             + ["quad_order" for d in range(self.dim)]
@@ -1938,8 +1935,7 @@ class InverseDrosteReduced(DrosteReduced):
                     lp.GlobalArg("interaction_case_scls", np.float64, "n_cases"),
                     lp.GlobalArg("target_nodes", np.float64, "quad_order"),
                     lp.GlobalArg(
-                        "result",
-                        lp.auto,
+                        "result", None,
                         ", ".join(
                             ["nfunctions" for d in range(self.dim)]
                             + ["quad_order" for d in range(self.dim)]
@@ -1959,8 +1955,7 @@ class InverseDrosteReduced(DrosteReduced):
                 [
                     lp.ValueArg("n_cases, nfunctions, quad_order, dim", np.int32),
                     lp.GlobalArg(
-                        "result",
-                        lp.auto,
+                        "result", None,
                         ", ".join(
                             ["nfunctions" for d in range(self.dim)]
                             + ["quad_order" for d in range(self.dim)]

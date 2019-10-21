@@ -427,6 +427,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 "...",
             ],
             name="near_field",
+            lang_version=(2018, 2)
         )
 
         # print(lpknl)

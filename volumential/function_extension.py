@@ -186,7 +186,8 @@ def compute_harmonic_extension(queue, target_discr,
             sym.S(kernel, inv_sqrt_w_sigma, **repr_kwargs)
             + sym.D(kernel, inv_sqrt_w_sigma, **repr_kwargs))
 
-    qbx_stick_out = qbx.copy(target_stick_out_factor=target_association_tolerance)
+    qbx_stick_out = qbx.copy(
+            target_association_tolerance=target_association_tolerance)
 
     debugging_info['qbx'] = qbx_stick_out
     debugging_info['representation'] = representation_sym
