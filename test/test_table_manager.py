@@ -299,7 +299,7 @@ def test_direct_quad_neighbor_box(ctx_factory, q_order):
 
 
 @pytest.mark.parametrize("q_order", [2, ])
-def test_direct_quad_neighbor_box(longrun, ctx_factory, q_order):
+def test_direct_quad_neighbor_box_longrun(longrun, ctx_factory, q_order):
     cl_ctx = ctx_factory()
     queue = cl.CommandQueue(cl_ctx)
 
