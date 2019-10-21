@@ -99,6 +99,23 @@ Python 3 Conda:
     reports:
       junit: test/pytest.xml
 
+Python 3 Conda Apple:
+  script:
+  - export LC_ALL=en_US.UTF-8
+  - export LANG=en_US.UTF-8
+  - export CONDA_ENVIRONMENT=.test-conda-env-py3-macos.yml
+  - export CC=clang
+  - set -o xtrace
+  - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/master/build-and-test-py-project-within-miniconda.sh
+  - ". ./build-and-test-py-project-within-miniconda.sh"
+  tags:
+  - apple
+  except:
+  - tags
+  artifacts:
+    reports:
+      junit: test/pytest.xml
+
 Python 3 POCL Examples:
   script:
   - test -n "$SKIP_EXAMPLES" && exit
