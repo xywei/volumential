@@ -52,3 +52,9 @@ def requires_pypvfmm(request):
         import pypvfmm  # noqa: F401
     except ImportError:
         pytest.skip("needs pypvfmm to run")
+
+
+def pytest_sessionfinish(session, exitstatus):
+    # remove table caches
+    import subprocess
+    subprocess.call(['rm', '-f', '/tmp/volumential_tests.hdf5'])
