@@ -421,7 +421,7 @@ def main():
         print("P2P Error =", np.max(np.abs(ze - zds)))
 
     # Write vtk
-    if 1:
+    if 0:
         from meshmode.mesh.io import read_gmsh
 
         modemesh = read_gmsh("box_grid.msh", force_ambient_dim=None)
