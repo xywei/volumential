@@ -208,13 +208,13 @@ def drive_test_direct_quad_same_box(q_order, ctx_factory):
         assert np.abs(v1 - v3) < 1e-6
 
 
-@pytest.mark.parametrize("q_order", [1, 2])
+@pytest.mark.parametrize("q_order", [1, ])
 def test_direct_quad(q_order, ctx_factory):
     subprocess.check_call(['rm', '-f', 'nft.hdf5'])
     drive_test_direct_quad_same_box(q_order, ctx_factory)
 
 
-@pytest.mark.parametrize("q_order", [3, 4, 5])
+@pytest.mark.parametrize("q_order", [2, 3, 4, 5])
 def test_direct_quad_longrun(longrun, ctx_factory, q_order):
     subprocess.check_call(['rm', '-f', 'nft.hdf5'])
     drive_test_direct_quad_same_box(q_order, ctx_factory)
@@ -326,24 +326,8 @@ def drive_test_direct_quad_neighbor_box(q_order, case_id, ctx_factory):
         assert np.abs(v1 - v3) < 1e-6
 
 
-@pytest.mark.parametrize("q_order", [1, ])
-def test_direct_quad_neighbor_box(q_order, ctx_factory):
-    subprocess.check_call(['rm', '-f', 'nft.hdf5'])
-
-    dim = 2
-    ctx = ctx_factory()
-    queue = cl.CommandQueue(ctx)
-    table_manager = make_tmp_table_manager()
-    table, _ = table_manager.get_table(
-            dim, "Laplace", q_order=1, force_recompute=False,
-            queue=queue)
-
-    for case_id in range(len(table.interaction_case_vecs)):
-        drive_test_direct_quad_neighbor_box(q_order, case_id, ctx_factory)
-
-
-@pytest.mark.parametrize("q_order", [2, ])
-def test_direct_quad_neighbor_box_longrun(longrun, ctx_factory, q_order):
+@pytest.mark.parametrize("q_order", [1, 2, ])
+def test_direct_quad_neighbor_box(longrun, ctx_factory, q_order):
     subprocess.check_call(['rm', '-f', 'nft.hdf5'])
 
     dim = 2
