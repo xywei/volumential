@@ -57,7 +57,7 @@ def main():
 
     logger.info("Using table cache: " + table_filename)
 
-    q_order = 5  # quadrature order
+    q_order = 7  # quadrature order
     n_levels = 5
     use_multilevel_table = False
 
@@ -69,7 +69,7 @@ def main():
 
     dtype = np.float64
 
-    m_order = 15  # multipole order
+    m_order = 10  # multipole order
     force_direct_evaluation = False
 
     logger.info("Multipole order = " + str(m_order))

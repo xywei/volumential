@@ -1,0 +1,35 @@
+name: test-conda-env-py3
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - git
+  - scipy
+  - conda-forge::numpy
+  - conda-forge::sympy
+  - pocl
+  - islpy
+  - pyopencl
+  - python=3
+  - symengine=0.3.0
+  - python-symengine=0.3.0
+  - cython
+  - cmake
+  - tbb-devel
+  - dealii
+  - gmsh
+  - python-gmsh
+
+  - pip
+  - pip:
+    -git+https://www.github.com/xywei/gmsh_interop
+    -git+https://gitlab.tiker.net/xywei/boxtree
+    -git+https://gitlab.tiker.net/xywei/meshmode
+    -git+https://gitlab.tiker.net/xywei/pymbolic
+    -git+https://gitlab.tiker.net/xywei/pytential
+    -git+https://gitlab.tiker.net/xywei/sumpy
+    -git+https://gitlab.tiker.net/xywei/modepy
+    -git+https://gitlab.tiker.net/inducer/cgen
+    -git+https://gitlab.tiker.net/inducer/genpy
+    -git+https://gitlab.tiker.net/inducer/pyvisfile
+    -git+https://gitlab.tiker.net/inducer/loopy
