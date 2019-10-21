@@ -210,7 +210,8 @@ class NearFieldInteractionTable(object):
         build_method=None,
         source_box_extent=1,
         dtype=np.float64,
-        inverse_droste=False
+        inverse_droste=False,
+        **kwargs
     ):
         """
         kernel_type determines how the kernel is scaled w.r.t. box size.
@@ -295,9 +296,15 @@ class NearFieldInteractionTable(object):
             # quad points in [-1,1]
             import volumential.meshgen as mg
 
+            if 'queue' in kwargs:
+                queue = kwargs['queue']
+            else:
+                queue = None
+
             q_points, _, _ = mg.make_uniform_cubic_grid(
-                degree=quad_order, level=1, dim=self.dim
-            )
+                degree=quad_order, level=1, dim=self.dim,
+                queue=queue)
+
             # map to source box
             mapped_q_points = np.array(
                 [

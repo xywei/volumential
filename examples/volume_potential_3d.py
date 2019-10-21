@@ -52,12 +52,12 @@ print("* Setting up...")
 print("*************************")
 
 dim = 3
-table_filename = "nft_laplace3dtmp.hdf5"
+table_filename = "nft_laplace3d.hdf5"
 
 logger.info("Using table cache: " + table_filename)
 
 q_order = 5  # quadrature order
-n_levels = 7  # 2^(n_levels-1) subintervals in 1D, must be at least 2 if not adaptive
+n_levels = 5  # 2^(n_levels-1) subintervals in 1D, must be at least 2 if not adaptive
 use_multilevel_table = False
 
 adaptive_mesh = False
@@ -108,7 +108,7 @@ import volumential.meshgen as mg
 # Show meshgen info
 mg.greet()
 
-mesh = mg.MeshGen3D(q_order, n_levels, a, b)
+mesh = mg.MeshGen3D(q_order, n_levels, a, b, queue=queue)
 if not adaptive_mesh:
     mesh.print_info()
     q_points = mesh.get_q_points()
@@ -136,7 +136,12 @@ else:
     q_radii = None
 
 if 1:
-    mesh.generate_gmsh("box_grid.msh")
+    try:
+        mesh.generate_gmsh("box_grid.msh")
+    except Exception as e:
+        print(e)
+        pass
+
     legacy_msh_file = True
     if legacy_msh_file:
         import os
@@ -215,8 +220,8 @@ trav, _ = tg(queue, tree)
 from volumential.table_manager import NearFieldInteractionTableManager
 
 tm = NearFieldInteractionTableManager(
-    table_filename, root_extent=root_table_source_extent
-)
+    table_filename, root_extent=root_table_source_extent,
+    queue=queue)
 
 if use_multilevel_table:
     logger.info("Using multilevel tables")

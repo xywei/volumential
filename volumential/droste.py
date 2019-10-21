@@ -569,12 +569,13 @@ class DrosteBase(KernelCacheWrapper):
             )
         ]
 
-    def get_target_points(self):
+    def get_target_points(self, queue=None):
         import volumential.meshgen as mg
 
         q_points, _, _ = mg.make_uniform_cubic_grid(
-            degree=self.ntgt_points, level=1, dim=self.dim
-        )
+            degree=self.ntgt_points, level=1, dim=self.dim,
+            queue=queue)
+
         # map to [0,1]^d
         mapped_q_points = np.array(
                 [
@@ -754,7 +755,7 @@ class DrosteFull(DrosteBase):
         root_brick[:, 1] = source_box_extent
 
         # target points in 1D
-        q_points = self.get_target_points()
+        q_points = self.get_target_points(queue)
         assert len(q_points) == self.ntgt_points ** self.dim
         t = np.array([pt[-1] for pt in q_points[: self.ntgt_points]])
 
@@ -1242,7 +1243,7 @@ class DrosteReduced(DrosteBase):
         root_brick[:, 1] = source_box_extent
 
         # target points in 1D
-        q_points = self.get_target_points()
+        q_points = self.get_target_points(queue)
         assert len(q_points) == self.ntgt_points ** self.dim
         t = np.array([pt[-1] for pt in q_points[: self.ntgt_points]])
 
@@ -2018,7 +2019,7 @@ class InverseDrosteReduced(DrosteReduced):
             alpha = 0
 
         # (template) target points in 1D over [0, 1]
-        q_points = self.get_target_points()
+        q_points = self.get_target_points(queue)
         assert len(q_points) == self.ntgt_points ** self.dim
         t = np.array([pt[-1] for pt in q_points[: self.ntgt_points]])
 

@@ -105,7 +105,7 @@ import volumential.meshgen as mg
 # Show meshgen info
 mg.greet()
 
-mesh = mg.MeshGen2D(q_order, n_levels, a, b)
+mesh = mg.MeshGen2D(q_order, n_levels, a, b, queue=queue)
 if not adaptive_mesh:
     mesh.print_info()
     q_points = mesh.get_q_points()
@@ -212,8 +212,8 @@ trav, _ = tg(queue, tree)
 from volumential.table_manager import NearFieldInteractionTableManager
 
 tm = NearFieldInteractionTableManager(
-    table_filename, root_extent=root_table_source_extent
-)
+    table_filename, root_extent=root_table_source_extent,
+    queue=queue)
 
 if use_multilevel_table:
     assert (

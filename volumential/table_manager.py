@@ -196,7 +196,7 @@ class NearFieldInteractionTableManager(object):
                 q_order,
                 source_box_level,
                 compute_method,
-                queue,
+                queue=queue,
                 **kwargs
             )
 
@@ -209,7 +209,7 @@ class NearFieldInteractionTableManager(object):
                 q_order,
                 source_box_level,
                 compute_method,
-                queue,
+                queue=queue,
                 **kwargs
             )
 
@@ -239,7 +239,7 @@ class NearFieldInteractionTableManager(object):
                     q_order,
                     source_box_level,
                     compute_method,
-                    queue,
+                    queue=queue,
                     **kwargs
                 )
 
