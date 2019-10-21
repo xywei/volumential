@@ -327,7 +327,7 @@ class DiscreteLegendreTransform(BoxSpecificMap):
 
         # Normalizers
         self.I = np.ascontiguousarray(  # noqa: E741
-                np.diag(self.V.T * self.W @ self.V))
+                np.diag(self.V.T * np.matmul(self.W, self.V)))
         assert self.I.shape == (self.degree**self.dim,)
 
         # Fix strides for loopy
@@ -335,7 +335,7 @@ class DiscreteLegendreTransform(BoxSpecificMap):
 
         # Check orthogonality
         ortho_resid = np.linalg.norm(
-                self.V.T * self.W @ self.V - np.diag(self.I))
+                self.V.T * np.matmul(self.W, self.V) - np.diag(self.I))
         if ortho_resid > 1e-13:
             logger.warn("Legendre polynomials' orthogonality residual = %f"
                     % ortho_resid)

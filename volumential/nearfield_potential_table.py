@@ -39,6 +39,33 @@ import volumential.singular_integral_2d as squad
 
 logger = logging.getLogger('NearFieldInteractionTable')
 
+# {{{ pickle support for instancemethod
+
+
+def _pickle_method(method):
+    func_name = method.im_func.__name__
+    obj = method.im_self
+    cls = method.im_class
+    return _unpickle_method, (func_name, obj, cls)
+
+
+def _unpickle_method(func_name, obj, cls):
+    for cls in cls.mro():
+        try:
+            func = cls.__dict__[func_name]
+        except KeyError:
+            pass
+        else:
+            break
+    return func.__get__(obj, cls)
+
+
+import copy_reg
+import types
+copy_reg.pickle(types.MethodType, _pickle_method, _unpickle_method)
+
+
+# }}}
 
 def _self_tp(vec, tpd=2):
     """
@@ -698,7 +725,7 @@ class NearFieldInteractionTable(object):
         """
         assert self.dim == 2
         if pool is None:
-            from multiprocess import Pool
+            from multiprocessing import Pool
 
             pool = Pool(processes=None)
 
@@ -717,7 +744,7 @@ class NearFieldInteractionTable(object):
         assert self.dim == 2
 
         # multiprocessing cannot handle member functions
-        from multiprocess import Pool
+        from multiprocessing import Pool
 
         pool = Pool(processes=None)
 

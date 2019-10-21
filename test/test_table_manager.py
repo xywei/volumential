@@ -24,6 +24,7 @@ THE SOFTWARE.
 
 import subprocess
 import numpy as np
+import pyopencl as cl
 import pytest
 import volumential as vm
 from volumential.table_manager import NearFieldInteractionTableManager
@@ -36,29 +37,38 @@ def make_tmp_table_manager():
             os.path.join('/tmp', str(uuid4()) + '.hdf5'))
 
 
-def test_case_id():
+def test_case_id(ctx_getter):
     dim = 2
+    ctx = ctx_getter()
+    queue = cl.CommandQueue(ctx)
     table_manager = make_tmp_table_manager()
     table1, _ = table_manager.get_table(
-        dim, "Laplace", q_order=1, force_recompute=False
+        dim, "Laplace", q_order=1, force_recompute=False,
+        queue=queue,
     )
     case_same_box = len(table1.interaction_case_vecs) // 2
     assert table1.interaction_case_vecs[case_same_box] == [0, 0]
 
 
-def test_get_table():
+def test_get_table(ctx_getter):
     dim = 2
+    ctx = ctx_getter()
+    queue = cl.CommandQueue(ctx)
     table_manager = make_tmp_table_manager()
     table, _ = table_manager.get_table(
-            dim, "Laplace", q_order=1, force_recompute=False)
+            dim, "Laplace", q_order=1, force_recompute=False,
+            queue=queue)
     assert table.dim == dim
 
 
-def laplace_const_source_same_box(q_order):
+def laplace_const_source_same_box(q_order, ctx_getter):
     dim = 2
+    ctx = ctx_getter()
+    queue = cl.CommandQueue(ctx)
     table_manager = make_tmp_table_manager()
     nft, _ = table_manager.get_table(
-        dim, "Laplace", q_order=q_order, force_recompute=False
+        dim, "Laplace", q_order=q_order, force_recompute=False,
+        queue=queue
     )
 
     n_pairs = nft.n_pairs
@@ -78,11 +88,14 @@ def laplace_const_source_same_box(q_order):
     return pot
 
 
-def laplace_cons_source_neighbor_box(q_order, case_id):
+def laplace_cons_source_neighbor_box(q_order, case_id, ctx_getter):
     dim = 2
+    ctx = ctx_getter()
+    queue = cl.CommandQueue(ctx)
     table_manager = make_tmp_table_manager()
     nft, _ = table_manager.get_table(
-        dim, "Laplace", q_order=q_order, force_recompute=False
+        dim, "Laplace", q_order=q_order, force_recompute=False,
+        queue=queue,
     )
 
     n_pairs = nft.n_pairs
@@ -100,16 +113,19 @@ def laplace_cons_source_neighbor_box(q_order, case_id):
     return pot
 
 
-def test_lcssb_1():
-    u = laplace_const_source_same_box(1)
+def test_lcssb_1(ctx_getter):
+    u = laplace_const_source_same_box(1, ctx_getter)
     assert len(u) == 1
 
 
-def interp_func(q_order, coef):
+def interp_func(q_order, coef, ctx_getter):
     dim = 2
+    ctx = ctx_getter()
+    queue = cl.CommandQueue(ctx)
     table_manager = make_tmp_table_manager()
     nft, _ = table_manager.get_table(
-        dim, "Laplace", q_order=q_order, force_recompute=False
+        dim, "Laplace", q_order=q_order, force_recompute=False,
+        queue=queue
     )
 
     assert dim == 2
@@ -157,14 +173,17 @@ def direct_quad(source_func, target_point):
     return integral
 
 
-def drive_test_direct_quad_same_box(q_order):
+def drive_test_direct_quad_same_box(q_order, ctx_getter):
     dim = 2
-    u = laplace_const_source_same_box(q_order)
+    ctx = ctx_getter()
+    queue = cl.CommandQueue(ctx)
+    u = laplace_const_source_same_box(q_order, ctx_getter)
     func = interp_func(q_order, u)
 
     table_manager = make_tmp_table_manager()
     nft, _ = table_manager.get_table(
-        dim, "Laplace", q_order=q_order, force_recompute=False
+        dim, "Laplace", q_order=q_order, force_recompute=False,
+        queue=queue,
     )
 
     def const_one_source_func(x, y):
@@ -190,22 +209,24 @@ def drive_test_direct_quad_same_box(q_order):
 
 
 @pytest.mark.parametrize("q_order", [1, 2])
-def test_direct_quad(q_order):
+def test_direct_quad(q_order, ctx_getter):
     subprocess.check_call(['rm', '-f', 'nft.hdf5'])
-    drive_test_direct_quad_same_box(q_order)
+    drive_test_direct_quad_same_box(q_order, ctx_getter)
 
 
 @pytest.mark.parametrize("q_order", [3, 4, 5])
-def test_direct_quad_longrun(longrun, q_order):
+def test_direct_quad_longrun(longrun, ctx_getter, q_order):
     subprocess.check_call(['rm', '-f', 'nft.hdf5'])
-    drive_test_direct_quad_same_box(q_order)
+    drive_test_direct_quad_same_box(q_order, ctx_getter)
 
 
-def test_case_ids():
+def test_case_ids(ctx_getter):
     dim = 2
+    ctx = ctx_getter()
+    queue = cl.CommandQueue(ctx)
     table_manager = make_tmp_table_manager()
     table, _ = table_manager.get_table(
-            dim, "Laplace", q_order=1, force_recompute=False)
+            dim, "Laplace", q_order=1, force_recompute=False, queue=queue)
     for i in range(len(table.interaction_case_vecs)):
         code = table.case_encode(table.interaction_case_vecs[i])
         assert table.case_indices[code] == i
@@ -227,12 +248,15 @@ def get_target_point(case_id, target_id, table):
     return target_point
 
 
-def test_get_neighbor_target_point():
+def test_get_neighbor_target_point(ctx_getter):
 
     dim = 2
+    ctx = ctx_getter()
+    queue = cl.CommandQueue(ctx)
     table_manager = make_tmp_table_manager()
     table, _ = table_manager.get_table(
-            dim, "Laplace", q_order=1, force_recompute=False)
+            dim, "Laplace", q_order=1, force_recompute=False,
+            queue=queue)
 
     case_same_box = len(table.interaction_case_vecs) // 2
 
@@ -248,11 +272,14 @@ def test_get_neighbor_target_point():
         assert np.allclose(pt, pt2)
 
 
-def laplace_const_source_neighbor_box(q_order, case_id):
+def laplace_const_source_neighbor_box(q_order, case_id, ctx_getter):
     dim = 2
+    ctx = ctx_getter()
+    queue = cl.CommandQueue(ctx)
     table_manager = make_tmp_table_manager()
     nft, _ = table_manager.get_table(
-        dim, "Laplace", q_order=q_order, force_recompute=False
+        dim, "Laplace", q_order=q_order, force_recompute=False,
+        queue=queue,
     )
 
     n_pairs = nft.n_pairs
@@ -268,13 +295,16 @@ def laplace_const_source_neighbor_box(q_order, case_id):
     return pot
 
 
-def drive_test_direct_quad_neighbor_box(q_order, case_id):
+def drive_test_direct_quad_neighbor_box(q_order, case_id, ctx_getter):
     u = laplace_const_source_neighbor_box(q_order, case_id)
 
     dim = 2
+    ctx = ctx_getter()
+    queue = cl.CommandQueue(ctx)
     table_manager = make_tmp_table_manager()
     nft, _ = table_manager.get_table(
-        dim, "Laplace", q_order=q_order, force_recompute=False
+        dim, "Laplace", q_order=q_order, force_recompute=False,
+        queue=queue,
     )
 
     def const_one_source_func(x, y):
@@ -297,35 +327,35 @@ def drive_test_direct_quad_neighbor_box(q_order, case_id):
 
 
 @pytest.mark.parametrize("q_order", [1, ])
-def test_direct_quad_neighbor_box(q_order):
+def test_direct_quad_neighbor_box(q_order, ctx_getter):
     subprocess.check_call(['rm', '-f', 'nft.hdf5'])
 
     dim = 2
+    ctx = ctx_getter()
+    queue = cl.CommandQueue(ctx)
     table_manager = make_tmp_table_manager()
     table, _ = table_manager.get_table(
-            dim, "Laplace", q_order=1, force_recompute=False)
+            dim, "Laplace", q_order=1, force_recompute=False,
+            queue=queue)
 
     for case_id in range(len(table.interaction_case_vecs)):
-        drive_test_direct_quad_neighbor_box(q_order, case_id)
+        drive_test_direct_quad_neighbor_box(q_order, case_id, ctx_getter)
 
 
 @pytest.mark.parametrize("q_order", [2, ])
-def test_direct_quad_neighbor_box_longrun(longrun, q_order):
+def test_direct_quad_neighbor_box_longrun(longrun, ctx_getter, q_order):
     subprocess.check_call(['rm', '-f', 'nft.hdf5'])
 
     dim = 2
+    ctx = ctx_getter()
+    queue = cl.CommandQueue(ctx)
     table_manager = make_tmp_table_manager()
     table, _ = table_manager.get_table(
-            dim, "Laplace", q_order=1, force_recompute=False)
+            dim, "Laplace", q_order=1, force_recompute=False,
+            queue=queue)
 
     for case_id in range(len(table.interaction_case_vecs)):
-        drive_test_direct_quad_neighbor_box(q_order, case_id)
-
-
-# fdm=marker:ft=pyopencl
-
-
-# fdm=marker:ft=pyopencl
+        drive_test_direct_quad_neighbor_box(q_order, case_id, ctx_getter)
 
 
 # fdm=marker:ft=pyopencl
