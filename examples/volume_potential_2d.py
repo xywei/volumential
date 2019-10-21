@@ -49,6 +49,7 @@ print("*************************")
 
 dim = 2
 
+download_table = True  # download precomputation results for the 2D Laplace kernel
 table_filename = "nft_laplace2d.hdf5"
 root_table_source_extent = 2
 
@@ -205,6 +206,16 @@ trav, _ = tg(queue, tree)
 # {{{ build near field potential table
 
 from volumential.table_manager import NearFieldInteractionTableManager
+import os
+
+if download_table and (not os.path.isfile(table_filename)):
+    import json
+    with open("table_urls.json", 'r') as fp:
+        urls = json.load(fp)
+
+    print("Downloading table from %s" % urls['Laplace2D'])
+    import subprocess
+    subprocess.call(["wget", urls['Laplace2D'], table_filename])
 
 tm = NearFieldInteractionTableManager(
     table_filename, root_extent=root_table_source_extent,

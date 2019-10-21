@@ -63,6 +63,27 @@ Python 3 POCL:
     reports:
       junit: test/pytest.xml
 
+Python 3 POCL Examples:
+  script:
+  - test -n "$SKIP_EXAMPLES" && exit
+  - export PY_EXE=python3
+  - export PYOPENCL_TEST=portable:pthread
+  - export EXTRA_INSTALL="pybind11 cython numpy pytest scipy mako wheel"
+  - git submodule sync && git submodule update --init --recursive --remote
+  - ((cd contrib/meshgen11_dealii/; ./build.sh) && echo "Using meshgen11_dealii.") || (echo "Using boxtree for meshgen.")
+  - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/master/build-py-project-and-run-examples.sh
+  - ". ./build-py-project-and-run-examples.sh"
+  tags:
+  - python3
+  - pocl
+  - dealii
+  - large-node
+  except:
+  - tags
+  artifacts:
+    reports:
+      junit: test/pytest.xml
+
 Documentation Sphinx:
   script:
   - export PY_EXE=python3
