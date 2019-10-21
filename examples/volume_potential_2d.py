@@ -59,8 +59,8 @@ def main():
 
     print("Using table cache:", table_filename)
 
-    q_order = 5   # quadrature order
-    n_levels = 4  # 2^(n_levels-1) subintervals in 1D
+    q_order = 9   # quadrature order
+    n_levels = 6  # 2^(n_levels-1) subintervals in 1D
 
     use_multilevel_table = False
 
@@ -215,7 +215,7 @@ def main():
 
         print("Downloading table from %s" % urls['Laplace2D'])
         import subprocess
-        subprocess.call(["wget", urls['Laplace2D'], table_filename])
+        subprocess.call(["wget", "-q", urls['Laplace2D'], table_filename])
 
     tm = NearFieldInteractionTableManager(
         table_filename, root_extent=root_table_source_extent,

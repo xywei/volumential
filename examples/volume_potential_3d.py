@@ -225,7 +225,7 @@ def main():
 
         print("Downloading table from %s" % urls['Laplace3D'])
         import subprocess
-        subprocess.call(["wget", urls['Laplace3D'], table_filename])
+        subprocess.call(["wget", "-q", urls['Laplace3D'], table_filename])
 
     tm = NearFieldInteractionTableManager(
         table_filename, root_extent=root_table_source_extent,
