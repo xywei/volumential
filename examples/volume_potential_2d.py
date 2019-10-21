@@ -38,9 +38,6 @@ else:
 
 import numpy as np
 import pyopencl as cl
-import boxtree as bt
-import sumpy as sp
-import volumential as vm
 from volumential.tools import ScalarFieldExpressionEvaluation as Eval
 
 import pymbolic as pmbl
@@ -116,12 +113,9 @@ else:
     iloop = -1
     while mesh.n_active_cells() < refined_n_cells:
         iloop += 1
-        crtr = np.array(
-            [
-                np.abs(source_field(c) * m)
-                for (c, m) in zip(mesh.get_cell_centers(), mesh.get_cell_measures())
-            ]
-        )
+        crtr = np.abs(
+            source_eval(mesh.get_cell_centers)
+            * mesh.get_cell_measures)
         mesh.update_mesh(crtr, rratio_top, rratio_bot)
         if iloop > n_refinement_loops:
             print("Max number of refinement loops reached.")
@@ -140,7 +134,8 @@ q_points = np.ascontiguousarray(np.transpose(q_points))
 
 from pytools.obj_array import make_obj_array
 
-q_points = make_obj_array([cl.array.to_device(queue, q_points[i]) for i in range(dim)])
+q_points = make_obj_array(
+    [cl.array.to_device(queue, q_points[i]) for i in range(dim)])
 
 q_weights = cl.array.to_device(queue, q_weights)
 # q_radii = cl.array.to_device(queue, q_radii)
@@ -218,10 +213,10 @@ tm = NearFieldInteractionTableManager(
 if use_multilevel_table:
     assert (
         abs(
-            int((b - a) / root_table_source_extent) * root_table_source_extent - (b - a)
-        )
-        < 1e-15
-    )
+            int((b - a)
+              / root_table_source_extent) * root_table_source_extent
+            - (b - a))
+        < 1e-15)
     nftable = []
     for l in range(0, tree.nlevels + 1):
         print("Getting table at level", l)
@@ -452,7 +447,7 @@ if 0:
     ax = Axes3D(plt3d)
     ax.scatter(x, y, zs, s=1)
     # ax.scatter(x, y, source_field([q.get() for q in q_points]), s=1)
-    import matplotlib.cm as cm
+    # import matplotlib.cm as cm
 
     # ax.scatter(x, y, zs, c=np.log(abs(zs-zds)), cmap=cm.jet)
     # plt.gca().set_aspect("equal")
