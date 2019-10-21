@@ -63,8 +63,8 @@ def setup_globals(ctx_factory):
 def test_case_id(ctx_factory):
     setup_globals(ctx_factory)
     case_same_box = len(pytest.table.interaction_case_vecs) // 2
-    assert list(pytest.table.interaction_case_vecs[case_same_box]
-            ) == [0, 0]
+    assert list(
+            pytest.table.interaction_case_vecs[case_same_box]) == [0, 0]
 
 
 def test_get_table(ctx_factory):
@@ -160,6 +160,7 @@ def test_interp_func(longrun, ctx_factory):
 
 def direct_quad(source_func, target_point):
     knl_func = vm.nearfield_potential_table.get_laplace(pytest.dim)
+
     def integrand(x, y):
         return source_func(x, y) * knl_func(x - target_point[0], y - target_point[1])
     import volumential.singular_integral_2d as squad
