@@ -760,8 +760,7 @@ class NearFieldInteractionTable(object):
         if 0:
             # Then complete the table via symmetry lookup
             for entry_id, centry_id in pool.imap_unordered(
-                    self.lookup_by_symmetry, [i for i in range(len(self.data))]
-                ):
+                    self.lookup_by_symmetry, [i for i in range(len(self.data))]):
                 assert not np.isnan(self.data[centry_id])
                 if centry_id == entry_id:
                     continue
