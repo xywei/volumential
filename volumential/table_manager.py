@@ -412,11 +412,7 @@ class NearFieldInteractionTableManager(object):
         provides support for some kernels such that the user can build and
         use the table without explicitly providing such information.
         """
-
         if kernel_type == "Laplace":
-            # knl = LaplaceKernel(dim)
-            # For unknown reasons this does not work with multiprocess
-            # knl_func = vm.nearfield_potential_table.sumpy_kernel_to_lambda(knl)
             knl_func = vm.nearfield_potential_table.get_laplace(dim)
         elif kernel_type == "Constant":
             knl_func = vm.nearfield_potential_table.constant_one
@@ -425,7 +421,8 @@ class NearFieldInteractionTableManager(object):
                 dim, kwargs["b"], kwargs["c"]
             )
         elif kernel_type in self.supported_kernels:
-            knl_func = None
+            knl = self.get_sumpy_kernel(dim, kernel_type)
+            knl_func = vm.nearfield_potential_table.sumpy_kernel_to_lambda(knl)
         else:
             raise NotImplementedError("Kernel type not supported.")
 

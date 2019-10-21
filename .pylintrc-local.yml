@@ -3,7 +3,6 @@
 - arg: ignored-modules
   val:
     - scipy.*
-    - multiprocess
     - gmsh
 - arg: disable
   val: all

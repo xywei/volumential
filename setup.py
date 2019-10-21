@@ -70,9 +70,8 @@ def main():
             "sumpy",
         ],
         extras_require={
-            "transform_based_table_builder": ["multiprocess"],
             "gmsh_support": ["gmsh_interop"],
-            "test": ["multiprocess", "pytest", "gmsh_interop"],
+            "test": ["pytest", "gmsh_interop"],
             "doc": ["sphinx", "sphinx_rtd_theme"],
         },
         include_package_data=True,

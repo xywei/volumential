@@ -32,11 +32,6 @@ from functools import partial
 import volumential.list1_gallery as gallery
 import volumential.singular_integral_2d as squad
 
-# NOTE: Cannot use sumpy kernels for "Transform" since they
-# do not work with multiprocess.
-# e.g. with LaplaceKernel it will complain "AttributeError:
-# 'LaplaceKernel' object has no attribute 'expression'"
-
 logger = logging.getLogger('NearFieldInteractionTable')
 
 
