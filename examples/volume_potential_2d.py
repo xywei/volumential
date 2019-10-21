@@ -52,7 +52,8 @@ def main():
 
     dim = 2
 
-    download_table = True  # download precomputation results for the 2D Laplace kernel
+    # download precomputation results for the 2D Laplace kernel
+    download_table = True
     table_filename = "nft_laplace2d.hdf5"
     root_table_source_extent = 2
 
@@ -111,7 +112,6 @@ def main():
         mesh.print_info()
         q_points = mesh.get_q_points()
         q_weights = mesh.get_q_weights()
-        q_radii = None
 
     else:
         iloop = -1
@@ -128,12 +128,10 @@ def main():
         mesh.print_info()
         q_points = mesh.get_q_points()
         q_weights = mesh.get_q_weights()
-        q_radii = None
 
     assert len(q_points) == len(q_weights)
     assert q_points.shape[1] == dim
 
-    q_points_org = q_points
     q_points = np.ascontiguousarray(np.transpose(q_points))
 
     from pytools.obj_array import make_obj_array
@@ -172,7 +170,6 @@ def main():
     for ax in axis_names:
         bbox["min_" + ax] = a
         bbox["max_" + ax] = b
-
 
     # tune max_particles_in_box to reconstruct the mesh
     # TODO: use points from FieldPlotter are used as target points for better
@@ -389,8 +386,8 @@ def main():
         from mpl_toolkits.mplot3d import Axes3D
 
         plt3d = plt.figure()
-        ax = Axes3D(plt3d)
-        surf = ax.plot_surface(oxx, oyy, opot.reshape(oxx.shape))
+        ax = Axes3D(plt3d)  # noqa
+        surf = ax.plot_surface(oxx, oyy, opot.reshape(oxx.shape))  # noqa
         # ax.scatter(x, y, src.get())
         # ax.set_zlim(-0.25, 0.25)
 
@@ -417,13 +414,12 @@ def main():
         # plt.show()
         plt.savefig("tree.png")
 
-
     # Direct p2p
     if 0:
         print("Performing P2P")
         pot_direct, = drive_volume_fmm(
-            trav, wrangler, source_vals * q_weights, source_vals, direct_evaluation=True
-        )
+            trav, wrangler, source_vals * q_weights,
+            source_vals, direct_evaluation=True)
         zds = pot_direct.get()
         zs = pot.get()
 
@@ -450,8 +446,6 @@ def main():
         import matplotlib.pyplot as plt
         from mpl_toolkits.mplot3d import Axes3D
 
-        n = 2 ** (n_levels - 1) * q_order
-
         x = q_points[0].get()
         y = q_points[1].get()
         ze = solu_eval(queue, np.array([x, y]))
@@ -477,6 +471,9 @@ def main():
 
     # }}} End postprocess and plot
 
+
 if __name__ == '__main__':
     main()
+
+
 # vim: filetype=pyopencl:foldmethod=marker

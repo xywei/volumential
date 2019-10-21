@@ -51,13 +51,14 @@ def main():
     print("*************************")
 
     dim = 3
-    download_table = True  # download precomputation results for the 3D Laplace kernel
+    # download precomputation results for the 3D Laplace kernel
+    download_table = True
     table_filename = "nft_laplace3d.hdf5"
 
     logger.info("Using table cache: " + table_filename)
 
     q_order = 5  # quadrature order
-    n_levels = 5  # 2^(n_levels-1) subintervals in 1D, must be at least 2 if not adaptive
+    n_levels = 5
     use_multilevel_table = False
 
     adaptive_mesh = False
@@ -113,7 +114,6 @@ def main():
         mesh.print_info()
         q_points = mesh.get_q_points()
         q_weights = mesh.get_q_weights()
-        q_radii = None
     else:
         iloop = -1
         while mesh.n_active_cells() < refined_n_cells:
@@ -122,8 +122,8 @@ def main():
             cell_measures = mesh.get_cell_measures()
             density_vals = source_eval(
                 queue,
-                np.array([[center[d] for center in cell_centers] for d in range(dim)]),
-            )
+                np.array([[center[d] for center in cell_centers]
+                    for d in range(dim)]))
             crtr = np.abs(cell_measures * density_vals)
             mesh.update_mesh(crtr, rratio_top, rratio_bot)
             if iloop > n_refinement_loops:
@@ -133,7 +133,6 @@ def main():
         mesh.print_info()
         q_points = mesh.get_q_points()
         q_weights = mesh.get_q_weights()
-        q_radii = None
 
     if 1:
         try:
@@ -151,7 +150,6 @@ def main():
     assert len(q_points) == len(q_weights)
     assert q_points.shape[1] == dim
 
-    q_points_org = q_points
     q_points = np.ascontiguousarray(np.transpose(q_points))
 
     from pytools.obj_array import make_obj_array
@@ -160,7 +158,6 @@ def main():
             [cl.array.to_device(queue, q_points[i]) for i in range(dim)])
 
     q_weights = cl.array.to_device(queue, q_weights)
-    # q_radii = cl.array.to_device(queue, q_radii)
 
     # }}}
 
@@ -229,7 +226,6 @@ def main():
         print("Downloading table from %s" % urls['Laplace3D'])
         import subprocess
         subprocess.call(["wget", urls['Laplace3D'], table_filename])
-
 
     tm = NearFieldInteractionTableManager(
         table_filename, root_extent=root_table_source_extent,
@@ -365,7 +361,6 @@ def main():
 
     # print(pot)
 
-
     solu_eval = Eval(dim, solu_expr, [x, y, z])
     # x = q_points[0].get()
     # y = q_points[1].get()
@@ -411,14 +406,13 @@ def main():
         plt.show()
         # plt.savefig("tree.png")
 
-
     # Direct p2p
 
     if 0:
         print("Performing P2P")
         pot_direct, = drive_volume_fmm(
-            trav, wrangler, source_vals * q_weights, source_vals, direct_evaluation=True
-        )
+            trav, wrangler, source_vals * q_weights,
+            source_vals, direct_evaluation=True)
         zds = pot_direct.get()
         zs = pot.get()
 
@@ -459,17 +453,15 @@ def main():
 
         from volumential.volume_fmm import interpolate_volume_potential
 
-        volume_potential = interpolate_volume_potential(box_nodes, trav, wrangler, pot)
-        source_density = interpolate_volume_potential(
-            box_nodes, trav, wrangler, source_vals
-        )
+        volume_potential = interpolate_volume_potential(
+                box_nodes, trav, wrangler, pot)
 
         # qx = q_points[0].get()
         # qy = q_points[1].get()
         # qz = q_points[2].get()
         exact_solution = cl.array.to_device(
-            queue, solu_eval(queue, np.array([box_nodes_x, box_nodes_y, box_nodes_z]))
-        )
+            queue, solu_eval(queue,
+                np.array([box_nodes_x, box_nodes_y, box_nodes_z])))
 
         # clean up the mess
         def clean_file(filename):
@@ -495,7 +487,9 @@ def main():
 
     # }}} End postprocess and plot
 
+
 if __name__ == '__main__':
     main()
+
 
 # vim: filetype=python.pyopencl:foldmethod=marker
