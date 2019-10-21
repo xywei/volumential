@@ -67,8 +67,8 @@ def drive_test_cheb_poly(queue, deg, nnodes):
         assert np.allclose(cheb_vals_lp[m], cheb_vals_np)
 
 
-def test_cheb_poly(ctx_getter):
-    cl_ctx = ctx_getter()
+def test_cheb_poly(ctx_factory):
+    cl_ctx = ctx_factory()
     queue = cl.CommandQueue(cl_ctx)
     nnodes = 100
     drive_test_cheb_poly(queue, 5, nnodes)
@@ -135,13 +135,13 @@ def drive_test_cheb_table(
         assert err < 1e-12
 
 
-def drive_test_cheb_tables_laplace3d(requires_pypvfmm, ctx_getter, q_order):
+def drive_test_cheb_tables_laplace3d(requires_pypvfmm, ctx_factory, q_order):
     """Test Chebyshev table vs PvFMM's computation for
     box-self interactions.
     """
     from sumpy.kernel import LaplaceKernel
 
-    cl_ctx = ctx_getter()
+    cl_ctx = ctx_factory()
     queue = cl.CommandQueue(cl_ctx)
 
     kernel = LaplaceKernel(3)
@@ -153,11 +153,11 @@ def drive_test_cheb_tables_laplace3d(requires_pypvfmm, ctx_getter, q_order):
 
 
 def drive_test_cheb_tables_grad_laplace3d(
-        requires_pypvfmm, ctx_getter, q_order, axis):
+        requires_pypvfmm, ctx_factory, q_order, axis):
     from sumpy.kernel import LaplaceKernel, AxisTargetDerivative
     from volumential.list1_symmetry import Flip, Swap
 
-    cl_ctx = ctx_getter()
+    cl_ctx = ctx_factory()
     queue = cl.CommandQueue(cl_ctx)
 
     kernel = AxisTargetDerivative(axis, LaplaceKernel(3))
@@ -175,29 +175,29 @@ def drive_test_cheb_tables_grad_laplace3d(
 
 
 @pytest.mark.parametrize("q_order", [1, 2])
-def test_cheb_tables_laplace3d_quick(requires_pypvfmm, ctx_getter, q_order):
-    drive_test_cheb_tables_laplace3d(requires_pypvfmm, ctx_getter, q_order)
+def test_cheb_tables_laplace3d_quick(requires_pypvfmm, ctx_factory, q_order):
+    drive_test_cheb_tables_laplace3d(requires_pypvfmm, ctx_factory, q_order)
 
 
 @pytest.mark.parametrize("q_order", [1, 2])
 @pytest.mark.parametrize("axis", [0, 1, 2])
 def test_cheb_tables_grad_laplace3d_quick(
-        requires_pypvfmm, ctx_getter, q_order, axis):
+        requires_pypvfmm, ctx_factory, q_order, axis):
     drive_test_cheb_tables_grad_laplace3d(
-            requires_pypvfmm, ctx_getter, q_order, axis)
+            requires_pypvfmm, ctx_factory, q_order, axis)
 
 
 @pytest.mark.parametrize("q_order", [3, 4, 5, 6])
-def test_cheb_tables_laplace3d_slow(longrun, requires_pypvfmm, ctx_getter, q_order):
-    drive_test_cheb_tables_laplace3d(requires_pypvfmm, ctx_getter, q_order)
+def test_cheb_tables_laplace3d_slow(longrun, requires_pypvfmm, ctx_factory, q_order):
+    drive_test_cheb_tables_laplace3d(requires_pypvfmm, ctx_factory, q_order)
 
 
 @pytest.mark.parametrize("q_order", [3, 4, 5, 6])
 @pytest.mark.parametrize("axis", [0, 1, 2])
 def test_cheb_tables_grad_laplace3d_slow(
-        longrun, requires_pypvfmm, ctx_getter, q_order, axis):
+        longrun, requires_pypvfmm, ctx_factory, q_order, axis):
     drive_test_cheb_tables_grad_laplace3d(
-            requires_pypvfmm, ctx_getter, q_order, axis)
+            requires_pypvfmm, ctx_factory, q_order, axis)
 
 
 if __name__ == "__main__":

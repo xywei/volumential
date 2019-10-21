@@ -24,7 +24,7 @@ THE SOFTWARE.
 
 import pytest  # noqa: F401
 
-# setup ctx_getter fixture
+# setup the ctx_factory fixture
 from pyopencl.tools import (  # NOQA
     pytest_generate_tests_for_pyopencl as pytest_generate_tests,
 )

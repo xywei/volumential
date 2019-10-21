@@ -45,10 +45,10 @@ import pytest
 # {{{ make sure context getter works
 
 
-def test_cl_ctx_getter(ctx_getter):
+def test_cl_ctx_getter(ctx_factory):
     logging.basicConfig(level=logging.INFO)
 
-    ctx = ctx_getter()
+    ctx = ctx_factory()
     queue = cl.CommandQueue(ctx)
 
     a_np = np.random.rand(50000).astype(np.float32)
@@ -86,8 +86,8 @@ def test_cl_ctx_getter(ctx_getter):
 
 
 @pytest.fixture
-def laplace_problem(ctx_getter):
-    ctx = ctx_getter()
+def laplace_problem(ctx_factory):
+    ctx = ctx_factory()
     queue = cl.CommandQueue(ctx)
 
     dim = 2

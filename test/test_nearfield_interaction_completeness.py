@@ -176,18 +176,18 @@ def drive_test_completeness(ctx, queue, dim, q_order):
         assert(abs(p - 2**dim) < 1e-8)
 
 
-def test_completeness_1(ctx_getter):
+def test_completeness_1(ctx_factory):
 
-    ctx = ctx_getter()
+    ctx = ctx_factory()
     queue = cl.CommandQueue(ctx)
 
     drive_test_completeness(ctx, queue, 2, 1)
     drive_test_completeness(ctx, queue, 3, 1)
 
 
-def test_completeness(longrun, ctx_getter):
+def test_completeness(longrun, ctx_factory):
 
-    ctx = ctx_getter()
+    ctx = ctx_factory()
     queue = cl.CommandQueue(ctx)
 
     for q in range(2, 4):

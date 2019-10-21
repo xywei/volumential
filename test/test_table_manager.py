@@ -37,9 +37,9 @@ def make_tmp_table_manager():
             os.path.join('/tmp', str(uuid4()) + '.hdf5'))
 
 
-def test_case_id(ctx_getter):
+def test_case_id(ctx_factory):
     dim = 2
-    ctx = ctx_getter()
+    ctx = ctx_factory()
     queue = cl.CommandQueue(ctx)
     table_manager = make_tmp_table_manager()
     table1, _ = table_manager.get_table(
@@ -50,9 +50,9 @@ def test_case_id(ctx_getter):
     assert list(table1.interaction_case_vecs[case_same_box]) == [0, 0]
 
 
-def test_get_table(ctx_getter):
+def test_get_table(ctx_factory):
     dim = 2
-    ctx = ctx_getter()
+    ctx = ctx_factory()
     queue = cl.CommandQueue(ctx)
     table_manager = make_tmp_table_manager()
     table, _ = table_manager.get_table(
@@ -61,9 +61,9 @@ def test_get_table(ctx_getter):
     assert table.dim == dim
 
 
-def laplace_const_source_same_box(q_order, ctx_getter):
+def laplace_const_source_same_box(q_order, ctx_factory):
     dim = 2
-    ctx = ctx_getter()
+    ctx = ctx_factory()
     queue = cl.CommandQueue(ctx)
     table_manager = make_tmp_table_manager()
     nft, _ = table_manager.get_table(
@@ -88,9 +88,9 @@ def laplace_const_source_same_box(q_order, ctx_getter):
     return pot
 
 
-def laplace_cons_source_neighbor_box(q_order, case_id, ctx_getter):
+def laplace_cons_source_neighbor_box(q_order, case_id, ctx_factory):
     dim = 2
-    ctx = ctx_getter()
+    ctx = ctx_factory()
     queue = cl.CommandQueue(ctx)
     table_manager = make_tmp_table_manager()
     nft, _ = table_manager.get_table(
@@ -113,14 +113,14 @@ def laplace_cons_source_neighbor_box(q_order, case_id, ctx_getter):
     return pot
 
 
-def test_lcssb_1(ctx_getter):
-    u = laplace_const_source_same_box(1, ctx_getter)
+def test_lcssb_1(ctx_factory):
+    u = laplace_const_source_same_box(1, ctx_factory)
     assert len(u) == 1
 
 
-def interp_func(q_order, coef, ctx_getter):
+def interp_func(q_order, coef, ctx_factory):
     dim = 2
-    ctx = ctx_getter()
+    ctx = ctx_factory()
     queue = cl.CommandQueue(ctx)
     table_manager = make_tmp_table_manager()
     nft, _ = table_manager.get_table(
@@ -142,14 +142,14 @@ def interp_func(q_order, coef, ctx_getter):
     return func
 
 
-def test_interp_func(longrun, ctx_getter):
+def test_interp_func(longrun, ctx_factory):
     q_order = 3
     coef = np.ones(q_order ** 2)
 
     h = 0.1
     xx = yy = np.arange(-1.0, 1.0, h)
     xi, yi = np.meshgrid(xx, yy)
-    func = interp_func(q_order, coef, ctx_getter)
+    func = interp_func(q_order, coef, ctx_factory)
 
     zi = func(xi, yi)
 
@@ -173,12 +173,12 @@ def direct_quad(source_func, target_point):
     return integral
 
 
-def drive_test_direct_quad_same_box(q_order, ctx_getter):
+def drive_test_direct_quad_same_box(q_order, ctx_factory):
     dim = 2
-    ctx = ctx_getter()
+    ctx = ctx_factory()
     queue = cl.CommandQueue(ctx)
-    u = laplace_const_source_same_box(q_order, ctx_getter)
-    func = interp_func(q_order, u, ctx_getter)
+    u = laplace_const_source_same_box(q_order, ctx_factory)
+    func = interp_func(q_order, u, ctx_factory)
 
     table_manager = make_tmp_table_manager()
     nft, _ = table_manager.get_table(
@@ -209,20 +209,20 @@ def drive_test_direct_quad_same_box(q_order, ctx_getter):
 
 
 @pytest.mark.parametrize("q_order", [1, 2])
-def test_direct_quad(q_order, ctx_getter):
+def test_direct_quad(q_order, ctx_factory):
     subprocess.check_call(['rm', '-f', 'nft.hdf5'])
-    drive_test_direct_quad_same_box(q_order, ctx_getter)
+    drive_test_direct_quad_same_box(q_order, ctx_factory)
 
 
 @pytest.mark.parametrize("q_order", [3, 4, 5])
-def test_direct_quad_longrun(longrun, ctx_getter, q_order):
+def test_direct_quad_longrun(longrun, ctx_factory, q_order):
     subprocess.check_call(['rm', '-f', 'nft.hdf5'])
-    drive_test_direct_quad_same_box(q_order, ctx_getter)
+    drive_test_direct_quad_same_box(q_order, ctx_factory)
 
 
-def test_case_ids(ctx_getter):
+def test_case_ids(ctx_factory):
     dim = 2
-    ctx = ctx_getter()
+    ctx = ctx_factory()
     queue = cl.CommandQueue(ctx)
     table_manager = make_tmp_table_manager()
     table, _ = table_manager.get_table(
@@ -248,10 +248,10 @@ def get_target_point(case_id, target_id, table):
     return target_point
 
 
-def test_get_neighbor_target_point(ctx_getter):
+def test_get_neighbor_target_point(ctx_factory):
 
     dim = 2
-    ctx = ctx_getter()
+    ctx = ctx_factory()
     queue = cl.CommandQueue(ctx)
     table_manager = make_tmp_table_manager()
     table, _ = table_manager.get_table(
@@ -272,9 +272,9 @@ def test_get_neighbor_target_point(ctx_getter):
         assert np.allclose(pt, pt2)
 
 
-def laplace_const_source_neighbor_box(q_order, case_id, ctx_getter):
+def laplace_const_source_neighbor_box(q_order, case_id, ctx_factory):
     dim = 2
-    ctx = ctx_getter()
+    ctx = ctx_factory()
     queue = cl.CommandQueue(ctx)
     table_manager = make_tmp_table_manager()
     nft, _ = table_manager.get_table(
@@ -295,11 +295,11 @@ def laplace_const_source_neighbor_box(q_order, case_id, ctx_getter):
     return pot
 
 
-def drive_test_direct_quad_neighbor_box(q_order, case_id, ctx_getter):
-    u = laplace_const_source_neighbor_box(q_order, case_id, ctx_getter)
+def drive_test_direct_quad_neighbor_box(q_order, case_id, ctx_factory):
+    u = laplace_const_source_neighbor_box(q_order, case_id, ctx_factory)
 
     dim = 2
-    ctx = ctx_getter()
+    ctx = ctx_factory()
     queue = cl.CommandQueue(ctx)
     table_manager = make_tmp_table_manager()
     nft, _ = table_manager.get_table(
@@ -327,11 +327,11 @@ def drive_test_direct_quad_neighbor_box(q_order, case_id, ctx_getter):
 
 
 @pytest.mark.parametrize("q_order", [1, ])
-def test_direct_quad_neighbor_box(q_order, ctx_getter):
+def test_direct_quad_neighbor_box(q_order, ctx_factory):
     subprocess.check_call(['rm', '-f', 'nft.hdf5'])
 
     dim = 2
-    ctx = ctx_getter()
+    ctx = ctx_factory()
     queue = cl.CommandQueue(ctx)
     table_manager = make_tmp_table_manager()
     table, _ = table_manager.get_table(
@@ -339,15 +339,15 @@ def test_direct_quad_neighbor_box(q_order, ctx_getter):
             queue=queue)
 
     for case_id in range(len(table.interaction_case_vecs)):
-        drive_test_direct_quad_neighbor_box(q_order, case_id, ctx_getter)
+        drive_test_direct_quad_neighbor_box(q_order, case_id, ctx_factory)
 
 
 @pytest.mark.parametrize("q_order", [2, ])
-def test_direct_quad_neighbor_box_longrun(longrun, ctx_getter, q_order):
+def test_direct_quad_neighbor_box_longrun(longrun, ctx_factory, q_order):
     subprocess.check_call(['rm', '-f', 'nft.hdf5'])
 
     dim = 2
-    ctx = ctx_getter()
+    ctx = ctx_factory()
     queue = cl.CommandQueue(ctx)
     table_manager = make_tmp_table_manager()
     table, _ = table_manager.get_table(
@@ -355,7 +355,7 @@ def test_direct_quad_neighbor_box_longrun(longrun, ctx_getter, q_order):
             queue=queue)
 
     for case_id in range(len(table.interaction_case_vecs)):
-        drive_test_direct_quad_neighbor_box(q_order, case_id, ctx_getter)
+        drive_test_direct_quad_neighbor_box(q_order, case_id, ctx_factory)
 
 
 # fdm=marker:ft=pyopencl
