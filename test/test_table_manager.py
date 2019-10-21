@@ -47,7 +47,7 @@ def test_case_id(ctx_getter):
         queue=queue,
     )
     case_same_box = len(table1.interaction_case_vecs) // 2
-    assert table1.interaction_case_vecs[case_same_box] == [0, 0]
+    assert list(table1.interaction_case_vecs[case_same_box]) == [0, 0]
 
 
 def test_get_table(ctx_getter):
@@ -142,14 +142,14 @@ def interp_func(q_order, coef, ctx_getter):
     return func
 
 
-def test_interp_func(longrun):
+def test_interp_func(longrun, ctx_getter):
     q_order = 3
     coef = np.ones(q_order ** 2)
 
     h = 0.1
     xx = yy = np.arange(-1.0, 1.0, h)
     xi, yi = np.meshgrid(xx, yy)
-    func = interp_func(q_order, coef)
+    func = interp_func(q_order, coef, ctx_getter)
 
     zi = func(xi, yi)
 
@@ -178,7 +178,7 @@ def drive_test_direct_quad_same_box(q_order, ctx_getter):
     ctx = ctx_getter()
     queue = cl.CommandQueue(ctx)
     u = laplace_const_source_same_box(q_order, ctx_getter)
-    func = interp_func(q_order, u)
+    func = interp_func(q_order, u, ctx_getter)
 
     table_manager = make_tmp_table_manager()
     nft, _ = table_manager.get_table(
@@ -296,7 +296,7 @@ def laplace_const_source_neighbor_box(q_order, case_id, ctx_getter):
 
 
 def drive_test_direct_quad_neighbor_box(q_order, case_id, ctx_getter):
-    u = laplace_const_source_neighbor_box(q_order, case_id)
+    u = laplace_const_source_neighbor_box(q_order, case_id, ctx_getter)
 
     dim = 2
     ctx = ctx_getter()
