@@ -39,33 +39,6 @@ import volumential.singular_integral_2d as squad
 
 logger = logging.getLogger('NearFieldInteractionTable')
 
-# {{{ pickle support for instancemethod
-
-
-def _pickle_method(method):
-    func_name = method.im_func.__name__
-    obj = method.im_self
-    cls = method.im_class
-    return _unpickle_method, (func_name, obj, cls)
-
-
-def _unpickle_method(func_name, obj, cls):
-    for cls in cls.mro():
-        try:
-            func = cls.__dict__[func_name]
-        except KeyError:
-            pass
-        else:
-            break
-    return func.__get__(obj, cls)
-
-
-import copy_reg
-import types
-copy_reg.pickle(types.MethodType, _pickle_method, _unpickle_method)
-
-
-# }}}
 
 def _self_tp(vec, tpd=2):
     """
@@ -653,7 +626,7 @@ class NearFieldInteractionTable(object):
         ct_id = qp_map(entry_info["target_point_index"])
         centry_id = self.get_entry_index(cs_id, ct_id, cc_id)
 
-        return centry_id
+        return entry_id, centry_id
 
     def compute_table_entry(self, entry_id):
         """Compute one entry in the table indexed by self.data[entry_id]
@@ -724,17 +697,25 @@ class NearFieldInteractionTable(object):
         currently only supported in 2D.
         """
         assert self.dim == 2
-        if pool is None:
-            from multiprocessing import Pool
+        if 0:
+            # FIXME: make everything needed for compute_nmlz picklable
+            if pool is None:
+                from multiprocessing import Pool
 
-            pool = Pool(processes=None)
+                pool = Pool(processes=None)
 
-        for mode_id, nmlz in pool.imap_unordered(
-            self.compute_nmlz, [i for i in range(self.n_q_points)]
-        ):
-            self.mode_normalizers[mode_id] = nmlz
-            if pb is not None:
-                pb.progress(1)
+            for mode_id, nmlz in pool.imap_unordered(
+                self.compute_nmlz, [i for i in range(self.n_q_points)]
+            ):
+                self.mode_normalizers[mode_id] = nmlz
+                if pb is not None:
+                    pb.progress(1)
+        else:
+            for mode_id in range(self.n_q_points):
+                _, nmlz = self.compute_nmlz(mode_id)
+                self.mode_normalizers[mode_id] = nmlz
+                if pb is not None:
+                    pb.progress(1)
 
     def build_table_via_transform(self):
         """
@@ -743,10 +724,13 @@ class NearFieldInteractionTable(object):
         """
         assert self.dim == 2
 
-        # multiprocessing cannot handle member functions
-        from multiprocessing import Pool
-
-        pool = Pool(processes=None)
+        if 0:
+            # FIXME: make everything needed for compute_nmlz picklable
+            # multiprocessing cannot handle member functions
+            from multiprocessing import Pool
+            pool = Pool(processes=None)
+        else:
+            pool = None
 
         self.pb.draw()
 
@@ -756,26 +740,41 @@ class NearFieldInteractionTable(object):
         # First compute entries that are invariant under
         # symmetry lookup
         invariant_entry_ids = [
-            i for i in range(len(self.data)) if self.lookup_by_symmetry(i) == i
+            i for i in range(len(self.data)) if self.lookup_by_symmetry(i) == (i, i)
         ]
 
-        for entry_id, entry_val in pool.imap_unordered(
-            self.compute_table_entry, invariant_entry_ids
-        ):
-            self.data[entry_id] = entry_val
-            self.pb.progress(1)
+        if 0:
+            # multiprocess disabled for py2 compatibility
+            # (also drops dependency on dill/multiprocess)
+            for entry_id, entry_val in pool.imap_unordered(
+                self.compute_table_entry, invariant_entry_ids
+            ):
+                self.data[entry_id] = entry_val
+                self.pb.progress(1)
+        else:
+            for entry_id in invariant_entry_ids:
+                _, entry_val = self.compute_table_entry(entry_id)
+                self.data[entry_id] = entry_val
+                self.pb.progress(1)
 
-        # Then complete the table via symmetry lookup
-        for entry_id, centry_id in enumerate(
-            pool.imap_unordered(
-                self.lookup_by_symmetry, [i for i in range(len(self.data))]
-            )
-        ):
-            assert not np.isnan(self.data[centry_id])
-            if centry_id == entry_id:
-                continue
-            self.data[entry_id] = self.data[centry_id]
-            self.pb.progress(1)
+        if 0:
+            # Then complete the table via symmetry lookup
+            for entry_id, centry_id in pool.imap_unordered(
+                    self.lookup_by_symmetry, [i for i in range(len(self.data))]
+                ):
+                assert not np.isnan(self.data[centry_id])
+                if centry_id == entry_id:
+                    continue
+                self.data[entry_id] = self.data[centry_id]
+                self.pb.progress(1)
+        else:
+            for entry_id in range(len(self.data)):
+                _, centry_id = self.lookup_by_symmetry(entry_id)
+                assert not np.isnan(self.data[centry_id])
+                if centry_id == entry_id:
+                    continue
+                self.data[entry_id] = self.data[centry_id]
+                self.pb.progress(1)
 
         self.pb.finished()
 

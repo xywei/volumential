@@ -142,7 +142,7 @@ class BoxFMMGeometryFactory():
         :class:`volumential.meshgen.MeshGenBase` interface.
     """
     def __init__(
-            self, cl_ctx, dim, *, quadrature_formula,
+            self, cl_ctx, dim, quadrature_formula,
             order, nlevels, bbox_getter,
             expand_to_hold_mesh=None, mesh_padding_factor=0.05):
         """
@@ -181,7 +181,7 @@ class BoxFMMGeometryFactory():
         self.engine = self._engine_class(self.order, self.nlevels, a, b)
 
     def reinit(
-            self, *, order=None, nlevels=None,
+            self, order=None, nlevels=None,
             quadrature_formula=None,
             expand_to_hold_mesh=None, mesh_padding_factor=None):
         """Resets the engine to its initial state, and optionally also

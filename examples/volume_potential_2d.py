@@ -58,7 +58,7 @@ root_table_source_extent = 2
 print("Using table cache:", table_filename)
 
 q_order = 5   # quadrature order
-n_levels = 9  # 2^(n_levels-1) subintervals in 1D
+n_levels = 4  # 2^(n_levels-1) subintervals in 1D
 
 use_multilevel_table = False
 

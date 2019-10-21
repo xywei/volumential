@@ -526,8 +526,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
             table_data=table_data_combined,
             target_boxes=target_boxes,
             table_root_extent=table_root_extent,
-            **integral_kernel_init_kargs,
-        )
+            **integral_kernel_init_kargs)
 
         res['result'].add_event(evt)
         if isinstance(result, cl.array.Array):
