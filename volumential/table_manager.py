@@ -122,10 +122,7 @@ class NearFieldInteractionTableManager(object):
         self.table_extra_kwargs = kwargs
 
         # If the file exists, it must be for the same root_extent
-        if "root_extent" not in self.datafile.attrs:
-            self.datafile.attrs["root_extent"] = \
-                    self.root_extent
-        else:
+        if "root_extent" in self.datafile.attrs:
             if not abs(
                     self.datafile.attrs["root_extent"] - self.root_extent
                     ) < 1e-15:
@@ -599,6 +596,8 @@ class NearFieldInteractionTableManager(object):
         if compute_method is None:
             logger.debug("Using default compute_method (Transform)")
             compute_method = "Transform"
+
+        self.datafile.attrs["root_extent"] = self.root_extent
 
         q_order = int(q_order)
         assert q_order >= 1
