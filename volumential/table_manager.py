@@ -102,13 +102,19 @@ class NearFieldInteractionTableManager(object):
         self.filename = dataset_filename
         self.root_extent = root_extent
 
-        try:
+        if read_only == 'auto':
+            try:
+                self.datafile = hdf.File(self.filename, "a")
+            except IOError:
+                from warnings import warn
+                warn("Opening table dataset %s in read-only mode." % self.filename)
+                self.datafile = hdf.File(self.filename, "r", swmr=True)
+        elif read_only:
+            self.datafile = hdf.File(self.filename, "r", swmr=True)
+        else:
             # Read/write if exists, create otherwise
             self.datafile = hdf.File(self.filename, "a")
-        except IOError:
-            from warnings import warn
-            warn("Opening table dataset %s in read-only mode." % self.filename)
-            self.datafile = hdf.File(self.filename, "r", swmr=True)
+
 
         self.table_extra_kwargs = kwargs
 
