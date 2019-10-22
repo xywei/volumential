@@ -263,7 +263,7 @@ def laplace_const_source_neighbor_box(queue, q_order, case_id, dim=2):
     return pot
 
 
-def drive_test_direct_quad_neighbor_box(queue, q_order, case_id, ctx_factory, dim=2):
+def drive_test_direct_quad_neighbor_box(queue, q_order, case_id, dim=2):
     u = laplace_const_source_neighbor_box(queue, q_order, case_id)
     table_manager, table = get_tmp_table_manager_and_data(queue)
     nft, _ = table_manager.get_table(
