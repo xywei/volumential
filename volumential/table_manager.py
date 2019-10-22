@@ -105,8 +105,9 @@ class NearFieldInteractionTableManager(object):
         if read_only == 'auto':
             try:
                 self.datafile = hdf.File(self.filename, "a")
-            except IOError:
+            except (IOError, OSError) as e:
                 from warnings import warn
+                warn("Trying to open in read/write mode failed: %s" % str(e))
                 warn("Opening table dataset %s in read-only mode." % self.filename)
                 self.datafile = hdf.File(self.filename, "r", swmr=True)
         elif read_only:
