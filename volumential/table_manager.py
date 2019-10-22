@@ -85,10 +85,16 @@ class NearFieldInteractionTableManager(object):
 
     Tables are stored under 'Dimension/KernelName/QuadOrder/BoxLevel/dataset_name'
     e.g., '2D/Laplace/Order_1/Level_0/data'
+
+    Only one table manager can exist for a dataset file with write access.
+    The access can be controlled with the read_only argument. By default,
+    the constructor tries to open the dataset with write access, and falls
+    back to read-only if that fails.
     """
 
     def __init__(self, dataset_filename="nft.hdf5",
-            root_extent=1, dtype=np.float64, **kwargs):
+            root_extent=1, dtype=np.float64,
+            read_only='auto', **kwargs):
         """Constructor.
         """
         self.dtype = dtype
@@ -96,8 +102,13 @@ class NearFieldInteractionTableManager(object):
         self.filename = dataset_filename
         self.root_extent = root_extent
 
-        # Read/write if exists, create otherwise
-        self.datafile = hdf.File(self.filename, "a")
+        try:
+            # Read/write if exists, create otherwise
+            self.datafile = hdf.File(self.filename, "a")
+        except IOError:
+            from warnings import warn
+            warn("Opening table dataset %s in read-only mode." % self.filename)
+            self.datafile = hdf.File(self.filename, "r", swmr=True)
 
         self.table_extra_kwargs = kwargs
 
