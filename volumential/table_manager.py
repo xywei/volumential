@@ -105,6 +105,7 @@ class NearFieldInteractionTableManager(object):
         if read_only == 'auto':
             try:
                 self.datafile = hdf.File(self.filename, "a")
+                self.datafile.swmr_mode = True
             except (IOError, OSError) as e:
                 from warnings import warn
                 warn("Trying to open in read/write mode failed: %s" % str(e))
@@ -115,6 +116,7 @@ class NearFieldInteractionTableManager(object):
         else:
             # Read/write if exists, create otherwise
             self.datafile = hdf.File(self.filename, "a")
+            self.datafile.swmr_mode = True
 
         self.table_extra_kwargs = kwargs
 
