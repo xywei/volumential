@@ -115,7 +115,6 @@ class NearFieldInteractionTableManager(object):
             # Read/write if exists, create otherwise
             self.datafile = hdf.File(self.filename, "a")
 
-
         self.table_extra_kwargs = kwargs
 
         # If the file exists, it must be for the same root_extent
