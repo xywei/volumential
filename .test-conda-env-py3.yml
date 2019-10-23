@@ -28,9 +28,9 @@ dependencies:
   - pip:
     - git+https://gitlab.tiker.net/inducer/loopy
     - git+https://www.github.com/xywei/gmsh_interop
-    - git+https://gitlab.tiker.net/xywei/modepy
     - git+https://gitlab.tiker.net/xywei/boxtree
-    - git+https://gitlab.tiker.net/xywei/meshmode
-    - git+https://gitlab.tiker.net/xywei/pymbolic
-    - git+https://gitlab.tiker.net/xywei/sumpy
-    - git+https://gitlab.tiker.net/xywei/pytential
+    - git+https://gitlab.tiker.net/inducer/modepy
+    - git+https://gitlab.tiker.net/inducer/meshmode
+    - git+https://gitlab.tiker.net/inducer/pymbolic
+    - git+https://gitlab.tiker.net/inducer/sumpy
+    - git+https://gitlab.tiker.net/inducer/pytential
