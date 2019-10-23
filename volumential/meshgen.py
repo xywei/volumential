@@ -64,7 +64,7 @@ class MeshGenBase(object):
         assert degree > 0
         assert nlevels > 0
         self.degree = degree
-        self.quadrature_formula = GaussLegendreQuadrature(degree - 1)
+        self.quadrature_formula = LegendreGaussQuadrature(degree - 1)
         self.nlevels = nlevels
 
         self.bound_a = np.array([a]).flatten()
@@ -183,7 +183,7 @@ except ImportError as e:
     try:
         logger.info("Trying out BoxTree.TreeInteractiveBuild interface.")
         import boxtree.tree_interactive_build  # noqa: F401
-        from modepy import GaussLegendreQuadrature
+        from modepy import LegendreGaussQuadrature
 
         provider = "meshgen_boxtree"
 
@@ -216,7 +216,7 @@ except ImportError as e:
             tree.generate_uniform_boxtree(
                 queue, nlevels=nlevels, root_extent=2, root_vertex=np.zeros(dim) - 1
             )
-            quad_rule = GaussLegendreQuadrature(degree - 1)
+            quad_rule = LegendreGaussQuadrature(degree - 1)
             quad = QuadratureOnBoxTree(tree, quad_rule)
             q_weights = quad.get_q_weights(queue).get(queue)
             q_points_dev = quad.get_q_points(queue)

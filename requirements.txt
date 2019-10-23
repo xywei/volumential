@@ -6,11 +6,11 @@
 -e git+https://gitlab.tiker.net/xywei/pymbolic.git#egg=pymbolic
 -e git+https://gitlab.tiker.net/xywei/pytential.git#egg=pytential
 -e git+https://gitlab.tiker.net/xywei/sumpy.git#egg=sumpy
--e git+https://gitlab.tiker.net/xywei/modepy.git#egg=modepy
 
 -e git+https://gitlab.tiker.net/inducer/cgen.git#egg=cgen
 -e git+https://gitlab.tiker.net/inducer/genpy.git#egg=genpy
 -e git+https://gitlab.tiker.net/inducer/pyvisfile.git#egg=pyvisfile
 -e git+https://gitlab.tiker.net/inducer/loopy.git#egg=loo.py
+-e git+https://gitlab.tiker.net/inducer/modepy.git#egg=modepy
 
 -e .[test,doc]
