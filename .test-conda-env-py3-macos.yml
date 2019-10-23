@@ -4,6 +4,8 @@ channels:
   - defaults
 dependencies:
   - git
+  - c-compiler
+  - binutils
   - scipy
   - conda-forge::numpy
   - conda-forge::sympy
