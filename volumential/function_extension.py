@@ -1,3 +1,5 @@
+from __future__ import absolute_import, division, print_function
+
 """Function extension with regularity contraints:
 
 1. :math:`L^2`: extend with constant value
@@ -184,7 +186,8 @@ def compute_harmonic_extension(queue, target_discr,
             sym.S(kernel, inv_sqrt_w_sigma, **repr_kwargs)
             + sym.D(kernel, inv_sqrt_w_sigma, **repr_kwargs))
 
-    qbx_stick_out = qbx.copy(target_stick_out_factor=target_association_tolerance)
+    qbx_stick_out = qbx.copy(
+            target_association_tolerance=target_association_tolerance)
 
     debugging_info['qbx'] = qbx_stick_out
     debugging_info['representation'] = representation_sym
@@ -266,8 +269,7 @@ class ComplexLogKernel(ExpressionKernel):
 
         if self.dim == 2:
             if nderivatives == 0:
-                import sumpy.symbolic as sp
-                return (expr + sp.log(rscale))
+                return expr + var("log")(rscale)
             else:
                 return expr
 

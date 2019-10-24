@@ -1,3 +1,5 @@
+from __future__ import absolute_import, division, print_function
+
 __copyright__ = "Copyright (C) 2019 Xiaoyu Wei"
 
 __license__ = """
@@ -36,7 +38,7 @@ from pytential import bind, sym, norm  # noqa
 from pytential.target import PointsTarget
 
 
-def test_harmonic_extension_exterior_3d(ctx_getter):
+def test_harmonic_extension_exterior_3d(ctx_factory):
 
     dim = 3  # noqa: F841
     mesh_order = 8
@@ -45,7 +47,7 @@ def test_harmonic_extension_exterior_3d(ctx_getter):
     bdry_ovsmp_quad_order = 4 * bdry_quad_order
     qbx_order = mesh_order
 
-    cl_ctx = ctx_getter()
+    cl_ctx = ctx_factory()
     queue = cl.CommandQueue(cl_ctx)
 
     from meshmode.mesh.generation import generate_icosphere

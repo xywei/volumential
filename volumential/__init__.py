@@ -1,4 +1,4 @@
-from __future__ import division
+from __future__ import absolute_import, division, print_function
 
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
@@ -21,6 +21,8 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
+import os
+from pytools.persistent_dict import WriteOncePersistentDict
 
 from volumential.singular_integral_2d import box_quad
 from volumential.version import VERSION_TEXT
@@ -32,20 +34,63 @@ from volumential.nearfield_potential_table import (  # noqa: F401
 volumential_version = VERSION_TEXT
 
 __all__ = ["volumential_version", "box_quad", "nearfield_potential_table"]
-"""
-try:
-    import volumential.meshgen as meshgen  # noqa: F401
-    __all__.append("meshgen")
-except ImportError:
-    raise ImportError("Could not import volumential.meshgen. "
-            "You need to either run 'build.sh' in "
-            "volumential/contrib/meshgen11_dealii or install a "
-            "version of boxtree that provides interactive tree "
-            "building.")
-"""
 
 __doc__ = """
 :mod:`volumential` can compute 2/3D volume potentials using FMM.
 """
+
+code_cache = WriteOncePersistentDict("volumential-code-cache-v0-"+VERSION_TEXT)
+
+# {{{ optimization control
+
+OPT_ENABLED = True
+
+OPT_ENABLED = "VOLUMENTIAL_NO_OPT" not in os.environ
+
+
+def set_optimization_enabled(flag):
+    """Set whether the :mod:`loopy` kernels should be optimized."""
+    global OPT_ENABLED
+    OPT_ENABLED = flag
+
+# }}}
+
+# {{{ cache control
+
+
+CACHING_ENABLED = True
+
+CACHING_ENABLED = (
+    "VOLUMENTIAL_NO_CACHE" not in os.environ
+    and "CG_NO_CACHE" not in os.environ)
+
+
+def set_caching_enabled(flag):
+    """Set whether :mod:`loopy` is allowed to use disk caching for its various
+    code generation stages.
+    """
+    global CACHING_ENABLED
+    CACHING_ENABLED = flag
+
+
+class CacheMode(object):
+    """A context manager for setting whether :mod:`volumential` is allowed to use
+    disk caches.
+    """
+
+    def __init__(self, new_flag):
+        self.new_flag = new_flag
+
+    def __enter__(self):
+        global CACHING_ENABLED
+        self.previous_mode = CACHING_ENABLED
+        CACHING_ENABLED = self.new_flag
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        global CACHING_ENABLED
+        CACHING_ENABLED = self.previous_mode
+        del self.previous_mode
+
+# }}}
 
 # vim: filetype=pyopencl:fdm=marker

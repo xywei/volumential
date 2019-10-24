@@ -1,4 +1,4 @@
-from __future__ import division
+from __future__ import absolute_import, division, print_function
 
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
@@ -182,13 +182,16 @@ def drive_volume_fmm(
             exclude_self=wrangler.code.exclude_self,
             value_dtypes=[wrangler.dtype],
         )
+
+        p2p_extra_kwargs = dict(wrangler.self_extra_kwargs)
+        p2p_extra_kwargs.update(wrangler.kernel_extra_kwargs)
+
         evt, (ref_pot,) = p2p(
             wrangler.queue,
             traversal.tree.targets,
             traversal.tree.sources,
             (src_weights.astype(dtype),),
-            **wrangler.self_extra_kwargs,
-            **wrangler.kernel_extra_kwargs
+            **p2p_extra_kwargs
         )
         potentials[0] += ref_pot
 
@@ -598,11 +601,10 @@ def interpolate_volume_potential(
         box_target_counts_cumul=tree.box_target_counts_cumul,
         potential=potential,
         user_mode_ids=tree.user_source_ids,
-        **target_coords_knl_kwargs,
         target_boxes=traversal.target_boxes,
         root_extent=tree.root_extent,
-        n_tgt_boxes=len(traversal.target_boxes)
-    )
+        n_tgt_boxes=len(traversal.target_boxes),
+        **target_coords_knl_kwargs)
 
     assert pout is res_dict["p_out"]
     assert multiplicity is res_dict["multiplicity"]

@@ -1,3 +1,5 @@
+from __future__ import absolute_import, division, print_function
+
 __copyright__ = "Copyright (C) 2018 Xiaoyu Wei"
 
 __license__ = """
@@ -27,6 +29,9 @@ import math
 
 
 class SymmetryOperationBase(object):
+    def __init__(self, index):
+        self._index = index
+
     def __lt__(self, other):
         if type(self) == type(other):
             return self._index < other._index
@@ -41,8 +46,8 @@ class Flip(SymmetryOperationBase):
     """
 
     def __init__(self, iaxis):
+        super(Flip, self).__init__(iaxis)
         self.axis = iaxis
-        self._index = iaxis
 
     def __repr__(self):
         return "Flip(%d)" % self.axis
@@ -55,7 +60,7 @@ class Swap(SymmetryOperationBase):
 
     def __init__(self, iaxis, jaxis):
         self.axes = (iaxis, jaxis)
-        self._index = sorted(self.axes)
+        super(Swap, self).__init__(sorted(self.axes))
 
     def __repr__(self):
         return "Swap(%d,%d)" % tuple(sorted(self.axes))

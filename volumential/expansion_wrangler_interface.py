@@ -1,4 +1,4 @@
-from __future__ import division
+from __future__ import absolute_import, division, print_function
 
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
@@ -37,12 +37,14 @@ __doc__ = """
 # NOTE: abstractmethod's signatures (arguement lists) are not enforced
 
 
-class ExpansionWranglerInterface(metaclass=ABCMeta):
+class ExpansionWranglerInterface(object):
     """
         Abstract expansion handling interface.
         The interface is adapted from, and stays compatible with boxtree/fmm.
         TODO: Update docstrings
     """
+
+    __metaclass__ = ABCMeta
 
     @abstractmethod
     def multipole_expansion_zeros(self):
@@ -206,11 +208,14 @@ class ExpansionWranglerInterface(metaclass=ABCMeta):
 # {{{ code container interface
 
 
-class ExpansionWranglerCodeContainerInterface(metaclass=ABCMeta):
+class ExpansionWranglerCodeContainerInterface(object):
     """
         Abstract expansion code container interface.
         The interface is adapted from, and stays compatible with boxtree/fmm.
     """
+
+    __metaclass__ = ABCMeta
+
     @abstractmethod
     def get_wrangler(self, *args, **kwargs):
         """Makes a wrangler object.

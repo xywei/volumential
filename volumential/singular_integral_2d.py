@@ -1,4 +1,4 @@
-from __future__ import division
+from __future__ import absolute_import, division, print_function
 
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
@@ -25,7 +25,8 @@ THE SOFTWARE.
 import logging
 
 import numpy as np
-import scipy.integrate.quadrature as quad
+import scipy.integrate as sint
+import scipy.integrate.quadrature as quad  # noqa
 import scipy as sp
 
 __doc__ = """The 2D singular integrals are computed using the transform
@@ -102,7 +103,7 @@ def qquad(
     :type maxitero: int, optional.
     :param maxiteri: Maximum order of inner Gaussian quadrature.
     :type maxiteri: int, optional.
-    :param vec_func: True if func handles arrays as arguments (is a “vector”
+    :param vec_func: True if func handles arrays as arguments (is a "vector"
                 function). Default is True.
     :type vec_func: bool, optional.
     :param minitero: Minimum order of outer Gaussian quadrature.
@@ -127,7 +128,7 @@ def qquad(
 
         # Using lambda for readability
         def outer_integrand(y):
-            return quad(  # NOQA
+            return sint.quadrature(  # NOQA
                 lambda x: func(x, y, *args),
                 a,
                 b,
@@ -143,7 +144,7 @@ def qquad(
 
         # Is there a simple way to retrieve err info from the inner quad calls?
 
-        val, err = quad(
+        val, err = sint.quadrature(
             outer_integrand, c, d, (), tol, rtol, maxitero, vec_func, minitero
         )
 
@@ -389,7 +390,7 @@ def tria_quad(
     :param maxiter: Maximum order of Gaussian quadrature.
     :type maxiter: int, optional.
     :param vec_func: True if func handles arrays as arguments
-        (is a “vector” function). Default is True.
+        (is a "vector" function). Default is True.
     :type vec_func: bool, optional.
     :param miniter: Minimum order of Gaussian quadrature.
     :type miniter: int, optional.
@@ -410,8 +411,8 @@ def tria_quad(
         return (0.0, 0.0)
 
     # The function must be regular at the last two vertices
-    assert np.isfinite(func(*tria[1], *args))
-    assert np.isfinite(func(*tria[2], *args))
+    assert np.isfinite(func(tria[1][0], tria[1][1], *args))
+    assert np.isfinite(func(tria[2][0], tria[2][1], *args))
 
     # Solve for transforms
     template_tria = ((0, 0), (1, 0), (0, 1))
@@ -435,7 +436,7 @@ def tria_quad(
     # Transformed function is defined on [0,1]X[0,pi/2]
     def transformed_func(rho, theta):
         preimage = inv_mapping(rho, theta)
-        return func(*preimage, *args)
+        return func(preimage[0], preimage[1], *args)
 
     # Transformed function, when multiplied by jacobian, should have no
     # singularity (numerically special treatment still needed)
@@ -515,7 +516,7 @@ def box_quad(
     :type rtol: float, optional.
     :param maxiter: Maximum order of Gaussian quadrature.
     :type maxiter: int, optional.
-    :param vec_func: True if func handles arrays as arguments (is a “vector”
+    :param vec_func: True if func handles arrays as arguments (is a "vector"
                 function). Default is True.
     :type vec_func: bool, optional.
     :param miniter: Minimum order of Gaussian quadrature.
@@ -578,7 +579,7 @@ def quadri_quad(
     :type rtol: float, optional.
     :param maxiter: Maximum order of Gaussian quadrature.
     :type maxiter: int, optional.
-    :param vec_func: True if func handles arrays as arguments (is a “vector”
+    :param vec_func: True if func handles arrays as arguments (is a "vector"
                 function). Default is True.
     :type vec_func: bool, optional.
     :param miniter: Minimum order of Gaussian quadrature.

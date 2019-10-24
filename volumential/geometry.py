@@ -1,3 +1,5 @@
+from __future__ import absolute_import, division, print_function
+
 __copyright__ = "Copyright (C) 2019 Xiaoyu Wei"
 
 __license__ = """
@@ -140,7 +142,7 @@ class BoxFMMGeometryFactory():
         :class:`volumential.meshgen.MeshGenBase` interface.
     """
     def __init__(
-            self, cl_ctx, dim, *, quadrature_formula,
+            self, cl_ctx, dim, quadrature_formula,
             order, nlevels, bbox_getter,
             expand_to_hold_mesh=None, mesh_padding_factor=0.05):
         """
@@ -161,6 +163,9 @@ class BoxFMMGeometryFactory():
             from volumential.meshgen import MeshGen3D
             self._engine_class = MeshGen3D
 
+        self.dim = dim
+        self.quadrature_formula = quadrature_formula
+
         self.bbox_getter = bbox_getter
 
         self.cl_context = cl_ctx
@@ -176,7 +181,7 @@ class BoxFMMGeometryFactory():
         self.engine = self._engine_class(self.order, self.nlevels, a, b)
 
     def reinit(
-            self, *, order=None, nlevels=None,
+            self, order=None, nlevels=None,
             quadrature_formula=None,
             expand_to_hold_mesh=None, mesh_padding_factor=None):
         """Resets the engine to its initial state, and optionally also

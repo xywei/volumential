@@ -18,6 +18,8 @@ a.out
 .cache
 .pytest_cache
 
+_git_rev.py
+
 src/
 build/
 builds/

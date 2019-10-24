@@ -1,3 +1,5 @@
+from __future__ import absolute_import, division, print_function
+
 __copyright__ = "Copyright (C) 2018 Xiaoyu Wei"
 
 __license__ = """
@@ -22,7 +24,7 @@ THE SOFTWARE.
 
 import pytest  # noqa: F401
 
-# setup ctx_getter fixture
+# setup the ctx_factory fixture
 from pyopencl.tools import (  # NOQA
     pytest_generate_tests_for_pyopencl as pytest_generate_tests,
 )
@@ -50,3 +52,22 @@ def requires_pypvfmm(request):
         import pypvfmm  # noqa: F401
     except ImportError:
         pytest.skip("needs pypvfmm to run")
+
+
+def pytest_sessionstart(session):
+    from volumential.table_manager import NearFieldInteractionTableManager
+
+    # clean the table file, in case there was an aborted previous test run
+    import subprocess
+    subprocess.call(['rm', '-f', '/tmp/volumential-tests.hdf5'])
+
+    # pre-compute a basic table that is re-used in many tests.
+    with NearFieldInteractionTableManager("/tmp/volumential-tests.hdf5") as tm:
+        table, _ = tm.get_table(2, "Laplace",
+                                q_order=1, force_recompute=False, queue=None)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    # remove table caches
+    import subprocess
+    subprocess.call(['rm', '-f', '/tmp/volumential-tests.hdf5'])

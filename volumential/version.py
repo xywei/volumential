@@ -1,3 +1,5 @@
+from __future__ import absolute_import, division, print_function
+
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
 __license__ = """
@@ -20,8 +22,31 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
+# {{{ find install- or run-time git revision
+
+import os
+if os.environ.get("AKPYTHON_EXEC_FROM_WITHIN_WITHIN_SETUP_PY") is not None:
+    # We're just being exec'd by setup.py. We can't import anything.
+    _git_rev = None
+
+else:
+    import volumential._git_rev as _git_rev_mod
+    _git_rev = _git_rev_mod.GIT_REVISION
+
+    # If we're running from a dev tree, the last install (and hence the most
+    # recent update of the above git rev) could have taken place very long ago.
+    from pytools import find_module_git_revision
+    _runtime_git_rev = find_module_git_revision(__file__, n_levels_up=1)
+    if _runtime_git_rev is not None:
+        _git_rev = _runtime_git_rev
+
+# }}}
+
 VERSION = (2017, 1)
-VERSION_TEXT = ".".join(str(i) for i in VERSION)
+VERSION_STATUS = "alpha"
+VERSION_TEXT = ".".join(str(i) for i in VERSION) + VERSION_STATUS
+
+KERNEL_VERSION = (VERSION, _git_rev, 0)
 
 LOOPY_LANG_VERSION = (2018, 2)
 
