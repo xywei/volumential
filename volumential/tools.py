@@ -1,4 +1,5 @@
 from __future__ import absolute_import, division, print_function
+import six
 
 __copyright__ = "Copyright (C) 2018 Xiaoyu Wei"
 
@@ -26,9 +27,9 @@ import numpy as np
 import loopy as lp
 import pyopencl as cl
 import pymbolic as pmbl
+from pytools import memoize_method
 from pymbolic.primitives import Variable as VariableType
 from pymbolic.primitives import Expression as ExpressionType
-from sumpy.tools import KernelCacheWrapper
 
 import logging
 
@@ -57,6 +58,55 @@ def clean_file(filename, new_name=None):
             pass
 
 # }}} End clean files
+
+# {{{ loopy kernel cache wrapper
+
+
+class KernelCacheWrapper(object):
+    # FIXME: largely code duplication with sumpy.
+    @memoize_method
+    def get_cached_optimized_kernel(self, **kwargs):
+        from sumpy import code_cache, CACHING_ENABLED, OPT_ENABLED
+
+        if CACHING_ENABLED:
+            import loopy.version
+            from sumpy.version import KERNEL_VERSION as SUMPY_KERNEL_VERSION
+            from volumential.version import KERNEL_VERSION
+            cache_key = (
+                    self.get_cache_key()
+                    + tuple(sorted(six.iteritems(kwargs)))
+                    + (loopy.version.DATA_MODEL_VERSION,)
+                    + (SUMPY_KERNEL_VERSION,)
+                    + (KERNEL_VERSION,)
+                    + (OPT_ENABLED,))
+
+            try:
+                result = code_cache[cache_key]
+                logger.debug("%s: kernel cache hit [key=%s]" % (
+                    self.name, cache_key))
+                return result
+            except KeyError:
+                pass
+
+        logger.info("%s: kernel cache miss" % self.name)
+        if CACHING_ENABLED:
+            logger.info("%s: kernel cache miss [key=%s]" % (
+                self.name, cache_key))
+
+        from pytools import MinRecursionLimit
+        with MinRecursionLimit(3000):
+            if OPT_ENABLED:
+                knl = self.get_optimized_kernel(**kwargs)
+            else:
+                knl = self.get_kernel()
+
+        if CACHING_ENABLED:
+            code_cache.store_if_not_present(cache_key, knl)
+
+        return knl
+
+
+# }}} End loopy kernel cache wrapper
 
 # {{{ scalar field expression eval
 

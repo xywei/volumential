@@ -24,7 +24,7 @@ THE SOFTWARE.
 
 import numpy as np
 import loopy as lp
-from sumpy.tools import KernelCacheWrapper
+from volumential.tools import KernelCacheWrapper
 
 import logging
 

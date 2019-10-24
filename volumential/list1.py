@@ -33,7 +33,7 @@ import numpy as np
 import loopy
 import pyopencl as cl
 
-from sumpy.tools import KernelCacheWrapper
+from volumential.tools import KernelCacheWrapper
 
 import logging
 
