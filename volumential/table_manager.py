@@ -85,10 +85,16 @@ class NearFieldInteractionTableManager(object):
 
     Tables are stored under 'Dimension/KernelName/QuadOrder/BoxLevel/dataset_name'
     e.g., '2D/Laplace/Order_1/Level_0/data'
+
+    Only one table manager can exist for a dataset file with write access.
+    The access can be controlled with the read_only argument. By default,
+    the constructor tries to open the dataset with write access, and falls
+    back to read-only if that fails.
     """
 
     def __init__(self, dataset_filename="nft.hdf5",
-            root_extent=1, dtype=np.float64, **kwargs):
+            root_extent=1, dtype=np.float64,
+            read_only='auto', **kwargs):
         """Constructor.
         """
         self.dtype = dtype
@@ -96,16 +102,24 @@ class NearFieldInteractionTableManager(object):
         self.filename = dataset_filename
         self.root_extent = root_extent
 
-        # Read/write if exists, create otherwise
-        self.datafile = hdf.File(self.filename, "a")
+        if read_only == 'auto':
+            try:
+                self.datafile = hdf.File(self.filename, "a")
+            except (IOError, OSError) as e:
+                from warnings import warn
+                warn("Trying to open in read/write mode failed: %s" % str(e))
+                warn("Opening table dataset %s in read-only mode." % self.filename)
+                self.datafile = hdf.File(self.filename, "r")
+        elif read_only:
+            self.datafile = hdf.File(self.filename, "r")
+        else:
+            # Read/write if exists, create otherwise
+            self.datafile = hdf.File(self.filename, "a")
 
         self.table_extra_kwargs = kwargs
 
         # If the file exists, it must be for the same root_extent
-        if "root_extent" not in self.datafile.attrs:
-            self.datafile.attrs["root_extent"] = \
-                    self.root_extent
-        else:
+        if "root_extent" in self.datafile.attrs:
             if not abs(
                     self.datafile.attrs["root_extent"] - self.root_extent
                     ) < 1e-15:
@@ -196,7 +210,7 @@ class NearFieldInteractionTableManager(object):
                 q_order,
                 source_box_level,
                 compute_method,
-                queue,
+                queue=queue,
                 **kwargs
             )
 
@@ -209,7 +223,7 @@ class NearFieldInteractionTableManager(object):
                 q_order,
                 source_box_level,
                 compute_method,
-                queue,
+                queue=queue,
                 **kwargs
             )
 
@@ -239,7 +253,7 @@ class NearFieldInteractionTableManager(object):
                     q_order,
                     source_box_level,
                     compute_method,
-                    queue,
+                    queue=queue,
                     **kwargs
                 )
 
@@ -412,11 +426,7 @@ class NearFieldInteractionTableManager(object):
         provides support for some kernels such that the user can build and
         use the table without explicitly providing such information.
         """
-
         if kernel_type == "Laplace":
-            # knl = LaplaceKernel(dim)
-            # For unknown reasons this does not work with multiprocess
-            # knl_func = vm.nearfield_potential_table.sumpy_kernel_to_lambda(knl)
             knl_func = vm.nearfield_potential_table.get_laplace(dim)
         elif kernel_type == "Constant":
             knl_func = vm.nearfield_potential_table.constant_one
@@ -425,7 +435,8 @@ class NearFieldInteractionTableManager(object):
                 dim, kwargs["b"], kwargs["c"]
             )
         elif kernel_type in self.supported_kernels:
-            knl_func = None
+            knl = self.get_sumpy_kernel(dim, kernel_type)
+            knl_func = vm.nearfield_potential_table.sumpy_kernel_to_lambda(knl)
         else:
             raise NotImplementedError("Kernel type not supported.")
 
@@ -582,6 +593,8 @@ class NearFieldInteractionTableManager(object):
         if compute_method is None:
             logger.debug("Using default compute_method (Transform)")
             compute_method = "Transform"
+
+        self.datafile.attrs["root_extent"] = self.root_extent
 
         q_order = int(q_order)
         assert q_order >= 1

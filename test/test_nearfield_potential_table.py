@@ -1,3 +1,5 @@
+from __future__ import absolute_import, division, print_function
+
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
 __license__ = """
@@ -72,11 +74,11 @@ def test_modes():
 
 def cheb_eval(dim, coefs, coords):
     if dim == 1:
-        return chebval(*coords, coefs)
+        return chebval(coords[0], coefs)
     elif dim == 2:
-        return chebval2d(*coords, coefs)
+        return chebval2d(coords[0], coords[1], coefs)
     elif dim == 3:
-        return chebval3d(*coords, coefs)
+        return chebval3d(coords[0], coords[1], coords[2], coefs)
     else:
         raise NotImplementedError('dimension %d not supported' % dim)
 
@@ -97,7 +99,7 @@ def drive_test_modes_cheb_coeffs(dim, q, cheb_order):
     # NOTE: table.q_points are over [0, 1]^dim,
     # while cheb_eval assumes points are over [-1, 1]^dim
     targets = np.array([
-        [q[i] for q in table.q_points]
+        [qpt[i] for qpt in table.q_points]
         for i in range(dim)]) * 2 - 1
 
     mode_vals = cheb_eval(dim, ccoefs, targets)

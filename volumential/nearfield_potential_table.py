@@ -32,11 +32,6 @@ from functools import partial
 import volumential.list1_gallery as gallery
 import volumential.singular_integral_2d as squad
 
-# NOTE: Cannot use sumpy kernels for "Transform" since they
-# do not work with multiprocess.
-# e.g. with LaplaceKernel it will complain "AttributeError:
-# 'LaplaceKernel' object has no attribute 'expression'"
-
 logger = logging.getLogger('NearFieldInteractionTable')
 
 
@@ -215,7 +210,8 @@ class NearFieldInteractionTable(object):
         build_method=None,
         source_box_extent=1,
         dtype=np.float64,
-        inverse_droste=False
+        inverse_droste=False,
+        **kwargs
     ):
         """
         kernel_type determines how the kernel is scaled w.r.t. box size.
@@ -300,9 +296,15 @@ class NearFieldInteractionTable(object):
             # quad points in [-1,1]
             import volumential.meshgen as mg
 
+            if 'queue' in kwargs:
+                queue = kwargs['queue']
+            else:
+                queue = None
+
             q_points, _, _ = mg.make_uniform_cubic_grid(
-                degree=quad_order, level=1, dim=self.dim
-            )
+                degree=quad_order, level=1, dim=self.dim,
+                queue=queue)
+
             # map to source box
             mapped_q_points = np.array(
                 [
@@ -626,7 +628,7 @@ class NearFieldInteractionTable(object):
         ct_id = qp_map(entry_info["target_point_index"])
         centry_id = self.get_entry_index(cs_id, ct_id, cc_id)
 
-        return centry_id
+        return entry_id, centry_id
 
     def compute_table_entry(self, entry_id):
         """Compute one entry in the table indexed by self.data[entry_id]
@@ -697,17 +699,25 @@ class NearFieldInteractionTable(object):
         currently only supported in 2D.
         """
         assert self.dim == 2
-        if pool is None:
-            from multiprocess import Pool
+        if 0:
+            # FIXME: make everything needed for compute_nmlz picklable
+            if pool is None:
+                from multiprocessing import Pool
 
-            pool = Pool(processes=None)
+                pool = Pool(processes=None)
 
-        for mode_id, nmlz in pool.imap_unordered(
-            self.compute_nmlz, [i for i in range(self.n_q_points)]
-        ):
-            self.mode_normalizers[mode_id] = nmlz
-            if pb is not None:
-                pb.progress(1)
+            for mode_id, nmlz in pool.imap_unordered(
+                self.compute_nmlz, [i for i in range(self.n_q_points)]
+            ):
+                self.mode_normalizers[mode_id] = nmlz
+                if pb is not None:
+                    pb.progress(1)
+        else:
+            for mode_id in range(self.n_q_points):
+                _, nmlz = self.compute_nmlz(mode_id)
+                self.mode_normalizers[mode_id] = nmlz
+                if pb is not None:
+                    pb.progress(1)
 
     def build_table_via_transform(self):
         """
@@ -716,10 +726,13 @@ class NearFieldInteractionTable(object):
         """
         assert self.dim == 2
 
-        # multiprocessing cannot handle member functions
-        from multiprocess import Pool
-
-        pool = Pool(processes=None)
+        if 0:
+            # FIXME: make everything needed for compute_nmlz picklable
+            # multiprocessing cannot handle member functions
+            from multiprocessing import Pool
+            pool = Pool(processes=None)
+        else:
+            pool = None
 
         self.pb.draw()
 
@@ -729,26 +742,40 @@ class NearFieldInteractionTable(object):
         # First compute entries that are invariant under
         # symmetry lookup
         invariant_entry_ids = [
-            i for i in range(len(self.data)) if self.lookup_by_symmetry(i) == i
+            i for i in range(len(self.data)) if self.lookup_by_symmetry(i) == (i, i)
         ]
 
-        for entry_id, entry_val in pool.imap_unordered(
-            self.compute_table_entry, invariant_entry_ids
-        ):
-            self.data[entry_id] = entry_val
-            self.pb.progress(1)
+        if 0:
+            # multiprocess disabled for py2 compatibility
+            # (also drops dependency on dill/multiprocess)
+            for entry_id, entry_val in pool.imap_unordered(
+                self.compute_table_entry, invariant_entry_ids
+            ):
+                self.data[entry_id] = entry_val
+                self.pb.progress(1)
+        else:
+            for entry_id in invariant_entry_ids:
+                _, entry_val = self.compute_table_entry(entry_id)
+                self.data[entry_id] = entry_val
+                self.pb.progress(1)
 
-        # Then complete the table via symmetry lookup
-        for entry_id, centry_id in enumerate(
-            pool.imap_unordered(
-                self.lookup_by_symmetry, [i for i in range(len(self.data))]
-            )
-        ):
-            assert not np.isnan(self.data[centry_id])
-            if centry_id == entry_id:
-                continue
-            self.data[entry_id] = self.data[centry_id]
-            self.pb.progress(1)
+        if 0:
+            # Then complete the table via symmetry lookup
+            for entry_id, centry_id in pool.imap_unordered(
+                    self.lookup_by_symmetry, [i for i in range(len(self.data))]):
+                assert not np.isnan(self.data[centry_id])
+                if centry_id == entry_id:
+                    continue
+                self.data[entry_id] = self.data[centry_id]
+                self.pb.progress(1)
+        else:
+            for entry_id in range(len(self.data)):
+                _, centry_id = self.lookup_by_symmetry(entry_id)
+                assert not np.isnan(self.data[centry_id])
+                if centry_id == entry_id:
+                    continue
+                self.data[entry_id] = self.data[centry_id]
+                self.pb.progress(1)
 
         self.pb.finished()
 
@@ -1040,8 +1067,8 @@ class NearFieldInteractionTable(object):
             raise ValueError()
 
         if ncpus is None:
-            import os
-            ncpus = os.cpu_count()
+            import multiprocessing
+            ncpus = multiprocessing.cpu_count()
 
         if pool is None:
             from multiprocessing import Pool
@@ -1227,14 +1254,13 @@ class NearFieldInteractionTable(object):
                     result[iqpt] = knl_val * knl_scaling
                 end
                 """
-            ],
+                ],
             [
                 lp.ValueArg("dim, n_q_points", np.int32),
                 lp.GlobalArg("quad_points", np.float64, "dim, n_q_points"),
-                lp.GlobalArg("target_point", np.float64, "dim"),
-                *extra_kernel_kwarg_types,
-                "...",
-            ],
+                lp.GlobalArg("target_point", np.float64, "dim")
+                ] + list(extra_kernel_kwarg_types)
+            + ["...", ],
             name="eval_kernel_lucky_coin",
             lang_version=(2018, 2),
         )
@@ -1266,8 +1292,6 @@ class NearFieldInteractionTable(object):
 
         # {{{ integrate over the exterior of the ball
 
-        import scipy.integrate.quadrature as quad
-
         if self.dim == 2:
 
             def rho_0(theta, target, radius):
@@ -1285,7 +1309,8 @@ class NearFieldInteractionTable(object):
                 # target: target point
                 # s: fractional order
                 # radius: radius of the circle
-                val, _ = quad(
+                import scipy.integrate as sint
+                val, _ = sint.quadrature(
                     partial(ext_inf_integrand,
                         s=s, target=target, radius=radius),
                     a=0,

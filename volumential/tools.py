@@ -1,3 +1,6 @@
+from __future__ import absolute_import, division, print_function
+import six
+
 __copyright__ = "Copyright (C) 2018 Xiaoyu Wei"
 
 __license__ = """
@@ -24,9 +27,9 @@ import numpy as np
 import loopy as lp
 import pyopencl as cl
 import pymbolic as pmbl
+from pytools import memoize_method
 from pymbolic.primitives import Variable as VariableType
 from pymbolic.primitives import Expression as ExpressionType
-from sumpy.tools import KernelCacheWrapper
 
 import logging
 
@@ -55,6 +58,70 @@ def clean_file(filename, new_name=None):
             pass
 
 # }}} End clean files
+
+# {{{ loopy kernel cache wrapper
+
+
+class KernelCacheWrapper(object):
+    # FIXME: largely code duplication with sumpy.
+
+    def __init__(self):
+        self.name = "KernelCacheWrapper"
+        raise RuntimeError(
+                "KernelCacheWrapper objects should not be constructed")
+
+    def get_cache_key(self):
+        raise NotImplementedError("Unimplemented cache key")
+
+    def get_kernel(self):
+        raise NotImplementedError()
+
+    def get_optimized_kernel(self):
+        raise NotImplementedError()
+
+    @memoize_method
+    def get_cached_optimized_kernel(self, **kwargs):
+        from sumpy import code_cache, CACHING_ENABLED, OPT_ENABLED
+
+        if CACHING_ENABLED:
+            import loopy.version
+            from sumpy.version import KERNEL_VERSION as SUMPY_KERNEL_VERSION
+            from volumential.version import KERNEL_VERSION
+            cache_key = (
+                    self.get_cache_key()
+                    + tuple(sorted(six.iteritems(kwargs)))
+                    + (loopy.version.DATA_MODEL_VERSION,)
+                    + (SUMPY_KERNEL_VERSION,)
+                    + (KERNEL_VERSION,)
+                    + (OPT_ENABLED,))
+
+            try:
+                result = code_cache[cache_key]
+                logger.debug("%s: kernel cache hit [key=%s]" % (
+                    self.name, cache_key))
+                return result
+            except KeyError:
+                pass
+
+        logger.info("%s: kernel cache miss" % self.name)
+        if CACHING_ENABLED:
+            logger.info("%s: kernel cache miss [key=%s]" % (
+                self.name, cache_key))
+
+        from pytools import MinRecursionLimit
+        with MinRecursionLimit(3000):
+            if OPT_ENABLED:
+                knl = self.get_optimized_kernel(**kwargs)
+            else:
+                knl = self.get_kernel()
+
+        if CACHING_ENABLED:
+            code_cache.store_if_not_present(cache_key, knl)
+
+        return knl
+
+
+# }}} End loopy kernel cache wrapper
 
 # {{{ scalar field expression eval
 
@@ -157,9 +224,9 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
             [
                 lp.ValueArg("dim, n_targets", np.int32),
                 lp.GlobalArg("target_points", np.float64, "dim, n_targets"),
-                *extra_kernel_kwarg_types,
-                "...",
-            ],
+                ]
+                + list(extra_kernel_kwarg_types)
+                + ["...", ],
             name="eval_expr",
             lang_version=(2018, 2),
         )
@@ -179,10 +246,10 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
     def get_optimized_kernel(self, ncpus=None, **kwargs):
         knl = self.get_kernel(**kwargs)
         if ncpus is None:
-            import os
+            import multiprocessing
             # NOTE: this detects the number of logical cores, which
             # may result in suboptimal performance.
-            ncpus = os.cpu_count()
+            ncpus = multiprocessing.cpu_count()
         knl = lp.split_iname(
             knl,
             split_iname="itgt",
@@ -325,7 +392,7 @@ class DiscreteLegendreTransform(BoxSpecificMap):
 
         # Normalizers
         self.I = np.ascontiguousarray(  # noqa: E741
-                np.diag(self.V.T * self.W @ self.V))
+                np.diag(self.V.T * np.matmul(self.W, self.V)))
         assert self.I.shape == (self.degree**self.dim,)
 
         # Fix strides for loopy
@@ -333,7 +400,7 @@ class DiscreteLegendreTransform(BoxSpecificMap):
 
         # Check orthogonality
         ortho_resid = np.linalg.norm(
-                self.V.T * self.W @ self.V - np.diag(self.I))
+                self.V.T * np.matmul(self.W, self.V) - np.diag(self.I))
         if ortho_resid > 1e-13:
             logger.warn("Legendre polynomials' orthogonality residual = %f"
                     % ortho_resid)
@@ -411,8 +478,8 @@ class DiscreteLegendreTransform(BoxSpecificMap):
     def get_optimized_kernel(self, ncpus=None, **kwargs):
         knl = self.get_kernel(**kwargs)
         if ncpus is None:
-            import os
-            ncpus = os.cpu_count()
+            import multiprocessing
+            ncpus = multiprocessing.cpu_count()
         knl = lp.split_iname(
             knl,
             split_iname="bid",
@@ -538,8 +605,8 @@ class BoxSum(BoxSpecificReduction):
     def get_optimized_kernel(self, ncpus=None, **kwargs):
         knl = self.get_kernel(**kwargs)
         if ncpus is None:
-            import os
-            ncpus = os.cpu_count()
+            import multiprocessing
+            ncpus = multiprocessing.cpu_count()
         knl = lp.split_iname(
             knl,
             split_iname="bid",

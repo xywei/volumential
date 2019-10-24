@@ -1,3 +1,5 @@
+from __future__ import absolute_import, division, print_function
+
 __copyright__ = "Copyright (C) 2018 Xiaoyu Wei"
 
 __license__ = """
@@ -62,7 +64,7 @@ class MeshGenBase(object):
         assert degree > 0
         assert nlevels > 0
         self.degree = degree
-        self.quadrature_formula = GaussLegendreQuadrature(degree - 1)
+        self.quadrature_formula = LegendreGaussQuadrature(degree - 1)
         self.nlevels = nlevels
 
         self.bound_a = np.array([a]).flatten()
@@ -94,6 +96,9 @@ class MeshGenBase(object):
         self.quadrature = QuadratureOnBoxTree(
             self.boxtree, self.quadrature_formula
         )
+
+    def dimension_specific_setup(self):
+        pass
 
     def get_q_points_dev(self):
         return self.quadrature.get_q_points(self.queue)
@@ -147,7 +152,7 @@ class MeshGenBase(object):
         # TODO
         raise NotImplementedError
 
-    def print_info(self, logging_func=print):
+    def print_info(self, logging_func=logger.info):
         logging_func("Number of cells: " + str(self.n_cells()))
         logging_func("Number of active cells: " + str(self.n_active_cells()))
         logging_func("Number of quad points per cell: "
@@ -178,7 +183,7 @@ except ImportError as e:
     try:
         logger.info("Trying out BoxTree.TreeInteractiveBuild interface.")
         import boxtree.tree_interactive_build  # noqa: F401
-        from modepy import GaussLegendreQuadrature
+        from modepy import LegendreGaussQuadrature
 
         provider = "meshgen_boxtree"
 
@@ -211,7 +216,7 @@ except ImportError as e:
             tree.generate_uniform_boxtree(
                 queue, nlevels=nlevels, root_extent=2, root_vertex=np.zeros(dim) - 1
             )
-            quad_rule = GaussLegendreQuadrature(degree - 1)
+            quad_rule = LegendreGaussQuadrature(degree - 1)
             quad = QuadratureOnBoxTree(tree, quad_rule)
             q_weights = quad.get_q_weights(queue).get(queue)
             q_points_dev = quad.get_q_points(queue)

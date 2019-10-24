@@ -573,7 +573,7 @@ class FPNDFMMLibExpansionWranglerCodeContainer(
 
     def get_wrangler(self, queue, tree, dtype, fmm_level_to_order,
             source_extra_kwargs={}, kernel_extra_kwargs=None,
-            *args, **kwargs,):
+            *args, **kwargs):
         return FPNDFMMLibExpansionWrangler(self, queue, tree,
                 dtype, fmm_level_to_order,
                 source_extra_kwargs, kernel_extra_kwargs,

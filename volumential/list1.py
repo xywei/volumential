@@ -1,3 +1,5 @@
+from __future__ import absolute_import, division, print_function
+
 __copyright__ = "Copyright (C) 2018 Xiaoyu Wei"
 
 __license__ = """
@@ -31,7 +33,7 @@ import numpy as np
 import loopy
 import pyopencl as cl
 
-from sumpy.tools import KernelCacheWrapper
+from volumential.tools import KernelCacheWrapper
 
 import logging
 
@@ -45,6 +47,8 @@ logging.basicConfig(level=logging.INFO)
 class NearFieldEvalBase(KernelCacheWrapper):
     """Base class of near-field evalulator.
     """
+
+    default_name = "near_field_eval_base"
 
     def __init__(
         self,
@@ -423,6 +427,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 "...",
             ],
             name="near_field",
+            lang_version=(2018, 2)
         )
 
         # print(lpknl)
@@ -445,10 +450,10 @@ class NearFieldFromCSR(NearFieldEvalBase):
 
     def get_optimized_kernel(self, ncpus=None):
         if ncpus is None:
-            import os
+            import multiprocessing
             # NOTE: this detects the number of logical cores, disable hyperthreading
             # for the optimal performance.
-            ncpus = os.cpu_count()
+            ncpus = multiprocessing.cpu_count()
         knl = self.get_kernel()
         knl = loopy.split_iname(knl, "tbox", ncpus, inner_tag="g.0")
         return knl
@@ -522,8 +527,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
             table_data=table_data_combined,
             target_boxes=target_boxes,
             table_root_extent=table_root_extent,
-            **integral_kernel_init_kargs,
-        )
+            **integral_kernel_init_kargs)
 
         res['result'].add_event(evt)
         if isinstance(result, cl.array.Array):

@@ -1,3 +1,5 @@
+from __future__ import absolute_import, division, print_function
+
 __copyright__ = "Copyright (C) 2018 Xiaoyu Wei"
 
 __license__ = """
@@ -22,7 +24,7 @@ THE SOFTWARE.
 
 import numpy as np
 import loopy as lp
-from sumpy.tools import KernelCacheWrapper
+from volumential.tools import KernelCacheWrapper
 
 import logging
 
@@ -567,12 +569,13 @@ class DrosteBase(KernelCacheWrapper):
             )
         ]
 
-    def get_target_points(self):
+    def get_target_points(self, queue=None):
         import volumential.meshgen as mg
 
         q_points, _, _ = mg.make_uniform_cubic_grid(
-            degree=self.ntgt_points, level=1, dim=self.dim
-        )
+            degree=self.ntgt_points, level=1, dim=self.dim,
+            queue=queue)
+
         # map to [0,1]^d
         mapped_q_points = np.array(
                 [
@@ -590,7 +593,7 @@ class DrosteBase(KernelCacheWrapper):
         return mapped_q_points[q_points_ordering]
 
     def postprocess_cheb_table(self, cheb_table, cheb_coefs):
-        nfp_table = np.zeros([self.n_q_points, *cheb_table.shape[self.dim:]])
+        nfp_table = np.zeros([self.n_q_points, ] + list(cheb_table.shape[self.dim:]))
 
         # transform to interpolatory basis functions
         # NOTE: the reversed order of indices, e.g.,
@@ -625,7 +628,8 @@ class DrosteFull(DrosteBase):
     """
 
     def __init__(self, integral_knl, quad_order, case_vecs, n_brick_quad_points=50):
-        super().__init__(integral_knl, quad_order, case_vecs, n_brick_quad_points)
+        super(DrosteFull, self).__init__(
+                integral_knl, quad_order, case_vecs, n_brick_quad_points)
         self.name = "DrosteFull"
 
     def make_loop_domain(self):
@@ -665,17 +669,15 @@ class DrosteFull(DrosteBase):
                 lp.GlobalArg("interaction_case_vecs", np.float64, "dim, n_cases"),
                 lp.GlobalArg("interaction_case_scls", np.float64, "n_cases"),
                 lp.GlobalArg(
-                    "result",
-                    lp.auto,
+                    "result", None,
                     ", ".join(
                         ["nfunctions" for d in range(self.dim)]
                         + ["quad_order" for d in range(self.dim)]
                     )
                     + ", n_cases",
-                ),
-                *extra_kernel_kwarg_types,
-                "...",
-            ],
+                ), ]
+                + list(extra_kernel_kwarg_types)
+                + ["...", ],
             name="brick_map",
             lang_version=(2018, 2),
         )
@@ -693,10 +695,10 @@ class DrosteFull(DrosteBase):
 
     def get_optimized_kernel(self, ncpus=None, **kwargs):
         if ncpus is None:
-            import os
+            import multiprocessing
             # NOTE: this detects the number of logical cores, which
             # may result in suboptimal performance.
-            ncpus = os.cpu_count()
+            ncpus = multiprocessing.cpu_count()
         knl = self.get_kernel(**kwargs)
         knl = lp.split_iname(knl, "icase", ncpus, inner_tag="g.0")
         return knl
@@ -752,7 +754,7 @@ class DrosteFull(DrosteBase):
         root_brick[:, 1] = source_box_extent
 
         # target points in 1D
-        q_points = self.get_target_points()
+        q_points = self.get_target_points(queue)
         assert len(q_points) == self.ntgt_points ** self.dim
         t = np.array([pt[-1] for pt in q_points[: self.ntgt_points]])
 
@@ -841,7 +843,8 @@ class DrosteReduced(DrosteBase):
         n_brick_quad_points=50,
         knl_symmetry_tags=None,
     ):
-        super().__init__(integral_knl, quad_order, case_vecs, n_brick_quad_points)
+        super(DrosteReduced, self).__init__(
+                integral_knl, quad_order, case_vecs, n_brick_quad_points)
 
         from volumential.list1_symmetry import CaseVecReduction
 
@@ -1043,8 +1046,8 @@ class DrosteReduced(DrosteBase):
 
         expansion_code = []
         for ext_index, ext_id in zip(range(len(ext_ids)), ext_ids):
-            ext_tgt_ordering = base_tgt_ordering.copy()
-            ext_fun_ordering = base_fun_ordering.copy()
+            ext_tgt_ordering = list(base_tgt_ordering)
+            ext_fun_ordering = list(base_fun_ordering)
             # apply s
             for swap in ext_id[1:]:
                 ns = len(swap)
@@ -1125,17 +1128,14 @@ class DrosteReduced(DrosteBase):
                     lp.GlobalArg("interaction_case_scls", np.float64, "n_cases"),
                     lp.GlobalArg("target_nodes", np.float64, "quad_order"),
                     lp.GlobalArg(
-                        "result",
-                        lp.auto,
+                        "result", None,
                         ", ".join(
                             ["nfunctions" for d in range(self.dim)]
                             + ["quad_order" for d in range(self.dim)]
                         )
                         + ", n_cases",
-                    ),
-                    *extra_kernel_kwarg_types,
-                    "...",
-                ],
+                    ), ] + list(extra_kernel_kwarg_types)
+                    + ["...", ],
                 name="brick_map",
                 lang_version=(2018, 2),
             )
@@ -1147,17 +1147,14 @@ class DrosteReduced(DrosteBase):
                 [
                     lp.ValueArg("n_cases, nfunctions, quad_order, dim", np.int32),
                     lp.GlobalArg(
-                        "result",
-                        lp.auto,
+                        "result", None,
                         ", ".join(
                             ["nfunctions" for d in range(self.dim)]
                             + ["quad_order" for d in range(self.dim)]
                         )
                         + ", n_cases",
-                    ),
-                    *extra_kernel_kwarg_types,
-                    "...",
-                ],
+                    ), ] + list(extra_kernel_kwarg_types)
+                    + ["...", ],
                 name="brick_map_expansion",
                 lang_version=(2018, 2),
             )
@@ -1180,10 +1177,10 @@ class DrosteReduced(DrosteBase):
         # The returned kernel depends on the state variable
         # self.current_base_case, self.get_kernel_id
         if ncpus is None:
-            import os
+            import multiprocessing
             # NOTE: this detects the number of logical cores, which
             # may result in suboptimal performance.
-            ncpus = os.cpu_count()
+            ncpus = multiprocessing.cpu_count()
 
         knl = self.get_kernel(**kwargs)
         knl = lp.join_inames(knl, inames=self.basis_vars, new_iname="func")
@@ -1243,7 +1240,7 @@ class DrosteReduced(DrosteBase):
         root_brick[:, 1] = source_box_extent
 
         # target points in 1D
-        q_points = self.get_target_points()
+        q_points = self.get_target_points(queue)
         assert len(q_points) == self.ntgt_points ** self.dim
         t = np.array([pt[-1] for pt in q_points[: self.ntgt_points]])
 
@@ -1548,7 +1545,7 @@ class InverseDrosteReduced(DrosteReduced):
         """
         :param auto_windowing: auto-detect window radius.
         """
-        super().__init__(
+        super(InverseDrosteReduced, self).__init__(
             integral_knl, quad_order, case_vecs,
             n_brick_quad_points, knl_symmetry_tags)
         self.auto_windowing = auto_windowing
@@ -1938,17 +1935,14 @@ class InverseDrosteReduced(DrosteReduced):
                     lp.GlobalArg("interaction_case_scls", np.float64, "n_cases"),
                     lp.GlobalArg("target_nodes", np.float64, "quad_order"),
                     lp.GlobalArg(
-                        "result",
-                        lp.auto,
+                        "result", None,
                         ", ".join(
                             ["nfunctions" for d in range(self.dim)]
                             + ["quad_order" for d in range(self.dim)]
                         )
                         + ", n_cases",
-                    ),
-                    *extra_kernel_kwarg_types,
-                    "...",
-                ],
+                    ), ] + list(extra_kernel_kwarg_types)
+                    + ["...", ],
                 name="brick_map_%d" % self.get_kernel_id,
                 lang_version=(2018, 2),
                 **extra_loopy_kernel_kwargs
@@ -1961,17 +1955,14 @@ class InverseDrosteReduced(DrosteReduced):
                 [
                     lp.ValueArg("n_cases, nfunctions, quad_order, dim", np.int32),
                     lp.GlobalArg(
-                        "result",
-                        lp.auto,
+                        "result", None,
                         ", ".join(
                             ["nfunctions" for d in range(self.dim)]
                             + ["quad_order" for d in range(self.dim)]
                         )
                         + ", n_cases",
-                    ),
-                    *extra_kernel_kwarg_types,
-                    "...",
-                ],
+                    ), ] + list(extra_kernel_kwarg_types)
+                    + ["...", ],
                 name="brick_map_expansion",
                 lang_version=(2018, 2),
                 **extra_loopy_kernel_kwargs
@@ -2023,7 +2014,7 @@ class InverseDrosteReduced(DrosteReduced):
             alpha = 0
 
         # (template) target points in 1D over [0, 1]
-        q_points = self.get_target_points()
+        q_points = self.get_target_points(queue)
         assert len(q_points) == self.ntgt_points ** self.dim
         t = np.array([pt[-1] for pt in q_points[: self.ntgt_points]])
 
