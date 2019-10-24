@@ -56,6 +56,11 @@ def requires_pypvfmm(request):
 
 def pytest_sessionstart(session):
     from volumential.table_manager import NearFieldInteractionTableManager
+
+    # clean the table file, in case there was an aborted previous test run
+    import subprocess
+    subprocess.call(['rm', '-f', '/tmp/volumential-tests.hdf5'])
+
     # pre-compute a basic table that is re-used in many tests.
     with NearFieldInteractionTableManager("/tmp/volumential-tests.hdf5") as tm:
         table, _ = tm.get_table(2, "Laplace",
