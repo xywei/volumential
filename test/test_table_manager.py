@@ -25,25 +25,23 @@ THE SOFTWARE.
 import numpy as np
 import pyopencl as cl
 import pytest
-import os
 import volumential as vm
-from volumential.table_manager import NearFieldInteractionTableManager
+from volumential.table_manager import (
+        NearFieldInteractionTableManager as NFTable)
 
 
-def get_tmp_table_manager_and_data(queue,
-        filename='volumential_tests.hdf5', dim=2,
-        kernel_name="Laplace", q_order=1, force_recompute=False):
-    table_manager = NearFieldInteractionTableManager(
-            os.path.join('/tmp', filename))
-    table, _ = table_manager.get_table(dim, kernel_name,
-            q_order=q_order, force_recompute=False, queue=queue)
-    return table_manager, table
+def get_table(queue, q_order=1, dim=2):
+    with NFTable("/tmp/volumential-tests.hdf5") as table_manager:
+        table, _ = table_manager.get_table(
+                dim, "Laplace",
+                q_order=q_order, force_recompute=False, queue=queue)
+    return table
 
 
 def test_case_id(ctx_factory):
     cl_ctx = ctx_factory()
     queue = cl.CommandQueue(cl_ctx)
-    table_manager, table = get_tmp_table_manager_and_data(queue)
+    table = get_table(queue)
     case_same_box = len(table.interaction_case_vecs) // 2
     assert list(table.interaction_case_vecs[case_same_box]) == [0, 0]
 
@@ -51,16 +49,12 @@ def test_case_id(ctx_factory):
 def test_get_table(ctx_factory):
     cl_ctx = ctx_factory()
     queue = cl.CommandQueue(cl_ctx)
-    table_manager, table = get_tmp_table_manager_and_data(queue)
+    table = get_table(queue)
     assert table.dim == 2
 
 
 def laplace_const_source_same_box(queue, q_order, dim=2):
-    table_manager, table = get_tmp_table_manager_and_data(queue, dim=dim)
-    nft, _ = table_manager.get_table(
-        dim, "Laplace", q_order=q_order,
-        force_recompute=False,
-        queue=queue)
+    nft = get_table(queue, q_order, dim)
 
     n_pairs = nft.n_pairs
     n_q_points = nft.n_q_points
@@ -80,11 +74,7 @@ def laplace_const_source_same_box(queue, q_order, dim=2):
 
 
 def laplace_cons_source_neighbor_box(queue, q_order, case_id, dim=2):
-    table_manager, table = get_tmp_table_manager_and_data(queue, dim=dim)
-    nft, _ = table_manager.get_table(
-        dim, "Laplace", q_order=q_order,
-        force_recompute=False,
-        queue=queue)
+    nft = get_table(queue, q_order, dim)
 
     n_pairs = nft.n_pairs
     n_q_points = nft.n_q_points
@@ -104,18 +94,12 @@ def laplace_cons_source_neighbor_box(queue, q_order, case_id, dim=2):
 def test_lcssb_1(ctx_factory):
     cl_ctx = ctx_factory()
     queue = cl.CommandQueue(cl_ctx)
-    table_manager, table = get_tmp_table_manager_and_data(queue)
     u = laplace_const_source_same_box(queue, 1)
     assert len(u) == 1
 
 
 def interp_func(queue, q_order, coef, dim=2):
-    table_manager, table = get_tmp_table_manager_and_data(queue, dim=dim)
-    nft, _ = table_manager.get_table(
-        dim, "Laplace", q_order=q_order,
-        force_recompute=False,
-        queue=queue)
-
+    nft = get_table(queue, q_order, dim)
     assert dim == 2
 
     modes = [nft.get_mode(i) for i in range(nft.n_q_points)]
@@ -133,8 +117,6 @@ def interp_func(queue, q_order, coef, dim=2):
 def test_interp_func(longrun, ctx_factory):
     cl_ctx = ctx_factory()
     queue = cl.CommandQueue(cl_ctx)
-    table_manager, table = get_tmp_table_manager_and_data(queue)
-
     q_order = 3
     coef = np.ones(q_order ** 2)
 
@@ -163,10 +145,7 @@ def direct_quad(source_func, target_point, dim=2):
 def drive_test_direct_quad_same_box(queue, q_order, dim=2):
     u = laplace_const_source_same_box(queue, q_order)
     func = interp_func(queue, q_order, u)
-    table_manager, table = get_tmp_table_manager_and_data(queue)
-    nft, _ = table_manager.get_table(
-        dim, "Laplace", q_order=q_order, force_recompute=False,
-        queue=queue)
+    nft = get_table(queue, q_order, dim)
 
     def const_one_source_func(x, y):
         return 1
@@ -194,7 +173,6 @@ def drive_test_direct_quad_same_box(queue, q_order, dim=2):
 def test_direct_quad(q_order, ctx_factory):
     cl_ctx = ctx_factory()
     queue = cl.CommandQueue(cl_ctx)
-    table_manager, table = get_tmp_table_manager_and_data(queue)
     drive_test_direct_quad_same_box(queue, q_order)
 
 
@@ -202,14 +180,13 @@ def test_direct_quad(q_order, ctx_factory):
 def test_direct_quad_longrun(longrun, ctx_factory, q_order):
     cl_ctx = ctx_factory()
     queue = cl.CommandQueue(cl_ctx)
-    table_manager, table = get_tmp_table_manager_and_data(queue)
     drive_test_direct_quad_same_box(queue, q_order)
 
 
 def test_case_ids(ctx_factory):
     cl_ctx = ctx_factory()
     queue = cl.CommandQueue(cl_ctx)
-    table_manager, table = get_tmp_table_manager_and_data(queue)
+    table = get_table(queue)
     for i in range(len(table.interaction_case_vecs)):
         code = table.case_encode(
                 table.interaction_case_vecs[i])
@@ -235,7 +212,7 @@ def get_target_point(case_id, target_id, table):
 def test_get_neighbor_target_point(ctx_factory):
     cl_ctx = ctx_factory()
     queue = cl.CommandQueue(cl_ctx)
-    table_manager, table = get_tmp_table_manager_and_data(queue)
+    table = get_table(queue)
     case_same_box = len(table.interaction_case_vecs) // 2
     for cid in range(len(table.interaction_case_vecs)):
         if cid == case_same_box:
@@ -247,10 +224,8 @@ def test_get_neighbor_target_point(ctx_factory):
 
 
 def laplace_const_source_neighbor_box(queue, q_order, case_id, dim=2):
-    table_manager, table = get_tmp_table_manager_and_data(queue)
-    nft, _ = table_manager.get_table(
-        dim, "Laplace", q_order=q_order,
-        force_recompute=False, queue=queue)
+    nft = get_table(queue, q_order, dim)
+
     n_pairs = nft.n_pairs
     n_q_points = nft.n_q_points
     pot = np.zeros(n_q_points)
@@ -265,10 +240,7 @@ def laplace_const_source_neighbor_box(queue, q_order, case_id, dim=2):
 
 def drive_test_direct_quad_neighbor_box(queue, q_order, case_id, dim=2):
     u = laplace_const_source_neighbor_box(queue, q_order, case_id)
-    table_manager, table = get_tmp_table_manager_and_data(queue)
-    nft, _ = table_manager.get_table(
-        dim, "Laplace", q_order=q_order,
-        force_recompute=False, queue=queue)
+    nft = get_table(queue, q_order, dim)
 
     def const_one_source_func(x, y):
         return 1
@@ -293,7 +265,7 @@ def drive_test_direct_quad_neighbor_box(queue, q_order, case_id, dim=2):
 def test_direct_quad_neighbor_box(ctx_factory, q_order):
     cl_ctx = ctx_factory()
     queue = cl.CommandQueue(cl_ctx)
-    table_manager, table = get_tmp_table_manager_and_data(queue)
+    table = get_table(queue)
     for case_id in range(len(table.interaction_case_vecs)):
         drive_test_direct_quad_neighbor_box(queue, q_order, case_id)
 
@@ -302,7 +274,7 @@ def test_direct_quad_neighbor_box(ctx_factory, q_order):
 def test_direct_quad_neighbor_box_longrun(longrun, ctx_factory, q_order):
     cl_ctx = ctx_factory()
     queue = cl.CommandQueue(cl_ctx)
-    table_manager, table = get_tmp_table_manager_and_data(queue)
+    table = get_table(queue)
     for case_id in range(len(table.interaction_case_vecs)):
         drive_test_direct_quad_neighbor_box(queue, q_order, case_id)
 
