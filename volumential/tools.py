@@ -64,6 +64,21 @@ def clean_file(filename, new_name=None):
 
 class KernelCacheWrapper(object):
     # FIXME: largely code duplication with sumpy.
+
+    def __init__(self):
+        self.name = "KernelCacheWrapper"
+        raise RuntimeError(
+                "KernelCacheWrapper objects should not be constructed")
+
+    def get_cache_key(self):
+        raise NotImplementedError("Unimplemented cache key")
+
+    def get_kernel(self):
+        raise NotImplementedError()
+
+    def get_optimized_kernel(self):
+        raise NotImplementedError()
+
     @memoize_method
     def get_cached_optimized_kernel(self, **kwargs):
         from sumpy import code_cache, CACHING_ENABLED, OPT_ENABLED
