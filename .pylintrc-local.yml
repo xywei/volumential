@@ -4,6 +4,7 @@
   val:
     - scipy.*
     - gmsh
+    - sumpy
 - arg: disable
   val: all
 - arg: enable
