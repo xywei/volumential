@@ -95,7 +95,7 @@ def drive_volume_fmm(
     logger.debug("reorder source weights")
 
     src_weights = wrangler.reorder_sources(src_weights)
-    src_func = wrangler.reorder_sources(src_func)
+    src_func = wrangler.reorder_targets(src_func)
 
     # {{{ Construct local multipoles
 
