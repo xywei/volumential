@@ -51,14 +51,15 @@ def inverse_id_map(queue, mapped_ids):
     """Given a index mapping as its mapped ids, compute its inverse,
     and return the inverse by the inversely-mapped ids.
     """
-    dtype = mapped_ids.dtype
+    cl_array = False
     if isinstance(mapped_ids, cl.array.Array):
+        cl_array = True
         mapped_ids = mapped_ids.get(queue)
 
     inv_ids = np.zeros_like(mapped_ids)
     inv_ids[mapped_ids] = np.arange(len(mapped_ids))
 
-    if isinstance(mapped_ids, cl.array.Array):
+    if cl_array:
         inv_ids = cl.array.to_device(queue, inv_ids)
 
     return inv_ids
