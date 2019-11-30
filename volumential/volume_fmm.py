@@ -168,6 +168,10 @@ def drive_volume_fmm(
     if direct_evaluation:
 
         print("Warning: NOT USING FMM (forcing global p2p)")
+        if len(src_weights) != len(src_func):
+            print("Using P2P with different src/tgt discretizations can be "
+                  "unstable when targets are close to the sources while not "
+                  "be exactly the same")
 
         # list 2 and beyond
         # First call global p2p, then substract list 1

@@ -432,13 +432,16 @@ class FPNDSumpyExpansionWrangler(
         self.queue.finish()
         logger.info("sent table data to device")
 
+        # NOTE: box_sources for this evaluation should be "box_targets".
+        # This is due to the special features of how box-FMM works.
+
         res, evt = near_field(
             self.queue,
             result=out_pot,
             box_centers=self.tree.box_centers,
             box_levels=self.tree.box_levels,
-            box_source_counts_cumul=self.tree.box_source_counts_cumul,
-            box_source_starts=self.tree.box_source_starts,
+            box_source_counts_cumul=self.tree.box_target_counts_cumul,
+            box_source_starts=self.tree.box_target_starts,
             box_target_counts_cumul=self.tree.box_target_counts_cumul,
             box_target_starts=self.tree.box_target_starts,
             case_indices=case_indices_dev,
@@ -1024,8 +1027,8 @@ class FPNDFMMLibExpansionWrangler(
             result=out_pot,
             box_centers=self.tree.box_centers,
             box_levels=self.tree.box_levels,
-            box_source_counts_cumul=self.tree.box_source_counts_cumul,
-            box_source_starts=self.tree.box_source_starts,
+            box_source_counts_cumul=self.tree.box_target_counts_cumul,
+            box_source_starts=self.tree.box_target_starts,
             box_target_counts_cumul=self.tree.box_target_counts_cumul,
             box_target_starts=self.tree.box_target_starts,
             case_indices=case_indices_dev,
