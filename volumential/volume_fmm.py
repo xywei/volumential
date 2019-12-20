@@ -90,7 +90,7 @@ def drive_volume_fmm(
         if isinstance(src_weights, cl.array.Array):
             src_weights = src_weights.get(wrangler.queue)
         if isinstance(src_func, cl.array.Array):
-            src_func = src_func.get()
+            src_func = src_func.get(wrangler.queue)
 
     logger.debug("reorder source weights")
 

@@ -899,6 +899,12 @@ class FPNDFMMLibExpansionWrangler(
     def reorder_sources(self, source_array):
         return FMMLibExpansionWrangler.reorder_sources(self, source_array)
 
+    def reorder_targets(self, target_array):
+        if not hasattr(self.tree, 'user_target_ids'):
+            self.tree.user_target_ids = inverse_id_map(
+                self.queue, self.tree.sorted_target_ids)
+        return target_array[self.tree.user_target_ids]
+
     def reorder_potentials(self, potentials):
         return FMMLibExpansionWrangler.reorder_potentials(self, potentials)
 
@@ -1001,6 +1007,18 @@ class FPNDFMMLibExpansionWrangler(
             mode_nmlz_combined[lev, :] = self.near_field_table[kname][
                 lev
             ].mode_normalizers
+        exterior_mode_nmlz_combined = np.zeros(
+            (
+                len(self.near_field_table[kname]),
+                len(self.near_field_table[kname][0].kernel_exterior_normalizers),
+            )
+        )
+        for lev in range(len(self.near_field_table[kname])):
+            table_data_combined[lev, :] = self.near_field_table[kname][lev].data
+            mode_nmlz_combined[lev, :] = \
+                self.near_field_table[kname][lev].mode_normalizers
+            exterior_mode_nmlz_combined[lev, :] = \
+                self.near_field_table[kname][lev].kernel_exterior_normalizers
 
         logger.info(
                 "Table data for kernel "
@@ -1035,6 +1053,7 @@ class FPNDFMMLibExpansionWrangler(
             encoding_base=base,
             encoding_shift=shift,
             mode_nmlz_combined=mode_nmlz_combined,
+            exterior_mode_nmlz_combined=exterior_mode_nmlz_combined,
             neighbor_source_boxes_starts=neighbor_source_boxes_starts,
             root_extent=self.tree.root_extent,
             neighbor_source_boxes_lists=neighbor_source_boxes_lists,
