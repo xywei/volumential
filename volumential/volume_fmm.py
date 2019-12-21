@@ -90,12 +90,12 @@ def drive_volume_fmm(
         if isinstance(src_weights, cl.array.Array):
             src_weights = src_weights.get(wrangler.queue)
         if isinstance(src_func, cl.array.Array):
-            src_func = src_func.get()
+            src_func = src_func.get(wrangler.queue)
 
     logger.debug("reorder source weights")
 
     src_weights = wrangler.reorder_sources(src_weights)
-    src_func = wrangler.reorder_sources(src_func)
+    src_func = wrangler.reorder_targets(src_func)
 
     # {{{ Construct local multipoles
 
@@ -168,6 +168,10 @@ def drive_volume_fmm(
     if direct_evaluation:
 
         print("Warning: NOT USING FMM (forcing global p2p)")
+        if len(src_weights) != len(src_func):
+            print("Using P2P with different src/tgt discretizations can be "
+                  "unstable when targets are close to the sources while not "
+                  "be exactly the same")
 
         # list 2 and beyond
         # First call global p2p, then substract list 1

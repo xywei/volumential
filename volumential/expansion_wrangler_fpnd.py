@@ -25,6 +25,7 @@ THE SOFTWARE.
 import numpy as np
 import logging
 import pyopencl as cl
+import pyopencl.array
 from pytools.obj_array import make_obj_array
 
 # from pytools import memoize_method
@@ -44,6 +45,24 @@ logger = logging.getLogger(__name__)
 
 def level_to_rscale(tree, level):
     return tree.root_extent * (2 ** -level)
+
+
+def inverse_id_map(queue, mapped_ids):
+    """Given a index mapping as its mapped ids, compute its inverse,
+    and return the inverse by the inversely-mapped ids.
+    """
+    cl_array = False
+    if isinstance(mapped_ids, cl.array.Array):
+        cl_array = True
+        mapped_ids = mapped_ids.get(queue)
+
+    inv_ids = np.zeros_like(mapped_ids)
+    inv_ids[mapped_ids] = np.arange(len(mapped_ids))
+
+    if cl_array:
+        inv_ids = cl.array.to_device(queue, inv_ids)
+
+    return inv_ids
 
 
 # {{{ sumpy backend
@@ -267,6 +286,12 @@ class FPNDSumpyExpansionWrangler(
     def reorder_sources(self, source_array):
         return SumpyExpansionWrangler.reorder_sources(self, source_array)
 
+    def reorder_targets(self, target_array):
+        if not hasattr(self.tree, 'user_target_ids'):
+            self.tree.user_target_ids = inverse_id_map(
+                self.queue, self.tree.sorted_target_ids)
+        return target_array.with_queue(self.queue)[self.tree.user_target_ids]
+
     def reorder_potentials(self, potentials):
         return SumpyExpansionWrangler.reorder_potentials(self, potentials)
 
@@ -407,13 +432,16 @@ class FPNDSumpyExpansionWrangler(
         self.queue.finish()
         logger.info("sent table data to device")
 
+        # NOTE: box_sources for this evaluation should be "box_targets".
+        # This is due to the special features of how box-FMM works.
+
         res, evt = near_field(
             self.queue,
             result=out_pot,
             box_centers=self.tree.box_centers,
             box_levels=self.tree.box_levels,
-            box_source_counts_cumul=self.tree.box_source_counts_cumul,
-            box_source_starts=self.tree.box_source_starts,
+            box_source_counts_cumul=self.tree.box_target_counts_cumul,
+            box_source_starts=self.tree.box_target_starts,
             box_target_counts_cumul=self.tree.box_target_counts_cumul,
             box_target_starts=self.tree.box_target_starts,
             case_indices=case_indices_dev,
@@ -871,6 +899,12 @@ class FPNDFMMLibExpansionWrangler(
     def reorder_sources(self, source_array):
         return FMMLibExpansionWrangler.reorder_sources(self, source_array)
 
+    def reorder_targets(self, target_array):
+        if not hasattr(self.tree, 'user_target_ids'):
+            self.tree.user_target_ids = inverse_id_map(
+                self.queue, self.tree.sorted_target_ids)
+        return target_array[self.tree.user_target_ids]
+
     def reorder_potentials(self, potentials):
         return FMMLibExpansionWrangler.reorder_potentials(self, potentials)
 
@@ -973,6 +1007,18 @@ class FPNDFMMLibExpansionWrangler(
             mode_nmlz_combined[lev, :] = self.near_field_table[kname][
                 lev
             ].mode_normalizers
+        exterior_mode_nmlz_combined = np.zeros(
+            (
+                len(self.near_field_table[kname]),
+                len(self.near_field_table[kname][0].kernel_exterior_normalizers),
+            )
+        )
+        for lev in range(len(self.near_field_table[kname])):
+            table_data_combined[lev, :] = self.near_field_table[kname][lev].data
+            mode_nmlz_combined[lev, :] = \
+                self.near_field_table[kname][lev].mode_normalizers
+            exterior_mode_nmlz_combined[lev, :] = \
+                self.near_field_table[kname][lev].kernel_exterior_normalizers
 
         logger.info(
                 "Table data for kernel "
@@ -999,14 +1045,15 @@ class FPNDFMMLibExpansionWrangler(
             result=out_pot,
             box_centers=self.tree.box_centers,
             box_levels=self.tree.box_levels,
-            box_source_counts_cumul=self.tree.box_source_counts_cumul,
-            box_source_starts=self.tree.box_source_starts,
+            box_source_counts_cumul=self.tree.box_target_counts_cumul,
+            box_source_starts=self.tree.box_target_starts,
             box_target_counts_cumul=self.tree.box_target_counts_cumul,
             box_target_starts=self.tree.box_target_starts,
             case_indices=case_indices_dev,
             encoding_base=base,
             encoding_shift=shift,
             mode_nmlz_combined=mode_nmlz_combined,
+            exterior_mode_nmlz_combined=exterior_mode_nmlz_combined,
             neighbor_source_boxes_starts=neighbor_source_boxes_starts,
             root_extent=self.tree.root_extent,
             neighbor_source_boxes_lists=neighbor_source_boxes_lists,

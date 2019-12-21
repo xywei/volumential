@@ -76,6 +76,14 @@ class ExpansionWranglerInterface(object):
         pass
 
     @abstractmethod
+    def reorder_targets(self, source_array):
+        """
+        Return a copy of *target_array* in tree source order.
+        *target_array* is in user target order.
+        """
+        pass
+
+    @abstractmethod
     def reorder_potentials(self, potentials):
         """
         Return a copy of *potentials* in user target order.
