@@ -5,6 +5,7 @@ git+https://gitlab.tiker.net/xywei/pypvfmm.git#egg=pypvfmm
 -e git+https://www.github.com/xywei/gmsh_interop.git#egg=gmsh_interop
 -e git+https://gitlab.tiker.net/xywei/pytential.git#egg=pytential
 
+-e git+https://gitlab.tiker.net/inducer/pytools.git#egg=pytools
 -e git+https://gitlab.tiker.net/inducer/cgen.git#egg=cgen
 -e git+https://gitlab.tiker.net/inducer/meshmode.git#egg=meshmode
 -e git+https://gitlab.tiker.net/inducer/genpy.git#egg=genpy
