@@ -268,8 +268,11 @@ else:
         greet,
         MeshGen2D,
         MeshGen3D,
-        make_uniform_cubic_grid,
     )
+
+    def make_uniform_cubic_grid(degree, level, dim, queue=None):
+        from volumential.meshgen_dealii import make_uniform_cubic_grid as _mucg
+        return _mucg(degree, level, dim)
 
 
 # {{{ mesh utils
