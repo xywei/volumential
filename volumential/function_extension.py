@@ -424,6 +424,7 @@ def compute_biharmonic_extension(queue, target_discr,
     """Biharmoc extension. Currently only support
     interior domains in 2D (i.e., extension is on the exterior).
     """
+    # pylint: disable=invalid-unary-operand-type
     dim = 2
     queue = setup_command_queue(queue=queue)
     qbx_forced_limit = 1

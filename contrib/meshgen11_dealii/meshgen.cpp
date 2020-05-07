@@ -145,9 +145,9 @@ public:
     d::GridGenerator::hyper_cube(triangulation, box_a, box_b);
 
     // initial number of levels must be compatible
-    assert(level > self.min_grid_level);
-    assert(level <= self.max_grid_level + 1);
-    assert(std::pow(std::pow(2, dimension), level - 1) <= self.max_n_cells);
+    assert(level > min_grid_level);
+    assert(level <= max_grid_level + 1);
+    assert(std::pow(std::pow(2, dimension), level - 1) <= max_n_cells);
 
     if (level > 1) {
       triangulation.refine_global(level - 1);
@@ -168,9 +168,9 @@ public:
     d::GridGenerator::hyper_cube(triangulation, box_a, box_b);
 
     // initial number of levels must be compatible
-    assert(level > self.min_grid_level);
-    assert(level <= self.max_grid_level + 1);
-    assert(std::pow(std::pow(2, dimension), level - 1) <= self.max_n_cells);
+    assert(level > min_grid_level);
+    assert(level <= max_grid_level + 1);
+    assert(std::pow(std::pow(2, dimension), level - 1) <= max_n_cells);
 
     if (level > 1) {
       triangulation.refine_global(level - 1);
