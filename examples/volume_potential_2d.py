@@ -29,7 +29,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-if 0:
+if 1:
     # verbose
     logging.basicConfig(level=logging.INFO)
 else:
@@ -322,7 +322,7 @@ def main():
     import time
     queue.finish()
 
-    t0 = time.clock()
+    t0 = time.process_time()
 
     pot, = drive_volume_fmm(
         trav,
@@ -333,7 +333,7 @@ def main():
     )
     queue.finish()
 
-    t1 = time.clock()
+    t1 = time.process_time()
 
     print("Finished in %.2f seconds." % (t1 - t0))
     print("(%e points per second)" % (
