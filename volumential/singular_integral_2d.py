@@ -25,9 +25,9 @@ THE SOFTWARE.
 import logging
 
 import numpy as np
-import scipy.integrate as sint
-import scipy.integrate.quadrature as quad  # noqa
 import scipy as sp
+import scipy.integrate as sint
+from scipy.integrate import quadrature as quad
 
 __doc__ = """The 2D singular integrals are computed using the transform
 described in http://link.springer.com/10.1007/BF00370482.
