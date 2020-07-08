@@ -88,7 +88,7 @@ def main():
         name="volumential",
         version=version_dict["VERSION_TEXT"],
         description="Volume potential computation powered by FMM.",
-        long_description=open("README.md", "rt").read(),
+        long_description=open("README.md", "rb").read().decode('utf-8'),
         author="Xiaoyu Wei",
         author_email="wxy0516@gmail.com",
         license="MIT",
