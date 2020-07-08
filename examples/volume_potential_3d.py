@@ -334,7 +334,7 @@ def main():
     import time
     queue.finish()
 
-    t0 = time.clock()
+    t0 = time.time()
 
     pot, = drive_volume_fmm(
         trav,
@@ -344,7 +344,7 @@ def main():
         direct_evaluation=force_direct_evaluation,
         list1_only=False)
 
-    t1 = time.clock()
+    t1 = time.time()
 
     print("Finished in %.2f seconds." % (t1 - t0))
     print("(%e points per second)" % (

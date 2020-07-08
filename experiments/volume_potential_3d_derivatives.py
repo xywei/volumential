@@ -365,7 +365,7 @@ from volumential.volume_fmm import drive_volume_fmm
 import time
 queue.finish()
 
-t0 = time.clock()
+t0 = time.time()
 
 pot = drive_volume_fmm(
     trav,
@@ -375,7 +375,7 @@ pot = drive_volume_fmm(
     direct_evaluation=force_direct_evaluation,
 )
 
-t1 = time.clock()
+t1 = time.time()
 
 print("Finished in %.2f seconds." % (t1 - t0))
 print("(%e points per second)" % (
