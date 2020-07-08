@@ -407,8 +407,8 @@ class NearFieldInteractionTableManager(object):
 
         def case_encode(case_vec):
             table_id = 0
-            for l in case_vec:
-                table_id = table_id * base + (l + shift)
+            for case_vec_comp in case_vec:
+                table_id = table_id * base + (case_vec_comp + shift)
             return int(table_id)
 
         table.case_encode = case_encode
@@ -673,8 +673,8 @@ class NearFieldInteractionTableManager(object):
 
         distinct_numbers = set()
         for vec in table.interaction_case_vecs:
-            for l in vec:
-                distinct_numbers.add(l)
+            for case_vec_comp in vec:
+                distinct_numbers.add(case_vec_comp)
         base = len(range(min(distinct_numbers), max(distinct_numbers) + 1))
         shift = -min(distinct_numbers)
 

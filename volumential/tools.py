@@ -225,8 +225,8 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
                 lp.ValueArg("dim, n_targets", np.int32),
                 lp.GlobalArg("target_points", np.float64, "dim, n_targets"),
                 ]
-                + list(extra_kernel_kwarg_types)
-                + ["...", ],
+            + list(extra_kernel_kwarg_types)
+            + ["...", ],
             name="eval_expr",
             lang_version=(2018, 2),
         )
