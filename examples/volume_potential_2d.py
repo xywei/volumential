@@ -29,7 +29,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-if 0:
+if 1:
     # verbose
     logging.basicConfig(level=logging.INFO)
 else:
