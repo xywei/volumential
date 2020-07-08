@@ -23,27 +23,6 @@ Pylint:
   except:
   - tags
 
-Python 2.7 POCL:
-  script:
-  - export PY_EXE=python2.7
-  - export PYOPENCL_TEST=portable:pthread
-  - export HDF5_USE_FILE_LOCKING=FALSE
-  - export PYTEST_ADDOPTS=${PYTEST_ADDOPTS:--k-slowtest}
-  - export EXTRA_INSTALL="pybind11 cython numpy pytest scipy mako wheel"
-  - git submodule sync && git submodule update --init --recursive --remote
-  - ((cd contrib/meshgen11_dealii/; ./build.sh) && echo "Using meshgen11_dealii.") || (echo "Using boxtree for meshgen.")
-  - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/master/build-and-test-py-project.sh
-  - ". ./build-and-test-py-project.sh"
-  tags:
-  - python2.7
-  - pocl
-  - large-node
-  except:
-  - tags
-  artifacts:
-    reports:
-      junit: test/pytest.xml
-
 Python 3 POCL:
   script:
   - export PY_EXE=python3
