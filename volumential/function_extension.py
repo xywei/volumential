@@ -558,10 +558,9 @@ def compute_biharmonic_extension(queue, target_discr,
             (qbx_stick_out, target_discr),
             sym.grad(dim, GD1)
             )(queue, mu=mu,
-                    arclength_parametrization_derivatives=make_obj_array(
-                        [xp, yp]
-                        )
-                    ).real
+              arclength_parametrization_derivatives=make_obj_array(
+                  [xp, yp])
+              ).real
     grad_omega_D = grad_omega_D1 + grad_v1  # noqa: N806
 
     omega_D1_bdry = bind(  # noqa: N806

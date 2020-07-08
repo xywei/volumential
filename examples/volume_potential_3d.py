@@ -240,13 +240,13 @@ def main():
                 - (b - a))
             < 1e-15)
         nftable = []
-        for l in range(0, tree.nlevels + 1):
-            print("Getting table at level", l)
+        for lev in range(0, tree.nlevels + 1):
+            print("Getting table at level", lev)
             tb, _ = tm.get_table(
                 dim,
                 "Laplace",
                 q_order,
-                source_box_level=l,
+                source_box_level=lev,
                 compute_method="DrosteSum",
                 queue=queue,
                 n_brick_quad_points=120,

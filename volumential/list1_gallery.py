@@ -178,8 +178,8 @@ def generate_list1_gallery(dim):
 
     distinct_numbers = set()
     for vec in vec_list:
-        for l in vec:
-            distinct_numbers.add(l)
+        for cvc in vec:
+            distinct_numbers.add(cvc)
 
     # contains a lookup table for case indices
     base = len(range(min(distinct_numbers), max(distinct_numbers) + 1))
@@ -188,8 +188,8 @@ def generate_list1_gallery(dim):
 
     def case_encode(case_vec):
         table_id = 0
-        for l in case_vec:
-            table_id = table_id * base + (l + shift)
+        for cvc in case_vec:
+            table_id = table_id * base + (cvc + shift)
         return int(table_id)
 
     case_id = 0
