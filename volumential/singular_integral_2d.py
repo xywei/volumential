@@ -27,7 +27,7 @@ import logging
 import numpy as np
 import scipy as sp
 import scipy.integrate as sint
-from scipy.integrate import quadrature as quad
+from scipy.integrate import quadrature as quad  # noqa:F401
 
 __doc__ = """The 2D singular integrals are computed using the transform
 described in http://link.springer.com/10.1007/BF00370482.

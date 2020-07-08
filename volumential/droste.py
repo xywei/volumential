@@ -92,7 +92,7 @@ class DrosteBase(KernelCacheWrapper):
             [
                 1
                 if int(max(abs(np.array(vec)))) == 0
-                else max([abs(l) - 0.5 for l in np.array(vec) / 4]) * 2
+                else max([abs(cvc) - 0.5 for cvc in np.array(vec) / 4]) * 2
                 for vec in case_vecs
             ]
         )
@@ -676,8 +676,8 @@ class DrosteFull(DrosteBase):
                     )
                     + ", n_cases",
                 ), ]
-                + list(extra_kernel_kwarg_types)
-                + ["...", ],
+            + list(extra_kernel_kwarg_types)
+            + ["...", ],
             name="brick_map",
             lang_version=(2018, 2),
         )
@@ -1135,7 +1135,7 @@ class DrosteReduced(DrosteBase):
                         )
                         + ", n_cases",
                     ), ] + list(extra_kernel_kwarg_types)
-                    + ["...", ],
+                + ["...", ],
                 name="brick_map",
                 lang_version=(2018, 2),
             )
@@ -1154,7 +1154,7 @@ class DrosteReduced(DrosteBase):
                         )
                         + ", n_cases",
                     ), ] + list(extra_kernel_kwarg_types)
-                    + ["...", ],
+                + ["...", ],
                 name="brick_map_expansion",
                 lang_version=(2018, 2),
             )
@@ -1942,7 +1942,7 @@ class InverseDrosteReduced(DrosteReduced):
                         )
                         + ", n_cases",
                     ), ] + list(extra_kernel_kwarg_types)
-                    + ["...", ],
+                + ["...", ],
                 name="brick_map_%d" % self.get_kernel_id,
                 lang_version=(2018, 2),
                 **extra_loopy_kernel_kwargs
@@ -1962,7 +1962,7 @@ class InverseDrosteReduced(DrosteReduced):
                         )
                         + ", n_cases",
                     ), ] + list(extra_kernel_kwarg_types)
-                    + ["...", ],
+                + ["...", ],
                 name="brick_map_expansion",
                 lang_version=(2018, 2),
                 **extra_loopy_kernel_kwargs

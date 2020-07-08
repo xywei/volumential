@@ -591,7 +591,9 @@ class NearFieldInteractionTable(object):
             new_size = 1
         else:
             new_size = (
-                max([abs(l) - 2 for l in self.interaction_case_vecs[case_index]]) / 2
+                max([abs(cvc) - 2
+                     for cvc in self.interaction_case_vecs[case_index]
+                     ]) / 2
             )
 
         # print(vec, new_cntr, new_size)
