@@ -460,7 +460,7 @@ class NearFieldInteractionTable(object):
         import scipy.special as sps
 
         cheby_nodes, _, cheby_weights = \
-            sps.chebyt(cheb_order).weights.T # pylint: disable=E1136
+            sps.chebyt(cheb_order).weights.T  # pylint: disable=E1136
         window = [0, 1]
 
         cheby_nodes = cheby_nodes * (window[1] - window[0]) / 2 + np.mean(window)
