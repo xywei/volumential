@@ -1,0 +1,29 @@
+# DockerFile that builds on firedrake's official docker image.
+# The resulting image preserves the firedrake user & venv & packages.
+
+FROM firedrakeproject/firedrake:latest
+
+# This DockerFile is looked after by
+MAINTAINER Xiaoyu Wei <xywei@illinois.edu>
+
+##########################################
+USER root
+RUN apt-get update \
+    && apt install -y wget \
+    && apt install -y opencl-pocl-icd opencl-headers \
+    && apt install -y fftw3 fftw3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# This symlink is for pyopencl build
+RUN ln -s /usr/lib/x86_64-linux-gnu/libOpenCL.so.1 /usr/lib/libOpenCL.so
+
+##########################################
+USER firedrake
+WORKDIR /home/firedrake
+
+RUN git clone "https://gitlab.tiker.net/xywei/volumential.git"
+
+# Code generation in pypvfm's setup.py needs mako
+RUN bash -c "source firedrake/bin/activate; pip install mako"
+
+RUN bash -c "source firedrake/bin/activate; pip install -r volumential/requirements.txt; pip install volumential/"
