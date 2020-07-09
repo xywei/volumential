@@ -9,8 +9,8 @@ MAINTAINER Xiaoyu Wei <xywei@illinois.edu>
 ##########################################
 USER root
 RUN apt-get update \
-    && apt install -y wget deal.ii deal.ii-dev\
-                      opencl-pocl-icd opencl-headers \
+    && apt-get install -y wget deal.ii deal.ii-dev \
+                      pocl-opencl-icd opencl-headers \
                       fftw3 fftw3-dev \
     && rm -rf /var/lib/apt/lists/*
 
