@@ -26,5 +26,5 @@ RUN git clone --recurse-submodules "https://gitlab.tiker.net/xywei/volumential.g
 # Code generation in pypvfm's setup.py needs mako
 RUN bash -c "source firedrake/bin/activate; pip install mako"
 
-RUN bash -c "source firedrake/bin/activate; pip install -r volumential/requirements.txt; pip install -e volumential/"
 RUN bash -c "source firedrake/bin/activate; cd volumential/contrib/meshgen11_dealii; ./build.sh"
+RUN bash -c "source firedrake/bin/activate; cd volumential; pip install -r volumential/requirements.txt"
