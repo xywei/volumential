@@ -154,3 +154,15 @@ Documentation Sphinx:
   except:
   - tags
   allow_failure: true
+
+Docker Image w/t Firedrake:
+  script:
+  - docker info
+  - docker login --username "${DOCKERHUB_USERNAME}" --password "${DOCKERHUB_ACCESS_TOKEN}"
+  - docker build --no-cache -t xywei/volumential-firedrake:latest -f docker/Dockerfile.firedrake
+  - docker push xywei/volumential-firedrake:latest
+  tags:
+  - docker
+  except:
+  - tags
+  allow_failure: true
