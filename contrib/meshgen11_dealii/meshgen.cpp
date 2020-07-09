@@ -133,31 +133,10 @@ public:
 
   // q: quad order
   // level: initial (uniform) level
-  MeshGenerator(
-      int q, int level,
-      unsigned int max_n_cells = std::numeric_limits<unsigned int>::max(),
-      unsigned int min_grid_level = std::numeric_limits<unsigned int>::min(),
-      unsigned int max_grid_level = std::numeric_limits<unsigned int>::max())
-      : triangulation(d::Triangulation<dimension>::limit_level_difference_at_vertices), fe(q),
-        dof_handler(triangulation), quadrature_formula(q), box_a(a), box_b(b),
-        max_n_cells(max_n_cells), min_grid_level(min_grid_level),
-        max_grid_level(max_grid_level) {
-    d::GridGenerator::hyper_cube(triangulation, box_a, box_b);
-
-    // initial number of levels must be compatible
-    assert(level > min_grid_level);
-    assert(level <= max_grid_level + 1);
-    assert(std::pow(std::pow(2, dimension), level - 1) <= max_n_cells);
-
-    if (level > 1) {
-      triangulation.refine_global(level - 1);
-    }
-    this->dof_handler.distribute_dofs(fe);
-  }
-
-  // customized bounding box
+  // bounding box: [aa, bb]^dim
   MeshGenerator(
       int q, int level, double aa, double bb,
+      py::args args, py::kwargs kwargs,
       unsigned int max_n_cells = std::numeric_limits<unsigned int>::max(),
       unsigned int min_grid_level = std::numeric_limits<unsigned int>::min(),
       unsigned int max_grid_level = std::numeric_limits<unsigned int>::max())
@@ -616,7 +595,8 @@ template <int dim> py::tuple make_uniform_cubic_grid_details(int q, int level) {
   return result;
 }
 
-py::tuple make_uniform_cubic_grid(int q, int level, int dim) {
+py::tuple make_uniform_cubic_grid(int q, int level, int dim,
+                                  py::args args, py::kwargs kwargs) {
   if (dim == 1) {
     return make_uniform_cubic_grid_details<1>(q, level);
   } else if (dim == 2) {
@@ -640,8 +620,7 @@ PYBIND11_MODULE(meshgen_dealii, m) {
         py::arg("dim") = 2);
 
   py::class_<MeshGen1D>(m, "MeshGen1D")
-      .def(py::init<int, int>(), py::arg("degree"), py::arg("level"))
-      .def(py::init<int, int, double, double>(), py::arg("degree"),
+      .def(py::init<int, int, double, double, py::args, py::kwargs>(), py::arg("degree"),
            py::arg("level"), py::arg("a"), py::arg("b"))
       .def("greet", &MeshGen1D::greet)
       .def("get_q_points", &MeshGen1D::get_q_points)
@@ -668,8 +647,7 @@ PYBIND11_MODULE(meshgen_dealii, m) {
       .def("write_vtu", &MeshGen1D::write_vtu);
 
   py::class_<MeshGen2D>(m, "MeshGen2D")
-      .def(py::init<int, int>(), py::arg("degree"), py::arg("level"))
-      .def(py::init<int, int, double, double>(), py::arg("degree"),
+      .def(py::init<int, int, double, double, py::args, py::kwargs>(), py::arg("degree"),
            py::arg("level"), py::arg("a"), py::arg("b"))
       .def("greet", &MeshGen2D::greet)
       .def("get_q_points", &MeshGen2D::get_q_points)
@@ -696,8 +674,7 @@ PYBIND11_MODULE(meshgen_dealii, m) {
       .def("write_vtu", &MeshGen2D::write_vtu);
 
   py::class_<MeshGen3D>(m, "MeshGen3D")
-      .def(py::init<int, int>(), py::arg("degree"), py::arg("level"))
-      .def(py::init<int, int, double, double>(), py::arg("degree"),
+      .def(py::init<int, int, double, double, py::args, py::kwargs>(), py::arg("degree"),
            py::arg("level"), py::arg("a"), py::arg("b"))
       .def("greet", &MeshGen3D::greet)
       .def("get_q_points", &MeshGen3D::get_q_points)
