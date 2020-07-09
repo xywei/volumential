@@ -269,7 +269,9 @@ class ComplexLogKernel(ExpressionKernel):
 
         if self.dim == 2:
             if nderivatives == 0:
-                return expr + var("log")(rscale)
+                # return expr + var("log")(rscale)
+                import sumpy.symbolic as sp
+                return (expr + sp.log(rscale))
             else:
                 return expr
 
@@ -529,7 +531,7 @@ def compute_biharmonic_extension(queue, target_discr,
 
     omega_S1 = bind(  # noqa: N806
             (qbx_stick_out, target_discr), GS1)(queue, mu=mu).real
-    omega_S2 = - bind(  # noqa: N806
+    omega_S2 = -1 * bind(  # noqa: N806
             (qbx_stick_out, target_discr), GS2)(queue, mu=mu).real
     omega_S3 = (z_conj * int_rho).real  # noqa: N806
     omega_S = -(omega_S1 + omega_S2 + omega_S3)  # noqa: N806
@@ -537,14 +539,14 @@ def compute_biharmonic_extension(queue, target_discr,
     grad_omega_S1 = bind(  # noqa: N806
             (qbx_stick_out, target_discr),
             sym.grad(dim, GS1))(queue, mu=mu).real
-    grad_omega_S2 = - bind(  # noqa: N806
+    grad_omega_S2 = -1 * bind(  # noqa: N806
             (qbx_stick_out, target_discr),
             sym.grad(dim, GS2))(queue, mu=mu).real
     grad_omega_S3 = (int_rho * make_obj_array([1., -1.])).real  # noqa: N806
     grad_omega_S = -(grad_omega_S1 + grad_omega_S2 + grad_omega_S3)  # noqa: N806
 
     omega_S1_bdry = bind(qbx, GS1_bdry)(queue, mu=mu).real  # noqa: N806
-    omega_S2_bdry = - bind(qbx, GS2_bdry)(queue, mu=mu).real  # noqa: N806
+    omega_S2_bdry = -1 * bind(qbx, GS2_bdry)(queue, mu=mu).real  # noqa: N806
     omega_S3_bdry = (z_conj_bdry * int_rho).real  # noqa: N806
     omega_S_bdry = -(omega_S1_bdry + omega_S2_bdry + omega_S3_bdry)  # noqa: N806
 
@@ -557,10 +559,9 @@ def compute_biharmonic_extension(queue, target_discr,
             (qbx_stick_out, target_discr),
             sym.grad(dim, GD1)
             )(queue, mu=mu,
-                    arclength_parametrization_derivatives=make_obj_array(
-                        [xp, yp]
-                        )
-                    ).real
+              arclength_parametrization_derivatives=make_obj_array(
+                  [xp, yp])
+              ).real
     grad_omega_D = grad_omega_D1 + grad_v1  # noqa: N806
 
     omega_D1_bdry = bind(  # noqa: N806

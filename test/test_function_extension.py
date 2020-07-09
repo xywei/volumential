@@ -38,6 +38,7 @@ from pytential import bind, sym, norm  # noqa
 from pytential.target import PointsTarget
 
 
+@pytest.mark.skip(reason="this test needs to be updated to use GeometryCollection")
 def test_harmonic_extension_exterior_3d(ctx_factory):
 
     dim = 3  # noqa: F841

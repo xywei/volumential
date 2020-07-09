@@ -225,8 +225,8 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
                 lp.ValueArg("dim, n_targets", np.int32),
                 lp.GlobalArg("target_points", np.float64, "dim, n_targets"),
                 ]
-                + list(extra_kernel_kwarg_types)
-                + ["...", ],
+            + list(extra_kernel_kwarg_types)
+            + ["...", ],
             name="eval_expr",
             lang_version=(2018, 2),
         )
@@ -371,8 +371,8 @@ class DiscreteLegendreTransform(BoxSpecificMap):
             self.V = np.polynomial.legendre.legvander2d(
                     x.reshape(-1), y.reshape(-1),
                     [self.degree - 1] * self.dim)
-            self.W = (self.leg_tplt_w[:, None]
-                    * self.leg_tplt_w[None, :]).reshape(-1)
+            self.W = (self.leg_tplt_w[None, :]
+                    * self.leg_tplt_w[:, None]).reshape(-1)
 
         elif self.dim == 3:
             x, y, z = np.meshgrid(self.leg_tplt_x, self.leg_tplt_x, self.leg_tplt_x)
@@ -392,7 +392,8 @@ class DiscreteLegendreTransform(BoxSpecificMap):
 
         # Normalizers
         self.I = np.ascontiguousarray(  # noqa: E741
-                np.diag(self.V.T * np.matmul(self.W, self.V)))
+                np.diag(
+                    (self.V.T * self.W) @ self.V))
         assert self.I.shape == (self.degree**self.dim,)
 
         # Fix strides for loopy

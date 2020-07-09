@@ -229,13 +229,13 @@ def main():
                 - (b - a))
             < 1e-15)
         nftable = []
-        for l in range(0, tree.nlevels + 1):
-            print("Getting table at level", l)
+        for lev in range(0, tree.nlevels + 1):
+            print("Getting table at level", lev)
             tb, _ = tm.get_table(
                 dim,
                 "Laplace",
                 q_order,
-                source_box_level=l,
+                source_box_level=lev,
                 compute_method="DrosteSum",
                 queue=queue,
                 n_brick_quad_poitns=100,
@@ -322,7 +322,7 @@ def main():
     import time
     queue.finish()
 
-    t0 = time.process_time()
+    t0 = time.time()
 
     pot, = drive_volume_fmm(
         trav,
@@ -333,7 +333,7 @@ def main():
     )
     queue.finish()
 
-    t1 = time.process_time()
+    t1 = time.time()
 
     print("Finished in %.2f seconds." % (t1 - t0))
     print("(%e points per second)" % (

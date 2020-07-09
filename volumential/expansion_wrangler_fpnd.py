@@ -367,8 +367,8 @@ class FPNDSumpyExpansionWrangler(
         # table.case_encode
         distinct_numbers = set()
         for vec in self.near_field_table[kname][0].interaction_case_vecs:
-            for l in vec:
-                distinct_numbers.add(l)
+            for cvc in vec:
+                distinct_numbers.add(cvc)
         base = len(range(min(distinct_numbers), max(distinct_numbers) + 1))
         shift = -min(distinct_numbers)
 
@@ -980,8 +980,8 @@ class FPNDFMMLibExpansionWrangler(
         # table.case_encode
         distinct_numbers = set()
         for vec in self.near_field_table[kname][0].interaction_case_vecs:
-            for l in vec:
-                distinct_numbers.add(l)
+            for cvc in vec:
+                distinct_numbers.add(cvc)
         base = len(range(min(distinct_numbers), max(distinct_numbers) + 1))
         shift = -min(distinct_numbers)
 

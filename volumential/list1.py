@@ -495,6 +495,11 @@ class NearFieldFromCSR(NearFieldEvalBase):
             if isinstance(val, float):
                 integral_kernel_init_kargs[key] = np.float64(val)
 
+        extra_knl_args_from_init = {}
+        for key, val in integral_kernel_init_kargs.items():
+            if key in knl.arg_dict:
+                extra_knl_args_from_init[key] = val
+
         evt, res = knl(
             queue,
             result=result,
@@ -527,7 +532,8 @@ class NearFieldFromCSR(NearFieldEvalBase):
             table_data=table_data_combined,
             target_boxes=target_boxes,
             table_root_extent=table_root_extent,
-            **integral_kernel_init_kargs)
+            **extra_knl_args_from_init
+            )
 
         res['result'].add_event(evt)
         if isinstance(result, cl.array.Array):

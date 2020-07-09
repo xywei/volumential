@@ -31,8 +31,8 @@ def test_1d():
 
     distinct_numbers = set()
     for vec in l1g1d:
-        for l in vec:
-            distinct_numbers.add(l)
+        for cvc in vec:
+            distinct_numbers.add(cvc)
 
     assert len(distinct_numbers) == 7
     assert max(distinct_numbers) == 6
@@ -45,8 +45,8 @@ def test_2d():
 
     distinct_numbers = set()
     for vec in l1g2d:
-        for l in vec:
-            distinct_numbers.add(l)
+        for cvc in vec:
+            distinct_numbers.add(cvc)
 
     assert len(distinct_numbers) == 11
     assert max(distinct_numbers) == 6
@@ -58,8 +58,8 @@ def test_3d():
 
     distinct_numbers = set()
     for vec in l1g3d:
-        for l in vec:
-            distinct_numbers.add(l)
+        for cvc in vec:
+            distinct_numbers.add(cvc)
 
     assert max(distinct_numbers) == 6
     assert min(distinct_numbers) == -6

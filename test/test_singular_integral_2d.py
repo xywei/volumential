@@ -69,8 +69,8 @@ def test_quadrature_2d_box():
 def test_affine_mapping():
     tria1 = ((1, 1), (2, 3), (0, 4))
     tria2 = ((0, 0), (1, 0), (0, 1))
-    mp, J, imp, iJ = sint.solve_affine_map_2d(tria1, tria2)  # noqa: N806
-    assert np.isclose(J * iJ, 1)
+    mp, jac, imp, ivjac = sint.solve_affine_map_2d(tria1, tria2)
+    assert np.isclose(jac * ivjac, 1)
     for i in range(3):
         assert np.allclose(mp(tria1[i]), tria2[i])
         assert np.allclose(imp(tria2[i]), tria1[i])
@@ -99,7 +99,7 @@ def test_is_in_r():
 
 
 def test_tria2rect_map():
-    t2r, J_t2r, r2t, J_r2t = sint.tria2rect_map_2d()  # noqa: N806
+    t2r, jac_t2r, r2t, jac_r2t = sint.tria2rect_map_2d()
     assert np.allclose(t2r((0, 0)), (0, 0))
     assert np.allclose(t2r((1, 0)), (1, 0))
     assert np.allclose(t2r((0, 1)), (1, np.pi / 2))
@@ -110,10 +110,10 @@ def test_tria2rect_map():
 
 
 def test_tria2rect_jacobian():
-    t2r, J_t2r, r2t, J_r2t = sint.tria2rect_map_2d()  # noqa: N806
+    t2r, jac_t2r, r2t, jac_r2t = sint.tria2rect_map_2d()
     p1 = (0.1, 0.1)
-    assert np.isclose(J_t2r(p1) * J_r2t(t2r(p1)), 1)
-    assert np.isclose(J_r2t(p1) * J_t2r(r2t(p1)), 1)
+    assert np.isclose(jac_t2r(p1) * jac_r2t(t2r(p1)), 1)
+    assert np.isclose(jac_r2t(p1) * jac_t2r(r2t(p1)), 1)
 
 
 def run_test_tria_quad(func, region, exact):
