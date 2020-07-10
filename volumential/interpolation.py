@@ -25,6 +25,7 @@ THE SOFTWARE.
 import numpy as np
 import pyopencl as cl
 import loopy as lp
+from pyopencl.algorithm import KeyValueSorter
 from pytools import memoize_method, ProcessLogger
 from pytools.obj_array import make_obj_array
 from boxtree.area_query import AreaQueryBuilder
@@ -132,6 +133,8 @@ class LeavesToNodesLookup(DeviceDataRecord):
 # }}} End output
 
 
+# {{{ elements-to-sources lookup builder
+
 class ElementsToSourcesLookupBuilder:
     """Given a :mod:`meshmod` mesh and a :mod:`boxtree.Tree`, both discretizing
     the same bounding box, this class helps to build a look-up table from
@@ -142,13 +145,18 @@ class ElementsToSourcesLookupBuilder:
         """
         :arg tree: a :class:`boxtree.Tree`
         :arg discr: a :class: `meshmode.discretization.Discretization`
+
+        Boxes and elements can be non-aligned as long as the domains
+        (bounding boxes) are the same.
         """
         assert tree.dimensions == discr.dim
         self.dim = discr.dim
         self.context = context
-        self.area_query_builder = AreaQueryBuilder(self.context)
         self.tree = tree
         self.discr = discr
+
+        self.key_value_sorter = KeyValueSorter(context)
+        self.area_query_builder = AreaQueryBuilder(self.context)
 
     # {{{ kernel generation
 
@@ -211,7 +219,7 @@ class ElementsToSourcesLookupBuilder:
              lp.GlobalArg("box_source_starts", np.int32, "nboxes"),
              lp.GlobalArg("box_source_counts_cumul", np.int32, "nboxes"),
              lp.GlobalArg("leaves_near_ball_lists", np.int32, None),
-             lp.GlobalArg("result", np.float64, "nsources"),
+             lp.GlobalArg("result", np.int32, "nsources"),
              "..."],
             name="build_sources_in_simplex_lookup",
             lang_version=(2018, 2),
@@ -245,19 +253,23 @@ class ElementsToSourcesLookupBuilder:
             peer_lists=None, wait_for=wait_for)
         return area_query_result, evt
 
-
     def __call__(self, queue, balls_to_leaves_lookup=None, wait_for=None):
         """
         :arg queue: a :class:`pyopencl.CommandQueue`
         """
+        slk_plog = ProcessLogger(logger, "element-to-source lookup: run area query")
+
         if balls_to_leaves_lookup is None:
             balls_to_leaves_lookup, evt = \
                 self.compute_short_lists(queue, wait_for=wait_for)
             wait_for = [evt]
 
-        element_lookup_kernel = self.get_simplex_lookup_kernel()
+        # -----------------------------------------------------------------
+        # Refine the area query using point-in-simplex test
 
-        slk_plog = ProcessLogger(logger, "sources-in-element lookup")
+        logger.debug("element-to-source lookup: refine starts")
+
+        element_lookup_kernel = self.get_simplex_lookup_kernel()
 
         vertices_dev = make_obj_array([
             cl.array.to_device(queue, verts)
@@ -267,8 +279,10 @@ class ElementsToSourcesLookupBuilder:
             queue, dim=self.dim, nboxes=self.tree.nboxes,
             nelements=self.discr.mesh.nelements, nsources=self.tree.nsources,
             mesh_vertex_indices=self.discr.mesh.groups[0].vertex_indices,
-            mesh_vertices_0=vertices_dev[0], mesh_vertices_1=vertices_dev[1],
-            source_points_0=self.tree.sources[0], source_points_1=self.tree.sources[1],
+            mesh_vertices_0=vertices_dev[0],
+            mesh_vertices_1=vertices_dev[1],
+            source_points_0=self.tree.sources[0],
+            source_points_1=self.tree.sources[1],
             box_source_starts=self.tree.box_source_starts,
             box_source_counts_cumul=self.tree.box_source_counts_cumul,
             leaves_near_ball_starts=balls_to_leaves_lookup.leaves_near_ball_starts,
@@ -276,11 +290,36 @@ class ElementsToSourcesLookupBuilder:
             wait_for=wait_for)
 
         source_to_element_lookup, = res
+        wait_for = [evt]
+
+        # -----------------------------------------------------------------
+        # Invert the source-to-element lookup by a key-value sort
+
+        logger.debug("element-to-source lookup: key-value sort")
+
+        sources_in_element_starts, sources_in_element_lists, evt = \
+            self.key_value_sorter(
+                queue,
+                keys=source_to_element_lookup,
+                values=cl.array.arange(
+                    queue, self.tree.nsources, dtype=self.tree.box_id_dtype),
+                nkeys=self.discr.mesh.nelements,
+                starts_dtype=self.tree.box_id_dtype,
+                wait_for=wait_for)
 
         slk_plog.done()
 
-        # FIXME: Invert source_to_element_lookup to get element_to_source_lookup
         return ElementsToSourcesLookup(
             tree=self.tree, discr=self.discr,
-            sources_in_element_starts=None,
-            sources_in_element_lists=None)
+            sources_in_element_starts=sources_in_element_starts,
+            sources_in_element_lists=sources_in_element_lists), evt
+
+# }}} End elements-to-sources lookup builder
+
+
+def interpolate_from_meshmode(queue, dof_vec, elements_to_sources_lookup):
+    """
+    :arg dof_vec: a DoF vector representing a field in :mod:`meshmode`
+    :arg elements_to_sources_lookup: a :class:`ElementsToSourcesLookup`
+    """
+    # TODO
