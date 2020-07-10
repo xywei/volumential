@@ -357,15 +357,15 @@ def compute_affine_transform(source_simplex, target_simplex):
         raise NotImplementedError()
 
 
-def invert_affine_transform(mat_A, disp_b):
+def invert_affine_transform(mat_a, disp_b):
     """Inverts an affine transform given by :math:`y = A x + b`.
 
     :param mat_A: a dim*(dim+1)-by-dim*(dim+1) :mod:`numpy` array
     :param disp_b: a dim*(dim+1) :mod:`numpy` array
     """
-    ivA = np.linalg.inv(mat_A)
-    ivb = - ivA @ disp_b
-    return ivA, ivb
+    iva = np.linalg.inv(mat_a)
+    ivb = - iva @ disp_b
+    return iva, ivb
 
 # }}} End transform helper
 
@@ -378,7 +378,10 @@ def interpolate_from_meshmode(queue, dof_vec, elements_to_sources_lookup):
         of shape ``(..., nnodes)``.
     :arg elements_to_sources_lookup: a :class:`ElementsToSourcesLookup`
 
-    .. note:: this function does some heavy-lifting computation in Python,
+    .. note:: This function currently supports meshes with just one element
+        group. Also, the element group must be simplex-based.
+
+    .. note:: This function does some heavy-lifting computation in Python,
         which we intend to optimize in the future. In particular, we plan
         to shift the batched linear solves and basis evaluations to
         :mod:`loopy`.
@@ -401,11 +404,7 @@ def interpolate_from_meshmode(queue, dof_vec, elements_to_sources_lookup):
 
     mesh = elements_to_sources_lookup.discr.mesh
     dim = elements_to_sources_lookup.discr.dim
-
-    if dim == 2:
-        template_simplex = mesh.groups[0].vertex_unit_coordinates().T
-    else:
-        raise NotImplementedError()
+    template_simplex = mesh.groups[0].vertex_unit_coordinates().T
 
     # -------------------------------------------------------
     # Inversely map source points with a global-to-local map.
@@ -429,7 +428,7 @@ def interpolate_from_meshmode(queue, dof_vec, elements_to_sources_lookup):
     for iel in range(degroup.nelements):
         vertex_ids = megroup.vertex_indices[iel]
         vertices = mesh.vertices[:, vertex_ids]
-        afA, afb = compute_affine_transform(vertices, template_simplex)
+        afa, afb = compute_affine_transform(vertices, template_simplex)
 
         beg = sources_in_element_starts[iel]
         end = sources_in_element_starts[iel + 1]
@@ -437,7 +436,7 @@ def interpolate_from_meshmode(queue, dof_vec, elements_to_sources_lookup):
         sources_in_el = np.vstack(
             [tree.sources[iaxis][source_ids_in_el] for iaxis in range(dim)])
 
-        ivmapped_el_sources = afA @ sources_in_el + afb.reshape([dim, 1])
+        ivmapped_el_sources = afa @ sources_in_el + afb.reshape([dim, 1])
         for iaxis in range(dim):
             unit_sources_host[iaxis][source_ids_in_el] = \
                 ivmapped_el_sources[iaxis, :]
@@ -487,7 +486,8 @@ def interpolate_from_meshmode(queue, dof_vec, elements_to_sources_lookup):
         else:
             from pytools import indices_in_shape
             for sym_id in indices_in_shape(sym_shape):
-                source_vec[sym_id + (source_ids_in_el, )] = rsplm @ local_dof_vec[sym_id]
+                source_vec[sym_id + (source_ids_in_el, )] = \
+                    rsplm @ local_dof_vec[sym_id]
 
     source_vec = cl.array.to_device(queue, source_vec)
 
