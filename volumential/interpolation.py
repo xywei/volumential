@@ -317,36 +317,180 @@ class ElementsToSourcesLookupBuilder:
 # }}} End elements-to-sources lookup builder
 
 
+# {{{ transform helper
+
+def compute_affine_transform(source_simplex, target_simplex):
+    """Computes A and b for the affine transform :math:`y = A x + b`
+    that maps ``source_simplex`` to ``target_simplex``.
+
+    :param source_simplex: a dim-by-(dim+1) :mod:`numpy` array
+    :param target_simplex: a dim-by-(dim+1) :mod:`numpy: array
+    """
+    assert source_simplex.shape == target_simplex.shape
+    dim = source_simplex.shape[0]
+
+    if dim == 2:
+        assert source_simplex.shape == (2, 3)
+        mat = np.zeros([6, 6])
+        mat[:3, :2] = source_simplex.T
+        mat[-3:, 2:4] = source_simplex.T
+        mat[:3, -2] = 1
+        mat[-3:, -1] = 1
+        rhs = target_simplex.reshape(-1)
+        solu = np.linalg.solve(mat, rhs)
+        return solu[:4].reshape(2, 2), solu[-2:]
+
+    elif dim == 3:
+        assert source_simplex.shape == (3, 4)
+        mat = np.zeros([12, 12])
+        mat[:4, :3] = source_simplex.T
+        mat[4:8, 3:6] = source_simplex.T
+        mat[-4:, 6:9] = source_simplex.T
+        mat[:4, -3] = 1
+        mat[4:8, -2] = 1
+        mat[-4:, -1] = 1
+        rhs = target_simplex.reshape(-1)
+        solu = np.linalg.solve(mat, rhs)
+        return solu[:9].reshape(3, 3), solu[-3:]
+
+    else:
+        raise NotImplementedError()
+
+
+def invert_affine_transform(mat_A, disp_b):
+    """Inverts an affine transform given by :math:`y = A x + b`.
+
+    :param mat_A: a dim*(dim+1)-by-dim*(dim+1) :mod:`numpy` array
+    :param disp_b: a dim*(dim+1) :mod:`numpy` array
+    """
+    ivA = np.linalg.inv(mat_A)
+    ivb = - ivA @ disp_b
+    return ivA, ivb
+
+# }}} End transform helper
+
+
+# {{{ from meshmode interpolation
+
 def interpolate_from_meshmode(queue, dof_vec, elements_to_sources_lookup):
     """
     :arg dof_vec: a DoF vector representing a field in :mod:`meshmode`
+        of shape ``(..., nnodes)``.
     :arg elements_to_sources_lookup: a :class:`ElementsToSourcesLookup`
+
+    .. note:: this function does some heavy-lifting computation in Python,
+        which we intend to optimize in the future. In particular, we plan
+        to shift the batched linear solves and basis evaluations to
+        :mod:`loopy`.
+
+    TODO: make linear solvers available as :mod:`loopy` callables.
+    TODO: make :mod:`modepy` emit :mod:`loopy` callables for basis evaluation.
     """
     if not isinstance(dof_vec, cl.array.Array):
         raise TypeError("non-array passed to interpolator")
 
-    if not elements_to_sources_lookup.discr.is_affine:
+    assert len(elements_to_sources_lookup.discr.groups) == 1
+    assert len(elements_to_sources_lookup.discr.mesh.groups) == 1
+    degroup = elements_to_sources_lookup.discr.groups[0]
+    megroup = elements_to_sources_lookup.discr.mesh.groups[0]
+
+    if not degroup.is_affine:
         raise ValueError(
             "interpolation requires global-to-local map, "
             "which is only available for affinely mapped elements")
 
-    # ------------------------------------------------------
-    # Inversely map source points with a global-to-local map
-    #
-    # 1. For each element, solve for the affine map. The results
-    #    of this step can be cached.
-    #
-    # 2. Apply the map to corresponding source points. The results
-    #    of this step can also be cached.
-    pass
+    mesh = elements_to_sources_lookup.discr.mesh
+    dim = elements_to_sources_lookup.discr.dim
 
-    # ------------------------------------------------------
-    # Carry out evaluations in the local (template) frames
+    if dim == 2:
+        template_simplex = mesh.groups[0].vertex_unit_coordinates().T
+    else:
+        raise NotImplementedError()
+
+    # -------------------------------------------------------
+    # Inversely map source points with a global-to-local map.
     #
-    # 1. Assemble a Vandermonde matrix for each element, with
+    # 1. For each element, solve for the affine map.
+    #
+    # 2. Apply the map to corresponding source points.
+    #
+    # This step computes `unit_sources`, the list of inversely
+    # mapped source points.
+
+    sources_in_element_starts = \
+        elements_to_sources_lookup.sources_in_element_starts.get(queue)
+    sources_in_element_lists = \
+        elements_to_sources_lookup.sources_in_element_lists.get(queue)
+    tree = elements_to_sources_lookup.tree.get(queue)
+
+    unit_sources_host = make_obj_array(
+            [np.zeros_like(srccrd) for srccrd in tree.sources])
+
+    for iel in range(degroup.nelements):
+        vertex_ids = megroup.vertex_indices[iel]
+        vertices = mesh.vertices[:, vertex_ids]
+        afA, afb = compute_affine_transform(vertices, template_simplex)
+
+        beg = sources_in_element_starts[iel]
+        end = sources_in_element_starts[iel + 1]
+        source_ids_in_el = sources_in_element_lists[beg:end]
+        sources_in_el = np.vstack(
+            [tree.sources[iaxis][source_ids_in_el] for iaxis in range(dim)])
+
+        ivmapped_el_sources = afA @ sources_in_el + afb.reshape([dim, 1])
+        for iaxis in range(dim):
+            unit_sources_host[iaxis][source_ids_in_el] = \
+                ivmapped_el_sources[iaxis, :]
+
+    unit_sources = make_obj_array(
+        [cl.array.to_device(queue, usc) for usc in unit_sources_host])
+
+    # -----------------------------------------------------
+    # Carry out evaluations in the local (template) frames.
+    #
+    # 1. Assemble a resampling matrix for each element, with
     #    the basis functions and the local source points.
-    #    The results of this step can be cached.
     #
-    # 2. For each element, perform matvec on the Vandermonde matrix
-    #    and the local DoF coefficients.
-    pass
+    # 2. For each element, perform matvec on the resampling
+    #    matrix and the local DoF coefficients.
+    #
+    # This step assumes `unit_sources` computed on device, so
+    # that the previous step can be swapped with a kernel without
+    # interrupting the followed computation.
+
+    mapped_sources = np.vstack(
+        [usc.get(queue) for usc in unit_sources])
+
+    basis_funcs = degroup.basis()
+    dof_vec_view = degroup.view(dof_vec).get(queue)
+
+    sym_shape = dof_vec.shape[:-1]
+    source_vec = np.zeros(sym_shape + (tree.nsources, ))
+
+    for iel in range(degroup.nelements):
+        beg = sources_in_element_starts[iel]
+        end = sources_in_element_starts[iel + 1]
+        source_ids_in_el = sources_in_element_lists[beg:end]
+        mapped_sources_in_el = mapped_sources[:, source_ids_in_el]
+        local_dof_vec = dof_vec_view[..., iel, :]
+
+        # resampling matrix built from Vandermonde matrices
+        import modepy as mp
+        rsplm = mp.resampling_matrix(
+                basis=basis_funcs,
+                new_nodes=mapped_sources_in_el,
+                old_nodes=degroup.unit_nodes)
+
+        if len(sym_shape) == 0:
+            local_coeffs = local_dof_vec
+            source_vec[source_ids_in_el] = rsplm @ local_coeffs
+        else:
+            from pytools import indices_in_shape
+            for sym_id in indices_in_shape(sym_shape):
+                source_vec[sym_id + (source_ids_in_el, )] = rsplm @ local_dof_vec[sym_id]
+
+    source_vec = cl.array.to_device(queue, source_vec)
+
+    return source_vec
+
+# }}} End from meshmode interpolation
