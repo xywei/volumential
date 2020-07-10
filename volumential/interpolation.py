@@ -25,7 +25,7 @@ THE SOFTWARE.
 import numpy as np
 import pyopencl as cl
 import loopy as lp
-from pytools import memoize_method
+from pytools import memoize_method, ProcessLogger
 from pytools.obj_array import make_obj_array
 from boxtree.area_query import AreaQueryBuilder
 from boxtree.tools import DeviceDataRecord
@@ -93,8 +93,6 @@ class ElementsToSourcesLookup(DeviceDataRecord):
 
         Indices into :attr:`tree.sources`.
 
-        .. note:: These lists may not be disjoint.
-
     .. automethod:: get
     """
 
@@ -128,8 +126,6 @@ class LeavesToNodesLookup(DeviceDataRecord):
 
         Indices into :attr:`tree.sources`.
 
-        .. note:: These lists may not be disjoint.
-
     .. automethod:: get
     """
 
@@ -157,11 +153,12 @@ class ElementsToSourcesLookupBuilder:
     # {{{ kernel generation
 
     @memoize_method
-    def get_simplex_lookup_build_kernels(self):
+    def get_simplex_lookup_kernel(self):
         """Returns a loopy kernel that computes a potential vector
         representing the (q_point --> element_id) relationship.
         When a source q_point lies on the element boundary, it will be
-        assigned an element depending on code scheduling.
+        assigned an element depending on code scheduling. This ensures
+        that the resulting lookup lists are disjoint.
 
         The kernel assumes that the mesh uses one single group of simplex elements.
         """
@@ -172,7 +169,7 @@ class ElementsToSourcesLookupBuilder:
 
         loopy_knl = lp.make_kernel(
             ["{ [ iel ]: 0 <= iel < nelements }",
-             "{ [ ileaf ]: nearby_leaves_beg <= ibox < nearby_leaves_end }",
+             "{ [ ineighbor ]: nearby_leaves_beg <= ineighbor < nearby_leaves_end }",
              "{ [ isrc ]: 0 <= isrc < n_box_sources }"
              ],
             ["""
@@ -180,29 +177,41 @@ class ElementsToSourcesLookupBuilder:
                 <> nearby_leaves_beg = leaves_near_ball_starts[iel]
                 <> nearby_leaves_end = leaves_near_ball_starts[iel + 1]
 
-                <> vertices[0, 0] = mesh_vertices_0[mesh_vertex_indices[iel, 0]]
-                vertices[1, 0] = mesh_vertices_1[mesh_vertex_indices[iel, 0]]
-                vertices[0, 1] = mesh_vertices_0[mesh_vertex_indices[iel, 1]]
-                vertices[1, 1] = mesh_vertices_1[mesh_vertex_indices[iel, 1]]
-                vertices[0, 2] = mesh_vertices_0[mesh_vertex_indices[iel, 2]]
-                vertices[1, 2] = mesh_vertices_1[mesh_vertex_indices[iel, 2]]
+                <> Ax = mesh_vertices_0[mesh_vertex_indices[iel, 0]]
+                <> Ay = mesh_vertices_1[mesh_vertex_indices[iel, 0]]
+                <> Bx = mesh_vertices_0[mesh_vertex_indices[iel, 1]]
+                <> By = mesh_vertices_1[mesh_vertex_indices[iel, 1]]
+                <> Cx = mesh_vertices_0[mesh_vertex_indices[iel, 2]]
+                <> Cy = mesh_vertices_1[mesh_vertex_indices[iel, 2]]
 
-                for ileaf
+                for ineighbor
+                    <> ileaf = leaves_near_ball_lists[ineighbor]
                     <> box_source_beg = box_source_starts[ileaf]
                     <> n_box_sources = box_source_counts_cumul[ileaf]
+
                     for isrc
                         <> source_id = box_source_beg + isrc
-                        <> source[0] = source_points_0[source_id]
-                        source[1] = source_points_1[source_id]
-                        # TODO: point-in-simplex-test
-                        result[source_id] = if(True, iel, result[source_id])
+                        <> Px = source_points_0[source_id]
+                        <> Py = source_points_1[source_id]
+
+                        <> s0 = (Px - Ax) * (By - Ay) - (Py - Ay) * (Bx - Ax)
+                        <> s1 = (Px - Bx) * (Cy - By) - (Py - By) * (Cx - Bx)
+                        <> s2 = (Px - Cx) * (Ay - Cy) - (Py - Cy) * (Ax - Cx)
+
+                        result[source_id] = if(
+                            s0 * s1 >= 0 and s1 * s2 >= 0,
+                            iel,
+                            result[source_id])
                     end
                 end
             end
             """],
-            [lp.GlobalArg("mesh_vertex_indices", np.int32, "nelements, dim+1"),
-             lp.GlobalArg("box_source_starts", np.int32, "n_boxes"),
-             lp.GlobalArg("box_source_counts_cumul", np.int32, "n_boxes"),
+            [lp.ValueArg("nelements, dim, nboxes, nsources", np.int32),
+             lp.GlobalArg("mesh_vertex_indices", np.int32, "nelements, dim+1"),
+             lp.GlobalArg("box_source_starts", np.int32, "nboxes"),
+             lp.GlobalArg("box_source_counts_cumul", np.int32, "nboxes"),
+             lp.GlobalArg("leaves_near_ball_lists", np.int32, None),
+             lp.GlobalArg("result", np.float64, "nsources"),
              "..."],
             name="build_sources_in_simplex_lookup",
             lang_version=(2018, 2),
@@ -213,9 +222,8 @@ class ElementsToSourcesLookupBuilder:
 
     # }}} End kernel generation
 
-    def __call__(self, queue):
-        """
-        :arg queue: a :class:`pyopencl.CommandQueue`
+    def compute_short_lists(self, queue, wait_for=None):
+        """balls --> overlapping leaves
         """
         mesh = self.discr.mesh
         if len(mesh.groups) > 1:
@@ -232,16 +240,47 @@ class ElementsToSourcesLookupBuilder:
             for center_coord_comp in ball_centers_host])
         ball_radii = cl.array.to_device(queue, ball_radii_host)
 
-        # balls --> overlapping leaves
         area_query_result, evt = self.area_query_builder(
             queue, self.tree, ball_centers, ball_radii,
-            peer_lists=None, wait_for=None)
+            peer_lists=None, wait_for=wait_for)
+        return area_query_result, evt
 
-        evt.wait()
 
-        # FIXME
+    def __call__(self, queue, balls_to_leaves_lookup=None, wait_for=None):
+        """
+        :arg queue: a :class:`pyopencl.CommandQueue`
+        """
+        if balls_to_leaves_lookup is None:
+            balls_to_leaves_lookup, evt = \
+                self.compute_short_lists(queue, wait_for=wait_for)
+            wait_for = [evt]
+
+        element_lookup_kernel = self.get_simplex_lookup_kernel()
+
+        slk_plog = ProcessLogger(logger, "sources-in-element lookup")
+
+        vertices_dev = make_obj_array([
+            cl.array.to_device(queue, verts)
+            for verts in self.discr.mesh.vertices])
+
+        evt, res = element_lookup_kernel(
+            queue, dim=self.dim, nboxes=self.tree.nboxes,
+            nelements=self.discr.mesh.nelements, nsources=self.tree.nsources,
+            mesh_vertex_indices=self.discr.mesh.groups[0].vertex_indices,
+            mesh_vertices_0=vertices_dev[0], mesh_vertices_1=vertices_dev[1],
+            source_points_0=self.tree.sources[0], source_points_1=self.tree.sources[1],
+            box_source_starts=self.tree.box_source_starts,
+            box_source_counts_cumul=self.tree.box_source_counts_cumul,
+            leaves_near_ball_starts=balls_to_leaves_lookup.leaves_near_ball_starts,
+            leaves_near_ball_lists=balls_to_leaves_lookup.leaves_near_ball_lists,
+            wait_for=wait_for)
+
+        source_to_element_lookup, = res
+
+        slk_plog.done()
+
+        # FIXME: Invert source_to_element_lookup to get element_to_source_lookup
         return ElementsToSourcesLookup(
-                tree=self.tree,
-                discr=self.discr,
-                sources_in_element_starts=None,
-                sources_in_element_lists=None)
+            tree=self.tree, discr=self.discr,
+            sources_in_element_starts=None,
+            sources_in_element_lists=None)
