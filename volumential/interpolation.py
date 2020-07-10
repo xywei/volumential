@@ -322,4 +322,31 @@ def interpolate_from_meshmode(queue, dof_vec, elements_to_sources_lookup):
     :arg dof_vec: a DoF vector representing a field in :mod:`meshmode`
     :arg elements_to_sources_lookup: a :class:`ElementsToSourcesLookup`
     """
-    # TODO
+    if not isinstance(dof_vec, cl.array.Array):
+        raise TypeError("non-array passed to interpolator")
+
+    if not elements_to_sources_lookup.discr.is_affine:
+        raise ValueError(
+            "interpolation requires global-to-local map, "
+            "which is only available for affinely mapped elements")
+
+    # ------------------------------------------------------
+    # Inversely map source points with a global-to-local map
+    #
+    # 1. For each element, solve for the affine map. The results
+    #    of this step can be cached.
+    #
+    # 2. Apply the map to corresponding source points. The results
+    #    of this step can also be cached.
+    pass
+
+    # ------------------------------------------------------
+    # Carry out evaluations in the local (template) frames
+    #
+    # 1. Assemble a Vandermonde matrix for each element, with
+    #    the basis functions and the local source points.
+    #    The results of this step can be cached.
+    #
+    # 2. For each element, perform matvec on the Vandermonde matrix
+    #    and the local DoF coefficients.
+    pass
