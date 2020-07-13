@@ -33,7 +33,7 @@ Python 3 POCL:
   - git submodule sync && git submodule update --init --recursive --remote
   - ((cd contrib/meshgen11_dealii/; ./build.sh) && echo "Using meshgen11_dealii.") || (echo "Using boxtree for meshgen.")
   - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/master/build-and-test-py-project.sh
-  - sed -i -e '/^TESTABLES=.*/i PIP="${PY_EXE} $(which pip)" \n$PIP uninstall pytest-warnings' build-and-test-py-project.sh
+  - sed -i -e '/^TESTABLES=.*/i PIP="${PY_EXE} $(which pip)" \n$PIP uninstall -y pytest-warnings' build-and-test-py-project.sh
   - ". ./build-and-test-py-project.sh"
   tags:
   - python3
@@ -57,7 +57,7 @@ Python 3 Intel:
   - git submodule sync && git submodule update --init --recursive --remote
   - ((cd contrib/meshgen11_dealii/; ./build.sh) && echo "Using meshgen11_dealii.") || (echo "Using boxtree for meshgen.")
   - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/master/build-and-test-py-project.sh
-  - sed -i -e '/^TESTABLES=.*/i PIP="${PY_EXE} $(which pip)" \n$PIP uninstall pytest-warnings' build-and-test-py-project.sh
+  - sed -i -e '/^TESTABLES=.*/i PIP="${PY_EXE} $(which pip)" \n$PIP uninstall -y pytest-warnings' build-and-test-py-project.sh
   - ". ./build-and-test-py-project.sh"
   tags:
   - python3
