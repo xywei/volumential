@@ -171,6 +171,7 @@ class ElementsToSourcesLookupBuilder:
         that the resulting lookup lists are disjoint.
 
         The kernel assumes that the mesh uses one single group of simplex elements.
+        Also, the test only works for affine elements.
         """
         logger.debug("start building elements-to-sources lookup kernel")
 
@@ -209,7 +210,7 @@ class ElementsToSourcesLookupBuilder:
                         <> s2 = (Px - Cx) * (Ay - Cy) - (Py - Cy) * (Ax - Cx)
 
                         result[source_id] = if(
-                            s0 * s1 >= 0 and s1 * s2 >= 0,
+                            s0 * s1 >= -1e-12 and s1 * s2 >= -1e-12,
                             iel,
                             result[source_id])
                     end
