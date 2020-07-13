@@ -28,10 +28,11 @@ Python 3 POCL:
   - export PY_EXE=python3
   - export PYOPENCL_TEST=portable
   - export HDF5_USE_FILE_LOCKING=FALSE
-  - export EXTRA_INSTALL="pybind11 cython numpy pytest scipy mako wheel"
+  - export EXTRA_INSTALL="pybind11 cython numpy pytest pytest-cov scipy mako wheel"
   - git submodule sync && git submodule update --init --recursive --remote
   - ((cd contrib/meshgen11_dealii/; ./build.sh) && echo "Using meshgen11_dealii.") || (echo "Using boxtree for meshgen.")
   - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/master/build-and-test-py-project.sh
+  - sed -i -e 's/${PY_EXE} -m pytest/${PY_EXE} -m pytest --cov=volumential/g' build-and-test-py-project.sh
   - ". ./build-and-test-py-project.sh"
   tags:
   - python3
