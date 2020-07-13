@@ -55,6 +55,8 @@ warp the element boundary too much.
 
 .. autoclass:: LeavesToNodesLookup
 
+.. autofunction:: interpolate_from_meshmode
+
 To :mod:`meshmode`
 ---------------------------
 
