@@ -20,7 +20,6 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
-import pytest
 import numpy as np
 import pyopencl as cl
 
@@ -89,7 +88,8 @@ def drive_test_from_meshmode_interpolation_2d(
             nlevels=n_levels, bbox_getter=bbox_fac,
             expand_to_hold_mesh=mesh, mesh_padding_factor=0.)
     boxgeo = boxfmm_fac(queue)
-    lookup_fac = ElementsToSourcesLookupBuilder(cl_ctx, tree=boxgeo.tree, discr=discr)
+    lookup_fac = ElementsToSourcesLookupBuilder(
+            cl_ctx, tree=boxgeo.tree, discr=discr)
     lookup, evt = lookup_fac(queue)
 
     func = random_polynomial_func(dim, degree, seed)
@@ -99,8 +99,6 @@ def drive_test_from_meshmode_interpolation_2d(
 
     tree = boxgeo.tree.get(queue)
     ref = func(np.vstack(tree.sources))
-    print(res)
-    print(ref)
 
     assert np.allclose(ref, res)
 
