@@ -64,7 +64,7 @@ def pytest_sessionstart(session):
     # pre-compute a basic table that is re-used in many tests.
     # can be easily turned off to run individual tests that do not require
     # the table cache.
-    if 0:
+    if 1:
         with NearFieldInteractionTableManager(
                 "/tmp/volumential-tests.hdf5") as tm:
             table, _ = tm.get_table(
