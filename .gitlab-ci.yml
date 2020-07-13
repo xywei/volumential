@@ -29,10 +29,10 @@ Python 3 POCL:
   - export PYOPENCL_TEST=portable
   - export HDF5_USE_FILE_LOCKING=FALSE
   - export EXTRA_INSTALL="pybind11 cython numpy pytest pytest-cov scipy mako wheel"
+  - export PYTEST_FLAGS="--cov=volumential"
   - git submodule sync && git submodule update --init --recursive --remote
   - ((cd contrib/meshgen11_dealii/; ./build.sh) && echo "Using meshgen11_dealii.") || (echo "Using boxtree for meshgen.")
   - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/master/build-and-test-py-project.sh
-  - sed -i -e 's/${PY_EXE} -m pytest/${PY_EXE} -m pytest --cov=volumential/g' build-and-test-py-project.sh
   - ". ./build-and-test-py-project.sh"
   tags:
   - python3
@@ -51,7 +51,8 @@ Python 3 Intel:
   - source /opt/enable-intel-cl.sh
   - export PYOPENCL_TEST="intel(r):pu"
   - export HDF5_USE_FILE_LOCKING=FALSE
-  - export EXTRA_INSTALL="pybind11 cython numpy pytest scipy mako wheel"
+  - export PYTEST_FLAGS="--cov=volumential"
+  - export EXTRA_INSTALL="pybind11 cython numpy pytest pytest-cov scipy mako wheel"
   - git submodule sync && git submodule update --init --recursive --remote
   - ((cd contrib/meshgen11_dealii/; ./build.sh) && echo "Using meshgen11_dealii.") || (echo "Using boxtree for meshgen.")
   - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/master/build-and-test-py-project.sh
@@ -72,6 +73,7 @@ Python 3 Conda:
   - export SUMPY_FORCE_SYMBOLIC_BACKEND=symengine
   - export CONDA_ENVIRONMENT=.test-conda-env-py3.yml
   - export HDF5_USE_FILE_LOCKING=FALSE
+  - export PYTEST_FLAGS="--cov=volumential"
   - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/master/build-and-test-py-project-within-miniconda.sh
   - ". ./build-and-test-py-project-within-miniconda.sh"
   tags:
@@ -92,6 +94,7 @@ Python 3 Conda Apple:
   - export CONDA_ENVIRONMENT=.test-conda-env-py3-macos.yml
   - export HDF5_USE_FILE_LOCKING=FALSE
   - export CC=clang
+  - export PYTEST_FLAGS="--cov=volumential"
   - set -o xtrace
   - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/master/build-and-test-py-project-within-miniconda.sh
   - ". ./build-and-test-py-project-within-miniconda.sh"

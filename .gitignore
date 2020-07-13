@@ -35,3 +35,6 @@ builds/
 
 gmsh_tmp/
 *.meshmode
+
+.coverage
+pytest.xml
