@@ -25,6 +25,7 @@ THE SOFTWARE.
 import logging
 import numpy as np
 import loopy as lp
+import pyopencl as cl
 from scipy.interpolate import BarycentricInterpolator as Interpolator
 
 from functools import partial
@@ -1098,6 +1099,8 @@ class NearFieldInteractionTable(object):
                     ) * fl_scaling(k=self.dim, s=s)
             return
 
+        from meshmode.array_context import PyOpenCLArrayContext
+        from meshmode.dof_array import thaw, flatten
         from meshmode.mesh.io import read_gmsh
         from meshmode.discretization import Discretization
         from meshmode.discretization.poly_element import \
@@ -1165,7 +1168,8 @@ class NearFieldInteractionTable(object):
 
         # }}} End gmsh processing
 
-        discr = Discretization(cl_ctx, mesh,  # noqa
+        arr_ctx = PyOpenCLArrayContext(queue)
+        discr = Discretization(arr_ctx, mesh,
                 PolynomialWarpAndBlendGroupFactory(order=quad_order))
 
         from pytential import bind, sym
@@ -1274,7 +1278,9 @@ class NearFieldInteractionTable(object):
 
         # }}} End kernel evaluation
 
-        nodes = discr.nodes().with_queue(queue)[:self.dim]
+        node_coords = flatten(thaw(arr_ctx, discr.nodes()))
+        nodes = cl.array.to_device(queue,
+            np.vstack([crd.get() for crd in node_coords]))
 
         int_vals = []
 

@@ -55,8 +55,8 @@ root_table_source_extent = 2
 
 print("Using table cache:", table_filename)
 
-q_order = 2   # quadrature order
-n_levels = 8  # 2^(n_levels-1) subintervals in 1D
+q_order = 6   # quadrature order
+n_levels = 6  # 2^(n_levels-1) subintervals in 1D
 
 use_multilevel_table = False
 
@@ -68,7 +68,7 @@ rratio_bot = 0.5
 
 dtype = np.float64
 
-m_order = 20  # multipole order
+m_order = 15  # multipole order
 force_direct_evaluation = False
 
 print("Multipole order =", m_order)
@@ -345,9 +345,11 @@ mpole_expn_class = expn_factory.get_multipole_expansion_class(knl)
 out_kernels = [knl, knl_dx, knl_dy]
 
 exclude_self = True
-from volumential.expansion_wrangler_interface import ExpansionWranglerCodeContainer
+from volumential.expansion_wrangler_fpnd import (
+    FPNDExpansionWranglerCodeContainer,
+    FPNDExpansionWrangler)
 
-wcc = ExpansionWranglerCodeContainer(
+wcc = FPNDExpansionWranglerCodeContainer(
     ctx,
     partial(mpole_expn_class, knl),
     partial(local_expn_class, knl),
@@ -360,8 +362,6 @@ if exclude_self:
     self_extra_kwargs = {"target_to_source": target_to_source}
 else:
     self_extra_kwargs = {}
-
-from volumential.expansion_wrangler_fpnd import FPNDExpansionWrangler
 
 wrangler = FPNDExpansionWrangler(
     code_container=wcc,
@@ -429,9 +429,9 @@ zs_dy = pot[2].get()
 
 print_error = True
 if print_error:
-    err = np.max(np.abs(ze - zs))
-    err_dx = np.max(np.abs(ze_dx - zs_dx))
-    err_dy = np.max(np.abs(ze_dy - zs_dy))
+    err = np.max(np.abs(ze - zs)) / exact_solu(0, 0)
+    err_dx = np.max(np.abs(ze_dx - zs_dx)) / np.max(np.abs(ze_dx))
+    err_dy = np.max(np.abs(ze_dy - zs_dy)) / np.max(np.abs(ze_dy))
     print("Error =", err)
     print("Error dx =", err_dx)
     print("Error dy =", err_dy)

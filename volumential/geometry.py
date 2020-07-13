@@ -33,7 +33,7 @@ from boxtree.pyfmmlib_integration import FMMLibRotationData
 class BoundingBoxFactory():
     def __init__(self, dim,
             center=None, radius=None,
-            dtype=np.float64):
+            dtype=np.dtype("float64")):
         self.dim = dim
         self.dtype = dtype
 
@@ -78,8 +78,8 @@ class BoundingBoxFactory():
             box_center = self.center
             box_radius = self.radius
         else:
-            a = np.min(expand_to_hold_mesh.vertices, axis=0)
-            b = np.max(expand_to_hold_mesh.vertices, axis=0)
+            a = np.min(expand_to_hold_mesh.vertices, axis=1)
+            b = np.max(expand_to_hold_mesh.vertices, axis=1)
             c = (a + b) * 0.5
 
             if self.center is None:
@@ -142,8 +142,8 @@ class BoxFMMGeometryFactory():
         :class:`volumential.meshgen.MeshGenBase` interface.
     """
     def __init__(
-            self, cl_ctx, dim, quadrature_formula,
-            order, nlevels, bbox_getter,
+            self, cl_ctx, dim, order, nlevels, bbox_getter,
+            quadrature_formula=None,
             expand_to_hold_mesh=None, mesh_padding_factor=0.05):
         """
         :arg bbox_getter: A :class:`BoundingBoxFactory` object.
@@ -164,7 +164,12 @@ class BoxFMMGeometryFactory():
             self._engine_class = MeshGen3D
 
         self.dim = dim
-        self.quadrature_formula = quadrature_formula
+        if quadrature_formula is None:
+            from modepy import LegendreGaussQuadrature
+            # order = degree + 1
+            self.quadrature_formula = LegendreGaussQuadrature(order - 1)
+        else:
+            raise NotImplementedError()
 
         self.bbox_getter = bbox_getter
 
@@ -176,8 +181,8 @@ class BoxFMMGeometryFactory():
         self.nlevels = nlevels
 
         # the engine generates meshes centered at the origin
-        a = -1 * self.bbox_getter.radius
-        b = self.bbox_getter.radius
+        a = -1 * self.bbox_getter.box_radius
+        b = self.bbox_getter.box_radius
         self.engine = self._engine_class(self.order, self.nlevels, a, b)
 
     def reinit(
