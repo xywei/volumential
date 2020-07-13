@@ -1,5 +1,8 @@
 # Volumential
 
+![pipeline](https://gitlab.tiker.net/xywei/volumential/badges/master/pipeline.svg)
+![coverage](https://gitlab.tiker.net/xywei/volumential/badges/master/coverage.svg)
+
 Volumential (VOLUME poteNTIAL) provides toolset to solve volume potential integral equations
 efficiently via Fast Multipole Method.
 

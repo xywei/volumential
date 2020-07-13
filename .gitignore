@@ -38,3 +38,4 @@ gmsh_tmp/
 
 .coverage
 pytest.xml
+prof/
