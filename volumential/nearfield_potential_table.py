@@ -1099,7 +1099,8 @@ class NearFieldInteractionTable(object):
                     ) * fl_scaling(k=self.dim, s=s)
             return
 
-        from meshmode.array_context import PyOpenCLArrayContext, thaw, flatten
+        from meshmode.array_context import PyOpenCLArrayContext
+        from meshmode.dof_array import thaw, flatten
         from meshmode.mesh.io import read_gmsh
         from meshmode.discretization import Discretization
         from meshmode.discretization.poly_element import \
