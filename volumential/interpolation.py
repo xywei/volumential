@@ -280,6 +280,7 @@ class ElementsToSourcesLookupBuilder:
         evt, res = element_lookup_kernel(
             queue, dim=self.dim, nboxes=self.tree.nboxes,
             nelements=self.discr.mesh.nelements, nsources=self.tree.nsources,
+            result=cl.array.zeros(queue, self.tree.nsources, dtype=np.int32),
             mesh_vertex_indices=self.discr.mesh.groups[0].vertex_indices,
             mesh_vertices_0=vertices_dev[0],
             mesh_vertices_1=vertices_dev[1],

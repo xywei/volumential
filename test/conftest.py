@@ -62,9 +62,14 @@ def pytest_sessionstart(session):
     subprocess.call(['rm', '-f', '/tmp/volumential-tests.hdf5'])
 
     # pre-compute a basic table that is re-used in many tests.
-    with NearFieldInteractionTableManager("/tmp/volumential-tests.hdf5") as tm:
-        table, _ = tm.get_table(2, "Laplace",
-                                q_order=1, force_recompute=False, queue=None)
+    # can be easily turned off to run individual tests that do not require
+    # the table cache.
+    if 1:
+        with NearFieldInteractionTableManager(
+                "/tmp/volumential-tests.hdf5") as tm:
+            table, _ = tm.get_table(
+                    2, "Laplace",
+                    q_order=1, force_recompute=False, queue=None)
 
 
 def pytest_sessionfinish(session, exitstatus):
