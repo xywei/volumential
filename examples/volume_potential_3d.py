@@ -428,11 +428,13 @@ def main():
         from meshmode.discretization.poly_element import (
             LegendreGaussLobattoTensorProductGroupFactory,
         )
+        from meshmode.array_context import PyOpenCLArrayContext
         from meshmode.discretization import Discretization
 
+        actx = PyOpenCLArrayContext(queue)
         box_discr = Discretization(
-            ctx, modemesh, LegendreGaussLobattoTensorProductGroupFactory(q_order)
-        )
+            actx, modemesh,
+            LegendreGaussLobattoTensorProductGroupFactory(q_order))
 
         box_nodes_x = box_discr.nodes()[0].with_queue(queue).get()
         box_nodes_y = box_discr.nodes()[1].with_queue(queue).get()
