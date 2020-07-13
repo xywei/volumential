@@ -30,6 +30,8 @@ from pytools import memoize_method, ProcessLogger
 from pytools.obj_array import make_obj_array
 from boxtree.area_query import AreaQueryBuilder
 from boxtree.tools import DeviceDataRecord
+from meshmode.array_context import PyOpenCLArrayContext
+from meshmode.dof_array import unflatten
 
 import logging
 logger = logging.getLogger(__name__)
@@ -465,7 +467,11 @@ def interpolate_from_meshmode(queue, dof_vec, elements_to_sources_lookup):
         [usc.get(queue) for usc in unit_sources])
 
     basis_funcs = degroup.basis()
-    dof_vec_view = degroup.view(dof_vec).get(queue)
+
+    arr_ctx = PyOpenCLArrayContext(queue)
+    dof_vec_view = unflatten(
+            arr_ctx, elements_to_sources_lookup.discr, dof_vec)[0]
+    dof_vec_view = dof_vec_view.get()
 
     sym_shape = dof_vec.shape[:-1]
     source_vec = np.zeros(sym_shape + (tree.nsources, ))

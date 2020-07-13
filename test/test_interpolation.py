@@ -23,6 +23,8 @@ import pytest
 import numpy as np
 import pyopencl as cl
 
+from meshmode.array_context import PyOpenCLArrayContext
+from meshmode.dof_array import flatten, thaw
 from meshmode.mesh.generation import generate_regular_rect_mesh
 from meshmode.discretization import Discretization
 from meshmode.discretization.poly_element import (
@@ -56,7 +58,9 @@ def random_polynomial_func(dim, degree, seed=None):
 
 
 def eval_func_on_discr_nodes(queue, discr, func):
-    nodes = discr.nodes().get(queue)
+    arr_ctx = PyOpenCLArrayContext(queue)
+    nodes = np.vstack([
+        c.get() for c in flatten(thaw(arr_ctx, discr.nodes()))])
     fvals = func(nodes)
     return cl.array.to_device(queue, fvals)
 
@@ -78,8 +82,9 @@ def drive_test_from_meshmode_exact_interpolation_2d(
             b=(b, b),
             n=(nel_1d, nel_1d))
 
+    arr_ctx = PyOpenCLArrayContext(queue)
     group_factory = PolynomialWarpAndBlendGroupFactory(order=degree)
-    discr = Discretization(cl_ctx, mesh, group_factory)
+    discr = Discretization(arr_ctx, mesh, group_factory)
 
     bbox_fac = BoundingBoxFactory(dim=2)
     boxfmm_fac = BoxFMMGeometryFactory(
@@ -118,8 +123,9 @@ def drive_test_from_meshmode_interpolation_2d(
             b=(b, b),
             n=(nel_1d, nel_1d))
 
+    arr_ctx = PyOpenCLArrayContext(queue)
     group_factory = PolynomialWarpAndBlendGroupFactory(order=degree)
-    discr = Discretization(cl_ctx, mesh, group_factory)
+    discr = Discretization(arr_ctx, mesh, group_factory)
 
     bbox_fac = BoundingBoxFactory(dim=2)
     boxfmm_fac = BoxFMMGeometryFactory(
