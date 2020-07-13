@@ -801,7 +801,6 @@ class DrosteFull(DrosteBase):
             self.integral_knl.__str__(),
             "quad_order-" + str(self.ntgt_points),
             "brick_order-" + str(self.nquad_points),
-            "brick_order-" + str(self.nquad_points),
         )
 
     def __call__(self, queue, **kwargs):
