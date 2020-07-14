@@ -50,8 +50,10 @@ def random_polynomial_func(dim, degree, seed=None):
         npts = pts.shape[1]
         res = np.zeros(npts)
         for deg in np.ndindex(coefs.shape):
+            mono = np.ones(npts)
             for iaxis in range(dim):
-                res += coefs[deg] * pts[iaxis, :]**deg[iaxis]
+                mono += pts[iaxis, :]**deg[iaxis]
+            res += coefs[deg] * mono
         return res
 
     return poly_func

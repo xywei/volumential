@@ -528,6 +528,18 @@ class DiscreteLegendreTransform(BoxSpecificMap):
 
 # }}} End discrete Legendre transform
 
+# {{{ inverse discrete Legendre transform
+
+
+class InverseDiscreteLegendreTransform(BoxSpecificMap):
+    """
+    Box-specific transform that maps box-local modal coefficients
+    to nodal values. Inverse of :class:`DiscreteLegendreTransform`.
+    """
+    pass
+
+# }}} End inverse discrete Legendre transform
+
 # }}} End box-specific maps
 
 # {{{ box-specific reductions
