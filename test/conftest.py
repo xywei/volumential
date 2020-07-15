@@ -67,7 +67,7 @@ def pytest_sessionstart(session):
     if 1:
         import subprocess
         subprocess.call(['rm', '-f', '/tmp/volumential-tests.hdf5'])
-        for q_order in [1, 2, 3, 4, 5]:
+        for q_order in [1, ]:
             with NearFieldInteractionTableManager(
                     "/tmp/volumential-tests.hdf5") as tm:
                 table, _ = tm.get_table(
