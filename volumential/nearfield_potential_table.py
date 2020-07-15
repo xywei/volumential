@@ -212,6 +212,7 @@ class NearFieldInteractionTable(object):
         source_box_extent=1,
         dtype=np.float64,
         inverse_droste=False,
+        progress_bar=True,
         **kwargs
     ):
         """
@@ -330,9 +331,11 @@ class NearFieldInteractionTable(object):
 
         total_evals = len(self.data) + self.n_q_points
 
-        from pytools import ProgressBar
-
-        self.pb = ProgressBar("Building table:", total_evals)
+        if progress_bar:
+            from pytools import ProgressBar
+            self.pb = ProgressBar("Building table:", total_evals)
+        else:
+            self.pb = None
 
         self.is_built = False
 
@@ -738,7 +741,8 @@ class NearFieldInteractionTable(object):
         else:
             pool = None
 
-        self.pb.draw()
+        if self.pb is not None:
+            self.pb.draw()
 
         self.build_normalizer_table(pool, pb=self.pb)
         self.has_normalizers = True
@@ -750,18 +754,19 @@ class NearFieldInteractionTable(object):
         ]
 
         if 0:
-            # multiprocess disabled for py2 compatibility
-            # (also drops dependency on dill/multiprocess)
+            # multiprocess disabled to remove dependency on dill/multiprocess
             for entry_id, entry_val in pool.imap_unordered(
                 self.compute_table_entry, invariant_entry_ids
             ):
                 self.data[entry_id] = entry_val
-                self.pb.progress(1)
+                if self.pb is not None:
+                    self.pb.progress(1)
         else:
             for entry_id in invariant_entry_ids:
                 _, entry_val = self.compute_table_entry(entry_id)
                 self.data[entry_id] = entry_val
-                self.pb.progress(1)
+                if self.pb is not None:
+                    self.pb.progress(1)
 
         if 0:
             # Then complete the table via symmetry lookup
@@ -771,7 +776,8 @@ class NearFieldInteractionTable(object):
                 if centry_id == entry_id:
                     continue
                 self.data[entry_id] = self.data[centry_id]
-                self.pb.progress(1)
+                if self.pb is not None:
+                    self.pb.progress(1)
         else:
             for entry_id in range(len(self.data)):
                 _, centry_id = self.lookup_by_symmetry(entry_id)
@@ -779,9 +785,11 @@ class NearFieldInteractionTable(object):
                 if centry_id == entry_id:
                     continue
                 self.data[entry_id] = self.data[centry_id]
-                self.pb.progress(1)
+                if self.pb is not None:
+                    self.pb.progress(1)
 
-        self.pb.finished()
+        if self.pb is not None:
+            self.pb.finished()
 
         for entry in self.data:
             assert not np.isnan(entry)

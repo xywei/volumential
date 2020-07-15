@@ -119,17 +119,17 @@ def drive_test_completeness(ctx, queue, dim, q_order):
 
     from volumential.table_manager import NearFieldInteractionTableManager
 
-    subprocess.check_call(['rm', '-f', 'nft.hdf5'])
+    subprocess.check_call(['rm', '-f', 'nft-test-completeness.hdf5'])
 
-    with NearFieldInteractionTableManager("nft.hdf5") as tm:
+    with NearFieldInteractionTableManager("nft-test-completeness.hdf5",
+                                          progress_bar=False) as tm:
 
-        nft, _ = tm.get_table(dim, "Constant", q_order,
-                queue=queue, n_levels=1, alpha=0,
-                compute_method="DrosteSum",
-                n_brick_quad_points=50,
-                adaptive_level=False, use_symmetry=True)
+        nft, _ = tm.get_table(
+            dim, "Constant", q_order, queue=queue, n_levels=1, alpha=0,
+            compute_method="DrosteSum", n_brick_quad_points=50,
+            adaptive_level=False, use_symmetry=True)
 
-    subprocess.check_call(['rm', 'nft.hdf5'])
+    subprocess.check_call(['rm', 'nft-test-completeness.hdf5'])
 
     # {{{ expansion wrangler
 
@@ -166,11 +166,8 @@ def drive_test_completeness(ctx, queue, dim, q_order):
 
     # }}} End sumpy expansion for laplace kernel
     pot = wrangler.eval_direct(
-        trav.target_boxes,
-        trav.neighbor_source_boxes_starts,
-        trav.neighbor_source_boxes_lists,
-        mode_coefs=source_vals,
-    )
+        trav.target_boxes, trav.neighbor_source_boxes_starts,
+        trav.neighbor_source_boxes_lists, mode_coefs=source_vals)
     pot = pot[0]
     for p in pot[0]:
         assert(abs(p - 2**dim) < 1e-8)

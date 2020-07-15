@@ -23,6 +23,7 @@ THE SOFTWARE.
 """
 
 import os
+import subprocess
 import numpy as np
 import pyopencl as cl
 import pytest
@@ -34,12 +35,26 @@ from volumential.table_manager import (
 
 def get_table(queue, q_order=1, dim=2):
     pid = os.getpid()
-    copyfile("/tmp/volumential-tests.hdf5",
-             f"/tmp/volumential-tests-{pid}.hdf5")
-    with NFTable(f"/tmp/volumential-tests-{pid}.hdf5") as table_manager:
+
+    # copy from shared cache
+    if os.path.exists("nft-test-table-manager.hdf5"):
+        copyfile("nft-test-table-manager.hdf5",
+                 f"nft-test-table-manager-{pid}.hdf5")
+
+    subprocess.check_call(['rm', '-f', f'nft-test-table-manager-{pid}.hdf5'])
+    with NFTable(f"nft-test-table-manager-{pid}.hdf5",
+                 progress_bar=False) as table_manager:
         table, _ = table_manager.get_table(
                 dim, "Laplace",
                 q_order=q_order, force_recompute=False, queue=queue)
+
+    # save to shared cache
+    if not os.path.exists("nft-test-table-manager.hdf5"):
+        copyfile(f"nft-test-table-manager-{pid}.hdf5",
+                 "nft-test-table-manager.hdf5")
+
+    subprocess.check_call(['rm', f'nft-test-table-manager-{pid}.hdf5'])
+
     return table
 
 

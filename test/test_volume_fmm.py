@@ -22,25 +22,17 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
-# import volumential.volume_fmm as vfmm
+import subprocess
+import logging
+import pytest
 
 import numpy as np
 import pyopencl as cl
-
-# import pyopencl.array
-# import boxtree as bt
-# import sumpy as sp
-# import volumential as vm
+import volumential.meshgen as mg
 
 from functools import partial
 
-import logging
-
 logger = logging.getLogger(__name__)
-
-import volumential.meshgen as mg
-
-import pytest
 
 # {{{ make sure context getter works
 
@@ -211,8 +203,12 @@ def laplace_problem(ctx_factory):
 
     from volumential.table_manager import NearFieldInteractionTableManager
 
-    tm = NearFieldInteractionTableManager("../nft.hdf5")
+    subprocess.check_call(['rm', '-f', 'nft-test-volume-fmm.hdf5'])
+
+    tm = NearFieldInteractionTableManager("nft-test-volume-fmm.hdf5")
     nftable, _ = tm.get_table(dim, "Laplace", q_order)
+
+    subprocess.check_call(['rm', 'nft-test-volume-fmm.hdf5'])
 
     # }}} End build near field potential table
 

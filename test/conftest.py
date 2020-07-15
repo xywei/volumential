@@ -22,6 +22,8 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
+import subprocess
+import glob
 import pytest  # noqa: F401
 
 # setup the ctx_factory fixture
@@ -54,28 +56,7 @@ def requires_pypvfmm(request):
         pytest.skip("needs pypvfmm to run")
 
 
-def pytest_sessionstart(session):
-    from volumential.table_manager import NearFieldInteractionTableManager
-
-    # clean the table file, in case there was an aborted previous test run
-    import subprocess
-    subprocess.call(['rm', '-f', '/tmp/volumential-tests.hdf5'])
-
-    # Pre-compute tables that is re-used in the tests.
-    # Updating the table file from different tests may result in file
-    # corruption.
-    if 1:
-        import subprocess
-        subprocess.call(['rm', '-f', '/tmp/volumential-tests.hdf5'])
-        for q_order in [1, ]:
-            with NearFieldInteractionTableManager(
-                    "/tmp/volumential-tests.hdf5") as tm:
-                table, _ = tm.get_table(
-                    2, "Laplace", q_order=q_order,
-                    force_recompute=False, queue=None)
-
-
 def pytest_sessionfinish(session, exitstatus):
     # remove table caches
-    import subprocess
-    subprocess.call(['rm', '-f', '/tmp/volumential-tests.hdf5'])
+    for table_file in glob.glob("*.hdf5"):
+        subprocess.call(['rm', '-f', table_file])
