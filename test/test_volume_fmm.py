@@ -95,8 +95,8 @@ def laplace_problem(ctx_factory):
     rratio_bot = 0.5
 
     # bounding box
-    a = -1
-    b = 1
+    a = -1.
+    b = 1.
 
     m_order = 15  # multipole order
 
@@ -115,7 +115,7 @@ def laplace_problem(ctx_factory):
 
     # {{{ generate quad points
 
-    mesh = mg.MeshGen2D(q_order, n_levels)
+    mesh = mg.MeshGen2D(q_order, n_levels, a, b)
     iloop = 0
     while mesh.n_active_cells() < refined_n_cells:
         iloop += 1
@@ -204,11 +204,8 @@ def laplace_problem(ctx_factory):
     from volumential.table_manager import NearFieldInteractionTableManager
 
     subprocess.check_call(['rm', '-f', 'nft-test-volume-fmm.hdf5'])
-
     tm = NearFieldInteractionTableManager("nft-test-volume-fmm.hdf5")
     nftable, _ = tm.get_table(dim, "Laplace", q_order)
-
-    subprocess.check_call(['rm', 'nft-test-volume-fmm.hdf5'])
 
     # }}} End build near field potential table
 
@@ -270,8 +267,8 @@ def laplace_problem(ctx_factory):
 
 
 @pytest.mark.skipif(
-    mg.provider != "meshgen_dealii", reason="Adaptive mesh module is not available"
-)
+    mg.provider != "meshgen_dealii",
+    reason="Adaptive mesh module is not available")
 def test_volume_fmm_laplace(laplace_problem):
 
     trav, wrangler, source_vals, q_weights = laplace_problem
@@ -279,12 +276,12 @@ def test_volume_fmm_laplace(laplace_problem):
     from volumential.volume_fmm import drive_volume_fmm
 
     direct_pot, = drive_volume_fmm(
-        trav, wrangler, source_vals * q_weights, source_vals, direct_evaluation=True
-    )
+        trav, wrangler, source_vals * q_weights,
+        source_vals, direct_evaluation=True)
 
     fmm_pot, = drive_volume_fmm(
-        trav, wrangler, source_vals * q_weights, source_vals, direct_evaluation=False
-    )
+        trav, wrangler, source_vals * q_weights,
+        source_vals, direct_evaluation=False)
 
     assert max(abs(direct_pot - fmm_pot)) < 1e-6
 

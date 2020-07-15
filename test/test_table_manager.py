@@ -49,8 +49,6 @@ def get_table(queue, q_order=1, dim=2):
                 dim, "Laplace",
                 q_order=q_order, force_recompute=False, queue=queue)
 
-    subprocess.check_call(['rm', f'nft-test-table-manager-{pid}.hdf5'])
-
     return table
 
 
