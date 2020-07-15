@@ -65,6 +65,8 @@ def pytest_sessionstart(session):
     # can be easily turned off to run individual tests that do not require
     # the table cache.
     if 1:
+        import subprocess
+        subprocess.call(['rm', '-f', '/tmp/volumential-tests.hdf5'])
         with NearFieldInteractionTableManager(
                 "/tmp/volumential-tests.hdf5") as tm:
             table, _ = tm.get_table(
