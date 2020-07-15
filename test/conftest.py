@@ -24,12 +24,16 @@ THE SOFTWARE.
 
 import subprocess
 import glob
+from filelock import FileLock
 import pytest  # noqa: F401
 
 # setup the ctx_factory fixture
 from pyopencl.tools import (  # NOQA
     pytest_generate_tests_for_pyopencl as pytest_generate_tests,
 )
+
+from volumential.table_manager import \
+    NearFieldInteractionTableManager as NFTManager
 
 
 def pytest_addoption(parser):
@@ -54,6 +58,27 @@ def requires_pypvfmm(request):
         import pypvfmm  # noqa: F401
     except ImportError:
         pytest.skip("needs pypvfmm to run")
+
+
+@pytest.fixture(scope='session')
+def table_2d_order1(tmp_path_factory, worker_id):
+    if not worker_id:
+        # not executing in with multiple workers, just produce the data and let
+        # pytest's fixture caching do its job
+        with NFTManager("nft.hdf5", progress_bar=True) as table_manager:
+            table, _ = table_manager.get_table(2, "Laplace", q_order=1)
+        subprocess.check_call(['rm', '-f', 'nft.hdf5'])
+        return table
+
+    # get the temp directory shared by all workers
+    root_tmp_dir = tmp_path_factory.getbasetemp().parent
+
+    fn = root_tmp_dir / "nft.hdf5"
+    with FileLock(str(fn) + ".lock"):
+        with NFTManager(str(fn), progress_bar=True) as table_manager:
+            table, _ = table_manager.get_table(2, "Laplace", q_order=1)
+        return table
+    return table
 
 
 def pytest_sessionfinish(session, exitstatus):

@@ -1,5 +1,7 @@
 --index-url https://pypi.python.org/simple/
 
+filelock
+
 # git+https://gitlab.tiker.net/xywei/pypvfmm.git#egg=pypvfmm
 -e git+https://gitlab.tiker.net/xywei/boxtree.git#egg=boxtree
 
