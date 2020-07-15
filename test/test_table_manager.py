@@ -53,8 +53,6 @@ def get_table(queue, q_order=1, dim=2):
 
 
 def test_case_id(ctx_factory, table_2d_order1):
-    cl_ctx = ctx_factory()
-    queue = cl.CommandQueue(cl_ctx)
     table = table_2d_order1
     case_same_box = len(table.interaction_case_vecs) // 2
     assert list(table.interaction_case_vecs[case_same_box]) == [0, 0]
