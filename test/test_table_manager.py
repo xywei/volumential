@@ -22,16 +22,21 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
+import os
 import numpy as np
 import pyopencl as cl
 import pytest
 import volumential as vm
+from shutil import copyfile
 from volumential.table_manager import (
         NearFieldInteractionTableManager as NFTable)
 
 
 def get_table(queue, q_order=1, dim=2):
-    with NFTable("/tmp/volumential-tests.hdf5") as table_manager:
+    pid = os.getpid()
+    copyfile("/tmp/volumential-tests.hdf5",
+             f"/tmp/volumential-tests-{pid}.hdf5")
+    with NFTable(f"/tmp/volumential-tests-{pid}.hdf5") as table_manager:
         table, _ = table_manager.get_table(
                 dim, "Laplace",
                 q_order=q_order, force_recompute=False, queue=queue)
