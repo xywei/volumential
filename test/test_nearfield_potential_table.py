@@ -28,14 +28,16 @@ from numpy.polynomial.chebyshev import chebval, chebval2d, chebval3d
 
 
 def test_const_order_1():
-    table = npt.NearFieldInteractionTable(quad_order=1, build_method='Transform')
+    table = npt.NearFieldInteractionTable(
+        quad_order=1, build_method='Transform', progress_bar=False)
     table.build_table()
     for ary in table.data:
         assert np.allclose(ary, 1)
 
 
 def test_const_order_2(longrun):
-    table = npt.NearFieldInteractionTable(quad_order=2, build_method='Transform')
+    table = npt.NearFieldInteractionTable(
+        quad_order=2, build_method='Transform', progress_bar=False)
     table.build_table()
     for ary in table.data:
         assert np.allclose(ary, 0.25)
@@ -43,7 +45,7 @@ def test_const_order_2(longrun):
 
 def interp_modes(q_order):
     table = npt.NearFieldInteractionTable(
-            quad_order=q_order, build_method='Transform')
+            quad_order=q_order, build_method='Transform', progress_bar=False)
 
     modes = [table.get_mode(i) for i in range(table.n_q_points)]
 
@@ -88,7 +90,7 @@ def drive_test_modes_cheb_coeffs(dim, q, cheb_order):
         raise RuntimeError('Insufficient cheb_order to fully resolve the modes')
 
     sample_mode = np.random.randint(q**dim)
-    table = npt.NearFieldInteractionTable(quad_order=q, dim=dim)
+    table = npt.NearFieldInteractionTable(quad_order=q, dim=dim, progress_bar=False)
     ccoefs = table.get_mode_cheb_coeffs(sample_mode, cheb_order)
     shape = (cheb_order, ) * dim
     ccoefs = ccoefs.reshape(*shape)

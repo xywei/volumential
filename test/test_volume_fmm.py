@@ -22,25 +22,17 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
-# import volumential.volume_fmm as vfmm
+import subprocess
+import logging
+import pytest
 
 import numpy as np
 import pyopencl as cl
-
-# import pyopencl.array
-# import boxtree as bt
-# import sumpy as sp
-# import volumential as vm
+import volumential.meshgen as mg
 
 from functools import partial
 
-import logging
-
 logger = logging.getLogger(__name__)
-
-import volumential.meshgen as mg
-
-import pytest
 
 # {{{ make sure context getter works
 
@@ -103,8 +95,8 @@ def laplace_problem(ctx_factory):
     rratio_bot = 0.5
 
     # bounding box
-    a = -1
-    b = 1
+    a = -1.
+    b = 1.
 
     m_order = 15  # multipole order
 
@@ -123,7 +115,7 @@ def laplace_problem(ctx_factory):
 
     # {{{ generate quad points
 
-    mesh = mg.MeshGen2D(q_order, n_levels)
+    mesh = mg.MeshGen2D(q_order, n_levels, a, b)
     iloop = 0
     while mesh.n_active_cells() < refined_n_cells:
         iloop += 1
@@ -211,7 +203,8 @@ def laplace_problem(ctx_factory):
 
     from volumential.table_manager import NearFieldInteractionTableManager
 
-    tm = NearFieldInteractionTableManager("../nft.hdf5")
+    subprocess.check_call(['rm', '-f', 'nft-test-volume-fmm.hdf5'])
+    tm = NearFieldInteractionTableManager("nft-test-volume-fmm.hdf5")
     nftable, _ = tm.get_table(dim, "Laplace", q_order)
 
     # }}} End build near field potential table
@@ -274,8 +267,8 @@ def laplace_problem(ctx_factory):
 
 
 @pytest.mark.skipif(
-    mg.provider != "meshgen_dealii", reason="Adaptive mesh module is not available"
-)
+    mg.provider != "meshgen_dealii",
+    reason="Adaptive mesh module is not available")
 def test_volume_fmm_laplace(laplace_problem):
 
     trav, wrangler, source_vals, q_weights = laplace_problem
@@ -283,12 +276,12 @@ def test_volume_fmm_laplace(laplace_problem):
     from volumential.volume_fmm import drive_volume_fmm
 
     direct_pot, = drive_volume_fmm(
-        trav, wrangler, source_vals * q_weights, source_vals, direct_evaluation=True
-    )
+        trav, wrangler, source_vals * q_weights,
+        source_vals, direct_evaluation=True)
 
     fmm_pot, = drive_volume_fmm(
-        trav, wrangler, source_vals * q_weights, source_vals, direct_evaluation=False
-    )
+        trav, wrangler, source_vals * q_weights,
+        source_vals, direct_evaluation=False)
 
     assert max(abs(direct_pot - fmm_pot)) < 1e-6
 

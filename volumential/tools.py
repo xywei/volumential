@@ -496,14 +496,13 @@ class DiscreteLegendreTransform(BoxSpecificMap):
         """
 
         if filtering is None:
-            filter_multiplier = 1 + cl.array.zeros(queue,
-                    self.degree**self.dim, np.float64)
+            filter_multiplier = 1 + cl.array.zeros(
+                queue, self.degree**self.dim, np.float64)
         elif isinstance(filtering, cl.array.Array):
             assert filtering.shape == (self.degree**self.dim,)
             filter_multiplier = filtering
         else:
-            raise RuntimeError("Invalid filtering argument: %s"
-                    % str(filtering))
+            raise RuntimeError(f"Invalid filtering argument: {str(filtering)}")
 
         knl = self.get_cached_optimized_kernel()
 
@@ -527,6 +526,18 @@ class DiscreteLegendreTransform(BoxSpecificMap):
         return res["result"]
 
 # }}} End discrete Legendre transform
+
+# {{{ inverse discrete Legendre transform
+
+
+class InverseDiscreteLegendreTransform(BoxSpecificMap):
+    """
+    Box-specific transform that maps box-local modal coefficients
+    to nodal values. Inverse of :class:`DiscreteLegendreTransform`.
+    """
+    pass
+
+# }}} End inverse discrete Legendre transform
 
 # }}} End box-specific maps
 
