@@ -26,7 +26,9 @@ dependencies:
   - libgfortran>=3.0.1
   - clangdev
   - openmp
+  # for pypvfmm
   - openmpi-mpicxx
+  - fftw
 
   - pip
   - pip:
