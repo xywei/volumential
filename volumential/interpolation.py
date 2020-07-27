@@ -25,10 +25,8 @@ THE SOFTWARE.
 import numpy as np
 import pyopencl as cl
 import loopy as lp
-from pyopencl.algorithm import KeyValueSorter
 from pytools import memoize_method, ProcessLogger
 from pytools.obj_array import make_obj_array
-from boxtree.area_query import AreaQueryBuilder, LeavesToBallsLookupBuilder
 from boxtree.tools import DeviceDataRecord
 from meshmode.array_context import PyOpenCLArrayContext
 from meshmode.dof_array import unflatten, flatten, thaw
@@ -166,7 +164,10 @@ class ElementsToSourcesLookupBuilder:
         self.tree = tree
         self.discr = discr
 
+        from pyopencl.algorithm import KeyValueSorter
         self.key_value_sorter = KeyValueSorter(context)
+
+        from boxtree.area_query import AreaQueryBuilder
         self.area_query_builder = AreaQueryBuilder(self.context)
 
     # {{{ kernel generation
@@ -352,6 +353,7 @@ class LeavesToNodesLookupBuilder:
         self.trav = trav
         self.discr = discr
 
+        from boxtree.area_query import LeavesToBallsLookupBuilder
         self.leaves_to_balls_lookup_builder = \
             LeavesToBallsLookupBuilder(self.context)
 
@@ -366,7 +368,7 @@ class LeavesToNodesLookupBuilder:
         radii = cl.array.zeros_like(nodes[0]) + tol
 
         lbl_lookup, evt = self.leaves_to_balls_lookup_builder(
-            queue, self.trav.tree, nodes, radii)
+            queue, self.trav.tree, nodes, radii, wait_for=wait_for)
 
         return LeavesToNodesLookup(
             trav=self.trav, discr=self.discr,
@@ -600,6 +602,7 @@ def interpolate_to_meshmode(queue, potential, leaves_to_nodes_lookup,
 
     # infer q_order from tree
     pts_per_box = tree.ntargets // traversal.ntarget_boxes
+    print(pts_per_box, traversal.ntarget_boxes, tree.ntargets)
     assert pts_per_box * traversal.ntarget_boxes == tree.ntargets
 
     # allow for +/- 0.25 floating point error

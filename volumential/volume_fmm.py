@@ -69,7 +69,7 @@ def drive_volume_fmm(traversal, expansion_wrangler, src_weights, src_func,
     :arg reorder_sources: Whether sources are in user order (if True, sources
         are reordered into tree order before conducting FMM).
     :arg reorder_potentials: Whether potentials should be in user order (if True,
-        potentials are reordered in to user order for the output).
+        potentials are reordered into user order before return).
 
     Returns the potentials computed by *expansion_wrangler*.
     """
@@ -412,6 +412,7 @@ def interpolate_volume_potential(target_points, traversal, wrangler, potential,
         traversal = traversal.to_device(queue)
 
     assert dim == len(target_points)
+    evt = None
 
     if ("balls_near_box_starts" in kwargs) and ("balls_near_box_lists" in kwargs):
         balls_near_box_starts = kwargs["balls_near_box_starts"]
@@ -437,7 +438,9 @@ def interpolate_volume_potential(target_points, traversal, wrangler, potential,
 
     pout = cl.array.zeros(queue, n_points, dtype=dtype)
     multiplicity = cl.array.zeros(queue, n_points, dtype=dtype)
-    pout.add_event(evt)
+
+    if evt is not None:
+        pout.add_event(evt)
 
     # map all boxes to a template [0,1]^2 so that the interpolation
     # weights and modes can be precomputed
