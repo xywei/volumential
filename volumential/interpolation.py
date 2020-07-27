@@ -32,6 +32,7 @@ from boxtree.area_query import AreaQueryBuilder
 from boxtree.tools import DeviceDataRecord
 from meshmode.array_context import PyOpenCLArrayContext
 from meshmode.dof_array import unflatten
+from volumential.volume_fmm import interpolate_volume_potential
 
 import logging
 logger = logging.getLogger(__name__)
@@ -104,9 +105,11 @@ class ElementsToSourcesLookup(DeviceDataRecord):
 
 class LeavesToNodesLookup(DeviceDataRecord):
     """
-    .. attribute:: tree
+    .. attribute:: trav
 
-        The :class:`boxtree.Tree` instance representing the box mesh.
+        The :class:`boxtree.FMMTraversalInfo` instance representing the
+        box mesh with metadata needed for interpolation. It contains a
+        reference to the underlying tree as `trav.tree`.
 
     .. attribute:: discr
 
@@ -127,9 +130,13 @@ class LeavesToNodesLookup(DeviceDataRecord):
         .. note:: Only leaf boxes have non-empty entries in this table.
             Nonetheless, this list is indexed by the global box index.
 
-    .. attribute:: box_nodes_in_element_lists
+    .. attribute:: nodes_in_leaf_lists
 
-        Indices into :attr:`tree.sources`.
+        Indices into :attr:`discr.nodes()`.
+
+        .. note:: Unlike :class:`ElementsToSourcesLookup`, lists are not disjoint
+            in the leaves-to-nodes lookup. :mod:`volumential` automatically computes
+            the average contribution from overlapping boxes.
 
     .. automethod:: get
     """
@@ -323,6 +330,11 @@ class ElementsToSourcesLookupBuilder:
 # }}} End elements-to-sources lookup builder
 
 
+# {{{ leaves-to-nodes lookup builder
+
+# }}} End leaves-to-nodes lookup builder
+
+
 # {{{ transform helper
 
 def compute_affine_transform(source_simplex, target_simplex):
@@ -378,11 +390,14 @@ def invert_affine_transform(mat_a, disp_b):
 
 # {{{ from meshmode interpolation
 
-def interpolate_from_meshmode(queue, dof_vec, elements_to_sources_lookup):
-    """
+def interpolate_from_meshmode(queue, dof_vec, elements_to_sources_lookup,
+                              order="tree"):
+    """Interpolate a DoF vector from :mod:`meshmode`.
+
     :arg dof_vec: a DoF vector representing a field in :mod:`meshmode`
         of shape ``(..., nnodes)``.
-    :arg elements_to_sources_lookup: a :class:`ElementsToSourcesLookup`
+    :arg elements_to_sources_lookup: a :class:`ElementsToSourcesLookup`.
+    :arg order: order of the output potential, either "tree" or "user".
 
     .. note:: This function currently supports meshes with just one element
         group. Also, the element group must be simplex-based.
@@ -501,6 +516,48 @@ def interpolate_from_meshmode(queue, dof_vec, elements_to_sources_lookup):
 
     source_vec = cl.array.to_device(queue, source_vec)
 
+    if order == "tree":
+        pass  # no need to do anything
+    elif order == "user":
+        source_vec = source_vec[tree.sorted_target_ids]  # into user order
+    else:
+        raise ValueError(f"order must be 'tree' or 'user' (got {order}).")
+
     return source_vec
 
 # }}} End from meshmode interpolation
+
+
+# {{{ to meshmode interpolation
+
+def interpolate_to_meshmode(queue, potential, leaves_to_nodes_lookup,
+                            order="tree"):
+    """
+    :arg potential: a DoF vector representing a field in :mod:`volumential`,
+        in tree order.
+    :arg leaves_to_nodes_lookup: a :class:`LeavesToNodesLookup`.
+    :arg order: order of the input potential, either "tree" or "user".
+    """
+
+    if order == "tree":
+        potential_in_tree_order = True
+    elif order == "user":
+        potential_in_tree_order = False
+    else:
+        raise ValueError(f"order must be 'tree' or 'user' (got {order}).")
+
+    target_points = None  # FIXME
+    q_order = None  # FIXME
+    traversal = leaves_to_nodes_lookup.trav
+    tree = leaves_to_nodes_lookup.trav.tree
+
+    return interpolate_volume_potential(
+            target_points=target_points, traversal=traversal,
+            wrangler=None, potential=potential,
+            potential_in_tree_order=potential_in_tree_order,
+            dim=tree.dimensions, tree=tree, queue=queue, q_order=q_order,
+            dtype=potential.dtype, lbl_lookup=None,
+            balls_near_box_starts=leaves_to_nodes_lookup.nodes_in_leaf_starts,
+            balls_near_box_lists=leaves_to_nodes_lookup.nodes_in_leaf_lists)
+
+# }}} End to meshmode interpolation

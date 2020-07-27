@@ -27,28 +27,24 @@ __doc__ = """
 .. autofunction:: interpolate_volume_potential
 """
 
-import logging
-
-logger = logging.getLogger(__name__)
-
+import numpy as np
 import pyopencl as cl
 from boxtree.fmm import TimingRecorder
 from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
 from volumential.expansion_wrangler_fpnd import (
         FPNDSumpyExpansionWrangler, FPNDFMMLibExpansionWrangler)
 
-import numpy as np
+
+import logging
+logger = logging.getLogger(__name__)
 
 
-def drive_volume_fmm(
-    traversal,
-    expansion_wrangler,
-    src_weights,
-    src_func,
-    direct_evaluation=False,
-    timing_data=None,
-    **kwargs
-):
+# {{{ volume FMM driver
+
+def drive_volume_fmm(traversal, expansion_wrangler, src_weights, src_func,
+                     direct_evaluation=False, timing_data=None,
+                     reorder_sources=True, reorder_potentials=True,
+                     **kwargs):
     """
     Top-level driver routine for volume potential calculation
     via fast multiple method.
@@ -70,6 +66,10 @@ def drive_volume_fmm(
         Passed unmodified to *expansion_wrangler*.
     :arg src_func: Source 'density/weights/charges' function.
         Passed unmodified to *expansion_wrangler*.
+    :arg reorder_sources: Whether sources are in user order (if True, sources
+        are reordered into tree order before conducting FMM).
+    :arg reorder_potentials: Whether potentials should be in user order (if True,
+        potentials are reordered in to user order for the output).
 
     Returns the potentials computed by *expansion_wrangler*.
     """
@@ -92,10 +92,10 @@ def drive_volume_fmm(
         if isinstance(src_func, cl.array.Array):
             src_func = src_func.get(wrangler.queue)
 
-    logger.debug("reorder source weights")
-
-    src_weights = wrangler.reorder_sources(src_weights)
-    src_func = wrangler.reorder_targets(src_func)
+    if reorder_sources:
+        logger.debug("reorder source weights")
+        src_weights = wrangler.reorder_sources(src_weights)
+        src_func = wrangler.reorder_targets(src_func)
 
     # {{{ Construct local multipoles
 
@@ -142,8 +142,9 @@ def drive_volume_fmm(
     # 'list1_only' takes precedence over 'exclude_list1'
     if 'list1_only' in kwargs and kwargs['list1_only']:
 
-        logger.debug("reorder potentials")
-        result = wrangler.reorder_potentials(potentials)
+        if reorder_potentials:
+            logger.debug("reorder potentials")
+            result = wrangler.reorder_potentials(potentials)
 
         logger.debug("finalize potentials")
         result = wrangler.finalize_potentials(result)
@@ -214,8 +215,9 @@ def drive_volume_fmm(
         # list 4
         assert traversal.from_sep_close_bigger_starts is None
 
-        logger.debug("reorder potentials")
-        result = wrangler.reorder_potentials(potentials)
+        if reorder_potentials:
+            logger.debug("reorder potentials")
+            result = wrangler.reorder_potentials(potentials)
 
         logger.debug("finalize potentials")
         result = wrangler.finalize_potentials(result)
@@ -334,8 +336,9 @@ def drive_volume_fmm(
     # }}}
 
     # {{{ Reorder potentials
-    logger.debug("reorder potentials")
-    result = wrangler.reorder_potentials(potentials)
+    if reorder_potentials:
+        logger.debug("reorder potentials")
+        result = wrangler.reorder_potentials(potentials)
 
     logger.debug("finalize potentials")
     result = wrangler.finalize_potentials(result)
@@ -348,6 +351,10 @@ def drive_volume_fmm(
 
     return result
 
+# }}} End volume FMM driver
+
+
+# {{{ free form interpolation of potentials
 
 def compute_barycentric_lagrange_params(q_order):
 
@@ -366,22 +373,36 @@ def compute_barycentric_lagrange_params(q_order):
     return (interp_points, interp_weights)
 
 
-def interpolate_volume_potential(
-    target_points, traversal, wrangler, potential, target_radii=None, lbl_lookup=None
-):
+def interpolate_volume_potential(target_points, traversal, wrangler, potential,
+                                 potential_in_tree_order=False,
+                                 target_radii=None, lbl_lookup=None, **kwargs):
     """
     Interpolate the volume potential, only works for tensor-product quadrature formulae.
     target_points and potential should be an cl array.
 
-    wrangler is used only for general info (nothing sumpy kernel specific)
+    :arg wrangler: Used only for general info (nothing sumpy kernel specific). May also
+        be None if the needed information is passed by kwargs.
+    :arg potential_in_tree_order: Whether the potential is in tree order (as opposed to
+        in user order).
+    :lbl_lookup: a :class:`boxtree.LeavesToBallsLookup` that has the lookup information
+        for target points. Can be None if the lookup lists are provided separately in
+        kwargs. If it is None and no other information is provided, the lookup will be
+        built from scratch.
     """
+    if wrangler is not None:
+        dim = next(iter(wrangler.near_field_table.values()))[0].dim
+        tree = wrangler.tree
+        queue = wrangler.queue
+        q_order = wrangler.quad_order
+        dtype = wrangler.dtype
+    else:
+        dim = kwargs['dim']
+        tree = kwargs['tree']
+        queue = kwargs['queue']
+        q_order = kwargs['q_order']
+        dtype = kwargs['dtype']
 
-    dim = next(iter(wrangler.near_field_table.values()))[0].dim
-    tree = wrangler.tree
-    queue = wrangler.queue
-    q_order = wrangler.quad_order
     ctx = queue.context
-    dtype = wrangler.dtype
     coord_dtype = tree.coord_dtype
     n_points = len(target_points[0])
 
@@ -392,22 +413,27 @@ def interpolate_volume_potential(
 
     assert dim == len(target_points)
 
-    # Building the lookup takes O(n*log(n))
-    if lbl_lookup is None:
-        from boxtree.area_query import LeavesToBallsLookupBuilder
+    if ("balls_near_box_starts" in kwargs) and ("balls_near_box_lists" in kwargs):
+        balls_near_box_starts = kwargs["balls_near_box_starts"]
+        balls_near_box_lists = kwargs["balls_near_box_lists"]
 
-        lookup_builder = LeavesToBallsLookupBuilder(ctx)
+    else:
+        # Building the lookup takes O(n*log(n))
+        if lbl_lookup is None:
+            from boxtree.area_query import LeavesToBallsLookupBuilder
+            lookup_builder = LeavesToBallsLookupBuilder(ctx)
 
-        if target_radii is None:
-            import pyopencl as cl
+            if target_radii is None:
+                # Set this number small enough so that all points found
+                # are inside the box
+                target_radii = cl.array.to_device(
+                    queue, np.ones(n_points, dtype=coord_dtype) * 1e-12)
 
-            # Set this number small enough so that all points found
-            # are inside the box
-            target_radii = cl.array.to_device(
-                queue, np.ones(n_points, dtype=coord_dtype) * 1e-12
-            )
+            lbl_lookup, evt = lookup_builder(
+                queue, tree, target_points, target_radii)
 
-        lbl_lookup, evt = lookup_builder(queue, tree, target_points, target_radii)
+        balls_near_box_starts = lbl_lookup.balls_near_box_starts
+        balls_near_box_lists = lbl_lookup.balls_near_box_lists
 
     pout = cl.array.zeros(queue, n_points, dtype=dtype)
     multiplicity = cl.array.zeros(queue, n_points, dtype=dtype)
@@ -588,6 +614,13 @@ def interpolate_volume_potential(
     else:
         raise NotImplementedError
 
+    if potential_in_tree_order:
+        user_mode_ids = cl.array.arange(
+            queue, len(tree.user_source_ids), dtype=tree.user_source_ids.dtype)
+    else:
+        # fetching from user_source_ids converts potential to tree order
+        user_mode_ids = tree.user_source_ids
+
     lpknl = loopy.set_options(lpknl, return_dict=True)
     lpknl = loopy.fix_parameters(lpknl, dim=int(dim), q_order=int(q_order))
     lpknl = loopy.split_iname(lpknl, "tbox", 128, outer_tag="g.0", inner_tag="l.0")
@@ -597,14 +630,14 @@ def interpolate_volume_potential(
         multiplicity=multiplicity,
         box_centers=tree.box_centers,
         box_levels=tree.box_levels,
-        balls_near_box_starts=lbl_lookup.balls_near_box_starts,
-        balls_near_box_lists=lbl_lookup.balls_near_box_lists,
+        balls_near_box_starts=balls_near_box_starts,
+        balls_near_box_lists=balls_near_box_lists,
         barycentric_lagrange_weights=blweights,
         barycentric_lagrange_points=blpoints,
         box_target_starts=tree.box_target_starts,
         box_target_counts_cumul=tree.box_target_counts_cumul,
         potential=potential,
-        user_mode_ids=tree.user_source_ids,
+        user_mode_ids=user_mode_ids,
         target_boxes=traversal.target_boxes,
         root_extent=tree.root_extent,
         n_tgt_boxes=len(traversal.target_boxes),
@@ -617,5 +650,6 @@ def interpolate_volume_potential(
 
     return pout / multiplicity
 
+# }}} End free form interpolation of potentials
 
 # vim: filetype=pyopencl:fdm=marker
