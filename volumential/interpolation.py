@@ -28,10 +28,10 @@ import loopy as lp
 from pyopencl.algorithm import KeyValueSorter
 from pytools import memoize_method, ProcessLogger
 from pytools.obj_array import make_obj_array
-from boxtree.area_query import AreaQueryBuilder
+from boxtree.area_query import AreaQueryBuilder, LeavesToBallsLookupBuilder
 from boxtree.tools import DeviceDataRecord
 from meshmode.array_context import PyOpenCLArrayContext
-from meshmode.dof_array import unflatten
+from meshmode.dof_array import unflatten, flatten, thaw
 from volumential.volume_fmm import interpolate_volume_potential
 
 import logging
@@ -332,6 +332,47 @@ class ElementsToSourcesLookupBuilder:
 
 # {{{ leaves-to-nodes lookup builder
 
+class LeavesToNodesLookupBuilder:
+    """Given a :mod:`meshmod` mesh and a :mod:`boxtree.Tree`, both discretizing
+    the same bounding box, this class helps to build a look-up table from
+    leaf boxes to mesh nodes that are positioned inside the box.
+    """
+
+    def __init__(self, context, trav, discr):
+        """
+        :arg trav: a :class:`boxtree.FMMTraversalInfo`
+        :arg discr: a :class: `meshmode.discretization.Discretization`
+
+        Boxes and elements can be non-aligned as long as the domains
+        (bounding boxes) are the same.
+        """
+        assert trav.tree.dimensions == discr.dim
+        self.dim = discr.dim
+        self.context = context
+        self.trav = trav
+        self.discr = discr
+
+        self.leaves_to_balls_lookup_builder = \
+            LeavesToBallsLookupBuilder(self.context)
+
+    def __call__(self, queue, tol=1e-12, wait_for=None):
+        """
+        :arg queue: a :class:`pyopencl.CommandQueue`
+        :tol: nodes close enough to the boundary will be treated as
+            lying on the boundary, whose interpolated values are averaged.
+        """
+        arr_ctx = PyOpenCLArrayContext(queue)
+        nodes = flatten(thaw(arr_ctx, self.discr.nodes()))
+        radii = cl.array.zeros_like(nodes[0]) + tol
+
+        lbl_lookup, evt = self.leaves_to_balls_lookup_builder(
+            queue, self.trav.tree, nodes, radii)
+
+        return LeavesToNodesLookup(
+            trav=self.trav, discr=self.discr,
+            nodes_in_leaf_starts=lbl_lookup.balls_near_box_starts,
+            nodes_in_leaf_lists=lbl_lookup.balls_near_box_lists), evt
+
 # }}} End leaves-to-nodes lookup builder
 
 
@@ -537,8 +578,10 @@ def interpolate_to_meshmode(queue, potential, leaves_to_nodes_lookup,
         in tree order.
     :arg leaves_to_nodes_lookup: a :class:`LeavesToNodesLookup`.
     :arg order: order of the input potential, either "tree" or "user".
-    """
 
+    :returns: a :class:`pyopencl.Array` of shape (nnodes, 1) containing the
+        interpolated data.
+    """
     if order == "tree":
         potential_in_tree_order = True
     elif order == "user":
@@ -546,18 +589,32 @@ def interpolate_to_meshmode(queue, potential, leaves_to_nodes_lookup,
     else:
         raise ValueError(f"order must be 'tree' or 'user' (got {order}).")
 
-    target_points = None  # FIXME
-    q_order = None  # FIXME
+    arr_ctx = PyOpenCLArrayContext(queue)
+    target_points = flatten(thaw(
+        arr_ctx, leaves_to_nodes_lookup.discr.nodes()))
+
     traversal = leaves_to_nodes_lookup.trav
     tree = leaves_to_nodes_lookup.trav.tree
 
-    return interpolate_volume_potential(
+    dim = tree.dimensions
+
+    # infer q_order from tree
+    pts_per_box = tree.ntargets // traversal.ntarget_boxes
+    assert pts_per_box * traversal.ntarget_boxes == tree.ntargets
+
+    # allow for +/- 0.25 floating point error
+    q_order = int(pts_per_box**(1 / dim) + 0.25)
+    assert q_order**dim == pts_per_box
+
+    interp_p = interpolate_volume_potential(
             target_points=target_points, traversal=traversal,
             wrangler=None, potential=potential,
             potential_in_tree_order=potential_in_tree_order,
-            dim=tree.dimensions, tree=tree, queue=queue, q_order=q_order,
+            dim=dim, tree=tree, queue=queue, q_order=q_order,
             dtype=potential.dtype, lbl_lookup=None,
             balls_near_box_starts=leaves_to_nodes_lookup.nodes_in_leaf_starts,
             balls_near_box_lists=leaves_to_nodes_lookup.nodes_in_leaf_lists)
+
+    return interp_p
 
 # }}} End to meshmode interpolation
