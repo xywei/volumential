@@ -25,13 +25,12 @@ THE SOFTWARE.
 import numpy as np
 import pyopencl as cl
 import loopy as lp
-from pyopencl.algorithm import KeyValueSorter
 from pytools import memoize_method, ProcessLogger
 from pytools.obj_array import make_obj_array
-from boxtree.area_query import AreaQueryBuilder
 from boxtree.tools import DeviceDataRecord
 from meshmode.array_context import PyOpenCLArrayContext
-from meshmode.dof_array import unflatten
+from meshmode.dof_array import unflatten, flatten, thaw
+from volumential.volume_fmm import interpolate_volume_potential
 
 import logging
 logger = logging.getLogger(__name__)
@@ -104,9 +103,11 @@ class ElementsToSourcesLookup(DeviceDataRecord):
 
 class LeavesToNodesLookup(DeviceDataRecord):
     """
-    .. attribute:: tree
+    .. attribute:: trav
 
-        The :class:`boxtree.Tree` instance representing the box mesh.
+        The :class:`boxtree.FMMTraversalInfo` instance representing the
+        box mesh with metadata needed for interpolation. It contains a
+        reference to the underlying tree as `trav.tree`.
 
     .. attribute:: discr
 
@@ -127,9 +128,13 @@ class LeavesToNodesLookup(DeviceDataRecord):
         .. note:: Only leaf boxes have non-empty entries in this table.
             Nonetheless, this list is indexed by the global box index.
 
-    .. attribute:: box_nodes_in_element_lists
+    .. attribute:: nodes_in_leaf_lists
 
-        Indices into :attr:`tree.sources`.
+        Indices into :attr:`discr.nodes()`.
+
+        .. note:: Unlike :class:`ElementsToSourcesLookup`, lists are not disjoint
+            in the leaves-to-nodes lookup. :mod:`volumential` automatically computes
+            the average contribution from overlapping boxes.
 
     .. automethod:: get
     """
@@ -159,7 +164,10 @@ class ElementsToSourcesLookupBuilder:
         self.tree = tree
         self.discr = discr
 
+        from pyopencl.algorithm import KeyValueSorter
         self.key_value_sorter = KeyValueSorter(context)
+
+        from boxtree.area_query import AreaQueryBuilder
         self.area_query_builder = AreaQueryBuilder(self.context)
 
     # {{{ kernel generation
@@ -323,6 +331,53 @@ class ElementsToSourcesLookupBuilder:
 # }}} End elements-to-sources lookup builder
 
 
+# {{{ leaves-to-nodes lookup builder
+
+class LeavesToNodesLookupBuilder:
+    """Given a :mod:`meshmod` mesh and a :mod:`boxtree.Tree`, both discretizing
+    the same bounding box, this class helps to build a look-up table from
+    leaf boxes to mesh nodes that are positioned inside the box.
+    """
+
+    def __init__(self, context, trav, discr):
+        """
+        :arg trav: a :class:`boxtree.FMMTraversalInfo`
+        :arg discr: a :class: `meshmode.discretization.Discretization`
+
+        Boxes and elements can be non-aligned as long as the domains
+        (bounding boxes) are the same.
+        """
+        assert trav.tree.dimensions == discr.dim
+        self.dim = discr.dim
+        self.context = context
+        self.trav = trav
+        self.discr = discr
+
+        from boxtree.area_query import LeavesToBallsLookupBuilder
+        self.leaves_to_balls_lookup_builder = \
+            LeavesToBallsLookupBuilder(self.context)
+
+    def __call__(self, queue, tol=1e-12, wait_for=None):
+        """
+        :arg queue: a :class:`pyopencl.CommandQueue`
+        :tol: nodes close enough to the boundary will be treated as
+            lying on the boundary, whose interpolated values are averaged.
+        """
+        arr_ctx = PyOpenCLArrayContext(queue)
+        nodes = flatten(thaw(arr_ctx, self.discr.nodes()))
+        radii = cl.array.zeros_like(nodes[0]) + tol
+
+        lbl_lookup, evt = self.leaves_to_balls_lookup_builder(
+            queue, self.trav.tree, nodes, radii, wait_for=wait_for)
+
+        return LeavesToNodesLookup(
+            trav=self.trav, discr=self.discr,
+            nodes_in_leaf_starts=lbl_lookup.balls_near_box_starts,
+            nodes_in_leaf_lists=lbl_lookup.balls_near_box_lists), evt
+
+# }}} End leaves-to-nodes lookup builder
+
+
 # {{{ transform helper
 
 def compute_affine_transform(source_simplex, target_simplex):
@@ -378,11 +433,14 @@ def invert_affine_transform(mat_a, disp_b):
 
 # {{{ from meshmode interpolation
 
-def interpolate_from_meshmode(queue, dof_vec, elements_to_sources_lookup):
-    """
+def interpolate_from_meshmode(queue, dof_vec, elements_to_sources_lookup,
+                              order="tree"):
+    """Interpolate a DoF vector from :mod:`meshmode`.
+
     :arg dof_vec: a DoF vector representing a field in :mod:`meshmode`
         of shape ``(..., nnodes)``.
-    :arg elements_to_sources_lookup: a :class:`ElementsToSourcesLookup`
+    :arg elements_to_sources_lookup: a :class:`ElementsToSourcesLookup`.
+    :arg order: order of the output potential, either "tree" or "user".
 
     .. note:: This function currently supports meshes with just one element
         group. Also, the element group must be simplex-based.
@@ -501,6 +559,65 @@ def interpolate_from_meshmode(queue, dof_vec, elements_to_sources_lookup):
 
     source_vec = cl.array.to_device(queue, source_vec)
 
+    if order == "tree":
+        pass  # no need to do anything
+    elif order == "user":
+        source_vec = source_vec[tree.sorted_target_ids]  # into user order
+    else:
+        raise ValueError(f"order must be 'tree' or 'user' (got {order}).")
+
     return source_vec
 
 # }}} End from meshmode interpolation
+
+
+# {{{ to meshmode interpolation
+
+def interpolate_to_meshmode(queue, potential, leaves_to_nodes_lookup,
+                            order="tree"):
+    """
+    :arg potential: a DoF vector representing a field in :mod:`volumential`,
+        in tree order.
+    :arg leaves_to_nodes_lookup: a :class:`LeavesToNodesLookup`.
+    :arg order: order of the input potential, either "tree" or "user".
+
+    :returns: a :class:`pyopencl.Array` of shape (nnodes, 1) containing the
+        interpolated data.
+    """
+    if order == "tree":
+        potential_in_tree_order = True
+    elif order == "user":
+        potential_in_tree_order = False
+    else:
+        raise ValueError(f"order must be 'tree' or 'user' (got {order}).")
+
+    arr_ctx = PyOpenCLArrayContext(queue)
+    target_points = flatten(thaw(
+        arr_ctx, leaves_to_nodes_lookup.discr.nodes()))
+
+    traversal = leaves_to_nodes_lookup.trav
+    tree = leaves_to_nodes_lookup.trav.tree
+
+    dim = tree.dimensions
+
+    # infer q_order from tree
+    pts_per_box = tree.ntargets // traversal.ntarget_boxes
+    print(pts_per_box, traversal.ntarget_boxes, tree.ntargets)
+    assert pts_per_box * traversal.ntarget_boxes == tree.ntargets
+
+    # allow for +/- 0.25 floating point error
+    q_order = int(pts_per_box**(1 / dim) + 0.25)
+    assert q_order**dim == pts_per_box
+
+    interp_p = interpolate_volume_potential(
+            target_points=target_points, traversal=traversal,
+            wrangler=None, potential=potential,
+            potential_in_tree_order=potential_in_tree_order,
+            dim=dim, tree=tree, queue=queue, q_order=q_order,
+            dtype=potential.dtype, lbl_lookup=None,
+            balls_near_box_starts=leaves_to_nodes_lookup.nodes_in_leaf_starts,
+            balls_near_box_lists=leaves_to_nodes_lookup.nodes_in_leaf_lists)
+
+    return interp_p
+
+# }}} End to meshmode interpolation

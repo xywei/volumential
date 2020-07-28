@@ -273,11 +273,11 @@ class BoxFMMGeometryFactory():
 
         q_points = self._get_q_points(queue)
 
-        tree, _ = tb(queue,
-                particles=q_points, targets=q_points, bbox=self._bbox,
-                max_particles_in_box=(
-                    self.n_q_points_per_cell * (2**self.dim) - 1),
-                kind="adaptive-level-restricted")
+        tree, _ = tb(queue, particles=q_points, targets=q_points,
+                     bbox=self._bbox, max_particles_in_box=(
+                         self.n_q_points_per_cell * (2**self.dim) * (2**self.dim)
+                         - 1),
+                     kind="adaptive-level-restricted")
 
         from boxtree.traversal import FMMTraversalBuilder
         tg = FMMTraversalBuilder(self.cl_context)
