@@ -26,7 +26,7 @@ Pylint:
 Python 3 POCL:
   script:
   - export PY_EXE=python3
-  - export PYOPENCL_TEST=portable
+  - export PYOPENCL_TEST=portable:pthread
   - export HDF5_USE_FILE_LOCKING=FALSE
   - export EXTRA_INSTALL="pybind11 cython numpy pytest pytest-cov scipy mako wheel"
   - export PYTEST_FLAGS="--cov=volumential"
@@ -135,7 +135,7 @@ Python 3 POCL Examples:
 Documentation Sphinx:
   script:
   - export PY_EXE=python3
-  - export PYOPENCL_TEST=portable
+  - export PYOPENCL_TEST=portable:pthread
   - export EXTRA_INSTALL="pybind11 cython numpy pytest scipy mako wheel"
   - git submodule sync && git submodule update --init --recursive --remote
   - ((cd contrib/meshgen11_dealii/; ./build.sh) && echo "Using meshgen11_dealii.") || (echo "Using boxtree for meshgen.")
