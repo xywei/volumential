@@ -237,13 +237,13 @@ class ElementsToSourcesLookupBuilder:
                 """
                 <> Ax = mesh_vertices_0[mesh_vertex_indices[iel, 0]]
                 <> Ay = mesh_vertices_1[mesh_vertex_indices[iel, 0]]
-                <> Ay = mesh_vertices_2[mesh_vertex_indices[iel, 0]]
+                <> Az = mesh_vertices_2[mesh_vertex_indices[iel, 0]]
                 <> Bx = mesh_vertices_0[mesh_vertex_indices[iel, 1]]
                 <> By = mesh_vertices_1[mesh_vertex_indices[iel, 1]]
-                <> By = mesh_vertices_2[mesh_vertex_indices[iel, 1]]
+                <> Bz = mesh_vertices_2[mesh_vertex_indices[iel, 1]]
                 <> Cx = mesh_vertices_0[mesh_vertex_indices[iel, 2]]
                 <> Cy = mesh_vertices_1[mesh_vertex_indices[iel, 2]]
-                <> Cy = mesh_vertices_2[mesh_vertex_indices[iel, 2]]
+                <> Cz = mesh_vertices_2[mesh_vertex_indices[iel, 2]]
                 <> Dx = mesh_vertices_0[mesh_vertex_indices[iel, 3]]
                 <> Dy = mesh_vertices_1[mesh_vertex_indices[iel, 3]]
                 <> Dz = mesh_vertices_2[mesh_vertex_indices[iel, 3]]
@@ -704,7 +704,6 @@ def interpolate_to_meshmode(queue, potential, leaves_to_nodes_lookup,
 
     # infer q_order from tree
     pts_per_box = tree.ntargets // traversal.ntarget_boxes
-    print(pts_per_box, traversal.ntarget_boxes, tree.ntargets)
     assert pts_per_box * traversal.ntarget_boxes == tree.ntargets
 
     # allow for +/- 0.25 floating point error

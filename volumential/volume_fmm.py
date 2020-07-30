@@ -518,7 +518,7 @@ def interpolate_volume_potential(target_points, traversal, wrangler, potential,
                     end
 
                     # Count how many times the potential is computed
-                    multiplicity[target_point_id] = multiplicity[target_point_id] + 1
+                    multiplicity[target_point_id] = multiplicity[target_point_id] + 1  {atomic}
 
                     # Map target point to template box
                     for iaxis
@@ -592,11 +592,13 @@ def interpolate_volume_potential(target_points, traversal, wrangler, potential,
             # loopy.TemporaryVariable("diff", dtype, "dim, q_order"),
             loopy.GlobalArg("box_centers", None, "dim, aligned_nboxes"),
             loopy.GlobalArg("balls_near_box_lists", None, None),
+            loopy.GlobalArg("multiplicity", None, None, for_atomic=True),
             loopy.ValueArg("aligned_nboxes", np.int32),
             loopy.ValueArg("dim", np.int32),
             loopy.ValueArg("q_order", np.int32),
             "...",
         ],
+        lang_version=(2018, 2),
     )
     # }}} End loopy kernel for interpolation
 

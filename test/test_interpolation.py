@@ -183,6 +183,8 @@ def drive_test_to_meshmode_interpolation(
     return resid
 
 
+# {{{ 2d tests
+
 @pytest.mark.parametrize("params", [
     [1, 8, 3, 1], [1, 8, 5, 2], [1, 8, 7, 3],
     [2, 16, 3, 1], [2, 32, 5, 2], [2, 64, 7, 3],
@@ -224,8 +226,41 @@ def test_to_meshmode_interpolation_2d_nonexact(ctx_factory, params):
     assert drive_test_to_meshmode_interpolation(
             cl_ctx, queue, 2, *params, test_case='non-exact') < 1e-3
 
+# }}} End 2d tests
+
+
+# {{{ 3d tests
+
+@pytest.mark.parametrize("params", [
+    [1, 5, 3, 2], [2, 7, 3, 3], [3, 7, 3, 4],
+    ])
+def test_to_meshmode_interpolation_3d_exact(ctx_factory, params):
+    cl_ctx = ctx_factory()
+    queue = cl.CommandQueue(cl_ctx)
+    assert drive_test_to_meshmode_interpolation(
+            cl_ctx, queue, 3, *params, test_case='exact')
+
+
+@pytest.mark.parametrize("params", [
+    [2, 5, 4, 4], [3, 7, 5, 3], [4, 7, 3, 5],
+    ])
+def test_to_meshmode_interpolation_3d_nonexact(ctx_factory, params):
+    cl_ctx = ctx_factory()
+    queue = cl.CommandQueue(cl_ctx)
+    assert drive_test_to_meshmode_interpolation(
+            cl_ctx, queue, 3, *params, test_case='non-exact') < 1e-3
+
+# }}} End 3d tests
+
 
 if __name__ == '__main__':
     cl_ctx = cl.create_some_context()
     queue = cl.CommandQueue(cl_ctx)
-    drive_test_from_meshmode_interpolation_2d(cl_ctx, queue, 1, 8, 5, 3)
+
+    # FIXME: the following set of parameters produce random failures
+    for iter in range(10):
+        resid = drive_test_to_meshmode_interpolation(
+            cl_ctx, queue,
+            dim=3, degree=1, nel_1d=5, n_levels=4, q_order=2,
+            test_case="exact")
+        print(resid)
