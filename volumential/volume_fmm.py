@@ -575,7 +575,7 @@ def interpolate_volume_potential(target_points, traversal, wrangler, potential,
 
                     p_out[target_point_id] = p_out[target_point_id] + sum(mid,
                         mode_coeff * prod_mode_val
-                        ) {id=p_out,dep=pmod}
+                        ) {id=p_out,dep=pmod,atomic}
 
                 end
 
@@ -593,6 +593,7 @@ def interpolate_volume_potential(target_points, traversal, wrangler, potential,
             loopy.GlobalArg("box_centers", None, "dim, aligned_nboxes"),
             loopy.GlobalArg("balls_near_box_lists", None, None),
             loopy.GlobalArg("multiplicity", None, None, for_atomic=True),
+            loopy.GlobalArg("p_out", None, None, for_atomic=True),
             loopy.ValueArg("aligned_nboxes", np.int32),
             loopy.ValueArg("dim", np.int32),
             loopy.ValueArg("q_order", np.int32),
@@ -626,6 +627,12 @@ def interpolate_volume_potential(target_points, traversal, wrangler, potential,
         # fetching from user_source_ids converts potential to tree order
         user_mode_ids = tree.user_source_ids
 
+    if 0:
+        import sys
+        np.set_printoptions(threshold=sys.maxsize)
+        print(balls_near_box_lists.with_queue(queue).get(), '&')
+        print(balls_near_box_starts.with_queue(queue).get(), '&')
+
     lpknl = loopy.set_options(lpknl, return_dict=True)
     lpknl = loopy.fix_parameters(lpknl, dim=int(dim), q_order=int(q_order))
     lpknl = loopy.split_iname(lpknl, "tbox", 128, outer_tag="g.0", inner_tag="l.0")
@@ -652,6 +659,10 @@ def interpolate_volume_potential(target_points, traversal, wrangler, potential,
     assert multiplicity is res_dict["multiplicity"]
     pout.add_event(evt)
     multiplicity.add_event(evt)
+
+    if 0:
+      print(pout.get(), '&')
+      print(multiplicity.get(), '&')
 
     return pout / multiplicity
 
