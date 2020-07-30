@@ -177,10 +177,6 @@ def drive_test_to_meshmode_interpolation(
     ref = eval_func_on_discr_nodes(queue, discr, func).get(queue)
 
     if test_case == 'exact':
-        if 1:
-            print(np.linalg.norm(ref - res, ord=np.inf), '&')
-            print(np.where(np.abs(ref - res) > 1e-10), '&')
-
         return np.allclose(ref, res)
 
     resid = np.linalg.norm(ref - res, ord=np.inf)
@@ -260,12 +256,8 @@ def test_to_meshmode_interpolation_3d_nonexact(ctx_factory, params):
 if __name__ == '__main__':
     cl_ctx = cl.create_some_context()
     queue = cl.CommandQueue(cl_ctx)
-
-    # FIXME: the following set of parameters produce random failures
-    for iter in range(10):
-        print("-----")
-        resid = drive_test_to_meshmode_interpolation(
-            cl_ctx, queue,
-            dim=3, degree=1, nel_1d=5, n_levels=4, q_order=2,
-            test_case="exact")
-        print(resid, '&')
+    resid = drive_test_to_meshmode_interpolation(
+        cl_ctx, queue,
+        dim=3, degree=1, nel_1d=5, n_levels=4, q_order=2,
+        test_case="exact")
+    print(resid)

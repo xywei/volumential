@@ -627,12 +627,6 @@ def interpolate_volume_potential(target_points, traversal, wrangler, potential,
         # fetching from user_source_ids converts potential to tree order
         user_mode_ids = tree.user_source_ids
 
-    if 0:
-        import sys
-        np.set_printoptions(threshold=sys.maxsize)
-        print(balls_near_box_lists.with_queue(queue).get(), '&')
-        print(balls_near_box_starts.with_queue(queue).get(), '&')
-
     lpknl = loopy.set_options(lpknl, return_dict=True)
     lpknl = loopy.fix_parameters(lpknl, dim=int(dim), q_order=int(q_order))
     lpknl = loopy.split_iname(lpknl, "tbox", 128, outer_tag="g.0", inner_tag="l.0")
@@ -659,10 +653,6 @@ def interpolate_volume_potential(target_points, traversal, wrangler, potential,
     assert multiplicity is res_dict["multiplicity"]
     pout.add_event(evt)
     multiplicity.add_event(evt)
-
-    if 0:
-      print(pout.get(), '&')
-      print(multiplicity.get(), '&')
 
     return pout / multiplicity
 
