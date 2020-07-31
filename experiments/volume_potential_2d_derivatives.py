@@ -267,7 +267,7 @@ if use_multilevel_table:
             print("Getting table at level", l)
             tb, _ = tm.get_table(dim, "Laplace", q_order,
                 source_box_level=l, compute_method="DrosteSum",
-                queue=queue, n_brick_quad_poitns=100,
+                queue=queue, n_brick_quad_points=100,
                 adaptive_level=False, use_symmetry=True,
                 alpha=0.1, nlevels=n_brick_levels)
             nftable_list.append(tb)
@@ -276,7 +276,7 @@ if use_multilevel_table:
             print("Getting table Dx at level", l)
             tb, _ = tm.get_table(dim, "Laplace-Dx", q_order,
                 source_box_level=l, compute_method="DrosteSum",
-                queue=queue, n_brick_quad_poitns=100,
+                queue=queue, n_brick_quad_points=100,
                 adaptive_level=False, use_symmetry=False,
                 alpha=0.1, nlevels=n_brick_levels)
             nftable_dx_list.append(tb)
@@ -285,7 +285,7 @@ if use_multilevel_table:
             print("Getting table Dy at level", l)
             tb, _ = tm.get_table(dim, "Laplace-Dy", q_order,
                 source_box_level=l, compute_method="DrosteSum",
-                queue=queue, n_brick_quad_poitns=100,
+                queue=queue, n_brick_quad_points=100,
                 adaptive_level=False, use_symmetry=False,
                 alpha=0.1, nlevels=n_brick_levels)
             nftable_dy_list.append(tb)
@@ -302,7 +302,7 @@ else:
             print("Getting table")
             tb, _ = tm.get_table(dim, "Laplace", q_order,
                 compute_method="DrosteSum",
-                queue=queue, n_brick_quad_poitns=100,
+                queue=queue, n_brick_quad_points=100,
                 adaptive_level=False, use_symmetry=True,
                 alpha=0.1, nlevels=n_brick_levels)
 
@@ -310,7 +310,7 @@ else:
             print("Getting table Dx")
             tb_dx, _ = tm.get_table(dim, "Laplace-Dx", q_order,
                 compute_method="DrosteSum",
-                queue=queue, n_brick_quad_poitns=100,
+                queue=queue, n_brick_quad_points=100,
                 adaptive_level=False, use_symmetry=False,
                 alpha=0.1, nlevels=n_brick_levels)
 
@@ -318,7 +318,7 @@ else:
             print("Getting table Dy")
             tb_dy, _ = tm.get_table(dim, "Laplace-Dy", q_order,
                 compute_method="DrosteSum",
-                queue=queue, n_brick_quad_poitns=100,
+                queue=queue, n_brick_quad_points=100,
                 adaptive_level=False, use_symmetry=False,
                 alpha=0.1, nlevels=n_brick_levels)
 
