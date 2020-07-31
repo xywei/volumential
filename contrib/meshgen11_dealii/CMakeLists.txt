@@ -41,9 +41,8 @@ FIND_PACKAGE(deal.II REQUIRED
 
 DEAL_II_INITIALIZE_CACHED_VARIABLES()
 
-# Avoid using 3.7
-find_package( PythonInterp 3.6 EXACT )
-find_package( PythonLibs 3.6 EXACT )
+find_package( PythonInterp 3.8 EXACT )
+find_package( PythonLibs 3.8 EXACT )
 
 add_subdirectory(pybind11)
 pybind11_add_module(meshgen11 meshgen.cpp)

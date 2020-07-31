@@ -178,7 +178,7 @@ try:
 
 except ImportError as e:
     logger.debug(repr(e))
-    logger.warn("Meshgen via Deal.II is not present or unusable.")
+    logger.warning("Meshgen via Deal.II is not present or unusable.")
 
     try:
         logger.info("Trying out BoxTree.TreeInteractiveBuild interface.")
@@ -189,7 +189,7 @@ except ImportError as e:
 
     except ImportError as ee:
         logger.debug(repr(ee))
-        logger.warn("Meshgen via BoxTree is not present or unusable.")
+        logger.warning("Meshgen via BoxTree is not present or unusable.")
         raise RuntimeError("Cannot find a usable Meshgen implementation.")
 
     else:

@@ -70,26 +70,24 @@ def eval_func_on_discr_nodes(queue, discr, func):
 # }}} End test data
 
 
-def drive_test_from_meshmode_exact_interpolation_2d(
-        cl_ctx, queue,
+def drive_test_from_meshmode_interpolation(
+        cl_ctx, queue, dim,
         degree, nel_1d, n_levels, q_order,
-        a=-0.5, b=0.5, seed=0):
+        a=-0.5, b=0.5, seed=0, test_case='exact'):
     """
     meshmode mesh control: nel_1d, degree
     volumential mesh control: n_levels, q_order
     """
-    dim = 2
-
     mesh = generate_regular_rect_mesh(
-            a=(a, a),
-            b=(b, b),
-            n=(nel_1d, nel_1d))
+            a=(a, ) * dim,
+            b=(b, ) * dim,
+            n=(nel_1d, ) * dim)
 
     arr_ctx = PyOpenCLArrayContext(queue)
     group_factory = PolynomialWarpAndBlendGroupFactory(order=degree)
     discr = Discretization(arr_ctx, mesh, group_factory)
 
-    bbox_fac = BoundingBoxFactory(dim=2)
+    bbox_fac = BoundingBoxFactory(dim=dim)
     boxfmm_fac = BoxFMMGeometryFactory(
             cl_ctx, dim=dim, order=q_order,
             nlevels=n_levels, bbox_getter=bbox_fac,
@@ -99,8 +97,22 @@ def drive_test_from_meshmode_exact_interpolation_2d(
             cl_ctx, tree=boxgeo.tree, discr=discr)
     lookup, evt = lookup_fac(queue)
 
-    # algebraically exact interpolation
-    func = random_polynomial_func(dim, degree, seed)
+    if test_case == 'exact':
+        # algebraically exact interpolation
+        func = random_polynomial_func(dim, degree, seed)
+    elif test_case == 'non-exact':
+        if dim == 2:
+            def func(pts):
+                x, y = pts
+                return np.sin(x + y) * x
+        elif dim == 3:
+            def func(pts):
+                x, y, z = pts
+                return np.sin(x + y * z) * x
+        else:
+            raise ValueError()
+    else:
+        raise ValueError()
 
     dof_vec = eval_func_on_discr_nodes(queue, discr, func)
     res = interpolate_from_meshmode(queue, dof_vec, lookup).get(queue)
@@ -108,72 +120,31 @@ def drive_test_from_meshmode_exact_interpolation_2d(
     tree = boxgeo.tree.get(queue)
     ref = func(np.vstack(tree.sources))
 
-    return np.allclose(ref, res)
-
-
-def drive_test_from_meshmode_interpolation_2d(
-        cl_ctx, queue,
-        degree, nel_1d, n_levels, q_order,
-        a=-0.5, b=0.5, seed=0):
-    """
-    meshmode mesh control: nel_1d, degree
-    volumential mesh control: n_levels, q_order
-    """
-    dim = 2
-
-    mesh = generate_regular_rect_mesh(
-            a=(a, a),
-            b=(b, b),
-            n=(nel_1d, nel_1d))
-
-    arr_ctx = PyOpenCLArrayContext(queue)
-    group_factory = PolynomialWarpAndBlendGroupFactory(order=degree)
-    discr = Discretization(arr_ctx, mesh, group_factory)
-
-    bbox_fac = BoundingBoxFactory(dim=2)
-    boxfmm_fac = BoxFMMGeometryFactory(
-            cl_ctx, dim=dim, order=q_order,
-            nlevels=n_levels, bbox_getter=bbox_fac,
-            expand_to_hold_mesh=mesh, mesh_padding_factor=0.)
-    boxgeo = boxfmm_fac(queue)
-    lookup_fac = ElementsToSourcesLookupBuilder(
-            cl_ctx, tree=boxgeo.tree, discr=discr)
-    lookup, evt = lookup_fac(queue)
-
-    def func(pts):
-        x, y = pts
-        return np.sin(x + y) * x
-
-    dof_vec = eval_func_on_discr_nodes(queue, discr, func)
-    res = interpolate_from_meshmode(queue, dof_vec, lookup).get(queue)
-
-    tree = boxgeo.tree.get(queue)
-    ref = func(np.vstack(tree.sources))
+    if test_case == 'exact':
+        return np.allclose(ref, res)
 
     resid = np.linalg.norm(ref - res, ord=np.inf)
     return resid
 
 
-def drive_test_to_meshmode_exact_interpolation_2d(
-        cl_ctx, queue,
+def drive_test_to_meshmode_interpolation(
+        cl_ctx, queue, dim,
         degree, nel_1d, n_levels, q_order,
-        a=-0.5, b=0.5, seed=0):
+        a=-0.5, b=0.5, seed=0, test_case='exact'):
     """
     meshmode mesh control: nel_1d, degree
     volumential mesh control: n_levels, q_order
     """
-    dim = 2
-
     mesh = generate_regular_rect_mesh(
-            a=(a, a),
-            b=(b, b),
-            n=(nel_1d, nel_1d))
+            a=(a, ) * dim,
+            b=(b, ) * dim,
+            n=(nel_1d, ) * dim)
 
     arr_ctx = PyOpenCLArrayContext(queue)
     group_factory = PolynomialWarpAndBlendGroupFactory(order=degree)
     discr = Discretization(arr_ctx, mesh, group_factory)
 
-    bbox_fac = BoundingBoxFactory(dim=2)
+    bbox_fac = BoundingBoxFactory(dim=dim)
     boxfmm_fac = BoxFMMGeometryFactory(
             cl_ctx, dim=dim, order=q_order,
             nlevels=n_levels, bbox_getter=bbox_fac,
@@ -183,58 +154,36 @@ def drive_test_to_meshmode_exact_interpolation_2d(
             cl_ctx, trav=boxgeo.trav, discr=discr)
     lookup, evt = lookup_fac(queue)
 
-    # algebraically exact interpolation
-    func = random_polynomial_func(dim, degree, seed)
+    if test_case == 'exact':
+        # algebraically exact interpolation
+        func = random_polynomial_func(dim, degree, seed)
+    elif test_case == 'non-exact':
+        if dim == 2:
+            def func(pts):
+                x, y = pts
+                return np.sin(x + y) * x
+        elif dim == 3:
+            def func(pts):
+                x, y, z = pts
+                return np.sin(x + y * z) * x
+        else:
+            raise ValueError()
+    else:
+        raise ValueError()
 
     tree = boxgeo.tree.get(queue)
     potential = func(np.vstack(tree.sources))
     res = interpolate_to_meshmode(queue, potential, lookup).get(queue)
-
     ref = eval_func_on_discr_nodes(queue, discr, func).get(queue)
-    return np.allclose(ref, res)
 
+    if test_case == 'exact':
+        return np.allclose(ref, res)
 
-def drive_test_to_meshmode_interpolation_2d(
-        cl_ctx, queue,
-        degree, nel_1d, n_levels, q_order,
-        a=-0.5, b=0.5, seed=0):
-    """
-    meshmode mesh control: nel_1d, degree
-    volumential mesh control: n_levels, q_order
-    """
-    dim = 2
-
-    mesh = generate_regular_rect_mesh(
-            a=(a, a),
-            b=(b, b),
-            n=(nel_1d, nel_1d))
-
-    arr_ctx = PyOpenCLArrayContext(queue)
-    group_factory = PolynomialWarpAndBlendGroupFactory(order=degree)
-    discr = Discretization(arr_ctx, mesh, group_factory)
-
-    bbox_fac = BoundingBoxFactory(dim=2)
-    boxfmm_fac = BoxFMMGeometryFactory(
-            cl_ctx, dim=dim, order=q_order,
-            nlevels=n_levels, bbox_getter=bbox_fac,
-            expand_to_hold_mesh=mesh, mesh_padding_factor=0.)
-    boxgeo = boxfmm_fac(queue)
-    lookup_fac = LeavesToNodesLookupBuilder(
-            cl_ctx, trav=boxgeo.trav, discr=discr)
-    lookup, evt = lookup_fac(queue)
-
-    def func(pts):
-        x, y = pts
-        return np.sin(x + y) * x
-
-    tree = boxgeo.tree.get(queue)
-    potential = func(np.vstack(tree.sources))
-    res = interpolate_to_meshmode(queue, potential, lookup).get(queue)
-
-    ref = eval_func_on_discr_nodes(queue, discr, func).get(queue)
     resid = np.linalg.norm(ref - res, ord=np.inf)
     return resid
 
+
+# {{{ 2d tests
 
 @pytest.mark.parametrize("params", [
     [1, 8, 3, 1], [1, 8, 5, 2], [1, 8, 7, 3],
@@ -243,18 +192,18 @@ def drive_test_to_meshmode_interpolation_2d(
 def test_from_meshmode_interpolation_2d_exact(ctx_factory, params):
     cl_ctx = ctx_factory()
     queue = cl.CommandQueue(cl_ctx)
-    assert drive_test_from_meshmode_exact_interpolation_2d(
-            cl_ctx, queue, *params)
+    assert drive_test_from_meshmode_interpolation(
+            cl_ctx, queue, 2, *params, test_case='exact')
 
 
 @pytest.mark.parametrize("params", [
-    [1, 32, 5, 1], [2, 64, 5, 3], [3, 64, 5, 4]
+    [1, 128, 5, 1], [2, 64, 5, 3], [3, 64, 5, 4]
     ])
 def test_from_meshmode_interpolation_2d_nonexact(ctx_factory, params):
     cl_ctx = ctx_factory()
     queue = cl.CommandQueue(cl_ctx)
-    assert drive_test_from_meshmode_interpolation_2d(
-            cl_ctx, queue, *params) < 1e-3
+    assert drive_test_from_meshmode_interpolation(
+            cl_ctx, queue, 2, *params, test_case='non-exact') < 1e-3
 
 
 @pytest.mark.parametrize("params", [
@@ -264,8 +213,8 @@ def test_from_meshmode_interpolation_2d_nonexact(ctx_factory, params):
 def test_to_meshmode_interpolation_2d_exact(ctx_factory, params):
     cl_ctx = ctx_factory()
     queue = cl.CommandQueue(cl_ctx)
-    assert drive_test_to_meshmode_exact_interpolation_2d(
-            cl_ctx, queue, *params)
+    assert drive_test_to_meshmode_interpolation(
+            cl_ctx, queue, 2, *params, test_case='exact')
 
 
 @pytest.mark.parametrize("params", [
@@ -274,11 +223,62 @@ def test_to_meshmode_interpolation_2d_exact(ctx_factory, params):
 def test_to_meshmode_interpolation_2d_nonexact(ctx_factory, params):
     cl_ctx = ctx_factory()
     queue = cl.CommandQueue(cl_ctx)
-    assert drive_test_to_meshmode_interpolation_2d(
-            cl_ctx, queue, *params) < 1e-3
+    assert drive_test_to_meshmode_interpolation(
+            cl_ctx, queue, 2, *params, test_case='non-exact') < 1e-3
+
+# }}} End 2d tests
+
+
+# {{{ 3d tests
+
+@pytest.mark.parametrize("params", [
+    [1, 3, 3, 1], [2, 2, 4, 2], [3, 3, 4, 3],
+    [4, 4, 3, 1], [5, 2, 2, 2], [8, 4, 3, 3],
+    ])
+def test_from_meshmode_interpolation_3d_exact(ctx_factory, params):
+    cl_ctx = ctx_factory()
+    queue = cl.CommandQueue(cl_ctx)
+    assert drive_test_from_meshmode_interpolation(
+            cl_ctx, queue, 3, *params, test_case='exact')
+
+
+@pytest.mark.parametrize("params", [
+    [6, 4, 5, 1], [7, 3, 4, 3], [8, 2, 3, 4]
+    ])
+def test_from_meshmode_interpolation_3d_nonexact(ctx_factory, params):
+    cl_ctx = ctx_factory()
+    queue = cl.CommandQueue(cl_ctx)
+    assert drive_test_from_meshmode_interpolation(
+            cl_ctx, queue, 3, *params, test_case='non-exact') < 1e-3
+
+
+@pytest.mark.parametrize("params", [
+    [1, 5, 3, 2], [2, 7, 3, 3], [3, 7, 3, 4],
+    [4, 8, 3, 5], [8, 10, 3, 9], [9, 7, 2, 10],
+    ])
+def test_to_meshmode_interpolation_3d_exact(ctx_factory, params):
+    cl_ctx = ctx_factory()
+    queue = cl.CommandQueue(cl_ctx)
+    assert drive_test_to_meshmode_interpolation(
+            cl_ctx, queue, 3, *params, test_case='exact')
+
+
+@pytest.mark.parametrize("params", [
+    [2, 5, 4, 4], [3, 7, 5, 3], [4, 7, 3, 5],
+    ])
+def test_to_meshmode_interpolation_3d_nonexact(ctx_factory, params):
+    cl_ctx = ctx_factory()
+    queue = cl.CommandQueue(cl_ctx)
+    assert drive_test_to_meshmode_interpolation(
+            cl_ctx, queue, 3, *params, test_case='non-exact') < 1e-3
+
+# }}} End 3d tests
 
 
 if __name__ == '__main__':
     cl_ctx = cl.create_some_context()
     queue = cl.CommandQueue(cl_ctx)
-    drive_test_from_meshmode_interpolation_2d(cl_ctx, queue, 1, 8, 5, 3)
+    resid = drive_test_to_meshmode_interpolation(
+        cl_ctx, queue,
+        dim=3, degree=9, nel_1d=7, n_levels=2, q_order=10,
+        test_case="exact")

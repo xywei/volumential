@@ -22,6 +22,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
+import itertools
 import numpy as np
 import pyopencl as cl
 import loopy as lp
@@ -173,6 +174,116 @@ class ElementsToSourcesLookupBuilder:
     # {{{ kernel generation
 
     @memoize_method
+    def codegen_get_dimension_specific_snippets(self):
+        """Dimension-dependent code loopy instructions.
+        """
+        import sympy as sp
+        axis_names = ["x", "y", "z"]
+        axis_names = axis_names[:self.dim]
+
+        # tolerance
+        tol = -1e-12
+
+        def make_sympy_vec(comp_names):
+            comps = []
+            for cn in comp_names:
+                comps.append(sp.var(cn))
+            return sp.Matrix(comps)
+
+        def get_simplex_measure(vtx_names):
+            mat0 = sp.ones(self.dim + 1)
+            for iv, v in enumerate(vtx_names):
+                vtx = sp.Matrix([sp.var(f"{v}{comp}") for comp in axis_names])
+                mat0[iv, :-1] = vtx.T
+            return str(mat0.det())
+
+        if self.dim == 2:
+
+            # {{{ 2d
+
+            code_get_simplex = \
+                """
+                <> Ax = mesh_vertices_0[mesh_vertex_indices[iel, 0]]
+                <> Ay = mesh_vertices_1[mesh_vertex_indices[iel, 0]]
+                <> Bx = mesh_vertices_0[mesh_vertex_indices[iel, 1]]
+                <> By = mesh_vertices_1[mesh_vertex_indices[iel, 1]]
+                <> Cx = mesh_vertices_0[mesh_vertex_indices[iel, 2]]
+                <> Cy = mesh_vertices_1[mesh_vertex_indices[iel, 2]]
+                """
+            code_get_point = \
+                """
+                <> Px = source_points_0[source_id]
+                <> Py = source_points_1[source_id]
+                """
+            # simplex measures
+            code_s0 = get_simplex_measure(["P", "B", "C"])
+            code_s1 = get_simplex_measure(["A", "P", "C"])
+            code_s2 = get_simplex_measure(["A", "B", "P"])
+            code_compute_simplex_measures = \
+                f"""
+                <> s0 = {code_s0}
+                <> s1 = {code_s1}
+                <> s2 = {code_s2}
+                """
+            code_measures_have_common_sign = " and ".join([
+                f"s{c1} * s{c2} >= {tol}"
+                for c1, c2 in itertools.combinations(["0", "1"], 2)])
+
+            # }}} End 2d
+
+        elif self.dim == 3:
+
+            # {{{ 3d
+
+            code_get_simplex = \
+                """
+                <> Ax = mesh_vertices_0[mesh_vertex_indices[iel, 0]]
+                <> Ay = mesh_vertices_1[mesh_vertex_indices[iel, 0]]
+                <> Az = mesh_vertices_2[mesh_vertex_indices[iel, 0]]
+                <> Bx = mesh_vertices_0[mesh_vertex_indices[iel, 1]]
+                <> By = mesh_vertices_1[mesh_vertex_indices[iel, 1]]
+                <> Bz = mesh_vertices_2[mesh_vertex_indices[iel, 1]]
+                <> Cx = mesh_vertices_0[mesh_vertex_indices[iel, 2]]
+                <> Cy = mesh_vertices_1[mesh_vertex_indices[iel, 2]]
+                <> Cz = mesh_vertices_2[mesh_vertex_indices[iel, 2]]
+                <> Dx = mesh_vertices_0[mesh_vertex_indices[iel, 3]]
+                <> Dy = mesh_vertices_1[mesh_vertex_indices[iel, 3]]
+                <> Dz = mesh_vertices_2[mesh_vertex_indices[iel, 3]]
+                """
+            code_get_point = \
+                """
+                <> Px = source_points_0[source_id]
+                <> Py = source_points_1[source_id]
+                <> Pz = source_points_2[source_id]
+                """
+            # simplex measures
+            code_s0 = get_simplex_measure(["P", "B", "C", "D"])
+            code_s1 = get_simplex_measure(["A", "P", "C", "D"])
+            code_s2 = get_simplex_measure(["A", "B", "P", "D"])
+            code_s3 = get_simplex_measure(["A", "B", "C", "P"])
+            code_compute_simplex_measures = \
+                f"""
+                <> s0 = {code_s0}
+                <> s1 = {code_s1}
+                <> s2 = {code_s2}
+                <> s3 = {code_s3}
+                """
+            code_measures_have_common_sign = " and ".join([
+                f"s{c1} * s{c2} >= {tol}"
+                for c1, c2 in itertools.combinations(["0", "1", "2"], 2)])
+
+            # }}} End 3d
+
+        else:
+            raise NotImplementedError()
+
+        return {"code_get_simplex": code_get_simplex,
+                "code_get_point": code_get_point,
+                "code_compute_simplex_measures": code_compute_simplex_measures,
+                "code_measures_have_common_sign": code_measures_have_common_sign,
+                }
+
+    @memoize_method
     def get_simplex_lookup_kernel(self):
         """Returns a loopy kernel that computes a potential vector
         representing the (q_point --> element_id) relationship.
@@ -185,9 +296,7 @@ class ElementsToSourcesLookupBuilder:
         """
         logger.debug("start building elements-to-sources lookup kernel")
 
-        if self.dim != 2:
-            raise NotImplementedError()
-
+        snippets = self.codegen_get_dimension_specific_snippets()
         loopy_knl = lp.make_kernel(
             ["{ [ iel ]: 0 <= iel < nelements }",
              "{ [ ineighbor ]: nearby_leaves_beg <= ineighbor < nearby_leaves_end }",
@@ -198,12 +307,7 @@ class ElementsToSourcesLookupBuilder:
                 <> nearby_leaves_beg = leaves_near_ball_starts[iel]
                 <> nearby_leaves_end = leaves_near_ball_starts[iel + 1]
 
-                <> Ax = mesh_vertices_0[mesh_vertex_indices[iel, 0]]
-                <> Ay = mesh_vertices_1[mesh_vertex_indices[iel, 0]]
-                <> Bx = mesh_vertices_0[mesh_vertex_indices[iel, 1]]
-                <> By = mesh_vertices_1[mesh_vertex_indices[iel, 1]]
-                <> Cx = mesh_vertices_0[mesh_vertex_indices[iel, 2]]
-                <> Cy = mesh_vertices_1[mesh_vertex_indices[iel, 2]]
+                {code_get_simplex}
 
                 for ineighbor
                     <> ileaf = leaves_near_ball_lists[ineighbor]
@@ -212,27 +316,24 @@ class ElementsToSourcesLookupBuilder:
 
                     for isrc
                         <> source_id = box_source_beg + isrc
-                        <> Px = source_points_0[source_id]
-                        <> Py = source_points_1[source_id]
 
-                        <> s0 = (Px - Ax) * (By - Ay) - (Py - Ay) * (Bx - Ax)
-                        <> s1 = (Px - Bx) * (Cy - By) - (Py - By) * (Cx - Bx)
-                        <> s2 = (Px - Cx) * (Ay - Cy) - (Py - Cy) * (Ax - Cx)
+                        {code_get_point}
+                        {code_compute_simplex_measures}
 
                         result[source_id] = if(
-                            s0 * s1 >= -1e-12 and s1 * s2 >= -1e-12,
+                            {code_measures_have_common_sign},
                             iel,
-                            result[source_id])
+                            result[source_id])  {{atomic}}
                     end
                 end
             end
-            """],
+            """.format(**snippets)],
             [lp.ValueArg("nelements, dim, nboxes, nsources", np.int32),
              lp.GlobalArg("mesh_vertex_indices", np.int32, "nelements, dim+1"),
              lp.GlobalArg("box_source_starts", np.int32, "nboxes"),
              lp.GlobalArg("box_source_counts_cumul", np.int32, "nboxes"),
              lp.GlobalArg("leaves_near_ball_lists", np.int32, None),
-             lp.GlobalArg("result", np.int32, "nsources"),
+             lp.GlobalArg("result", np.int32, "nsources", for_atomic=True),
              "..."],
             name="build_sources_in_simplex_lookup",
             lang_version=(2018, 2),
@@ -251,7 +352,7 @@ class ElementsToSourcesLookupBuilder:
             raise NotImplementedError("Mixed elements not supported")
         melgrp = mesh.groups[0]
         ball_centers_host = (np.max(melgrp.nodes, axis=2)
-                        + np.min(melgrp.nodes, axis=2)) / 2
+                             + np.min(melgrp.nodes, axis=2)) / 2
         ball_radii_host = np.max(
                 np.max(melgrp.nodes, axis=2) - np.min(melgrp.nodes, axis=2),
                 axis=0) / 2
@@ -288,23 +389,31 @@ class ElementsToSourcesLookupBuilder:
             cl.array.to_device(queue, verts)
             for verts in self.discr.mesh.vertices])
 
+        mesh_vertices_kwargs = {
+            f"mesh_vertices_{iaxis}": vertices_dev[iaxis]
+            for iaxis in range(self.dim)}
+
+        source_points_kwargs = {
+            f"source_points_{iaxis}": self.tree.sources[iaxis]
+            for iaxis in range(self.dim)}
+
         evt, res = element_lookup_kernel(
             queue, dim=self.dim, nboxes=self.tree.nboxes,
             nelements=self.discr.mesh.nelements, nsources=self.tree.nsources,
-            result=cl.array.zeros(queue, self.tree.nsources, dtype=np.int32),
+            result=cl.array.zeros(queue, self.tree.nsources, dtype=np.int32) - 1,
             mesh_vertex_indices=self.discr.mesh.groups[0].vertex_indices,
-            mesh_vertices_0=vertices_dev[0],
-            mesh_vertices_1=vertices_dev[1],
-            source_points_0=self.tree.sources[0],
-            source_points_1=self.tree.sources[1],
             box_source_starts=self.tree.box_source_starts,
             box_source_counts_cumul=self.tree.box_source_counts_cumul,
             leaves_near_ball_starts=balls_to_leaves_lookup.leaves_near_ball_starts,
             leaves_near_ball_lists=balls_to_leaves_lookup.leaves_near_ball_lists,
-            wait_for=wait_for)
+            wait_for=wait_for, **mesh_vertices_kwargs, **source_points_kwargs)
 
         source_to_element_lookup, = res
+
         wait_for = [evt]
+
+        # elements = source_to_element_lookup.get()
+        # for idx in [362,  365,  874,  877, 1386, 1389, 1898, 1901])
 
         # -----------------------------------------------------------------
         # Invert the source-to-element lookup by a key-value sort
@@ -602,7 +711,6 @@ def interpolate_to_meshmode(queue, potential, leaves_to_nodes_lookup,
 
     # infer q_order from tree
     pts_per_box = tree.ntargets // traversal.ntarget_boxes
-    print(pts_per_box, traversal.ntarget_boxes, tree.ntargets)
     assert pts_per_box * traversal.ntarget_boxes == tree.ntargets
 
     # allow for +/- 0.25 floating point error
