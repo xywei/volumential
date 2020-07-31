@@ -232,7 +232,29 @@ def test_to_meshmode_interpolation_2d_nonexact(ctx_factory, params):
 # {{{ 3d tests
 
 @pytest.mark.parametrize("params", [
+    [1, 8, 3, 1], [2, 7, 4, 2], [3, 3, 4, 3],
+    [4, 16, 3, 1], [5, 32, 2, 2], [8, 4, 3, 3],
+    ])
+def test_from_meshmode_interpolation_3d_exact(ctx_factory, params):
+    cl_ctx = ctx_factory()
+    queue = cl.CommandQueue(cl_ctx)
+    assert drive_test_from_meshmode_interpolation(
+            cl_ctx, queue, 3, *params, test_case='exact')
+
+
+@pytest.mark.parametrize("params", [
+    [2, 64, 5, 1], [4, 32, 4, 3], [8, 16, 3, 4]
+    ])
+def test_from_meshmode_interpolation_3d_nonexact(ctx_factory, params):
+    cl_ctx = ctx_factory()
+    queue = cl.CommandQueue(cl_ctx)
+    assert drive_test_from_meshmode_interpolation(
+            cl_ctx, queue, 3, *params, test_case='non-exact') < 1e-3
+
+
+@pytest.mark.parametrize("params", [
     [1, 5, 3, 2], [2, 7, 3, 3], [3, 7, 3, 4],
+    [4, 32, 3, 5], [8, 32, 3, 9], [9, 7, 2, 10],
     ])
 def test_to_meshmode_interpolation_3d_exact(ctx_factory, params):
     cl_ctx = ctx_factory()
