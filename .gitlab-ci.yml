@@ -100,8 +100,6 @@ Python 3 Conda Apple:
   - ". ./build-and-test-py-project-within-miniconda.sh"
   tags:
   - apple
-  only:
-  - /^conda-.*$/i
   except:
   - tags
   artifacts:
