@@ -22,6 +22,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
+import itertools
 import numpy as np
 import pyopencl as cl
 import loopy as lp
@@ -224,8 +225,9 @@ class ElementsToSourcesLookupBuilder:
                 <> s1 = {code_s1}
                 <> s2 = {code_s2}
                 """
-            code_measures_have_common_sign = \
-                f"s0 * s1 >= {tol} and s1 * s2 >= {tol}"
+            code_measures_have_common_sign = " and ".join([
+                f"s{c1} * s{c2} >= {tol}"
+                for c1, c2 in itertools.combinations(["0", "1"], 2)])
 
             # }}} End 2d
 
@@ -266,8 +268,9 @@ class ElementsToSourcesLookupBuilder:
                 <> s2 = {code_s2}
                 <> s3 = {code_s3}
                 """
-            code_measures_have_common_sign = \
-                f"s0 * s1 >= {tol} and s1 * s2 >= {tol} and s2 * s3 >= {tol}"
+            code_measures_have_common_sign = " and ".join([
+                f"s{c1} * s{c2} >= {tol}"
+                for c1, c2 in itertools.combinations(["0", "1", "2"], 2)])
 
             # }}} End 3d
 
@@ -320,7 +323,7 @@ class ElementsToSourcesLookupBuilder:
                         result[source_id] = if(
                             {code_measures_have_common_sign},
                             iel,
-                            result[source_id])
+                            result[source_id])  {{atomic}}
                     end
                 end
             end
@@ -330,7 +333,7 @@ class ElementsToSourcesLookupBuilder:
              lp.GlobalArg("box_source_starts", np.int32, "nboxes"),
              lp.GlobalArg("box_source_counts_cumul", np.int32, "nboxes"),
              lp.GlobalArg("leaves_near_ball_lists", np.int32, None),
-             lp.GlobalArg("result", np.int32, "nsources"),
+             lp.GlobalArg("result", np.int32, "nsources", for_atomic=True),
              "..."],
             name="build_sources_in_simplex_lookup",
             lang_version=(2018, 2),
@@ -349,7 +352,7 @@ class ElementsToSourcesLookupBuilder:
             raise NotImplementedError("Mixed elements not supported")
         melgrp = mesh.groups[0]
         ball_centers_host = (np.max(melgrp.nodes, axis=2)
-                        + np.min(melgrp.nodes, axis=2)) / 2
+                             + np.min(melgrp.nodes, axis=2)) / 2
         ball_radii_host = np.max(
                 np.max(melgrp.nodes, axis=2) - np.min(melgrp.nodes, axis=2),
                 axis=0) / 2
@@ -397,7 +400,7 @@ class ElementsToSourcesLookupBuilder:
         evt, res = element_lookup_kernel(
             queue, dim=self.dim, nboxes=self.tree.nboxes,
             nelements=self.discr.mesh.nelements, nsources=self.tree.nsources,
-            result=cl.array.zeros(queue, self.tree.nsources, dtype=np.int32),
+            result=cl.array.zeros(queue, self.tree.nsources, dtype=np.int32) - 1,
             mesh_vertex_indices=self.discr.mesh.groups[0].vertex_indices,
             box_source_starts=self.tree.box_source_starts,
             box_source_counts_cumul=self.tree.box_source_counts_cumul,
@@ -406,7 +409,62 @@ class ElementsToSourcesLookupBuilder:
             wait_for=wait_for, **mesh_vertices_kwargs, **source_points_kwargs)
 
         source_to_element_lookup, = res
+
+        if 0:
+            from mpl_toolkits.mplot3d import Axes3D
+            import matplotlib.pyplot as plt
+            fig = plt.figure()
+            ax = fig.add_subplot(111, projection='3d')
+            if 0:
+                ax.scatter(
+                        self.tree.sources[0].get(queue),
+                        self.tree.sources[1].get(queue),
+                        self.tree.sources[2].get(queue),
+                        c=source_to_element_lookup.get(queue),
+                        cmap='tab20c', alpha=0.5)
+
+            highlight = [362,  365,  874,  877, 1386, 1389, 1898, 1901]
+            for h in highlight[:1]:
+                print("=====")
+                src0 = self.tree.sources[0].get(queue)[h]
+                src1 = self.tree.sources[1].get(queue)[h]
+                src2 = self.tree.sources[2].get(queue)[h]
+                print(f"A bad source: ({src0}, {src1}, {src2})")
+
+                e = source_to_element_lookup.get(queue)[h]
+                tet = self.discr.mesh.groups[0].nodes[:, e, :]
+                tetvs = [0, 1, 2, 0, 3, 1, 3, 2]
+                print(f"It is said to be in element {e}: {tet}")
+
+                ax.plot(tet[0, tetvs], tet[1, tetvs], tet[2, tetvs])
+                ax.scatter(
+                        self.tree.sources[0].get(queue)[h],
+                        self.tree.sources[1].get(queue)[h],
+                        self.tree.sources[2].get(queue)[h],
+                        # c=source_to_element_lookup.get(queue)[highlight],
+                        cmap='tab20c', alpha=1, s=50)
+
+
+                # plt.show()
+                Ax, Ay, Az = tet[:, 0]
+                Bx, By, Bz = tet[:, 1]
+                Cx, Cy, Cz = tet[:, 2]
+                Dx, Dy, Dz = tet[:, 3]
+                Px, Py, Pz = (src0, src1, src2)
+
+                s3 = Ax * By * Cz + -1.0 * Ax * By * Pz + -1.0 * Ax * Bz * Cy + Ax * Bz * Py + Ax * Cy * Pz + -1.0 * Ax * Cz * Py + -1.0 * Ay * Bx * Cz + Ay * Bx * Pz + Ay * Bz * Cx + -1.0 * Ay * Bz * Px + -1.0 * Ay * Cx * Pz + Ay * Cz * Px + Az * Bx * Cy + -1.0 * Az * Bx * Py + -1.0 * Az * By * Cx + Az * By * Px + Az * Cx * Py + -1.0 * Az * Cy * Px + -1.0 * Bx * Cy * Pz + Bx * Cz * Py + By * Cx * Pz + -1.0 * By * Cz * Px + -1.0 * Bz * Cx * Py + Bz * Cy * Px
+                s2 = -1.0 * Ax * By * Dz + Ax * By * Pz + Ax * Bz * Dy + -1.0 * Ax * Bz * Py + -1.0 * Ax * Dy * Pz + Ax * Dz * Py + Ay * Bx * Dz + -1.0 * Ay * Bx * Pz + -1.0 * Ay * Bz * Dx + Ay * Bz * Px + Ay * Dx * Pz + -1.0 * Ay * Dz * Px + -1.0 * Az * Bx * Dy + Az * Bx * Py + Az * By * Dx + -1.0 * Az * By * Px + -1.0 * Az * Dx * Py + Az * Dy * Px + Bx * Dy * Pz + -1.0 * Bx * Dz * Py + -1.0 * By * Dx * Pz + By * Dz * Px + Bz * Dx * Py + -1.0 * Bz * Dy * Px
+                s1 = Ax * Cy * Dz + -1.0 * Ax * Cy * Pz + -1.0 * Ax * Cz * Dy + Ax * Cz * Py + Ax * Dy * Pz + -1.0 * Ax * Dz * Py + -1.0 * Ay * Cx * Dz + Ay * Cx * Pz + Ay * Cz * Dx + -1.0 * Ay * Cz * Px + -1.0 * Ay * Dx * Pz + Ay * Dz * Px + Az * Cx * Dy + -1.0 * Az * Cx * Py + -1.0 * Az * Cy * Dx + Az * Cy * Px + Az * Dx * Py + -1.0 * Az * Dy * Px + -1.0 * Cx * Dy * Pz + Cx * Dz * Py + Cy * Dx * Pz + -1.0 * Cy * Dz * Px + -1.0 * Cz * Dx * Py + Cz * Dy * Px
+                s0 = -1.0 * Bx * Cy * Dz + Bx * Cy * Pz + Bx * Cz * Dy + -1.0 * Bx * Cz * Py + -1.0 * Bx * Dy * Pz + Bx * Dz * Py + By * Cx * Dz + -1.0 * By * Cx * Pz + -1.0 * By * Cz * Dx + By * Cz * Px + By * Dx * Pz + -1.0 * By * Dz * Px + -1.0 * Bz * Cx * Dy + Bz * Cx * Py + Bz * Cy * Dx + -1.0 * Bz * Cy * Px + -1.0 * Bz * Dx * Py + Bz * Dy * Px + Cx * Dy * Pz + -1.0 * Cx * Dz * Py + -1.0 * Cy * Dx * Pz + Cy * Dz * Px + Cz * Dx * Py + -1.0 * Cz * Dy * Px
+
+                print(s0, s1, s2, s3)
+                print(s0 * s1)
+
+
         wait_for = [evt]
+
+        # elements = source_to_element_lookup.get()
+        # for idx in [362,  365,  874,  877, 1386, 1389, 1898, 1901])
 
         # -----------------------------------------------------------------
         # Invert the source-to-element lookup by a key-value sort

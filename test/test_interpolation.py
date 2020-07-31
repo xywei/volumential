@@ -197,7 +197,7 @@ def test_from_meshmode_interpolation_2d_exact(ctx_factory, params):
 
 
 @pytest.mark.parametrize("params", [
-    [1, 32, 5, 1], [2, 64, 5, 3], [3, 64, 5, 4]
+    [1, 128, 5, 1], [2, 64, 5, 3], [3, 64, 5, 4]
     ])
 def test_from_meshmode_interpolation_2d_nonexact(ctx_factory, params):
     cl_ctx = ctx_factory()
@@ -256,8 +256,7 @@ def test_to_meshmode_interpolation_3d_nonexact(ctx_factory, params):
 if __name__ == '__main__':
     cl_ctx = cl.create_some_context()
     queue = cl.CommandQueue(cl_ctx)
-    resid = drive_test_to_meshmode_interpolation(
+    resid = drive_test_from_meshmode_interpolation(
         cl_ctx, queue,
-        dim=3, degree=1, nel_1d=5, n_levels=4, q_order=2,
+        dim=3, degree=1, nel_1d=3, n_levels=4, q_order=2,
         test_case="exact")
-    print(resid)
