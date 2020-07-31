@@ -410,57 +410,6 @@ class ElementsToSourcesLookupBuilder:
 
         source_to_element_lookup, = res
 
-        if 0:
-            from mpl_toolkits.mplot3d import Axes3D
-            import matplotlib.pyplot as plt
-            fig = plt.figure()
-            ax = fig.add_subplot(111, projection='3d')
-            if 0:
-                ax.scatter(
-                        self.tree.sources[0].get(queue),
-                        self.tree.sources[1].get(queue),
-                        self.tree.sources[2].get(queue),
-                        c=source_to_element_lookup.get(queue),
-                        cmap='tab20c', alpha=0.5)
-
-            highlight = [362,  365,  874,  877, 1386, 1389, 1898, 1901]
-            for h in highlight[:1]:
-                print("=====")
-                src0 = self.tree.sources[0].get(queue)[h]
-                src1 = self.tree.sources[1].get(queue)[h]
-                src2 = self.tree.sources[2].get(queue)[h]
-                print(f"A bad source: ({src0}, {src1}, {src2})")
-
-                e = source_to_element_lookup.get(queue)[h]
-                tet = self.discr.mesh.groups[0].nodes[:, e, :]
-                tetvs = [0, 1, 2, 0, 3, 1, 3, 2]
-                print(f"It is said to be in element {e}: {tet}")
-
-                ax.plot(tet[0, tetvs], tet[1, tetvs], tet[2, tetvs])
-                ax.scatter(
-                        self.tree.sources[0].get(queue)[h],
-                        self.tree.sources[1].get(queue)[h],
-                        self.tree.sources[2].get(queue)[h],
-                        # c=source_to_element_lookup.get(queue)[highlight],
-                        cmap='tab20c', alpha=1, s=50)
-
-
-                # plt.show()
-                Ax, Ay, Az = tet[:, 0]
-                Bx, By, Bz = tet[:, 1]
-                Cx, Cy, Cz = tet[:, 2]
-                Dx, Dy, Dz = tet[:, 3]
-                Px, Py, Pz = (src0, src1, src2)
-
-                s3 = Ax * By * Cz + -1.0 * Ax * By * Pz + -1.0 * Ax * Bz * Cy + Ax * Bz * Py + Ax * Cy * Pz + -1.0 * Ax * Cz * Py + -1.0 * Ay * Bx * Cz + Ay * Bx * Pz + Ay * Bz * Cx + -1.0 * Ay * Bz * Px + -1.0 * Ay * Cx * Pz + Ay * Cz * Px + Az * Bx * Cy + -1.0 * Az * Bx * Py + -1.0 * Az * By * Cx + Az * By * Px + Az * Cx * Py + -1.0 * Az * Cy * Px + -1.0 * Bx * Cy * Pz + Bx * Cz * Py + By * Cx * Pz + -1.0 * By * Cz * Px + -1.0 * Bz * Cx * Py + Bz * Cy * Px
-                s2 = -1.0 * Ax * By * Dz + Ax * By * Pz + Ax * Bz * Dy + -1.0 * Ax * Bz * Py + -1.0 * Ax * Dy * Pz + Ax * Dz * Py + Ay * Bx * Dz + -1.0 * Ay * Bx * Pz + -1.0 * Ay * Bz * Dx + Ay * Bz * Px + Ay * Dx * Pz + -1.0 * Ay * Dz * Px + -1.0 * Az * Bx * Dy + Az * Bx * Py + Az * By * Dx + -1.0 * Az * By * Px + -1.0 * Az * Dx * Py + Az * Dy * Px + Bx * Dy * Pz + -1.0 * Bx * Dz * Py + -1.0 * By * Dx * Pz + By * Dz * Px + Bz * Dx * Py + -1.0 * Bz * Dy * Px
-                s1 = Ax * Cy * Dz + -1.0 * Ax * Cy * Pz + -1.0 * Ax * Cz * Dy + Ax * Cz * Py + Ax * Dy * Pz + -1.0 * Ax * Dz * Py + -1.0 * Ay * Cx * Dz + Ay * Cx * Pz + Ay * Cz * Dx + -1.0 * Ay * Cz * Px + -1.0 * Ay * Dx * Pz + Ay * Dz * Px + Az * Cx * Dy + -1.0 * Az * Cx * Py + -1.0 * Az * Cy * Dx + Az * Cy * Px + Az * Dx * Py + -1.0 * Az * Dy * Px + -1.0 * Cx * Dy * Pz + Cx * Dz * Py + Cy * Dx * Pz + -1.0 * Cy * Dz * Px + -1.0 * Cz * Dx * Py + Cz * Dy * Px
-                s0 = -1.0 * Bx * Cy * Dz + Bx * Cy * Pz + Bx * Cz * Dy + -1.0 * Bx * Cz * Py + -1.0 * Bx * Dy * Pz + Bx * Dz * Py + By * Cx * Dz + -1.0 * By * Cx * Pz + -1.0 * By * Cz * Dx + By * Cz * Px + By * Dx * Pz + -1.0 * By * Dz * Px + -1.0 * Bz * Cx * Dy + Bz * Cx * Py + Bz * Cy * Dx + -1.0 * Bz * Cy * Px + -1.0 * Bz * Dx * Py + Bz * Dy * Px + Cx * Dy * Pz + -1.0 * Cx * Dz * Py + -1.0 * Cy * Dx * Pz + Cy * Dz * Px + Cz * Dx * Py + -1.0 * Cz * Dy * Px
-
-                print(s0, s1, s2, s3)
-                print(s0 * s1)
-
-
         wait_for = [evt]
 
         # elements = source_to_element_lookup.get()
