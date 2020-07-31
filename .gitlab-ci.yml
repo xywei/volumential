@@ -81,8 +81,6 @@ Python 3 Conda:
   tags:
   - linux
   - large-node
-  only:
-  - /^conda-.*$/i
   except:
   - tags
   artifacts:
