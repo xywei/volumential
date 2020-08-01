@@ -305,6 +305,11 @@ class NearFieldFromCSR(NearFieldEvalBase):
 
     def get_kernel(self):
 
+        if self.integral_kernel.is_complex_valued:
+            potential_dtype = np.complex128
+        else:
+            potential_dtype = np.float64
+
         lpknl = loopy.make_kernel(  # NOQA
             [
                 "{ [ tbox ] : 0 <= tbox < n_tgt_boxes }",
@@ -411,11 +416,12 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 loopy.TemporaryVariable("tgt_table_lev", np.int32),
                 loopy.TemporaryVariable("tgt_table_lev_tmp", np.float64),
                 loopy.ValueArg("encoding_base", np.int32),
-                loopy.GlobalArg("mode_nmlz", np.float64, "n_tables, n_q_points"),
-                loopy.GlobalArg("exterior_mode_nmlz", np.float64,
-                    "n_tables, n_q_points"),
-                loopy.GlobalArg("table_data", np.float64,
-                    "n_tables, n_table_entries"),
+                loopy.GlobalArg("mode_nmlz", potential_dtype,
+                                "n_tables, n_q_points"),
+                loopy.GlobalArg("exterior_mode_nmlz", potential_dtype,
+                                "n_tables, n_q_points"),
+                loopy.GlobalArg("table_data", potential_dtype,
+                                "n_tables, n_table_entries"),
                 loopy.GlobalArg("source_boxes", np.int32, "n_source_boxes"),
                 loopy.GlobalArg("box_centers", None, "dim, aligned_nboxes"),
                 loopy.ValueArg("aligned_nboxes", np.int32),
@@ -430,9 +436,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
             lang_version=(2018, 2)
         )
 
-        # print(lpknl)
         # lpknl = loopy.set_options(lpknl, write_code=True)
-
         lpknl = loopy.set_options(lpknl, return_dict=True)
 
         return lpknl
@@ -442,6 +446,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
             type(self).__name__,
             self.name,
             self.kname,
+            "complex_kernel=" + str(self.integral_kernel.is_complex_valued),
             "potential_kind=%d" % self.potential_kind,
             "infer_scaling=" + str(self.extra_kwargs["infer_kernel_scaling"]),
             "scaling_policy=" + self.codegen_compute_scaling(),
