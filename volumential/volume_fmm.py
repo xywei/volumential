@@ -105,8 +105,6 @@ def drive_volume_fmm(traversal, expansion_wrangler, src_weights, src_func,
     )
     recorder.add("form_multipoles", timing_future)
 
-    # print(max(abs(mpole_exps)))
-
     # }}}
 
     # {{{ Propagate multipoles upward
@@ -118,8 +116,6 @@ def drive_volume_fmm(traversal, expansion_wrangler, src_weights, src_func,
         mpole_exps,
     )
     recorder.add("coarsen_multipoles", timing_future)
-
-    # print(max(abs(mpole_exps)))
 
     # mpole_exps is called Phi in [1]
 
@@ -188,8 +184,13 @@ def drive_volume_fmm(traversal, expansion_wrangler, src_weights, src_func,
             value_dtypes=[wrangler.dtype],
         )
 
-        p2p_extra_kwargs = dict(wrangler.self_extra_kwargs)
-        p2p_extra_kwargs.update(wrangler.kernel_extra_kwargs)
+        if hasattr(wrangler, "self_extra_kwargs"):
+            p2p_extra_kwargs = dict(wrangler.self_extra_kwargs)
+        else:
+            p2p_extra_kwargs = {}
+
+        if hasattr(wrangler, "self_extra_kwargs"):
+            p2p_extra_kwargs.update(wrangler.kernel_extra_kwargs)
 
         evt, (ref_pot,) = p2p(
             wrangler.queue,
@@ -239,8 +240,6 @@ def drive_volume_fmm(traversal, expansion_wrangler, src_weights, src_func,
         mpole_exps,
     )
     recorder.add("multipole_to_local", timing_future)
-
-    # print(max(abs(local_exps)))
 
     # local_exps represents both Gamma and Delta in [1]
 

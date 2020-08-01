@@ -381,19 +381,20 @@ class FPNDSumpyExpansionWrangler(
             (
                 len(self.near_field_table[kname]),
                 len(self.near_field_table[kname][0].data),
-            )
+            ), dtype=self.near_field_table[kname][0].data.dtype
         )
         mode_nmlz_combined = np.zeros(
             (
                 len(self.near_field_table[kname]),
                 len(self.near_field_table[kname][0].mode_normalizers),
-            )
+            ), dtype=self.near_field_table[kname][0].mode_normalizers.dtype
         )
         exterior_mode_nmlz_combined = np.zeros(
             (
                 len(self.near_field_table[kname]),
                 len(self.near_field_table[kname][0].kernel_exterior_normalizers),
-            )
+            ),
+            dtype=self.near_field_table[kname][0].kernel_exterior_normalizers.dtype
         )
         for lev in range(len(self.near_field_table[kname])):
             table_data_combined[lev, :] = self.near_field_table[kname][lev].data
@@ -994,13 +995,13 @@ class FPNDFMMLibExpansionWrangler(
             (
                 len(self.near_field_table[kname]),
                 len(self.near_field_table[kname][0].data),
-            )
+            ), dtype=self.near_field_table[kname][0].data.dtype
         )
         mode_nmlz_combined = np.zeros(
             (
                 len(self.near_field_table[kname]),
                 len(self.near_field_table[kname][0].mode_normalizers),
-            )
+            ), dtype=self.near_field_table[kname][0].mode_normalizers.dtype
         )
         for lev in range(len(self.near_field_table[kname])):
             table_data_combined[lev, :] = self.near_field_table[kname][lev].data
@@ -1011,7 +1012,8 @@ class FPNDFMMLibExpansionWrangler(
             (
                 len(self.near_field_table[kname]),
                 len(self.near_field_table[kname][0].kernel_exterior_normalizers),
-            )
+            ),
+            dtype=self.near_field_table[kname][0].kernel_exterior_normalizers.dtype
         )
         for lev in range(len(self.near_field_table[kname])):
             table_data_combined[lev, :] = self.near_field_table[kname][lev].data

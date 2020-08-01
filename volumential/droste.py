@@ -185,8 +185,6 @@ class DrosteBase(KernelCacheWrapper):
             retain_names=[result_name],
             complex_dtype=np.complex128,
         )
-        # for i in loopy_insns:
-        #     print(i)
         return loopy_insns
 
     def get_sumpy_kernel_eval_insns(self):
@@ -336,7 +334,10 @@ class DrosteBase(KernelCacheWrapper):
         if "result_dtype" in kwargs:
             result_dtype = kwargs["result_dtype"]
         else:
-            result_dtype = np.float64
+            if self.integral_knl.is_complex_valued:
+                result_dtype = np.complex128
+            else:
+                result_dtype = np.float64
 
         # allocate return arrays
         if self.dim == 1:
@@ -593,7 +594,9 @@ class DrosteBase(KernelCacheWrapper):
         return mapped_q_points[q_points_ordering]
 
     def postprocess_cheb_table(self, cheb_table, cheb_coefs):
-        nfp_table = np.zeros([self.n_q_points, ] + list(cheb_table.shape[self.dim:]))
+        nfp_table = np.zeros(
+            [self.n_q_points, ] + list(cheb_table.shape[self.dim:]),
+            dtype=cheb_table.dtype)
 
         # transform to interpolatory basis functions
         # NOTE: the reversed order of indices, e.g.,
@@ -946,7 +949,10 @@ class DrosteReduced(DrosteBase):
         if "result_dtype" in kwargs:
             result_dtype = kwargs["result_dtype"]
         else:
-            result_dtype = np.float64
+            if self.integral_knl.is_complex_valued:
+                result_dtype = np.complex128
+            else:
+                result_dtype = np.float64
 
         # allocate return arrays
         if self.dim == 1:
@@ -1035,8 +1041,6 @@ class DrosteReduced(DrosteBase):
             )
         ]
 
-        # print(ext_ids)
-
         # The idea is that, any member of the hyperoctahedral group
         # has the decomposition m = f * s, where f is a flip and s
         # is a swap.
@@ -1068,7 +1072,6 @@ class DrosteReduced(DrosteBase):
                         + " % 2 == 0, 1, -1)"
                     )
 
-            # print(', '.join(ext_tgt_ordering))
             ext_tgt_ordering.reverse()
             ext_fun_ordering.reverse()
 
@@ -1304,7 +1307,6 @@ class DrosteReduced(DrosteBase):
             nfunctions=self.nfunctions,
             quad_order=self.ntgt_points,
             nlevels=nlevels,
-            **extra_kernel_kwargs
         )
         cheb_table_case = res2["result"]
 
@@ -1312,49 +1314,35 @@ class DrosteReduced(DrosteBase):
 
     def build_cheb_table(self, queue, **kwargs):
         # Build the table using Cheb modes as sources
+
+        if self.integral_knl.is_complex_valued:
+            dtype = np.complex128
+        else:
+            dtype = np.float64
+
         if self.dim == 1:
             cheb_table = (
-                np.zeros((self.nfunctions, self.ntgt_points, self.ncases)) + np.nan
-            )
+                np.zeros((self.nfunctions, self.ntgt_points, self.ncases),
+                         dtype) + np.nan)
         elif self.dim == 2:
             cheb_table = (
-                np.zeros(
-                    (
-                        self.nfunctions,
-                        self.nfunctions,
-                        self.ntgt_points,
-                        self.ntgt_points,
-                        self.ncases,
-                    )
-                )
-                + np.nan
-            )
+                np.zeros((self.nfunctions, self.nfunctions,
+                          self.ntgt_points, self.ntgt_points,
+                          self.ncases,), dtype) + np.nan)
         elif self.dim == 3:
             cheb_table = (
-                np.zeros(
-                    (
-                        self.nfunctions,
-                        self.nfunctions,
-                        self.nfunctions,
-                        self.ntgt_points,
-                        self.ntgt_points,
-                        self.ntgt_points,
-                        self.ncases,
-                    )
-                )
-                + np.nan
-            )
+                np.zeros((self.nfunctions, self.nfunctions, self.nfunctions,
+                          self.ntgt_points, self.ntgt_points, self.ntgt_points,
+                          self.ncases,), dtype) + np.nan)
         else:
             raise NotImplementedError
 
         for base_case_id in range(self.nbcases):
-            # print(base_case_id)
             self.current_base_case = base_case_id
             case_id = self.reduce_by_symmetry.reduced_vec_ids[base_case_id]
             cheb_table[..., case_id] = self.call_loopy_kernel_case(
                 queue, base_case_id, **kwargs
             )[..., 0]
-            # print("Loopy kernel finished")
 
             # {{{ expansion by symmetry
             flippable, swappable_groups = \
@@ -1404,10 +1392,6 @@ class DrosteReduced(DrosteBase):
                     .copy()
                 )
 
-                # if case_id == 69:
-                #    print("after swapping:",
-                #           np.linalg.norm(tmp_table_part - cheb_table[...,case_id]))
-
                 # apply f, also figure out the rule for sign changes
                 for fid in range(nflippables):
                     if ext_id[0][fid]:
@@ -1434,12 +1418,6 @@ class DrosteReduced(DrosteBase):
                         tmp_table_part = np.flip(
                             tmp_table_part, (self.dim - 1 - iaxis) + self.dim
                         )
-
-                # if case_id == 69:
-                #    print("after flipping:",
-                #       np.linalg.norm(tmp_table_part - cheb_table[...,case_id]))
-                #    print("Filling by symmetry",
-                #       base_case_vec, "-->", ext_vec, swapped_axes, ext_id)
 
                 assert tuple(ext_vec) in self.reduce_by_symmetry.full_vecs
                 ext_case_id = self.reduce_by_symmetry.full_vecs.index(tuple(ext_vec))
