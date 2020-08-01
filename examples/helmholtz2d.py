@@ -56,7 +56,7 @@ def main():
 
     print("Using table cache:", table_filename)
 
-    q_order = 5   # quadrature order
+    q_order = 4   # quadrature order
     n_levels = 7  # 2^(n_levels-1) subintervals in 1D
 
     dtype = np.complex128
