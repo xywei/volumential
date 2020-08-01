@@ -203,8 +203,8 @@ def main():
         queue=queue, dtype=dtype)
 
     assert (abs(
-      int((b - a) / root_table_source_extent) * root_table_source_extent
-      - (b - a)) < 1e-15)
+        int((b - a) / root_table_source_extent) * root_table_source_extent
+        - (b - a)) < 1e-15)
     nftable = []
 
     # FIXME: need at leat two levels even for uniform trees?
