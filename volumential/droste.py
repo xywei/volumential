@@ -187,7 +187,7 @@ class DrosteBase(KernelCacheWrapper):
             # Since there is no exact degree -> nqpts map for tanh-sinh rule,
             # we find the largest rule whose size dose not exceed the parameter
             # nradial_quad_points
-            pass
+            raise NotImplementedError
         else:
             return dict(quadrature_nodes=legendre_nodes,
                         quadrature_weights=legendre_weights)
@@ -897,9 +897,9 @@ class DrosteReduced(DrosteBase):
         quad_order=None,
         case_vecs=None,
         n_brick_quad_points=50,
+        knl_symmetry_tags=None,
         special_radial_quadrature=False,
         nradial_quad_points=None,
-        knl_symmetry_tags=None,
     ):
         super(DrosteReduced, self).__init__(
             integral_knl, quad_order, case_vecs, n_brick_quad_points,
@@ -1333,22 +1333,17 @@ class DrosteReduced(DrosteBase):
         except Exception:
             pass
         knl = self.get_cached_optimized_kernel()
+        brick_quadrature_kwargs = self.make_brick_quadrature_kwargs()
         evt, res = knl(
-            queue,
-            alpha=alpha,
-            result=result_array,
+            queue, alpha=alpha, result=result_array,
             root_brick=root_brick,
             target_nodes=t.astype(np.float64, copy=True),
-            quadrature_nodes=legendre_nodes,
-            quadrature_weights=legendre_weights,
             interaction_case_vecs=base_case_vec.astype(np.float64, copy=True),
             interaction_case_scls=base_case_scl.astype(np.float64, copy=True),
-            n_cases=1,
-            nfunctions=self.nfunctions,
-            quad_order=self.ntgt_points,
-            nlevels=nlevels,
-            **extra_kernel_kwargs
-        )
+            n_cases=1, nfunctions=self.nfunctions,
+            quad_order=self.ntgt_points, nlevels=nlevels,
+            **extra_kernel_kwargs, **brick_quadrature_kwargs)
+
         raw_cheb_table_case = res["result"]
 
         self.get_kernel_id = 1
@@ -1570,9 +1565,9 @@ class InverseDrosteReduced(DrosteReduced):
     """
 
     def __init__(self, integral_knl, quad_order, case_vecs,
-                 n_brick_quad_points=50,
+                 n_brick_quad_points=50, knl_symmetry_tags=None,
                  special_radial_quadrature=False, nradial_quad_points=None,
-                 knl_symmetry_tags=None, auto_windowing=True):
+                 auto_windowing=True):
         """
         :param auto_windowing: auto-detect window radius.
         """
