@@ -830,8 +830,8 @@ class DrosteFull(DrosteBase):
         t = np.array([pt[-1] for pt in q_points[: self.ntgt_points]])
 
         # quad formula for each brick (normalized to [0,1])
-
         brick_quadrature_kwargs = self.make_brick_quadrature_kwargs()
+
         knl = self.get_cached_optimized_kernel()
         evt, res = knl(
             queue, alpha=alpha, result=result_array,
@@ -1316,16 +1316,6 @@ class DrosteReduced(DrosteBase):
                 ]
             ]
         )
-
-        # quad formula for each brick (normalized to [0,1])
-        # sps.legendre blows up easily at high order
-        import scipy.special as sps
-
-        # legendre_nodes, _, legendre_weights = sps.legendre(
-        #        nquad_points).weights.T
-        legendre_nodes, legendre_weights = sps.p_roots(self.nquad_points)
-        legendre_nodes = legendre_nodes * 0.5 + 0.5
-        legendre_weights = legendre_weights * 0.5
 
         self.get_kernel_id = 0
         try:
@@ -2104,14 +2094,7 @@ class InverseDrosteReduced(DrosteReduced):
         )
 
         # quad formula for each brick (normalized to [0,1])
-        # sps.legendre blows up easily at high order
-        import scipy.special as sps
-
-        # legendre_nodes, _, legendre_weights = sps.legendre(
-        #        nquad_points).weights.T
-        legendre_nodes, legendre_weights = sps.p_roots(self.nquad_points)
-        legendre_nodes = legendre_nodes * 0.5 + 0.5
-        legendre_weights = legendre_weights * 0.5
+        brick_quadrature_kwargs = self.make_brick_quadrature_kwargs()
 
         # --------- call kernel 0 ----------
         self.get_kernel_id = 0
@@ -2127,15 +2110,13 @@ class InverseDrosteReduced(DrosteReduced):
             result=result_array_0,
             root_brick=root_brick,
             target_nodes=t.astype(np.float64, copy=True),
-            quadrature_nodes=legendre_nodes,
-            quadrature_weights=legendre_weights,
             interaction_case_vecs=base_case_vec.astype(np.float64, copy=True),
             interaction_case_scls=base_case_scl.astype(np.float64, copy=True),
             n_cases=1,
             nfunctions=self.nfunctions,
             quad_order=self.ntgt_points,
             nlevels=nlevels,
-            **extra_kernel_kwargs
+            **extra_kernel_kwargs, **brick_quadrature_kwargs
         )
 
         # --------- call kernel 1 ----------
@@ -2152,15 +2133,13 @@ class InverseDrosteReduced(DrosteReduced):
             result=result_array_1,
             root_brick=root_brick,
             target_nodes=t.astype(np.float64, copy=True),
-            quadrature_nodes=legendre_nodes,
-            quadrature_weights=legendre_weights,
             interaction_case_vecs=base_case_vec.astype(np.float64, copy=True),
             interaction_case_scls=base_case_scl.astype(np.float64, copy=True),
             n_cases=1,
             nfunctions=self.nfunctions,
             quad_order=self.ntgt_points,
             nlevels=nlevels,
-            **extra_kernel_kwargs
+            **extra_kernel_kwargs, **brick_quadrature_kwargs
         )
 
         # --------- call kernel 2 ----------

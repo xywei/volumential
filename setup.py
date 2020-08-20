@@ -120,6 +120,7 @@ def main():
             "pytential",
             "scipy",
             "sumpy",
+            "mpmath",
         ],
         extras_require={
             "gmsh_support": ["gmsh_interop"],
