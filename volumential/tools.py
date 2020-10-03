@@ -132,7 +132,8 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
     Useful for imposing analytic conditions efficiently.
     """
 
-    def __init__(self, dim, expression, variables=None, function_manglers=None):
+    def __init__(self, dim, expression, variables=None, dtype=np.float64,
+                 function_manglers=None, preamble_generators=None):
         """
         :arg dim
         :arg expression A pymbolic expression for the function
@@ -152,7 +153,9 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
                 assert isinstance(var, VariableType)
             self.vars = variables
 
+        self.dtype = dtype
         self.function_manglers = function_manglers
+        self.preamble_generators = preamble_generators
 
         self.name = "ScalarFieldExpressionEvaluation"
 
@@ -224,7 +227,8 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
             [
                 lp.ValueArg("dim, n_targets", np.int32),
                 lp.GlobalArg("target_points", np.float64, "dim, n_targets"),
-                ]
+                lp.TemporaryVariable("expr_val", None, ()),
+            ]
             + list(extra_kernel_kwarg_types)
             + ["...", ],
             name="eval_expr",
@@ -238,8 +242,12 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
         if self.function_manglers is not None:
             loopy_knl = lp.register_function_manglers(
                 loopy_knl,
-                self.function_manglers
-                )
+                self.function_manglers)
+
+        if self.preamble_generators is not None:
+            loopy_knl = lp.register_preamble_generators(
+                loopy_knl,
+                self.preamble_generators)
 
         return loopy_knl
 
@@ -285,11 +293,14 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
         if self.function_manglers is not None:
             knl = lp.register_function_manglers(knl, self.function_manglers)
 
+        if self.preamble_generators is not None:
+            knl = lp.register_preamble_generators(knl, self.preamble_generators)
+
         evt, res = knl(
             queue,
             target_points=target_points,
             n_targets=n_tgt_points,
-            result=np.zeros(n_tgt_points),
+            result=np.zeros(n_tgt_points, dtype=self.dtype),
             **extra_kernel_kwargs
         )
 
