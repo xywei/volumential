@@ -194,7 +194,7 @@ class DrosteBase(KernelCacheWrapper):
             ts = mpmath.calculus.quadrature.TanhSinh(mp_ctx)
             prec = int(np.log(10) / np.log(2) * mp_ctx.dps)  # bits of precision
 
-            for deg in range(100):
+            for deg in range(1, 100):
                 nodes = ts.calc_nodes(degree=deg, prec=prec)
                 if len(nodes) >= self.nradial_quad_points:
                     break
@@ -204,6 +204,8 @@ class DrosteBase(KernelCacheWrapper):
             ts_weights = np.array(
                 [p[1] * 2 * mp_ctx.power(0.5, deg) for p in nodes],
                 dtype=np.float64)
+            if deg == 1:
+                ts_weights *= 0.5  # peculiar scaling when deg=1
 
             # map to [0, 1]
             ts_nodes = ts_nodes * 0.5 + 0.5
