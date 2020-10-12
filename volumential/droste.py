@@ -187,7 +187,33 @@ class DrosteBase(KernelCacheWrapper):
             # Since there is no exact degree -> nqpts map for tanh-sinh rule,
             # we find the largest rule whose size dose not exceed the parameter
             # nradial_quad_points
-            raise NotImplementedError
+            import mpmath
+            mp_ctx = mpmath.mp
+            mp_ctx.dps = 20  # decimal precision
+            mp_ctx.pretty = True
+            ts = mpmath.calculus.quadrature.TanhSinh(mp_ctx)
+            prec = int(np.log(10) / np.log(2) * mp_ctx.dps)  # bits of precision
+
+            for deg in range(100):
+                nodes = ts.calc_nodes(degree=deg, prec=prec)
+                if len(nodes) >= self.nradial_quad_points:
+                    break
+
+            # extract quadrature formula over [-1, 1], note the 0.5**level scaling
+            ts_nodes = np.array([p[0] for p in nodes], dtype=np.float64)
+            ts_weights = np.array(
+                [p[1] * 2 * mp_ctx.power(0.5, deg) for p in nodes],
+                dtype=np.float64)
+
+            # map to [0, 1]
+            ts_nodes = ts_nodes * 0.5 + 0.5
+            ts_weights *= 0.5
+
+            return dict(quadrature_nodes=legendre_nodes,
+                        quadrature_weights=legendre_weights,
+                        radial_quadrature_nodes=ts_nodes,
+                        radial_quadrature_weights=ts_weights)
+
         else:
             return dict(quadrature_nodes=legendre_nodes,
                         quadrature_weights=legendre_weights)
