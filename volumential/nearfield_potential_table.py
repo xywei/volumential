@@ -940,7 +940,7 @@ class NearFieldInteractionTable(object):
 
             if resid >= table_tol:
                 logger.warn("Adaptive level refinement failed to converge.")
-                logger.warn("Residual at level %d equals to %d" % (nlev, resid))
+                logger.warn("Residual at level %d equals to %f" % (nlev, resid))
 
         # }}} End adaptively determine number of levels
 
@@ -951,17 +951,24 @@ class NearFieldInteractionTable(object):
             table_tol = np.finfo(self.dtype).eps * 64
             logger.warn("Searching for n_brick_quad_points since "
                         "adaptive_quadrature=True. Note that if you are using "
-                        "special radial quadrature, the radial order will not be "
+                        "special radial quadrature, the radial order will also be "
                         "adaptively refined.")
 
-            max_n_quad_pts = 200
+            max_n_quad_pts = 1000
             resid = np.inf
 
             while True:
 
-                n_brick_quad_points = n_brick_quad_points + 3
-                logger.warn(f"Trying n_brick_quad_points = {n_brick_quad_points}, "
-                            f"resid = {resid}")
+                n_brick_quad_points += max(int(n_brick_quad_points * 0.2), 3)
+                if special_radial_brick_quadrature:
+                    nradial_brick_quad_points += max(
+                        int(nradial_brick_quad_points * 0.2), 3)
+                    logger.warn(f"Trying n_brick_quad_points = {n_brick_quad_points}, "
+                                f"nradial_brick_quad_points = {nradial_brick_quad_points}, "
+                                f"resid = {resid}")
+                else:
+                    logger.warn(f"Trying n_brick_quad_points = {n_brick_quad_points}, "
+                                f"resid = {resid}")
                 if n_brick_quad_points > max_n_quad_pts:
                     logger.warn(
                             "Adaptive quadrature refinement terminated "
