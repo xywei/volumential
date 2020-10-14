@@ -114,6 +114,7 @@ class DrosteBase(KernelCacheWrapper):
 
         self.special_radial_quadrature = special_radial_quadrature
         self.nradial_quad_points = nradial_quad_points
+        self.brick_quadrature_kwargs = self.make_brick_quadrature_kwargs()
 
         if self.dim is not None:
             self.n_q_points = quad_order ** self.dim
@@ -197,6 +198,7 @@ class DrosteBase(KernelCacheWrapper):
             for deg in range(1, 100):
                 nodes = ts.calc_nodes(degree=deg, prec=prec)
                 if len(nodes) >= self.nradial_quad_points:
+                    self.nradial_quad_points = len(nodes)
                     break
 
             # extract quadrature formula over [-1, 1], note the 0.5**level scaling
@@ -732,7 +734,7 @@ class DrosteFull(DrosteBase):
         if self.special_radial_quadrature:
             quad_vars_subdomain = self.make_brick_domain(
                 quad_vars[1:], self.nquad_points) & self.make_brick_domain(
-                    quad_vars[0], self.nradial_quad_points)
+                    quad_vars[:1], self.nradial_quad_points)
         else:
             quad_vars_subdomain = self.make_brick_domain(
                 quad_vars, self.nquad_points)
@@ -857,9 +859,6 @@ class DrosteFull(DrosteBase):
         assert len(q_points) == self.ntgt_points ** self.dim
         t = np.array([pt[-1] for pt in q_points[: self.ntgt_points]])
 
-        # quad formula for each brick (normalized to [0,1])
-        brick_quadrature_kwargs = self.make_brick_quadrature_kwargs()
-
         knl = self.get_cached_optimized_kernel()
         evt, res = knl(
             queue, alpha=alpha, result=result_array,
@@ -871,7 +870,7 @@ class DrosteFull(DrosteBase):
                 np.float64, copy=True),
             n_cases=self.ncases, nfunctions=self.nfunctions,
             quad_order=self.ntgt_points, nlevels=nlevels,
-            **brick_quadrature_kwargs,
+            **self.brick_quadrature_kwargs,
             **extra_kernel_kwargs)
 
         cheb_table = res["result"]
@@ -967,8 +966,17 @@ class DrosteReduced(DrosteBase):
         basis_vars = self.make_basis_vars()
         basis_eval_vars = self.make_basis_eval_vars()
         pwaffs = self.make_pwaffs()
+
+        if self.special_radial_quadrature:
+            quad_vars_subdomain = self.make_brick_domain(
+                quad_vars[1:], self.nquad_points) & self.make_brick_domain(
+                    quad_vars[:1], self.nradial_quad_points)
+        else:
+            quad_vars_subdomain = self.make_brick_domain(
+                quad_vars, self.nquad_points)
+
         loop_domain_common_parts = (
-            self.make_brick_domain(quad_vars, self.nquad_points)
+            quad_vars_subdomain
             & self.make_brick_domain(basis_vars, self.nfunctions)
             & self.make_brick_domain(basis_eval_vars, self.nfunctions)
             & self.make_brick_domain(["iside"], 2)
@@ -1351,7 +1359,6 @@ class DrosteReduced(DrosteBase):
         except Exception:
             pass
         knl = self.get_cached_optimized_kernel()
-        brick_quadrature_kwargs = self.make_brick_quadrature_kwargs()
         evt, res = knl(
             queue, alpha=alpha, result=result_array,
             root_brick=root_brick,
@@ -1360,7 +1367,7 @@ class DrosteReduced(DrosteBase):
             interaction_case_scls=base_case_scl.astype(np.float64, copy=True),
             n_cases=1, nfunctions=self.nfunctions,
             quad_order=self.ntgt_points, nlevels=nlevels,
-            **extra_kernel_kwargs, **brick_quadrature_kwargs)
+            **extra_kernel_kwargs, **self.brick_quadrature_kwargs)
 
         raw_cheb_table_case = res["result"]
 
@@ -2120,9 +2127,6 @@ class InverseDrosteReduced(DrosteReduced):
                 ]
             ]
         )
-
-        # quad formula for each brick (normalized to [0,1])
-        brick_quadrature_kwargs = self.make_brick_quadrature_kwargs()
 
         # --------- call kernel 0 ----------
         self.get_kernel_id = 0
