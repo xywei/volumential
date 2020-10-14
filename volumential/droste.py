@@ -831,6 +831,9 @@ class DrosteFull(DrosteBase):
         if "nlevels" in kwargs:
             nlevels = kwargs["nlevels"]
             assert nlevels > 0
+            if nlevels > 1 and self.special_radial_quadrature:
+                logger.warn("When using tanh-sinh quadrature in the radial "
+                            "direction, it is often best to use a single level.")
         else:
             # Single level is equivalent to Duffy transform
             nlevels = 1
@@ -2148,7 +2151,7 @@ class InverseDrosteReduced(DrosteReduced):
             nfunctions=self.nfunctions,
             quad_order=self.ntgt_points,
             nlevels=nlevels,
-            **extra_kernel_kwargs, **brick_quadrature_kwargs
+            **extra_kernel_kwargs, **self.brick_quadrature_kwargs
         )
 
         # --------- call kernel 1 ----------
@@ -2171,7 +2174,7 @@ class InverseDrosteReduced(DrosteReduced):
             nfunctions=self.nfunctions,
             quad_order=self.ntgt_points,
             nlevels=nlevels,
-            **extra_kernel_kwargs, **brick_quadrature_kwargs
+            **extra_kernel_kwargs, **self.brick_quadrature_kwargs
         )
 
         # --------- call kernel 2 ----------

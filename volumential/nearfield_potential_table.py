@@ -858,7 +858,8 @@ class NearFieldInteractionTable(object):
             nlev = 1
 
         if "special_radial_brick_quadrature" in kwargs:
-            special_radial_brick_quadrature = kwargs.pop("special_radial_brick_quadrature")
+            special_radial_brick_quadrature = kwargs.pop(
+                "special_radial_brick_quadrature")
             nradial_brick_quad_points = kwargs.pop("nradial_brick_quad_points")
         else:
             special_radial_brick_quadrature = False
@@ -963,12 +964,14 @@ class NearFieldInteractionTable(object):
                 if special_radial_brick_quadrature:
                     nradial_brick_quad_points += max(
                         int(nradial_brick_quad_points * 0.2), 3)
-                    logger.warn(f"Trying n_brick_quad_points = {n_brick_quad_points}, "
-                                f"nradial_brick_quad_points = {nradial_brick_quad_points}, "
-                                f"resid = {resid}")
+                    logger.warn(
+                        f"Trying n_brick_quad_points = {n_brick_quad_points}, "
+                        f"nradial_brick_quad_points = {nradial_brick_quad_points}, "
+                        f"resid = {resid}")
                 else:
-                    logger.warn(f"Trying n_brick_quad_points = {n_brick_quad_points}, "
-                                f"resid = {resid}")
+                    logger.warn(
+                        f"Trying n_brick_quad_points = {n_brick_quad_points}, "
+                        f"resid = {resid}")
                 if n_brick_quad_points > max_n_quad_pts:
                     logger.warn(
                             "Adaptive quadrature refinement terminated "
