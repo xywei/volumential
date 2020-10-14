@@ -800,6 +800,39 @@ class NearFieldInteractionTable(object):
 
     # {{{ build table via adding up a Droste of bricks
 
+    def get_droste_table_builder(self, n_brick_quad_points,
+                                 special_radial_brick_quadrature,
+                                 nradial_brick_quad_points,
+                                 use_symmetry=False,
+                                 knl_symmetry_tags=None):
+        if self.inverse_droste:
+            from volumential.droste import InverseDrosteReduced
+
+            drf = InverseDrosteReduced(
+                self.integral_knl, self.quad_order, self.interaction_case_vecs,
+                n_brick_quad_points, knl_symmetry_tags, auto_windowing=False,
+                special_radial_quadrature=special_radial_brick_quadrature,
+                nradial_quad_points=nradial_brick_quad_points)
+
+        else:
+            if not use_symmetry:
+                from volumential.droste import DrosteFull
+
+                drf = DrosteFull(
+                    self.integral_knl, self.quad_order,
+                    self.interaction_case_vecs, n_brick_quad_points,
+                    special_radial_quadrature=special_radial_brick_quadrature,
+                    nradial_quad_points=nradial_brick_quad_points)
+            else:
+                from volumential.droste import DrosteReduced
+
+                drf = DrosteReduced(
+                    self.integral_knl, self.quad_order, self.interaction_case_vecs,
+                    n_brick_quad_points, knl_symmetry_tags,
+                    special_radial_quadrature=special_radial_brick_quadrature,
+                    nradial_quad_points=nradial_brick_quad_points)
+        return drf
+
     def build_table_via_droste_bricks(
         self,
         n_brick_quad_points=50,
@@ -824,20 +857,14 @@ class NearFieldInteractionTable(object):
         else:
             nlev = 1
 
-        # extra_kernel_kwargs = {}
-        # if "extra_kernel_kwargs" in kwargs:
-        #     extra_kernel_kwargs = kwargs["extra_kernel_kwargs"]
+        if "special_radial_brick_quadrature" in kwargs:
+            special_radial_brick_quadrature = kwargs.pop("special_radial_brick_quadrature")
+            nradial_brick_quad_points = kwargs.pop("nradial_brick_quad_points")
+        else:
+            special_radial_brick_quadrature = False
+            nradial_brick_quad_points = None
 
-        cheb_coefs = [
-            self.get_mode_cheb_coeffs(mid, self.quad_order)
-            for mid in range(self.n_q_points)
-            ]
-
-        # {{{ get the table builder
-
-        if self.inverse_droste:
-            from volumential.droste import InverseDrosteReduced
-
+        if use_symmetry:
             if "knl_symmetry_tags" in kwargs:
                 knl_symmetry_tags = kwargs["knl_symmetry_tags"]
             else:
@@ -850,60 +877,24 @@ class NearFieldInteractionTable(object):
                         )
                 knl_symmetry_tags = None
 
-            drf = InverseDrosteReduced(
-                    self.integral_knl,
-                    self.quad_order,
-                    self.interaction_case_vecs,
-                    n_brick_quad_points,
-                    knl_symmetry_tags,
-                    auto_windowing=False
-                    )
+        # extra_kernel_kwargs = {}
+        # if "extra_kernel_kwargs" in kwargs:
+        #     extra_kernel_kwargs = kwargs["extra_kernel_kwargs"]
 
-        else:
-            if not use_symmetry:
-                from volumential.droste import DrosteFull
-
-                drf = DrosteFull(
-                    self.integral_knl,
-                    self.quad_order,
-                    self.interaction_case_vecs,
-                    n_brick_quad_points,
-                )
-            else:
-                from volumential.droste import DrosteReduced
-
-                if "knl_symmetry_tags" in kwargs:
-                    knl_symmetry_tags = kwargs["knl_symmetry_tags"]
-                else:
-                    # Maximum symmetry by default
-                    logger.warning(
-                        "use_symmetry is set to True, but knl_symmetry_tags is not "
-                        "set. Using the default maximum symmetry. (Using maximum "
-                        "symmetry for some kernels (e.g. derivatives of "
-                        "LaplaceKernel will yield incorrect results)."
-                        )
-                    knl_symmetry_tags = None
-
-                drf = DrosteReduced(
-                    self.integral_knl,
-                    self.quad_order,
-                    self.interaction_case_vecs,
-                    n_brick_quad_points,
-                    knl_symmetry_tags,
-                )
-
-        # }}} End get the table builder
+        cheb_coefs = [
+            self.get_mode_cheb_coeffs(mid, self.quad_order)
+            for mid in range(self.n_q_points)
+            ]
 
         # compute an initial table
-        data0 = drf(
-            queue,
-            source_box_extent=self.source_box_extent,
-            alpha=alpha,
-            nlevels=nlev,
-            # extra_kernel_kwargs=extra_kernel_kwargs,
-            cheb_coefs=cheb_coefs,
-            **kwargs
-        )
+        drf = self.get_droste_table_builder(
+            n_brick_quad_points,
+            special_radial_brick_quadrature, nradial_brick_quad_points,
+            use_symmetry, knl_symmetry_tags)
+        data0 = drf(queue, source_box_extent=self.source_box_extent,
+                    alpha=alpha, nlevels=nlev,
+                    # extra_kernel_kwargs=extra_kernel_kwargs,
+                    cheb_coefs=cheb_coefs, **kwargs)
 
         # {{{ adaptively determine number of levels
 
@@ -926,15 +917,10 @@ class NearFieldInteractionTable(object):
                     break
 
                 nlev = nlev + 1
-                data1 = drf(
-                    queue,
-                    source_box_extent=self.source_box_extent,
-                    alpha=alpha,
-                    nlevels=nlev,
-                    # extra_kernel_kwargs=extra_kernel_kwargs,
-                    cheb_coefs=cheb_coefs,
-                    **kwargs
-                )
+                data1 = drf(queue, source_box_extent=self.source_box_extent,
+                            alpha=alpha, nlevels=nlev,
+                            # extra_kernel_kwargs=extra_kernel_kwargs,
+                            cheb_coefs=cheb_coefs, **kwargs)
 
                 resid = np.max(np.abs(data1 - data0)) / np.max(np.abs(data1))
                 data0 = data1
@@ -963,15 +949,19 @@ class NearFieldInteractionTable(object):
         resid = -1
         if adaptive_quadrature:
             table_tol = np.finfo(self.dtype).eps * 64
-            logger.warn(
-                "Searching for n_brick_quad_points since "
-                "adaptive_quadrature=True")
+            logger.warn("Searching for n_brick_quad_points since "
+                        "adaptive_quadrature=True. Note that if you are using "
+                        "special radial quadrature, the radial order will not be "
+                        "adaptively refined.")
 
             max_n_quad_pts = 200
+            resid = np.inf
 
             while True:
 
                 n_brick_quad_points = n_brick_quad_points + 3
+                logger.warn(f"Trying n_brick_quad_points = {n_brick_quad_points}, "
+                            f"resid = {resid}")
                 if n_brick_quad_points > max_n_quad_pts:
                     logger.warn(
                             "Adaptive quadrature refinement terminated "
@@ -981,16 +971,15 @@ class NearFieldInteractionTable(object):
                                 max_n_quad_pts - 1))
                     break
 
-                data1 = drf(
-                    queue,
-                    source_box_extent=self.source_box_extent,
-                    alpha=alpha,
-                    nlevels=nlev,
-                    n_brick_quad_points=n_brick_quad_points,
-                    # extra_kernel_kwargs=extra_kernel_kwargs,
-                    cheb_coefs=cheb_coefs,
-                    **kwargs
-                )
+                drf = self.get_droste_table_builder(
+                    n_brick_quad_points,
+                    special_radial_brick_quadrature, nradial_brick_quad_points,
+                    use_symmetry, knl_symmetry_tags)
+                data1 = drf(queue, source_box_extent=self.source_box_extent,
+                            alpha=alpha, nlevels=nlev,
+                            n_brick_quad_points=n_brick_quad_points,
+                            # extra_kernel_kwargs=extra_kernel_kwargs,
+                            cheb_coefs=cheb_coefs, **kwargs)
 
                 resid = np.max(np.abs(data1 - data0)) / np.max(np.abs(data1))
                 data0 = data1
@@ -1219,13 +1208,9 @@ class NearFieldInteractionTable(object):
 
         # only for getting kernel evaluation related stuff
         drf = InverseDrosteReduced(
-                self.integral_knl,
-                self.quad_order,
-                self.interaction_case_vecs,
-                n_brick_quad_points=0,
-                knl_symmetry_tags=[],
-                auto_windowing=False
-                )
+                self.integral_knl, self.quad_order,
+                self.interaction_case_vecs, n_brick_quad_points=0,
+                knl_symmetry_tags=[], auto_windowing=False)
 
         # uses "dist[dim]", assigned to "knl_val"
         knl_insns = drf.get_sumpy_kernel_insns()
