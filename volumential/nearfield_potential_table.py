@@ -902,7 +902,7 @@ class NearFieldInteractionTable(object):
         resid = -1
         missing_measure = 1
         if adaptive_level:
-            table_tol = np.finfo(self.dtype).eps * 64
+            table_tol = np.finfo(self.dtype).eps * 256  # 5e-14 for float64
             logger.warn("Searching for nlevels since adaptive_level=True")
 
             while True:
@@ -941,15 +941,14 @@ class NearFieldInteractionTable(object):
 
             if resid >= table_tol:
                 logger.warn("Adaptive level refinement failed to converge.")
-                logger.warn("Residual at level %d equals to %f" % (nlev, resid))
+                logger.warn(f"Residual at level {nlev} equals to {resid}")
 
         # }}} End adaptively determine number of levels
 
         # {{{ adaptively determine brick quad order
 
-        resid = -1
         if adaptive_quadrature:
-            table_tol = np.finfo(self.dtype).eps * 64
+            table_tol = np.finfo(self.dtype).eps * 256  # 5e-14 for float64
             logger.warn("Searching for n_brick_quad_points since "
                         "adaptive_quadrature=True. Note that if you are using "
                         "special radial quadrature, the radial order will also be "
@@ -991,14 +990,19 @@ class NearFieldInteractionTable(object):
                             # extra_kernel_kwargs=extra_kernel_kwargs,
                             cheb_coefs=cheb_coefs, **kwargs)
 
+                resid_prev = resid
                 resid = np.max(np.abs(data1 - data0)) / np.max(np.abs(data1))
                 data0 = data1
 
-                if abs(resid) < table_tol:
+                if resid < table_tol:
                     logger.warn(
                         "Adaptive quadrature "
                         "converged at order %d with residual %e" % (
                             n_brick_quad_points - 1, resid))
+                    break
+
+                if resid > resid_prev:
+                    logger.warn("Non-monotonic residual, breaking..")
                     break
 
                 if np.isnan(resid):
@@ -1009,8 +1013,8 @@ class NearFieldInteractionTable(object):
 
             if resid >= table_tol:
                 logger.warn("Adaptive quadrature failed to converge.")
-                logger.warn("Residual at order %d equals to %d" % (
-                    n_brick_quad_points, resid))
+                logger.warn(f"Residual at order {n_brick_quad_points} "
+                            f"equals to {resid}")
 
             if resid < 0:
                 logger.warn("Failed to perform quadrature order refinement.")
