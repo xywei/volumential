@@ -63,9 +63,16 @@ class DrosteBase(KernelCacheWrapper):
     .. attribute:: interaction_case_scls
 
        The relative sizes of the target box for each case.
+
+    .. attribute:: special_radial_quadrature
+
+        If True, the radial direction uses a different quadrature rule.
+        The radial direction is identified with the condition
+        ``ibrick_axis == iaxis`` and always uses iname ``q0``.
     """
 
-    def __init__(self, integral_knl, quad_order, case_vecs, n_brick_quad_points=15):
+    def __init__(self, integral_knl, quad_order, case_vecs, n_brick_quad_points,
+                 special_radial_quadrature, nradial_quad_points):
         from sumpy.kernel import Kernel
 
         if integral_knl is not None:
@@ -100,6 +107,14 @@ class DrosteBase(KernelCacheWrapper):
         self.nfunctions = quad_order
         self.ntgt_points = quad_order
         self.nquad_points = n_brick_quad_points
+
+        if special_radial_quadrature and (self.dim == 1):
+            raise ValueError(
+                "please only use normal quadrature nodes for 1D quadrature")
+
+        self.special_radial_quadrature = special_radial_quadrature
+        self.nradial_quad_points = nradial_quad_points
+        self.brick_quadrature_kwargs = self.make_brick_quadrature_kwargs()
 
         if self.dim is not None:
             self.n_q_points = quad_order ** self.dim
@@ -156,6 +171,56 @@ class DrosteBase(KernelCacheWrapper):
             [(pwaffs[0] + lbound).le_set(pwaffs[var]) for var in variables]
             + [pwaffs[var].lt_set(ubound_pwaff) for var in variables],
         )
+
+    def make_brick_quadrature_kwargs(self):
+        """Produce 1D quadrature formulae used for each brick.
+        The rules returned are defined over [0, 1].
+        """
+        # sps.legendre blows up easily at high order
+        import scipy.special as sps
+        # legendre_nodes, _, legendre_weights = sps.legendre(
+        #        nquad_points).weights.T
+        legendre_nodes, legendre_weights = sps.p_roots(self.nquad_points)
+        legendre_nodes = legendre_nodes * 0.5 + 0.5
+        legendre_weights = legendre_weights * 0.5
+
+        if self.special_radial_quadrature:
+            # Since there is no exact degree -> nqpts map for tanh-sinh rule,
+            # we find the largest rule whose size dose not exceed the parameter
+            # nradial_quad_points
+            import mpmath
+            mp_ctx = mpmath.mp
+            mp_ctx.dps = 20  # decimal precision
+            mp_ctx.pretty = True
+            ts = mpmath.calculus.quadrature.TanhSinh(mp_ctx)
+            prec = int(np.log(10) / np.log(2) * mp_ctx.dps)  # bits of precision
+
+            for deg in range(1, 100):
+                nodes = ts.calc_nodes(degree=deg, prec=prec)
+                if len(nodes) >= self.nradial_quad_points:
+                    self.nradial_quad_points = len(nodes)
+                    break
+
+            # extract quadrature formula over [-1, 1], note the 0.5**level scaling
+            ts_nodes = np.array([p[0] for p in nodes], dtype=np.float64)
+            ts_weights = np.array(
+                [p[1] * 2 * mp_ctx.power(0.5, deg) for p in nodes],
+                dtype=np.float64)
+            if deg == 1:
+                ts_weights *= 0.5  # peculiar scaling when deg=1
+
+            # map to [0, 1]
+            ts_nodes = ts_nodes * 0.5 + 0.5
+            ts_weights *= 0.5
+
+            return dict(quadrature_nodes=legendre_nodes,
+                        quadrature_weights=legendre_weights,
+                        radial_quadrature_nodes=ts_nodes,
+                        radial_quadrature_weights=ts_weights)
+
+        else:
+            return dict(quadrature_nodes=legendre_nodes,
+                        quadrature_weights=legendre_weights)
 
     def get_sumpy_kernel_insns(self):
         # get sumpy kernel insns
@@ -257,19 +322,11 @@ class DrosteBase(KernelCacheWrapper):
                 "<> knl_val_post = knl_val {id=pp_kval}"
                 )
 
-        resknl = resknl.replace(
-            "PROD_QUAD_WEIGHT",
-            " * ".join(
-                [
-                    "quadrature_weights[QID]".replace("QID", qvar)
-                    for qvar in self.quad_vars
-                ]
-            ),
-        )
-
         if self.dim == 1:
+
             resknl = resknl.replace("TPLTGT_ASSIGNMENT", """target_nodes[t0]""")
             resknl = resknl.replace("QUAD_PT_ASSIGNMENT", """quadrature_nodes[q0]""")
+            resknl = resknl.replace("PROD_QUAD_WEIGHT", """quadrature_weights[q0]""")
             resknl = resknl.replace("DENSITY_VAL_ASSIGNMENT", """basis_eval0""")
             resknl = resknl.replace(
                 "PREPARE_BASIS_VALS",
@@ -284,10 +341,23 @@ class DrosteBase(KernelCacheWrapper):
                 "TPLTGT_ASSIGNMENT",
                 """if(iaxis == 0, target_nodes[t0], target_nodes[t1])""",
             )
-            resknl = resknl.replace(
-                "QUAD_PT_ASSIGNMENT",
-                """if(iaxis == 0, quadrature_nodes[q0], quadrature_nodes[q1])""",
-            )
+            if self.special_radial_quadrature:
+                resknl = resknl.replace(
+                    "QUAD_PT_ASSIGNMENT",
+                    """if(iaxis == ibrick_axis,
+                          radial_quadrature_nodes[q0], quadrature_nodes[q1])""",
+                )
+                resknl = resknl.replace(
+                    "PROD_QUAD_WEIGHT",
+                    """radial_quadrature_weights[q0] * quadrature_weights[q1]""")
+            else:
+                resknl = resknl.replace(
+                    "QUAD_PT_ASSIGNMENT",
+                    """if(iaxis == 0, quadrature_nodes[q0], quadrature_nodes[q1])""",
+                )
+                resknl = resknl.replace(
+                    "PROD_QUAD_WEIGHT",
+                    """quadrature_weights[q0] * quadrature_weights[q1]""")
             resknl = resknl.replace(
                 "DENSITY_VAL_ASSIGNMENT", """basis_eval0 * basis_eval1"""
             )
@@ -305,11 +375,28 @@ class DrosteBase(KernelCacheWrapper):
                 """if(iaxis == 0, target_nodes[t0], if(
                           iaxis == 1, target_nodes[t1], target_nodes[t2]))""",
             )
-            resknl = resknl.replace(
-                "QUAD_PT_ASSIGNMENT",
-                """if(iaxis == 0, quadrature_nodes[q0], if(
-                  iaxis == 1, quadrature_nodes[q1], quadrature_nodes[q2]))""",
-            )
+            if self.special_radial_quadrature:
+                # depending on ibrick_axis, axes could be
+                # [q0, q1, q2], [q1, q0, q2], or [q1, q2, q0]
+                resknl = resknl.replace(
+                    "QUAD_PT_ASSIGNMENT",
+                    """if(iaxis == ibrick_axis, radial_quadrature_nodes[q0], if(
+                      (iaxis == 0) or ((iaxis == 1) and (ibrick_axis == 0)),
+                      quadrature_nodes[q1],
+                      quadrature_nodes[q2]))""",
+                )
+                resknl = resknl.replace(
+                    "PROD_QUAD_WEIGHT",
+                    """radial_w[q0] * w[q1] * w[q2]""".replace(
+                        "w", "quadrature_weights"))
+            else:
+                resknl = resknl.replace(
+                    "QUAD_PT_ASSIGNMENT",
+                    """if(iaxis == 0, quadrature_nodes[q0], if(
+                      iaxis == 1, quadrature_nodes[q1], quadrature_nodes[q2]))""")
+                resknl = resknl.replace(
+                    "PROD_QUAD_WEIGHT",
+                    """w[q0] * w[q1] * w[q2]""".replace("w", "quadrature_weights"))
             resknl = resknl.replace(
                 "DENSITY_VAL_ASSIGNMENT",
                 """basis_eval0 * basis_eval1 * basis_eval2"""
@@ -566,8 +653,7 @@ class DrosteBase(KernelCacheWrapper):
                     *  knl_scaling
                 ) {id=result,dep=jac:mpoint:density:finish_kval}
         end
-        """
-            )
+        """)
         ]
 
     def get_target_points(self, queue=None):
@@ -630,9 +716,13 @@ class DrosteFull(DrosteBase):
     Build the full table directly.
     """
 
-    def __init__(self, integral_knl, quad_order, case_vecs, n_brick_quad_points=50):
+    def __init__(self, integral_knl, quad_order, case_vecs,
+                 n_brick_quad_points=50,
+                 special_radial_quadrature=False,
+                 nradial_quad_points=None):
         super(DrosteFull, self).__init__(
-                integral_knl, quad_order, case_vecs, n_brick_quad_points)
+            integral_knl, quad_order, case_vecs, n_brick_quad_points,
+            special_radial_quadrature, nradial_quad_points)
         self.name = "DrosteFull"
 
     def make_loop_domain(self):
@@ -641,9 +731,16 @@ class DrosteFull(DrosteBase):
         basis_vars = self.make_basis_vars()
         basis_eval_vars = self.make_basis_eval_vars()
         pwaffs = self.make_pwaffs()  # noqa: F841
+        if self.special_radial_quadrature:
+            quad_vars_subdomain = self.make_brick_domain(
+                quad_vars[1:], self.nquad_points) & self.make_brick_domain(
+                    quad_vars[:1], self.nradial_quad_points)
+        else:
+            quad_vars_subdomain = self.make_brick_domain(
+                quad_vars, self.nquad_points)
         self.loop_domain = (
             self.make_brick_domain(tgt_vars, self.ntgt_points)
-            & self.make_brick_domain(quad_vars, self.nquad_points)
+            & quad_vars_subdomain
             & self.make_brick_domain(basis_vars, self.nfunctions)
             & self.make_brick_domain(basis_eval_vars, self.nfunctions)
             & self.make_brick_domain(["iside"], 2)
@@ -665,7 +762,8 @@ class DrosteFull(DrosteBase):
 
         loopy_knl = lp.make_kernel(  # NOQA
             [domain],
-            self.get_kernel_code() + self.get_sumpy_kernel_eval_insns(),
+            self.get_kernel_code()
+            + self.get_sumpy_kernel_eval_insns(),
             [
                 lp.ValueArg("alpha", np.float64),
                 lp.ValueArg("n_cases, nfunctions, quad_order, dim", np.int32),
@@ -708,10 +806,10 @@ class DrosteFull(DrosteBase):
 
     def call_loopy_kernel(self, queue, **kwargs):
         """
-        :arg source_box_extent
-        :arg alpha
-        :arg nlevels
-        :arg extra_kernel_kwargs
+        :param source_box_extent:
+        :param alpha:
+        :param nlevels:
+        :param extra_kernel_kwargs:
         """
 
         if "source_box_extent" in kwargs:
@@ -733,6 +831,9 @@ class DrosteFull(DrosteBase):
         if "nlevels" in kwargs:
             nlevels = kwargs["nlevels"]
             assert nlevels > 0
+            if nlevels > 1 and self.special_radial_quadrature:
+                logger.warn("When using tanh-sinh quadrature in the radial "
+                            "direction, it is often best to use a single level.")
         else:
             # Single level is equivalent to Duffy transform
             nlevels = 1
@@ -761,37 +862,19 @@ class DrosteFull(DrosteBase):
         assert len(q_points) == self.ntgt_points ** self.dim
         t = np.array([pt[-1] for pt in q_points[: self.ntgt_points]])
 
-        # quad formula for each brick (normalized to [0,1])
-        # sps.legendre blows up easily at high order
-        import scipy.special as sps
-
-        # legendre_nodes, _, legendre_weights = sps.legendre(
-        #        nquad_points).weights.T
-        legendre_nodes, legendre_weights = sps.p_roots(self.nquad_points)
-        legendre_nodes = legendre_nodes * 0.5 + 0.5
-        legendre_weights = legendre_weights * 0.5
-
         knl = self.get_cached_optimized_kernel()
         evt, res = knl(
-            queue,
-            alpha=alpha,
-            result=result_array,
+            queue, alpha=alpha, result=result_array,
             root_brick=root_brick,
             target_nodes=t.astype(np.float64, copy=True),
-            quadrature_nodes=legendre_nodes,
-            quadrature_weights=legendre_weights,
             interaction_case_vecs=self.interaction_case_vecs.astype(
-                np.float64, copy=True
-            ),
+                np.float64, copy=True),
             interaction_case_scls=self.interaction_case_scls.reshape(-1).astype(
-                np.float64, copy=True
-            ),
-            n_cases=self.ncases,
-            nfunctions=self.nfunctions,
-            quad_order=self.ntgt_points,
-            nlevels=nlevels,
-            **extra_kernel_kwargs
-        )
+                np.float64, copy=True),
+            n_cases=self.ncases, nfunctions=self.nfunctions,
+            quad_order=self.ntgt_points, nlevels=nlevels,
+            **self.brick_quadrature_kwargs,
+            **extra_kernel_kwargs)
 
         cheb_table = res["result"]
 
@@ -804,6 +887,7 @@ class DrosteFull(DrosteBase):
             self.integral_knl.__str__(),
             "quad_order-" + str(self.ntgt_points),
             "brick_order-" + str(self.nquad_points),
+            "brick_radial_order-" + str(self.nradial_quad_points),
         )
 
     def __call__(self, queue, **kwargs):
@@ -844,9 +928,12 @@ class DrosteReduced(DrosteBase):
         case_vecs=None,
         n_brick_quad_points=50,
         knl_symmetry_tags=None,
+        special_radial_quadrature=False,
+        nradial_quad_points=None,
     ):
         super(DrosteReduced, self).__init__(
-                integral_knl, quad_order, case_vecs, n_brick_quad_points)
+            integral_knl, quad_order, case_vecs, n_brick_quad_points,
+            special_radial_quadrature, nradial_quad_points)
 
         from volumential.list1_symmetry import CaseVecReduction
 
@@ -882,8 +969,17 @@ class DrosteReduced(DrosteBase):
         basis_vars = self.make_basis_vars()
         basis_eval_vars = self.make_basis_eval_vars()
         pwaffs = self.make_pwaffs()
+
+        if self.special_radial_quadrature:
+            quad_vars_subdomain = self.make_brick_domain(
+                quad_vars[1:], self.nquad_points) & self.make_brick_domain(
+                    quad_vars[:1], self.nradial_quad_points)
+        else:
+            quad_vars_subdomain = self.make_brick_domain(
+                quad_vars, self.nquad_points)
+
         loop_domain_common_parts = (
-            self.make_brick_domain(quad_vars, self.nquad_points)
+            quad_vars_subdomain
             & self.make_brick_domain(basis_vars, self.nfunctions)
             & self.make_brick_domain(basis_eval_vars, self.nfunctions)
             & self.make_brick_domain(["iside"], 2)
@@ -1260,16 +1356,6 @@ class DrosteReduced(DrosteBase):
             ]
         )
 
-        # quad formula for each brick (normalized to [0,1])
-        # sps.legendre blows up easily at high order
-        import scipy.special as sps
-
-        # legendre_nodes, _, legendre_weights = sps.legendre(
-        #        nquad_points).weights.T
-        legendre_nodes, legendre_weights = sps.p_roots(self.nquad_points)
-        legendre_nodes = legendre_nodes * 0.5 + 0.5
-        legendre_weights = legendre_weights * 0.5
-
         self.get_kernel_id = 0
         try:
             delattr(self, "_memoize_dic_get_cached_optimized_kernel")
@@ -1277,21 +1363,15 @@ class DrosteReduced(DrosteBase):
             pass
         knl = self.get_cached_optimized_kernel()
         evt, res = knl(
-            queue,
-            alpha=alpha,
-            result=result_array,
+            queue, alpha=alpha, result=result_array,
             root_brick=root_brick,
             target_nodes=t.astype(np.float64, copy=True),
-            quadrature_nodes=legendre_nodes,
-            quadrature_weights=legendre_weights,
             interaction_case_vecs=base_case_vec.astype(np.float64, copy=True),
             interaction_case_scls=base_case_scl.astype(np.float64, copy=True),
-            n_cases=1,
-            nfunctions=self.nfunctions,
-            quad_order=self.ntgt_points,
-            nlevels=nlevels,
-            **extra_kernel_kwargs
-        )
+            n_cases=1, nfunctions=self.nfunctions,
+            quad_order=self.ntgt_points, nlevels=nlevels,
+            **extra_kernel_kwargs, **self.brick_quadrature_kwargs)
+
         raw_cheb_table_case = res["result"]
 
         self.get_kernel_id = 1
@@ -1443,6 +1523,7 @@ class DrosteReduced(DrosteBase):
             self.integral_knl.__str__(),
             "quad_order-" + str(self.ntgt_points),
             "brick_order-" + str(self.nquad_points),
+            "brick_radial_order-" + str(self.nradial_quad_points),
             "case-" + str(self.current_base_case),
             "kernel_id-" + str(self.get_kernel_id),
             "symmetry-" + symmetry_info,
@@ -1511,20 +1592,17 @@ class InverseDrosteReduced(DrosteReduced):
 
     """
 
-    def __init__(
-            self,
-            integral_knl,
-            quad_order,
-            case_vecs,
-            n_brick_quad_points=50,
-            knl_symmetry_tags=None,
-            auto_windowing=True):
+    def __init__(self, integral_knl, quad_order, case_vecs,
+                 n_brick_quad_points=50, knl_symmetry_tags=None,
+                 special_radial_quadrature=False, nradial_quad_points=None,
+                 auto_windowing=True):
         """
         :param auto_windowing: auto-detect window radius.
         """
         super(InverseDrosteReduced, self).__init__(
             integral_knl, quad_order, case_vecs,
-            n_brick_quad_points, knl_symmetry_tags)
+            n_brick_quad_points, special_radial_quadrature,
+            nradial_quad_points, knl_symmetry_tags)
         self.auto_windowing = auto_windowing
 
     def get_cache_key(self):
@@ -1534,9 +1612,9 @@ class InverseDrosteReduced(DrosteReduced):
             self.integral_knl.__str__(),
             "quad_order-" + str(self.ntgt_points),
             "brick_order-" + str(self.nquad_points),
+            "brick_radial_order-" + str(self.nradial_quad_points),
             "case-" + str(self.current_base_case),
-            "kernel_id-" + str(self.get_kernel_id),
-        )
+            "kernel_id-" + str(self.get_kernel_id),)
 
     def codegen_basis_tgt_eval(self, iaxis):
         """Generate instructions to evaluate Chebyshev polynomial basis
@@ -2053,16 +2131,6 @@ class InverseDrosteReduced(DrosteReduced):
             ]
         )
 
-        # quad formula for each brick (normalized to [0,1])
-        # sps.legendre blows up easily at high order
-        import scipy.special as sps
-
-        # legendre_nodes, _, legendre_weights = sps.legendre(
-        #        nquad_points).weights.T
-        legendre_nodes, legendre_weights = sps.p_roots(self.nquad_points)
-        legendre_nodes = legendre_nodes * 0.5 + 0.5
-        legendre_weights = legendre_weights * 0.5
-
         # --------- call kernel 0 ----------
         self.get_kernel_id = 0
         try:
@@ -2077,15 +2145,13 @@ class InverseDrosteReduced(DrosteReduced):
             result=result_array_0,
             root_brick=root_brick,
             target_nodes=t.astype(np.float64, copy=True),
-            quadrature_nodes=legendre_nodes,
-            quadrature_weights=legendre_weights,
             interaction_case_vecs=base_case_vec.astype(np.float64, copy=True),
             interaction_case_scls=base_case_scl.astype(np.float64, copy=True),
             n_cases=1,
             nfunctions=self.nfunctions,
             quad_order=self.ntgt_points,
             nlevels=nlevels,
-            **extra_kernel_kwargs
+            **extra_kernel_kwargs, **self.brick_quadrature_kwargs
         )
 
         # --------- call kernel 1 ----------
@@ -2102,15 +2168,13 @@ class InverseDrosteReduced(DrosteReduced):
             result=result_array_1,
             root_brick=root_brick,
             target_nodes=t.astype(np.float64, copy=True),
-            quadrature_nodes=legendre_nodes,
-            quadrature_weights=legendre_weights,
             interaction_case_vecs=base_case_vec.astype(np.float64, copy=True),
             interaction_case_scls=base_case_scl.astype(np.float64, copy=True),
             n_cases=1,
             nfunctions=self.nfunctions,
             quad_order=self.ntgt_points,
             nlevels=nlevels,
-            **extra_kernel_kwargs
+            **extra_kernel_kwargs, **self.brick_quadrature_kwargs
         )
 
         # --------- call kernel 2 ----------
