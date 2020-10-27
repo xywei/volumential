@@ -19,12 +19,17 @@ RUN ln -s /usr/lib/x86_64-linux-gnu/libOpenCL.so.1 /usr/lib/libOpenCL.so
 
 ##########################################
 USER firedrake
-WORKDIR /home/firedrake
+WORKDIR /home/firedrake/firedrake/src
 
 RUN git clone --recurse-submodules "https://gitlab.tiker.net/xywei/volumential.git"
 
 # Code generation in pypvfm's setup.py needs mako
-RUN bash -c "source firedrake/bin/activate; pip install mako"
+RUN bash -c "source ~/firedrake/bin/activate; pip install mako"
 
-RUN bash -c "source firedrake/bin/activate; cd volumential/contrib/meshgen11_dealii; ./build.sh"
-RUN bash -c "source firedrake/bin/activate; cd volumential; pip install -r requirements.txt"
+RUN bash -c "source ~/firedrake/bin/activate; cd volumential/contrib/meshgen11_dealii; ./build.sh"
+RUN bash -c "source ~/firedrake/bin/activate; cd volumential; pip install -r requirements.txt"
+COPY docker/to_loopyy.sh .
+RUN bash -c "source ~/firedrake/bin/activate; sh to_loopyy.sh"
+
+# Some convenience utils
+RUN bash -c "source ~/firedrake/bin/activate; pip install tqdm jupyterlab"
