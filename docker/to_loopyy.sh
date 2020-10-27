@@ -31,6 +31,8 @@ find . \( -type d -name .git -prune \) -o -type f -print0 | xargs -0 sed -i 's/l
 find . \( -type d -name .git -prune \) -o -type f -print0 | xargs -0 sed -i 's/from __future__.*//g'  # to use py3.6
 cd ..
 
+# fix egg links and make sure both loopy and loopyy are installed
 rm /home/firedrake/firedrake/lib/python3.6/site-packages/loo.py.egg-link
 pip install -e ./loopyy
 pip install -e ./loopy
+pip install -e ./loopyy

@@ -31,5 +31,7 @@ RUN bash -c "source ~/firedrake/bin/activate; cd volumential; pip install -r req
 COPY docker/to_loopyy.sh .
 RUN bash -c "source ~/firedrake/bin/activate; sh to_loopyy.sh"
 
+##########################################
 # Some convenience utils
+WORKDIR /home/firedrake/
 RUN bash -c "source ~/firedrake/bin/activate; pip install tqdm jupyterlab"
