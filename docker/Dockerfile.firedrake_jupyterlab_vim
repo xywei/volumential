@@ -1,0 +1,7 @@
+# Jupyter lab working envioronment with vim mode
+FROM xywei/volumential-firedrake-jupyterlab:latest
+
+# This DockerFile is looked after by
+MAINTAINER Xiaoyu Wei <xywei@illinois.edu>
+
+RUN bash -c "source ~/firedrake/bin/activate; jupyter labextension install @axlair/jupyterlab_vim"

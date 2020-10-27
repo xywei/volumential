@@ -1,0 +1,19 @@
+# Working environment that also starts a jupyterlab server on start
+FROM xywei/volumential-firedrake:latest
+
+# This DockerFile is looked after by
+MAINTAINER Xiaoyu Wei <xywei@illinois.edu>
+
+##########################################
+# install nodejs for jupyter lab extensions
+USER root
+RUN curl -sL https://deb.nodesource.com/setup_14.x | bash -
+RUN apt-get install -y nodejs && rm -rf /var/lib/apt/lists/*
+
+##########################################
+USER firedrake
+COPY docker/start_jupyterlab.sh .
+RUN bash -c "source ~/firedrake/bin/activate; pip install tqdm jupyterlab"
+RUN bash -c "source ~/firedrake/bin/activate; jupyter labextension install @jupyter-widgets/jupyterlab-manager"
+RUN bash -c "source ~/firedrake/bin/activate; jupyter labextension install @jupyterlab/toc"
+CMD ["sh", "start_jupyterlab.sh"]
