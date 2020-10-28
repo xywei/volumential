@@ -38,7 +38,6 @@ Python 3 POCL:
   tags:
   - python3
   - pocl
-  - dealii
   - large-node
   except:
   - tags
@@ -61,7 +60,6 @@ Python 3 Intel:
   - ". ./build-and-test-py-project.sh"
   tags:
   - python3
-  - dealii
   - intel-cl-cpu
   - large-node
   except:
@@ -120,7 +118,6 @@ Python 3 POCL Examples:
   tags:
   - python3
   - pocl
-  - dealii
   - large-node
   except:
   - tags
