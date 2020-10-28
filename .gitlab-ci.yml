@@ -38,7 +38,6 @@ Python 3 POCL:
   tags:
   - python3
   - pocl
-  - dealii
   - large-node
   except:
   - tags
@@ -61,7 +60,6 @@ Python 3 Intel:
   - ". ./build-and-test-py-project.sh"
   tags:
   - python3
-  - dealii
   - intel-cl-cpu
   - large-node
   except:
@@ -120,7 +118,6 @@ Python 3 POCL Examples:
   tags:
   - python3
   - pocl
-  - dealii
   - large-node
   except:
   - tags
@@ -151,8 +148,6 @@ Documentation Sphinx:
   - git push
   tags:
   - python3
-  - pocl
-  - dealii
   except:
   - tags
   allow_failure: true
@@ -160,10 +155,15 @@ Documentation Sphinx:
 Docker Image w/t Firedrake:
   script:
   - docker info
+  - docker pull firedrakeproject/firedrake:latest
   - docker build --no-cache -t xywei/volumential-firedrake:latest -f docker/Dockerfile.firedrake .
+  - docker build --no-cache -t xywei/volumential-firedrake-jupyterlab:latest -f docker/Dockerfile.firedrake_jupyterlab .
+  - docker build --no-cache -t xywei/volumential-firedrake-jupyterlab-vim:latest -f docker/Dockerfile.firedrake_jupyterlab_vim .
   - bash -c 'if [ "$BRANCH_PROTECTED" = 1 ]; then exit 0; else exit 1; fi'
   - docker login --username "${DOCKERHUB_USERNAME}" --password "${DOCKERHUB_ACCESS_TOKEN}"
   - docker push xywei/volumential-firedrake:latest
+  - docker push xywei/volumential-firedrake-jupyterlab:latest
+  - docker push xywei/volumential-firedrake-jupyterlab-vim:latest
   tags:
   - docker
   except:
