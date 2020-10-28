@@ -148,8 +148,6 @@ Documentation Sphinx:
   - git push
   tags:
   - python3
-  - pocl
-  - dealii
   except:
   - tags
   allow_failure: true
