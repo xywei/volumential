@@ -51,9 +51,11 @@ def random_polynomial_func(dim, degree, seed=None):
         npts = pts.shape[1]
         res = np.zeros(npts)
         for deg in np.ndindex(coefs.shape):
+            if sum(deg) > degree:
+                continue
             mono = np.ones(npts)
             for iaxis in range(dim):
-                mono += pts[iaxis, :]**deg[iaxis]
+                mono *= pts[iaxis, :]**deg[iaxis]
             res += coefs[deg] * mono
         return res
 

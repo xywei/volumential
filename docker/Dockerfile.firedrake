@@ -30,3 +30,5 @@ RUN bash -c "source ~/firedrake/bin/activate; cd volumential/contrib/meshgen11_d
 RUN bash -c "source ~/firedrake/bin/activate; cd volumential; pip install -r requirements.txt"
 COPY docker/to_loopyy.sh .
 RUN bash -c "source ~/firedrake/bin/activate; sh to_loopyy.sh"
+
+WORKDIR /home/firedrake/
