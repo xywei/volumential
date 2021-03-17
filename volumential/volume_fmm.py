@@ -29,6 +29,7 @@ __doc__ = """
 
 import numpy as np
 import pyopencl as cl
+from pytools.obj_array import make_obj_array
 from boxtree.fmm import TimingRecorder
 from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
 from volumential.expansion_wrangler_fpnd import (
@@ -79,9 +80,19 @@ def drive_volume_fmm(traversal, expansion_wrangler, src_weights, src_func,
     recorder = TimingRecorder()
     logger.info("start fmm")
 
+    # accept unpacked inputs when doing fmm for just one source field
+    if src_weights.ndim == 1:
+        src_weights = make_obj_array([src_weights])
+    if src_func.ndim == 1:
+        src_func = make_obj_array([src_func])
+
+    assert (ns := len(src_weights)) == len(src_func)
+    if ns > 1:
+        raise NotImplementedError("Multiple outputs are not yet supported")
+
     if isinstance(expansion_wrangler, FPNDSumpyExpansionWrangler):
-        assert isinstance(src_weights, cl.array.Array)
-        assert isinstance(src_func, cl.array.Array)
+        assert all(isinstance(sw, cl.array.Array) for sw in src_weights)
+        assert all(isinstance(sf, cl.array.Array) for sf in src_func)
 
     elif isinstance(expansion_wrangler, FPNDFMMLibExpansionWrangler):
 
@@ -94,8 +105,9 @@ def drive_volume_fmm(traversal, expansion_wrangler, src_weights, src_func,
 
     if reorder_sources:
         logger.debug("reorder source weights")
-        src_weights = wrangler.reorder_sources(src_weights)
-        src_func = wrangler.reorder_targets(src_func)
+        for idx_s in range(ns):
+            src_weights[idx_s] = wrangler.reorder_sources(src_weights[idx_s])
+            src_func[idx_s] = wrangler.reorder_targets(src_func[idx_s])
 
     # {{{ Construct local multipoles
 
@@ -130,7 +142,7 @@ def drive_volume_fmm(traversal, expansion_wrangler, src_weights, src_func,
         traversal.target_boxes,
         traversal.neighbor_source_boxes_starts,
         traversal.neighbor_source_boxes_lists,
-        src_func,
+        src_func[0],  # FIXME: handle multiple source fields
     )
     recorder.add("eval_direct", timing_future)
 
