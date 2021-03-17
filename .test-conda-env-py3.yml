@@ -4,40 +4,33 @@ channels:
   - defaults
 dependencies:
   - git
-  - c-compiler
-  - binutils
-  - openmp
+  - python>=3.8
+  - dealii
+  - pocl
+  - pyopencl
+  - pyfmmlib
   - scipy
   - numpy
   - sympy
-  - pytest
-  - pytest-cov
-  - pocl
+  - matplotlib
+  - cgen
+  - cython
   - toml
   - py
   - pluggy
   - packaging
   - iniconfig
   - attrs
+  - pytest
   - genpy
-  - islpy
   - colorama
+  - islpy
   - pyrsistent
-  - pyopencl
-  - python>=3.8
-  - symengine=0.3.0
-  - python-symengine=0.3.0
-  - pyfmmlib
-  - cython
-  - cmake
-  - tbb-devel
-  - dealii
-  - cgen
   - h5py
   - pyevtk
-  # for pypvfmm
-  - openmpi-mpicxx
-  - fftw
+  - pytest
+  - pytest-cov
+  - cmake
 
   - pip
   - pip:
