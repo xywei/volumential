@@ -179,7 +179,7 @@ def drive_volume_fmm(traversal, expansion_wrangler, src_weights, src_func,
 
         p2p = P2P(
             wrangler.queue.context,
-            wrangler.code.out_kernels,
+            wrangler.code.target_kernels,
             exclude_self=wrangler.code.exclude_self,
             value_dtypes=[wrangler.dtype],
         )

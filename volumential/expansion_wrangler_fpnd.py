@@ -124,8 +124,8 @@ class FPNDSumpyExpansionWrangler(
     ):
         """
         near_field_table can either one of three things:
-            1. a single table, when len(out_kernels) = 1 (single level)
-            2. a list of tables, when len(out_kernels) = 1 (multiple levels)
+            1. a single table, when len(target_kernels) = 1 (single level)
+            2. a list of tables, when len(target_kernels) = 1 (multiple levels)
             3. otherwise, a dictionary from kernel.__repr__() to a list of its tables
         """
 
@@ -136,16 +136,16 @@ class FPNDSumpyExpansionWrangler(
         self.near_field_table = {}
         # list of tables for a single out kernel
         if isinstance(near_field_table, list):
-            assert len(self.code.out_kernels) == 1
+            assert len(self.code.target_kernels) == 1
             self.near_field_table[
-                self.code.out_kernels[0].__repr__()
+                self.code.target_kernels[0].__repr__()
             ] = near_field_table
             self.n_tables = len(near_field_table)
 
         # single table
         elif isinstance(near_field_table, NearFieldInteractionTable):
-            assert len(self.code.out_kernels) == 1
-            self.near_field_table[self.code.out_kernels[0].__repr__()] = [
+            assert len(self.code.target_kernels) == 1
+            self.near_field_table[self.code.target_kernels[0].__repr__()] = [
                 near_field_table
             ]
             self.n_tables = 1
@@ -153,7 +153,7 @@ class FPNDSumpyExpansionWrangler(
         # dictionary of lists of tables
         elif isinstance(near_field_table, dict):
             self.n_tables = dict()
-            for out_knl in self.code.out_kernels:
+            for out_knl in self.code.target_kernels:
                 if repr(out_knl) not in near_field_table:
                     raise RuntimeError(
                             "Missing nearfield table for %s." % repr(out_knl))
@@ -174,15 +174,15 @@ class FPNDSumpyExpansionWrangler(
         self.potential_kind = potential_kind
 
         # TODO: make all parameters table-specific (allow using inhomogeneous tables)
-        kname = repr(self.code.out_kernels[0])
+        kname = repr(self.code.target_kernels[0])
         self.root_table_source_box_extent = (
                 self.near_field_table[kname][0].source_box_extent)
         table_starting_level = np.round(
             np.log(self.tree.root_extent / self.root_table_source_box_extent)
             / np.log(2)
             )
-        for kid in range(len(self.code.out_kernels)):
-            kname = self.code.out_kernels[kid].__repr__()
+        for kid in range(len(self.code.target_kernels)):
+            kname = self.code.target_kernels[kid].__repr__()
             for lev, table in zip(
                     range(len(self.near_field_table[kname])),
                     self.near_field_table[kname]
@@ -481,11 +481,11 @@ class FPNDSumpyExpansionWrangler(
     ):
         pot = self.output_zeros()
         events = []
-        for i in range(len(self.code.out_kernels)):
+        for i in range(len(self.code.target_kernels)):
             # print("processing near-field of out_kernel", i)
             pot[i], evt = self.eval_direct_single_out_kernel(
                 pot[i],
-                self.code.out_kernels[i],
+                self.code.target_kernels[i],
                 target_boxes,
                 neighbor_source_boxes_starts,
                 neighbor_source_boxes_lists,
@@ -592,12 +592,12 @@ class FPNDFMMLibExpansionWranglerCodeContainer(
     """
     def __init__(self, cl_context,
             multipole_expansion_factory, local_expansion_factory,
-            out_kernels, exclude_self=True, *args, **kwargs):
+            target_kernels, exclude_self=True, *args, **kwargs):
         self.cl_context = cl_context
         self.multipole_expansion_factory = multipole_expansion_factory
         self.local_expansion_factory = local_expansion_factory
 
-        self.out_kernels = out_kernels
+        self.target_kernels = target_kernels
         self.exclude_self = True
 
     def get_wrangler(self, queue, tree, dtype, fmm_level_to_order,
@@ -649,14 +649,14 @@ class FPNDFMMLibExpansionWrangler(
         self.quad_order = quad_order
         self.potential_kind = potential_kind
 
-        # {{{ digest out_kernels
+        # {{{ digest target_kernels
 
         ifgrad = False
         outputs = []
         source_deriv_names = []
         k_names = []
 
-        for out_knl in self.code.out_kernels:
+        for out_knl in self.code.target_kernels:
 
             if self.is_supported_helmknl(out_knl):
                 outputs.append(())
@@ -711,16 +711,16 @@ class FPNDFMMLibExpansionWrangler(
         self.near_field_table = {}
         # list of tables for a single out kernel
         if isinstance(near_field_table, list):
-            assert len(self.code.out_kernels) == 1
+            assert len(self.code.target_kernels) == 1
             self.near_field_table[
-                self.code.out_kernels[0].__repr__()
+                self.code.target_kernels[0].__repr__()
             ] = near_field_table
             self.n_tables = len(near_field_table)
 
         # single table
         elif isinstance(near_field_table, NearFieldInteractionTable):
-            assert len(self.code.out_kernels) == 1
-            self.near_field_table[self.code.out_kernels[0].__repr__()] = [
+            assert len(self.code.target_kernels) == 1
+            self.near_field_table[self.code.target_kernels[0].__repr__()] = [
                 near_field_table
             ]
             self.n_tables = 1
@@ -728,7 +728,7 @@ class FPNDFMMLibExpansionWrangler(
         # dictionary of lists of tables
         elif isinstance(near_field_table, dict):
             self.n_tables = dict()
-            for out_knl in self.code.out_kernels:
+            for out_knl in self.code.target_kernels:
                 if repr(out_knl) not in near_field_table:
                     raise RuntimeError(
                             "Missing nearfield table for %s." % repr(out_knl))
@@ -746,15 +746,15 @@ class FPNDFMMLibExpansionWrangler(
             raise RuntimeError("Table type unrecognized.")
 
         # TODO: make all parameters table-specific (allow using inhomogeneous tables)
-        kname = repr(self.code.out_kernels[0])
+        kname = repr(self.code.target_kernels[0])
         self.root_table_source_box_extent = (
                 self.near_field_table[kname][0].source_box_extent)
         table_starting_level = np.round(
             np.log(self.tree.root_extent / self.root_table_source_box_extent)
             / np.log(2)
             )
-        for kid in range(len(self.code.out_kernels)):
-            kname = self.code.out_kernels[kid].__repr__()
+        for kid in range(len(self.code.target_kernels)):
+            kname = self.code.target_kernels[kid].__repr__()
             for lev, table in zip(
                     range(len(self.near_field_table[kname])),
                     self.near_field_table[kname]
@@ -1090,11 +1090,11 @@ class FPNDFMMLibExpansionWrangler(
         if pot.dtype != np.object:
             pot = make_obj_array([pot, ])
         events = []
-        for i in range(len(self.code.out_kernels)):
+        for i in range(len(self.code.target_kernels)):
             # print("processing near-field of out_kernel", i)
             pot[i], evt = self.eval_direct_single_out_kernel(
                 pot[i],
-                self.code.out_kernels[i],
+                self.code.target_kernels[i],
                 target_boxes,
                 neighbor_source_boxes_starts,
                 neighbor_source_boxes_lists,
@@ -1107,7 +1107,7 @@ class FPNDFMMLibExpansionWrangler(
                 out_pot.finish()
 
         # boxtree.pyfmmlib_integration handles things diffferently
-        # when out_kernels has only one element
+        # when target_kernels has only one element
         if len(pot) == 1:
             pot = pot[0]
 
