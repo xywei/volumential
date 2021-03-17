@@ -14,7 +14,7 @@ filelock
 -e git+https://gitlab.tiker.net/inducer/pyvisfile.git#egg=pyvisfile
 -e git+https://gitlab.tiker.net/inducer/pymbolic.git#egg=pymbolic
 -e git+https://gitlab.tiker.net/inducer/sumpy.git#egg=sumpy
--e git+https://gitlab.tiker.net/inducer/loopy.git#egg=loo.py
+-e git+https://gitlab.tiker.net/inducer/loopy.git#egg=loopy
 -e git+https://gitlab.tiker.net/inducer/modepy.git#egg=modepy
 
 -e .[test,doc]

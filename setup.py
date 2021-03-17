@@ -112,7 +112,7 @@ def main():
         install_requires=[
             "boxtree",
             "h5py",
-            "loo.py",
+            "loopy",
             "meshmode",
             "modepy",
             "pyevtk",
