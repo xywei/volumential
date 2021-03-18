@@ -4,36 +4,40 @@ channels:
   - defaults
 dependencies:
   - git
-  - c-compiler
-  - binutils
-  - openmp
+  - python>=3.8
+  - dealii
+  - pocl
+  - pyopencl
+  - pyfmmlib
   - scipy
-  - conda-forge::numpy
-  - conda-forge::sympy
+  - numpy
+  - sympy
+  - matplotlib
+  - cgen
+  - cython
+  - toml
+  - py
+  - pluggy
+  - packaging
+  - iniconfig
+  - attrs
+  - genpy
+  - colorama
+  - islpy
+  - pyrsistent
+  - h5py
+  - pyevtk
   - pytest
   - pytest-cov
-  - pocl
-  - islpy
-  - pyopencl
-  - python=3
-  - symengine=0.3.0
-  - python-symengine=0.3.0
-  - pyfmmlib
-  - cython
   - cmake
-  - tbb-devel
-  - dealii
-  - gmsh
-  - python-gmsh
-  # for pypvfmm
-  - openmpi-mpicxx
-  - fftw
+  - symengine
+  - python-symengine
 
   - pip
   - pip:
     - git+https://gitlab.tiker.net/inducer/loopy
     - git+https://gitlab.tiker.net/inducer/gmsh_interop
-    - git+https://gitlab.tiker.net/xywei/boxtree
+    - git+https://gitlab.tiker.net/inducer/boxtree
     - git+https://gitlab.tiker.net/inducer/modepy
     - git+https://gitlab.tiker.net/inducer/meshmode
     - git+https://gitlab.tiker.net/inducer/pymbolic

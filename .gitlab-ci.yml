@@ -7,22 +7,6 @@ Flake8:
     except:
     - tags
 
-Pylint:
-  script:
-  # Needed to avoid name shadowing issues when running from source directory.
-  # Pylint won't find the Cython bits without this
-  - PROJECT_INSTALL_FLAGS="--editable"
-  - export PY_EXE=python3
-  # Pin to numpy 1.15
-  # See https://github.com/PyCQA/pylint/issues/2721
-  - EXTRA_INSTALL="Cython pybind11 numpy==1.15 mako matplotlib"
-  - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/master/prepare-and-run-pylint.sh
-  - ". ./prepare-and-run-pylint.sh volumential test examples benchmarks"
-  tags:
-  - python3
-  except:
-  - tags
-
 Python 3 POCL:
   script:
   - export PY_EXE=python3
