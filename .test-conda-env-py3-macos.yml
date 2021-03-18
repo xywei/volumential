@@ -31,7 +31,9 @@ dependencies:
   - pytest
   - pytest-cov
   - cmake
+  # enable openmp on osx
   - openmp
+  - clangdev
 
   - pip
   - pip:
