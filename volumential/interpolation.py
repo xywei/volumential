@@ -344,9 +344,18 @@ class ElementsToSourcesLookupBuilder:
 
     # }}} End kernel generation
 
-    def compute_short_lists(self, queue, wait_for=None):
+    def compute_short_lists(self, actx, wait_for=None):
         """balls --> overlapping leaves
         """
+        if not isinstance(actx, PyOpenCLArrayContext):
+            if isinstance(actx, cl.CommandQueue):
+                from warnings import warn
+                warn("Command queue passed to the interpolator. "
+                     "Supply an array context to enable proper caching.")
+                actx = PyOpenCLArrayContext(actx)
+            else:
+                raise ValueError
+
         mesh = self.discr.mesh
         if len(mesh.groups) > 1:
             raise NotImplementedError("Mixed elements not supported")
@@ -358,24 +367,33 @@ class ElementsToSourcesLookupBuilder:
                 axis=0) / 2
 
         ball_centers = make_obj_array([
-            cl.array.to_device(queue, center_coord_comp)
+            cl.array.to_device(actx.queue, center_coord_comp)
             for center_coord_comp in ball_centers_host])
-        ball_radii = cl.array.to_device(queue, ball_radii_host)
+        ball_radii = cl.array.to_device(actx.queue, ball_radii_host)
 
         area_query_result, evt = self.area_query_builder(
-            queue, self.tree, ball_centers, ball_radii,
+            actx.queue, self.tree, ball_centers, ball_radii,
             peer_lists=None, wait_for=wait_for)
         return area_query_result, evt
 
-    def __call__(self, queue, balls_to_leaves_lookup=None, wait_for=None):
+    def __call__(self, actx, balls_to_leaves_lookup=None, wait_for=None):
         """
         :arg queue: a :class:`pyopencl.CommandQueue`
         """
+        if not isinstance(actx, PyOpenCLArrayContext):
+            if isinstance(actx, cl.CommandQueue):
+                from warnings import warn
+                warn("Command queue passed to the interpolator. "
+                     "Supply an array context to enable proper caching.")
+                actx = PyOpenCLArrayContext(actx)
+            else:
+                raise ValueError
+
         slk_plog = ProcessLogger(logger, "element-to-source lookup: run area query")
 
         if balls_to_leaves_lookup is None:
             balls_to_leaves_lookup, evt = \
-                self.compute_short_lists(queue, wait_for=wait_for)
+                self.compute_short_lists(actx.queue, wait_for=wait_for)
             wait_for = [evt]
 
         # -----------------------------------------------------------------
@@ -386,7 +404,7 @@ class ElementsToSourcesLookupBuilder:
         element_lookup_kernel = self.get_simplex_lookup_kernel()
 
         vertices_dev = make_obj_array([
-            cl.array.to_device(queue, verts)
+            cl.array.to_device(actx.queue, verts)
             for verts in self.discr.mesh.vertices])
 
         mesh_vertices_kwargs = {
@@ -398,9 +416,10 @@ class ElementsToSourcesLookupBuilder:
             for iaxis in range(self.dim)}
 
         evt, res = element_lookup_kernel(
-            queue, dim=self.dim, nboxes=self.tree.nboxes,
+            actx.queue, dim=self.dim, nboxes=self.tree.nboxes,
             nelements=self.discr.mesh.nelements, nsources=self.tree.nsources,
-            result=cl.array.zeros(queue, self.tree.nsources, dtype=np.int32) - 1,
+            result=cl.array.zeros(actx.queue,
+                                  self.tree.nsources, dtype=np.int32) - 1,
             mesh_vertex_indices=self.discr.mesh.groups[0].vertex_indices,
             box_source_starts=self.tree.box_source_starts,
             box_source_counts_cumul=self.tree.box_source_counts_cumul,
@@ -422,10 +441,10 @@ class ElementsToSourcesLookupBuilder:
 
         sources_in_element_starts, sources_in_element_lists, evt = \
             self.key_value_sorter(
-                queue,
+                actx.queue,
                 keys=source_to_element_lookup,
                 values=cl.array.arange(
-                    queue, self.tree.nsources, dtype=self.tree.box_id_dtype),
+                    actx.queue, self.tree.nsources, dtype=self.tree.box_id_dtype),
                 nkeys=self.discr.mesh.nelements,
                 starts_dtype=self.tree.box_id_dtype,
                 wait_for=wait_for)
@@ -466,18 +485,26 @@ class LeavesToNodesLookupBuilder:
         self.leaves_to_balls_lookup_builder = \
             LeavesToBallsLookupBuilder(self.context)
 
-    def __call__(self, queue, tol=1e-12, wait_for=None):
+    def __call__(self, actx, tol=1e-12, wait_for=None):
         """
         :arg queue: a :class:`pyopencl.CommandQueue`
         :tol: nodes close enough to the boundary will be treated as
             lying on the boundary, whose interpolated values are averaged.
         """
-        arr_ctx = PyOpenCLArrayContext(queue)
-        nodes = flatten(thaw(arr_ctx, self.discr.nodes()))
+        if not isinstance(actx, PyOpenCLArrayContext):
+            if isinstance(actx, cl.CommandQueue):
+                from warnings import warn
+                warn("Command queue passed to the interpolator. "
+                     "Supply an array context to enable proper caching.")
+                actx = PyOpenCLArrayContext(actx)
+            else:
+                raise ValueError
+
+        nodes = flatten(thaw(actx, self.discr.nodes()))
         radii = cl.array.zeros_like(nodes[0]) + tol
 
         lbl_lookup, evt = self.leaves_to_balls_lookup_builder(
-            queue, self.trav.tree, nodes, radii, wait_for=wait_for)
+            actx.queue, self.trav.tree, nodes, radii, wait_for=wait_for)
 
         return LeavesToNodesLookup(
             trav=self.trav, discr=self.discr,
