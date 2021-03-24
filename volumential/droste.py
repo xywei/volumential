@@ -789,7 +789,7 @@ class DrosteFull(DrosteBase):
 
         try:
             loopy_knl = self.integral_knl.prepare_loopy_kernel(loopy_knl)
-        except Exception:
+        except Exception:  # noqa: B902
             pass
 
         return loopy_knl
@@ -1267,7 +1267,7 @@ class DrosteReduced(DrosteBase):
 
         try:
             loopy_knl = self.integral_knl.prepare_loopy_kernel(loopy_knl)
-        except Exception:
+        except Exception:  # noqa: B902
             pass
 
         return loopy_knl
@@ -1361,7 +1361,7 @@ class DrosteReduced(DrosteBase):
         self.get_kernel_id = 0
         try:
             delattr(self, "_memoize_dic_get_cached_optimized_kernel")
-        except Exception:
+        except Exception:  # noqa: B902
             pass
         knl = self.get_cached_optimized_kernel()
         evt, res = knl(
@@ -1379,7 +1379,7 @@ class DrosteReduced(DrosteBase):
         self.get_kernel_id = 1
         try:
             delattr(self, "_memoize_dic_get_cached_optimized_kernel")
-        except Exception:
+        except Exception:  # noqa: B902
             pass
         knl2 = self.get_cached_optimized_kernel()
         evt, res2 = knl2(
@@ -2036,7 +2036,7 @@ class InverseDrosteReduced(DrosteReduced):
 
         try:
             loopy_knl = self.integral_knl.prepare_loopy_kernel(loopy_knl)
-        except Exception:
+        except Exception:  # noqa: B902
             pass
 
         return loopy_knl
@@ -2137,7 +2137,7 @@ class InverseDrosteReduced(DrosteReduced):
         self.get_kernel_id = 0
         try:
             delattr(self, "_memoize_dic_get_cached_optimized_kernel")
-        except Exception:
+        except Exception:  # noqa: B902
             pass
         knl = self.get_cached_optimized_kernel()
         result_array_0 = self.make_result_array(**kwargs)
@@ -2160,7 +2160,7 @@ class InverseDrosteReduced(DrosteReduced):
         self.get_kernel_id = 1
         try:
             delattr(self, "_memoize_dic_get_cached_optimized_kernel")
-        except Exception:
+        except Exception:  # noqa: B902
             pass
         result_array_1 = self.make_result_array(**kwargs)
         knl = self.get_cached_optimized_kernel()
@@ -2183,7 +2183,7 @@ class InverseDrosteReduced(DrosteReduced):
         self.get_kernel_id = 2
         try:
             delattr(self, "_memoize_dic_get_cached_optimized_kernel")
-        except Exception:
+        except Exception:  # noqa: B902
             pass
         knl2 = self.get_cached_optimized_kernel()
         result_array = res0['result'] + res1['result']
