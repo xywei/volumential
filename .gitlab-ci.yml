@@ -58,8 +58,11 @@ Python 3 Conda:
   - export CONDA_ENVIRONMENT=.test-conda-env-py3.yml
   - export HDF5_USE_FILE_LOCKING=FALSE
   - export PYTEST_FLAGS="--cov=volumential"
-  - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/master/build-and-test-py-project-within-miniconda.sh
-  - ". ./build-and-test-py-project-within-miniconda.sh"
+  - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/main/ci-support.sh
+  - source ci-support.sh
+  - build_py_project_in_conda_env
+  - ((cd contrib/meshgen11_dealii/; ./build.sh) && echo "Using meshgen11_dealii.") || (echo "Using boxtree for meshgen.")
+  - test_py_project
   tags:
   - linux
   - large-node
