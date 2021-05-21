@@ -9,6 +9,7 @@ filelock
 -e git+https://gitlab.tiker.net/inducer/pytential.git#egg=pytential
 -e git+https://gitlab.tiker.net/inducer/pytools.git#egg=pytools
 -e git+https://gitlab.tiker.net/inducer/cgen.git#egg=cgen
+-e git+https://gitlab.tiker.net/inducer/arraycontext.git#egg=arraycontext
 -e git+https://gitlab.tiker.net/inducer/meshmode.git#egg=meshmode
 -e git+https://gitlab.tiker.net/inducer/genpy.git#egg=genpy
 -e git+https://gitlab.tiker.net/inducer/pyvisfile.git#egg=pyvisfile
