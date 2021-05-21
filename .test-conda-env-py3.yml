@@ -12,7 +12,7 @@ dependencies:
   - scipy
   - numpy
   - sympy
-  - matplotlib
+  - matplotlib-base
   - cgen
   - cython
   - toml
