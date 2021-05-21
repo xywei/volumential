@@ -34,9 +34,6 @@ import numpy as np
 
 import volumential as vm
 
-# from sumpy.expansion.local import VolumeTaylorLocalExpansion
-# from sumpy.expansion.multipole import VolumeTaylorMultipoleExpansion
-# from sumpy.kernel import LaplaceKernel
 from volumential.nearfield_potential_table import NearFieldInteractionTable
 
 logger = logging.getLogger(__name__)
