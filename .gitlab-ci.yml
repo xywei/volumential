@@ -22,7 +22,7 @@ Python 3 POCL:
   tags:
   - python3
   - pocl
-  - large-node
+  - dealii
   except:
   - tags
   artifacts:
@@ -45,7 +45,7 @@ Python 3 Intel:
   tags:
   - python3
   - intel-cl-cpu
-  - large-node
+  - dealii
   except:
   - tags
   artifacts:
