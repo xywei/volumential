@@ -216,17 +216,17 @@ def laplace_problem(ctx_factory):
     # from sumpy.expansion.multipole import VolumeTaylorMultipoleExpansion
     # from sumpy.expansion.local import VolumeTaylorLocalExpansion
 
-    from sumpy.expansion.multipole import (
-        LaplaceConformingVolumeTaylorMultipoleExpansion,
-    )
-    from sumpy.expansion.local import LaplaceConformingVolumeTaylorLocalExpansion
+    from sumpy.expansion.multipole import \
+        LinearPDEConformingVolumeTaylorMultipoleExpansion
+    from sumpy.expansion.local import \
+        LinearPDEConformingVolumeTaylorLocalExpansion
 
     knl = LaplaceKernel(dim)
     out_kernels = [knl]
-    local_expn_class = LaplaceConformingVolumeTaylorLocalExpansion
-    mpole_expn_class = LaplaceConformingVolumeTaylorMultipoleExpansion
-    # local_expn_class = VolumeTaylorLocalExpansion
-    # mpole_expn_class = VolumeTaylorMultipoleExpansion
+    local_expn_class = LinearPDEConformingVolumeTaylorLocalExpansion
+    mpole_expn_class = LinearPDEConformingVolumeTaylorMultipoleExpansion
+    # local_expn_class = partial(VolumeTaylorLocalExpansion, use_rscale=None)
+    # mpole_expn_class = partial(VolumeTaylorMultipoleExpansion, use_rscale=None)
 
     exclude_self = True
     from volumential.expansion_wrangler_fpnd import (

@@ -113,6 +113,7 @@ def main():
             "boxtree",
             "h5py",
             "loopy",
+            "arraycontext",
             "meshmode",
             "modepy",
             "pyevtk",
