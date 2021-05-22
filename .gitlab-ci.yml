@@ -9,9 +9,9 @@ Flake8:
 
 Python 3 POCL:
   script:
+  - if [[ $(dpkg-query -l | grep libdeal.ii-dev | wc -l) = 0 ]]; then echo "Deal.ii not found"; exit 0; fi
   - export PY_EXE=python3
   - export PYOPENCL_TEST=portable:pthread
-  - export HDF5_USE_FILE_LOCKING=FALSE
   - export EXTRA_INSTALL="pybind11 cython numpy pytest pytest-cov scipy mako wheel"
   - export PYTEST_FLAGS="--cov=volumential"
   - git submodule sync && git submodule update --init --recursive --remote
@@ -22,7 +22,7 @@ Python 3 POCL:
   tags:
   - python3
   - pocl
-  - large-node
+  - dealii
   except:
   - tags
   artifacts:
@@ -31,10 +31,10 @@ Python 3 POCL:
 
 Python 3 Intel:
   script:
+  - if [[ $(dpkg-query -l | grep libdeal.ii-dev | wc -l) = 0 ]]; then echo "Deal.ii not found"; exit 0; fi
   - export PY_EXE=python3
   - source /opt/enable-intel-cl.sh
   - export PYOPENCL_TEST="intel(r):pu"
-  - export HDF5_USE_FILE_LOCKING=FALSE
   - export PYTEST_FLAGS="--cov=volumential"
   - export EXTRA_INSTALL="pybind11 cython numpy pytest pytest-cov scipy mako wheel"
   - git submodule sync && git submodule update --init --recursive --remote
@@ -45,7 +45,7 @@ Python 3 Intel:
   tags:
   - python3
   - intel-cl-cpu
-  - large-node
+  - dealii
   except:
   - tags
   artifacts:
@@ -56,13 +56,14 @@ Python 3 Conda:
   script:
   - export SUMPY_FORCE_SYMBOLIC_BACKEND=symengine
   - export CONDA_ENVIRONMENT=.test-conda-env-py3.yml
-  - export HDF5_USE_FILE_LOCKING=FALSE
   - export PYTEST_FLAGS="--cov=volumential"
-  - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/master/build-and-test-py-project-within-miniconda.sh
-  - ". ./build-and-test-py-project-within-miniconda.sh"
+  - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/main/ci-support.sh
+  - source ci-support.sh
+  - build_py_project_in_conda_env
+  - ((cd contrib/meshgen11_dealii/; ./build.sh) && echo "Using meshgen11_dealii.") || (echo "Using boxtree for meshgen.")
+  - test_py_project
   tags:
   - linux
-  - large-node
   except:
   - tags
   artifacts:
@@ -74,12 +75,14 @@ Python 3 Conda Apple:
   - export LC_ALL=en_US.UTF-8
   - export LANG=en_US.UTF-8
   - export CONDA_ENVIRONMENT=.test-conda-env-py3-macos.yml
-  - export HDF5_USE_FILE_LOCKING=FALSE
   - export CC=clang
   - export PYTEST_FLAGS="--cov=volumential"
   - set -o xtrace
-  - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/master/build-and-test-py-project-within-miniconda.sh
-  - ". ./build-and-test-py-project-within-miniconda.sh"
+  - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/main/ci-support.sh
+  - source ci-support.sh
+  - build_py_project_in_conda_env
+  - ((cd contrib/meshgen11_dealii/; ./build.sh) && echo "Using meshgen11_dealii.") || (echo "Using boxtree for meshgen.")
+  - test_py_project
   tags:
   - apple
   except:
@@ -87,22 +90,20 @@ Python 3 Conda Apple:
   artifacts:
     reports:
       junit: test/pytest.xml
+  allow_failure: true
 
-Python 3 POCL Examples:
+Python 3 Conda Examples:
   script:
-  - test -n "$SKIP_EXAMPLES" && exit
-  - export PY_EXE=python3
-  - export PYOPENCL_TEST=portable:pthread
-  - export EXTRA_INSTALL="pybind11 cython numpy pytest scipy mako wheel"
+  - export CONDA_ENVIRONMENT=.test-conda-env-py3.yml
   - rm -f examples/*.hdf5
-  - git submodule sync && git submodule update --init --recursive --remote
+  - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/main/ci-support.sh
+  - source ci-support.sh
+  - build_py_project_in_conda_env
   - ((cd contrib/meshgen11_dealii/; ./build.sh) && echo "Using meshgen11_dealii.") || (echo "Using boxtree for meshgen.")
-  - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/master/build-py-project-and-run-examples.sh
-  - ". ./build-py-project-and-run-examples.sh"
+  - run_examples
   tags:
   - python3
   - pocl
-  - large-node
   except:
   - tags
   artifacts:
