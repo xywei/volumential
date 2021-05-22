@@ -136,8 +136,8 @@ def drive_test_completeness(ctx, queue, dim, q_order):
 
     knl = LaplaceKernel(dim)
     out_kernels = [knl]
-    local_expn_class = VolumeTaylorLocalExpansion
-    mpole_expn_class = VolumeTaylorMultipoleExpansion
+    local_expn_class = partial(VolumeTaylorLocalExpansion, use_rscale=None)
+    mpole_expn_class = partial(VolumeTaylorMultipoleExpansion, use_rscale=None)
 
     from volumential.expansion_wrangler_fpnd import (
             FPNDExpansionWranglerCodeContainer,

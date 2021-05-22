@@ -81,10 +81,11 @@ def drive_volume_fmm(traversal, expansion_wrangler, src_weights, src_func,
     logger.info("start fmm")
 
     # accept unpacked inputs when doing fmm for just one source field
+    dtype = wrangler.dtype
     if src_weights.ndim == 1:
-        src_weights = make_obj_array([src_weights])
+        src_weights = make_obj_array([src_weights.astype(dtype)])
     if src_func.ndim == 1:
-        src_func = make_obj_array([src_func])
+        src_func = make_obj_array([src_func.astype(dtype)])
 
     assert (ns := len(src_weights)) == len(src_func)
     if ns > 1:
@@ -187,8 +188,6 @@ def drive_volume_fmm(traversal, expansion_wrangler, src_weights, src_func,
 
         from sumpy import P2P
 
-        dtype = wrangler.dtype
-
         p2p = P2P(
             wrangler.queue.context,
             wrangler.code.target_kernels,
@@ -204,14 +203,15 @@ def drive_volume_fmm(traversal, expansion_wrangler, src_weights, src_func,
         if hasattr(wrangler, "self_extra_kwargs"):
             p2p_extra_kwargs.update(wrangler.kernel_extra_kwargs)
 
-        evt, (ref_pot,) = p2p(
-            wrangler.queue,
-            traversal.tree.targets,
-            traversal.tree.sources,
-            (src_weights.astype(dtype),),
-            **p2p_extra_kwargs
-        )
-        potentials[0] += ref_pot
+        for iw, sw in enumerate(src_weights):
+            evt, (ref_pot,) = p2p(
+                wrangler.queue,
+                traversal.tree.targets,
+                traversal.tree.sources,
+                (sw,),
+                **p2p_extra_kwargs
+            )
+            potentials[iw] += ref_pot
 
         l1_potentials, timing_future = wrangler.eval_direct_p2p(
                 traversal.target_boxes,
