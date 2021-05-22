@@ -90,6 +90,7 @@ Python 3 Conda Apple:
   artifacts:
     reports:
       junit: test/pytest.xml
+  allow_failure: true
 
 Python 3 Conda Examples:
   script:
