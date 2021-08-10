@@ -38,6 +38,7 @@ else:
 
 import numpy as np
 import pyopencl as cl
+import pyopencl.array
 from volumential.tools import ScalarFieldExpressionEvaluation as Eval
 
 import pymbolic as pmbl

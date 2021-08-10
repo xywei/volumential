@@ -1,4 +1,3 @@
-from __future__ import absolute_import, division, print_function
 import six
 
 __copyright__ = "Copyright (C) 2018 Xiaoyu Wei"
@@ -133,7 +132,7 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
     """
 
     def __init__(self, dim, expression, variables=None, dtype=np.float64,
-                 function_manglers=None, preamble_generators=None):
+                 preamble_generators=None):
         """
         :arg dim
         :arg expression A pymbolic expression for the function
@@ -142,19 +141,22 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
         assert dim > 0
         self.dim = dim
 
-        assert isinstance(expression, (ExpressionType, int, float, complex))
-        self.expr = expression
+        if isinstance(expression, (ExpressionType, int, float, complex)):
+            self.expr = expression
+        else:
+            from pymbolic.interop.sympy import SympyToPymbolicMapper
+            stpm = SympyToPymbolicMapper()
+            self.expr = stpm(expression)
 
         if variables is None:
             self.vars = [pmbl.var("x%d" % d) for d in range(self.dim)]
         else:
             assert isinstance(variables, list)
-            for var in variables:
-                assert isinstance(var, VariableType)
+            variables = [var if isinstance(var, VariableType)
+                else stpm(var) for var in variables]
             self.vars = variables
 
         self.dtype = dtype
-        self.function_manglers = function_manglers
         self.preamble_generators = preamble_generators
 
         self.name = "ScalarFieldExpressionEvaluation"
@@ -239,11 +241,6 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
         loopy_knl = lp.set_options(loopy_knl, write_cl=False)
         loopy_knl = lp.set_options(loopy_knl, return_dict=True)
 
-        if self.function_manglers is not None:
-            loopy_knl = lp.register_function_manglers(
-                loopy_knl,
-                self.function_manglers)
-
         if self.preamble_generators is not None:
             loopy_knl = lp.register_preamble_generators(
                 loopy_knl,
@@ -288,10 +285,6 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
             extra_kernel_kwargs = kwargs["extra_kernel_kwargs"]
 
         knl = self.get_cached_optimized_kernel()
-
-        # FIXME: caching loses function mangler information
-        if self.function_manglers is not None:
-            knl = lp.register_function_manglers(knl, self.function_manglers)
 
         if self.preamble_generators is not None:
             knl = lp.register_preamble_generators(knl, self.preamble_generators)

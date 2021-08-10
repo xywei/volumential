@@ -465,6 +465,8 @@ class NearFieldFromCSR(NearFieldEvalBase):
 
     def __call__(self, queue, **kwargs):
         knl = self.get_cached_optimized_kernel()
+        from loopy.target.opencl import OpenCLCallable
+        knl = loopy.register_callable(knl, "round", OpenCLCallable("round"))
 
         result = kwargs.pop("result")
         box_centers = kwargs.pop("box_centers")
@@ -501,9 +503,11 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 integral_kernel_init_kargs[key] = np.float64(val)
 
         extra_knl_args_from_init = {}
-        for key, val in integral_kernel_init_kargs.items():
-            if key in knl.arg_dict:
-                extra_knl_args_from_init[key] = val
+        if 0:
+            # loopy kernel no longer has arg_dict
+            for key, val in integral_kernel_init_kargs.items():
+                if key in knl.arg_dict:
+                    extra_knl_args_from_init[key] = val
 
         evt, res = knl(
             queue,

@@ -126,9 +126,7 @@ def get_evaluator(dim, expression, variables=None):
         assert len(variables) == dim
 
     return ScalarFieldExpressionEvaluation(
-            dim=dim,
-            expression=expression,
-            variables=variables,
-            function_manglers=[math_func_mangler])
+            dim=dim, expression=expression,
+            variables=variables)
 
 # }}} End evaluation helper

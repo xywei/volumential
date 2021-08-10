@@ -121,6 +121,7 @@ class FPNDSumpyExpansionWrangler(
         kernel_extra_kwargs=None,
         self_extra_kwargs=None,
         list1_extra_kwargs=None,
+        translation_classes_data=None,
     ):
         """
         near_field_table can either one of three things:
@@ -128,10 +129,12 @@ class FPNDSumpyExpansionWrangler(
             2. a list of tables, when len(target_kernels) = 1 (multiple levels)
             3. otherwise, a dictionary from kernel.__repr__() to a list of its tables
         """
+        if source_extra_kwargs is None:
+            source_extra_kwargs = {}
 
-        self.code = code_container
-        self.queue = queue
-        self.tree = tree
+        super().__init__(
+            code_container, queue, tree, dtype, fmm_level_to_order,
+            source_extra_kwargs, kernel_extra_kwargs, translation_classes_data)
 
         self.near_field_table = {}
         # list of tables for a single out kernel
@@ -236,39 +239,11 @@ class FPNDSumpyExpansionWrangler(
                 # deferred until trav.target_boxes is passed when invoking
                 # eval_direct
 
-        self.dtype = dtype
-
-        if source_extra_kwargs is None:
-            source_extra_kwargs = {}
-
-        if kernel_extra_kwargs is None:
-            kernel_extra_kwargs = {}
-
-        if self_extra_kwargs is None:
-            self_extra_kwargs = {}
-
         if list1_extra_kwargs is None:
             list1_extra_kwargs = {}
-
-        if not callable(fmm_level_to_order):
-            raise TypeError("fmm_level_to_order not passed")
-
-        base_kernel = code_container.get_base_kernel()
-        kernel_arg_set = frozenset(kernel_extra_kwargs.items())
-        self.level_orders = [
-            fmm_level_to_order(base_kernel, kernel_arg_set, tree, lev)
-            for lev in range(tree.nlevels)
-        ]
-
-        # print("Multipole order = ",self.level_orders)
-
-        self.source_extra_kwargs = source_extra_kwargs
-        self.kernel_extra_kwargs = kernel_extra_kwargs
-        self.self_extra_kwargs = self_extra_kwargs
         self.list1_extra_kwargs = list1_extra_kwargs
 
-        self.extra_kwargs = source_extra_kwargs.copy()
-        self.extra_kwargs.update(self.kernel_extra_kwargs)
+        # print("Multipole order = ",self.level_orders)
 
     # }}} End constructor
 
