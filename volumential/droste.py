@@ -1,5 +1,3 @@
-from __future__ import absolute_import, division, print_function
-
 __copyright__ = "Copyright (C) 2018 Xiaoyu Wei"
 
 __license__ = """
@@ -268,14 +266,14 @@ class DrosteBase(KernelCacheWrapper):
         ]
 
         from sumpy.symbolic import SympyToPymbolicMapper
-
+        from sumpy.tools import ScalingAssignmentTag
         sympy_conv = SympyToPymbolicMapper()
         scaling_assignment = lp.Assignment(
             id=None,
             assignee="knl_scaling",
             expression=sympy_conv(self.integral_knl.get_global_scaling_const()),
-            temp_var_type=lp.Optional(),
-        )
+            temp_var_type=lp.Optional(lp.auto),
+            tags=frozenset([ScalingAssignmentTag()]))
 
         return quad_kernel_insns + [scaling_assignment]
 
@@ -524,10 +522,10 @@ class DrosteBase(KernelCacheWrapper):
             for iaxis
                 template_target[iaxis] = if(
                     template_target[iaxis] > 1,
-                    1,
+                    1.0,
                     if(
                         template_target[iaxis] < 0,
-                        0,
+                        0.0,
                         template_target[iaxis])
                     ) {id=tplt_tgt4,dup=iaxis,dep=tplt_tgt3}
             end
