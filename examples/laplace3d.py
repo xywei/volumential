@@ -29,6 +29,7 @@ import logging
 
 import numpy as np
 import pyopencl as cl
+import pyopencl.array
 
 import pymbolic as pmbl
 import pymbolic.functions
