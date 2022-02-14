@@ -30,7 +30,7 @@ __doc__ = """
 import numpy as np
 import pyopencl as cl
 from pytools.obj_array import make_obj_array
-from boxtree.fmm import TimingRecorder
+from boxtree.timing import TimingRecorder
 from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
 from volumential.expansion_wrangler_fpnd import (
         FPNDSumpyExpansionWrangler, FPNDFMMLibExpansionWrangler)

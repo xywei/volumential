@@ -182,8 +182,9 @@ except ImportError as e:
 
     try:
         logger.info("Trying out BoxTree.TreeInteractiveBuild interface.")
-        import boxtree.tree_interactive_build  # noqa: F401
-        from modepy import LegendreGaussQuadrature
+        from boxtree.tree_build import (
+            make_tob_root, uniformly_refined, distribute_quadrature_rule)
+        import modepy as mp
 
         provider = "meshgen_boxtree"
 
@@ -195,38 +196,29 @@ except ImportError as e:
     else:
         # {{{ Meshgen via BoxTree
         logger.info("Using Meshgen via BoxTree interface.")
-        from boxtree.tree_interactive_build import BoxTree, QuadratureOnBoxTree
 
         def greet():
             return "Hello from Meshgen via BoxTree!"
 
-        def make_uniform_cubic_grid(degree, nlevels=1, dim=2, queue=None, **kwargs):
+        def make_uniform_cubic_grid(nqpoints, nlevels=1, dim=2, actx=None, **kwargs):
             """Uniform cubic grid in [-1,1]^dim.
             This function provides backward compatibility with meshgen_dealii.
             """
-            if queue is None:
-                ctx = cl.create_some_context()
-                queue = cl.CommandQueue(ctx)
-
             # For meshgen_dealii compatibility
             if "level" in kwargs:
                 nlevels = kwargs["level"]
 
-            tree = BoxTree()
-            tree.generate_uniform_boxtree(
-                queue, nlevels=nlevels, root_extent=2, root_vertex=np.zeros(dim) - 1
-            )
-            quad_rule = LegendreGaussQuadrature(degree - 1)
-            quad = QuadratureOnBoxTree(tree, quad_rule)
-            q_weights = quad.get_q_weights(queue).get(queue)
-            q_points_dev = quad.get_q_points(queue)
-            n_all_q_points = len(q_weights)
-            q_points = np.zeros((n_all_q_points, dim))
-            for d in range(dim):
-                q_points[:, d] = q_points_dev[d].get(queue)
+            lower_bounds = [-1, ] * dim
+            upper_bounds = [1, ] * dim
+            tob = make_tob_root(dim=dim, bbox=[lower_bounds, upper_bounds])
+            for _ in range(nlevels - 1):
+                tob = uniformly_refined(tob)
 
-            # Adding a placeholder for deprecated point radii
-            return (q_points, q_weights, None)
+            degree = nqpoints - 1
+            quad = mp.LegendreGaussQuadrature(degree)
+            x, q = distribute_quadrature_rule(tob, quad)
+            radii = None
+            return (x, q, radii)
 
         class MeshGen1D(MeshGenBase):
             """Meshgen in 1D

@@ -31,9 +31,9 @@ from pytools.obj_array import make_obj_array
 # from pytools import memoize_method
 from volumential.nearfield_potential_table import NearFieldInteractionTable
 from volumential.expansion_wrangler_interface import (
-        ExpansionWranglerInterface, ExpansionWranglerCodeContainerInterface)
-from sumpy.fmm import SumpyExpansionWrangler, \
-        SumpyTimingFuture, SumpyExpansionWranglerCodeContainer
+        ExpansionWranglerInterface, TreeIndependentDataForWranglerInterface)
+from sumpy.fmm import (SumpyExpansionWrangler,
+        SumpyTimingFuture, SumpyTreeIndependentDataForWrangler)
 from boxtree.pyfmmlib_integration import FMMLibExpansionWrangler
 
 from sumpy.kernel import (
@@ -68,9 +68,9 @@ def inverse_id_map(queue, mapped_ids):
 # {{{ sumpy backend
 
 
-class FPNDSumpyExpansionWranglerCodeContainer(
-        ExpansionWranglerCodeContainerInterface,
-        SumpyExpansionWranglerCodeContainer):
+class FPNDSumpyTreeIndependentDataForWrangler(
+        TreeIndependentDataForWranglerInterface,
+        SumpyTreeIndependentDataForWrangler):
     """Objects of this type serve as a place to keep the code needed
     for ExpansionWrangler if it is using sumpy to perform multipole
     expansion and manipulations.
@@ -80,7 +80,10 @@ class FPNDSumpyExpansionWranglerCodeContainer(
     more ephemeral than the code, the code's lifetime
     is decoupled by storing it in this object.
     """
-    get_wrangler = SumpyExpansionWranglerCodeContainer.get_wrangler
+
+    @property
+    def wrangler_cls(self):
+        return SumpyExpansionWrangler
 
 
 class FPNDSumpyExpansionWrangler(
@@ -579,9 +582,8 @@ class FPNDSumpyExpansionWrangler(
 # {{{ fmmlib backend (for laplace, helmholtz)
 
 
-class FPNDFMMLibExpansionWranglerCodeContainer(
-        ExpansionWranglerCodeContainerInterface,
-        ):
+class FPNDFMMLibTreeIndependentDataForWrangler(
+        TreeIndependentDataForWranglerInterface):
     """Objects of this type serve as a place to keep the code needed
     for ExpansionWrangler if it is using fmmlib to perform multipole
     expansion and manipulations.
@@ -600,13 +602,9 @@ class FPNDFMMLibExpansionWranglerCodeContainer(
         self.target_kernels = target_kernels
         self.exclude_self = True
 
-    def get_wrangler(self, queue, tree, dtype, fmm_level_to_order,
-            source_extra_kwargs={}, kernel_extra_kwargs=None,
-            *args, **kwargs):
-        return FPNDFMMLibExpansionWrangler(self, queue, tree,
-                dtype, fmm_level_to_order,
-                source_extra_kwargs, kernel_extra_kwargs,
-                *args, **kwargs)
+    @property
+    def wrangler_cls(self):
+        return FPNDFMMLibExpansionWrangler
 
 
 class FPNDFMMLibExpansionWrangler(
@@ -1201,7 +1199,7 @@ class FPNDFMMLibExpansionWrangler(
 # }}} End fmmlib backend (for laplace, helmholtz)
 
 
-class FPNDExpansionWranglerCodeContainer(FPNDSumpyExpansionWranglerCodeContainer):
+class FPNDTreeIndependentDataForWrangler(FPNDSumpyTreeIndependentDataForWrangler):
     """The default code container.
     """
 

@@ -10,7 +10,8 @@ filelock
 -e git+https://gitlab.tiker.net/inducer/cgen.git#egg=cgen
 -e git+https://gitlab.tiker.net/inducer/loopy.git#egg=loopy
 -e git+https://gitlab.tiker.net/inducer/pymbolic.git#egg=pymbolic
--e git+https://gitlab.tiker.net/inducer/boxtree.git#egg=boxtree
+# -e git+https://gitlab.tiker.net/inducer/boxtree.git#egg=boxtree
+-e git+https://gitlab.tiker.net/xywei/boxtree.git@tree-build-refactor#egg=boxtree
 -e git+https://gitlab.tiker.net/inducer/arraycontext.git#egg=arraycontext
 -e git+https://gitlab.tiker.net/inducer/meshmode.git#egg=meshmode
 -e git+https://gitlab.tiker.net/inducer/genpy.git#egg=genpy

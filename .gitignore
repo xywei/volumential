@@ -39,3 +39,5 @@ gmsh_tmp/
 .coverage
 pytest.xml
 prof/
+
+.ccls-cache/

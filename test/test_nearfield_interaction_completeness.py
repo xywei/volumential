@@ -41,41 +41,29 @@ def drive_test_completeness(ctx, queue, dim, q_order):
 
     def source_field(x):
         assert len(x) == dim
-        return 1
+        return np.ones_like(x[0])
 
     # {{{ generate quad points
 
     import volumential.meshgen as mg
 
-    q_points, q_weights, q_radii = mg.make_uniform_cubic_grid(
-        degree=q_order, level=n_levels, dim=dim
-    )
+    q_points, q_weights, _ = mg.make_uniform_cubic_grid(
+        nqpoints=q_order+1, level=n_levels, dim=dim)
 
-    assert len(q_points) == len(q_weights)
-    assert q_points.shape[1] == dim
-
-    q_points_org = q_points
-    q_points = np.ascontiguousarray(np.transpose(q_points))
+    assert len(q_points) == dim
+    len(q_weights) == len(q_points[0])
 
     from pytools.obj_array import make_obj_array
 
+    q_points_org = q_points
     q_points = make_obj_array(
-        [cl.array.to_device(queue, q_points[i]) for i in range(dim)]
-    )
+        [cl.array.to_device(queue, q_points[i]) for i in range(dim)])
 
     q_weights = cl.array.to_device(queue, q_weights)
-    if q_radii is not None:
-        q_radii = cl.array.to_device(queue, q_radii)
 
     # }}}
 
-    # {{{ discretize the source field
-
-    source_vals = cl.array.to_device(
-        queue, np.array([source_field(qp) for qp in q_points_org])
-    )
-
-    # }}} End discretize the source field
+    source_vals = cl.array.to_device(queue, source_field(q_points_org))
 
     # {{{ build tree and traversals
 

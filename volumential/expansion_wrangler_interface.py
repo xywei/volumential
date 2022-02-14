@@ -213,10 +213,10 @@ class ExpansionWranglerInterface(object):
 
 # }}} End expansion wrangler interface
 
-# {{{ code container interface
+# {{{ tree-independent data for wrangler interface
 
 
-class ExpansionWranglerCodeContainerInterface(object):
+class TreeIndependentDataForWranglerInterface(object):
     """
         Abstract expansion code container interface.
         The interface is adapted from, and stays compatible with boxtree/fmm.
@@ -230,6 +230,6 @@ class ExpansionWranglerCodeContainerInterface(object):
         """
         pass
 
-# }}} End code container interface
+# }}}
 
 # vim: filetype=pyopencl:fdm=marker
