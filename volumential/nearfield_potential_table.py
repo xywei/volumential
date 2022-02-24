@@ -304,14 +304,14 @@ class NearFieldInteractionTable(object):
                 queue = None
 
             q_points, _, _ = mg.make_uniform_cubic_grid(
-                nqpoints=quad_order-1, level=1, dim=self.dim,
+                degree=quad_order-1, level=1, dim=self.dim,
                 queue=queue)
 
             # map to source box
             mapped_q_points = np.array(
                 [
                     0.5 * self.source_box_extent * (qp + np.ones(self.dim))
-                    for qp in q_points.T
+                    for qp in q_points
                 ]
             )
             # sort in dictionary order, preserve only the leading
@@ -401,11 +401,10 @@ class NearFieldInteractionTable(object):
         idx = self.unwrap_mode_index(mode_index)
 
         xi = (
-            np.array([p[self.dim - 1] for p in self.q_points[: self.quad_order + 1]])
+            np.array([p[self.dim - 1] for p in self.q_points[: self.quad_order]])
             / self.source_box_extent
         )
-        assert len(xi) == self.quad_order - 1
-        print(xi)
+        assert len(xi) == self.quad_order
 
         yi = []
         for d in range(self.dim):

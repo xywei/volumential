@@ -36,6 +36,7 @@ Mesh generation
 import logging
 import numpy as np
 import pyopencl as cl
+import modepy as mp
 from pytools.obj_array import make_obj_array
 
 logger = logging.getLogger(__name__)
@@ -45,106 +46,100 @@ provider = None
 # {{{ meshgen Python provider
 
 
-class MeshGenBase(object):
+class MeshGenBoxtree(object):
     """Base class for Meshgen via BoxTree.
     The interface is similar to the Meshgen via Deal.II, except that
     the arguments a and b can also be of higher dimensions to allow
     added flexibility on choosing the bounding box.
 
-    This base class cannot be used directly since the boxtree is not
-    built in the constructor until dimension_specific_setup() is
-    provided.
-
-    In addition to the common capabilities of the deal.II implementation,
-    this class also implements native CL getters like get_q_points_dev()
-    that play well with the other libraries like boxtree.
+    The interface of this class should be kept in sync with the dealii backend.
     """
+    def __init__(self, degree, nlevels=1, a=-1, b=1, dim=None, queue=None):
+        """
+        Specifying bounding box:
+          1. Assign scalar values to a,b for [a, b]^dim
+          2. Assign dim-vectors for [a0, b0] X [a1, b1] ...
 
-    def __init__(self, degree, nlevels, a=-1, b=1, queue=None):
+        Note: due to legacy reasons, the degree argument here is the number of
+        quadrature nodes in 1D (not the polynomial degree).
+        """
         assert degree > 0
         assert nlevels > 0
+        self.dim = dim
         self.degree = degree
-        self.quadrature_formula = LegendreGaussQuadrature(degree - 1)
+        self.quadrature_formula = mp.LegendreGaussQuadrature(degree - 1)
         self.nlevels = nlevels
+        self.n_box_nodes = self.degree ** self.dim
+        self.queue = queue
 
-        self.bound_a = np.array([a]).flatten()
-        self.bound_b = np.array([b]).flatten()
-        assert len(self.bound_a) == len(self.bound_b)
-        assert np.all(self.bound_a < self.bound_b)
+        x = self.quadrature_formula.nodes  # nodes in [-1, 1]
+        w = self.quadrature_formula.weights
+        assert len(x) == self.degree
+        self.box_nodes = np.array(np.meshgrid(*((x,) * self.dim), indexing="ij")
+                                  ).reshape([self.dim, -1])
 
-        self.dim = len(self.bound_a)
-        self.root_vertex = self.bound_a
-        self.root_extent = np.max(self.bound_b - self.bound_a)
-
-        if queue is None:
-            ctx = cl.create_some_context()
-            self.queue = cl.CommandQueue(ctx)
+        if self.dim == 1:
+            self.box_weights = w
+        elif self.dim == 2:
+            self.box_weights = w[:, None] @ w[None, :]
+        elif self.dim == 3:
+            self.box_weights = (w[:, None] @ w[None, :]
+                                ).reshape(-1)[:, None] @ w[None, :]
         else:
-            self.queue = queue
+            raise ValueError
+        self.box_weights = self.box_weights.reshape(-1)
 
-        # plug in dimension-specific details
-        self.dimension_specific_setup()
-        self.n_q_points = self.degree ** self.dim
+        # make bounding box
+        if np.array(a).size == 1:
+            a = np.repeat(a, dim)
+        if np.array(b).size == 1:
+            b = np.repeat(b, dim)
 
-        self.boxtree = BoxTree()
-        self.boxtree.generate_uniform_boxtree(
-            self.queue,
-            nlevels=self.nlevels,
-            root_extent=self.root_extent,
-            root_vertex=self.root_vertex,
-        )
-        self.quadrature = QuadratureOnBoxTree(
-            self.boxtree, self.quadrature_formula
-        )
+        assert len(a) == dim
+        assert len(b) == dim
+        assert all(ai < bi for ai, bi in zip(a, b))
+        bbox = [a, b]
 
-    def dimension_specific_setup(self):
-        pass
-
-    def get_q_points_dev(self):
-        return self.quadrature.get_q_points(self.queue)
+        self.tob = make_tob_root(self.dim, bbox)
+        for i in range(self.nlevels - 1):
+            self.tob = uniformly_refined(self.tob)
 
     def get_q_points(self):
-        q_points_dev = self.get_q_points_dev()
-        n_all_q_points = len(q_points_dev[0])
-        q_points = np.zeros((n_all_q_points, self.dim))
-        for d in range(self.dim):
-            q_points[:, d] = q_points_dev[d].get(self.queue)
-        return q_points
-
-    def get_q_weights_dev(self):
-        return self.quadrature.get_q_weights(self.queue)
+        lfboxes = self.tob.leaf_boxes()
+        nodes = np.tile(self.box_nodes, (1, len(lfboxes)))
+        box_shifts = np.repeat(
+            self.tob.box_centers[:, lfboxes], self.n_box_nodes, axis=1)
+        box_scales = np.repeat(
+            self.tob.get_box_size(lfboxes) / 2, self.n_box_nodes)
+        nodes = nodes * box_scales[None, :] + box_shifts
+        return nodes.T
 
     def get_q_weights(self):
-        q_weights_dev = self.get_q_weights_dev()
-        return q_weights_dev.get(self.queue)
-
-    def get_cell_measures_dev(self):
-        return self.quadrature.get_cell_measures(self.queue)
+        lfboxes = self.tob.leaf_boxes()
+        weights = np.tile(self.box_weights, len(lfboxes))
+        box_scales = np.repeat(
+            self.tob.get_box_size(lfboxes) / 2, self.n_box_nodes)
+        weights = weights * box_scales**self.tob.dim
+        return weights
 
     def get_cell_measures(self):
-        cell_measures_dev = self.get_cell_measures_dev()
-        return cell_measures_dev.get(self.queue)
-
-    def get_cell_centers_dev(self):
-        return self.quadrature.get_cell_centers(self.queue)
+        lfboxes = self.tob.leaf_boxes()
+        box_scales = np.repeat(
+            self.tob.get_box_size(lfboxes) / 2, self.n_box_nodes)
+        return box_scales**self.tob.dim
 
     def get_cell_centers(self):
-        cell_centers_dev = self.get_cell_centers_dev()
-        n_active_cells = self.n_active_cells()
-        cell_centers = np.zeros((n_active_cells, self.dim))
-        for d in range(self.dim):
-            cell_centers[:, d] = cell_centers_dev[d].get(self.queue)
-        return cell_centers
+        return self.bob.box_centers
 
     def n_cells(self):
         """Note that this value can be larger than the actual number
         of cells used in the boxtree. It mainly serves as the bound for
         iterators on cells.
         """
-        return self.boxtree.nboxes
+        return self.tob.nboxes
 
     def n_active_cells(self):
-        return self.boxtree.n_active_boxes
+        return len(self.tob.leaf_boxes())
 
     def update_mesh(
         self, criteria, top_fraction_of_cells, bottom_fraction_of_cells
@@ -156,7 +151,7 @@ class MeshGenBase(object):
         logging_func("Number of cells: " + str(self.n_cells()))
         logging_func("Number of active cells: " + str(self.n_active_cells()))
         logging_func("Number of quad points per cell: "
-                + str(self.n_q_points))
+                + str(self.n_box_nodes))
 
     def generate_gmsh(self, filename):
         """
@@ -181,10 +176,8 @@ except ImportError as e:
     logger.warning("Meshgen via Deal.II is not present or unusable.")
 
     try:
-        logger.info("Trying out BoxTree.TreeInteractiveBuild interface.")
-        from boxtree.tree_build import (
-            make_tob_root, uniformly_refined, distribute_quadrature_rule)
-        import modepy as mp
+        logger.info("Trying out BoxTree backend.")
+        from boxtree.tree_build import make_tob_root, uniformly_refined
 
         provider = "meshgen_boxtree"
 
@@ -200,7 +193,7 @@ except ImportError as e:
         def greet():
             return "Hello from Meshgen via BoxTree!"
 
-        def make_uniform_cubic_grid(nqpoints, nlevels=1, dim=2, actx=None, **kwargs):
+        def make_uniform_cubic_grid(degree, nlevels=1, dim=2, actx=None, **kwargs):
             """Uniform cubic grid in [-1,1]^dim.
             This function provides backward compatibility with meshgen_dealii.
             """
@@ -208,48 +201,29 @@ except ImportError as e:
             if "level" in kwargs:
                 nlevels = kwargs["level"]
 
-            lower_bounds = [-1, ] * dim
-            upper_bounds = [1, ] * dim
-            tob = make_tob_root(dim=dim, bbox=[lower_bounds, upper_bounds])
-            for _ in range(nlevels - 1):
-                tob = uniformly_refined(tob)
-
-            degree = nqpoints - 1
-            quad = mp.LegendreGaussQuadrature(degree)
-            x, q = distribute_quadrature_rule(tob, quad)
+            mgen = MeshGenBoxtree(degree + 1, nlevels, -1, 1, dim)
+            x = mgen.get_q_points()
+            q = mgen.get_q_weights()
             radii = None
             return (x, q, radii)
 
-        class MeshGen1D(MeshGenBase):
+        class MeshGen1D(MeshGenBoxtree):
             """Meshgen in 1D
             """
+            def __init__(self, degree, nlevels=1, a=-1, b=1, queue=None):
+                super().__init__(degree, nlevels, a, b, 1, queue)
 
-            def dimension_specific_setup(self):
-                assert self.dim == 1
-
-        class MeshGen2D(MeshGenBase):
+        class MeshGen2D(MeshGenBoxtree):
             """Meshgen in 2D
             """
+            def __init__(self, degree, nlevels=1, a=-1, b=1, queue=None):
+                super().__init__(degree, nlevels, a, b, 2, queue)
 
-            def dimension_specific_setup(self):
-                if self.dim == 1:
-                    # allow passing scalar values of a and b to the constructor
-                    self.dim = 2
-                    self.root_vertex = np.zeros(self.dim) + self.bound_a
-                else:
-                    assert self.dim == 2
-
-        class MeshGen3D(MeshGenBase):
+        class MeshGen3D(MeshGenBoxtree):
             """Meshgen in 3D
             """
-
-            def dimension_specific_setup(self):
-                if self.dim == 1:
-                    # allow passing scalar values of a and b to the constructor
-                    self.dim = 3
-                    self.root_vertex = np.zeros(self.dim) + self.bound_a
-                else:
-                    assert self.dim == 3
+            def __init__(self, degree, nlevels=1, a=-1, b=1, queue=None):
+                super().__init__(degree, nlevels, a, b, 3, queue)
 
         # }}} End Meshgen via BoxTree
 

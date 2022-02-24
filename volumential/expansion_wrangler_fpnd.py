@@ -30,11 +30,10 @@ from pytools.obj_array import make_obj_array
 
 # from pytools import memoize_method
 from volumential.nearfield_potential_table import NearFieldInteractionTable
-from volumential.expansion_wrangler_interface import (
-        ExpansionWranglerInterface, TreeIndependentDataForWranglerInterface)
 from sumpy.fmm import (SumpyExpansionWrangler,
         SumpyTimingFuture, SumpyTreeIndependentDataForWrangler)
-from boxtree.pyfmmlib_integration import FMMLibExpansionWrangler
+from boxtree.pyfmmlib_integration import (FMMLibExpansionWrangler,
+                                          FMMLibTreeIndependentDataForWrangler)
 
 from sumpy.kernel import (
         LaplaceKernel, HelmholtzKernel, AxisTargetDerivative,
@@ -68,9 +67,7 @@ def inverse_id_map(queue, mapped_ids):
 # {{{ sumpy backend
 
 
-class FPNDSumpyTreeIndependentDataForWrangler(
-        TreeIndependentDataForWranglerInterface,
-        SumpyTreeIndependentDataForWrangler):
+class FPNDSumpyTreeIndependentDataForWrangler(SumpyTreeIndependentDataForWrangler):
     """Objects of this type serve as a place to keep the code needed
     for ExpansionWrangler if it is using sumpy to perform multipole
     expansion and manipulations.
@@ -86,8 +83,7 @@ class FPNDSumpyTreeIndependentDataForWrangler(
         return SumpyExpansionWrangler
 
 
-class FPNDSumpyExpansionWrangler(
-        ExpansionWranglerInterface, SumpyExpansionWrangler):
+class FPNDSumpyExpansionWrangler(SumpyExpansionWrangler):
     """This expansion wrangler uses "fpnd" strategy. That is, Far field is
     computed via Particle approximation and Near field is computed Directly.
     The FMM is performed using sumpy backend.
@@ -112,17 +108,13 @@ class FPNDSumpyExpansionWrangler(
 
     def __init__(
         self,
-        code_container,
-        queue,
-        tree,
-        near_field_table,
-        dtype,
-        fmm_level_to_order,
-        quad_order,
-        potential_kind=1,
+        tree_indep, traversal, dtype, fmm_level_to_order,
+        near_field_table, quad_order, potential_kind=1,
         source_extra_kwargs=None,
         kernel_extra_kwargs=None,
         self_extra_kwargs=None,
+        translation_classes_data=None,
+        preprocessed_mpole_dtype=None,
         list1_extra_kwargs=None,
     ):
         """
@@ -131,24 +123,29 @@ class FPNDSumpyExpansionWrangler(
             2. a list of tables, when len(target_kernels) = 1 (multiple levels)
             3. otherwise, a dictionary from kernel.__repr__() to a list of its tables
         """
+        super().__init__(
+            tree_indep, traversal, dtype, fmm_level_to_order,
+            source_extra_kwargs,
+            kernel_extra_kwargs,
+            self_extra_kwargs,
+            translation_classes_data,
+            preprocessed_mpole_dtype)
 
-        self.code = code_container
-        self.queue = queue
-        self.tree = tree
+        self.list1_extra_kwargs = list1_extra_kwargs
 
         self.near_field_table = {}
         # list of tables for a single out kernel
         if isinstance(near_field_table, list):
-            assert len(self.code.target_kernels) == 1
+            assert len(self.tree_indep.target_kernels) == 1
             self.near_field_table[
-                self.code.target_kernels[0].__repr__()
+                self.tree_indep.target_kernels[0].__repr__()
             ] = near_field_table
             self.n_tables = len(near_field_table)
 
         # single table
         elif isinstance(near_field_table, NearFieldInteractionTable):
-            assert len(self.code.target_kernels) == 1
-            self.near_field_table[self.code.target_kernels[0].__repr__()] = [
+            assert len(self.tree_indep.target_kernels) == 1
+            self.near_field_table[self.tree_indep.target_kernels[0].__repr__()] = [
                 near_field_table
             ]
             self.n_tables = 1
@@ -156,7 +153,7 @@ class FPNDSumpyExpansionWrangler(
         # dictionary of lists of tables
         elif isinstance(near_field_table, dict):
             self.n_tables = dict()
-            for out_knl in self.code.target_kernels:
+            for out_knl in self.tree_indep.target_kernels:
                 if repr(out_knl) not in near_field_table:
                     raise RuntimeError(
                             "Missing nearfield table for %s." % repr(out_knl))
@@ -177,15 +174,15 @@ class FPNDSumpyExpansionWrangler(
         self.potential_kind = potential_kind
 
         # TODO: make all parameters table-specific (allow using inhomogeneous tables)
-        kname = repr(self.code.target_kernels[0])
+        kname = repr(self.tree_indep.target_kernels[0])
         self.root_table_source_box_extent = (
                 self.near_field_table[kname][0].source_box_extent)
         table_starting_level = np.round(
-            np.log(self.tree.root_extent / self.root_table_source_box_extent)
+            np.log(traversal.tree.root_extent / self.root_table_source_box_extent)
             / np.log(2)
             )
-        for kid in range(len(self.code.target_kernels)):
-            kname = self.code.target_kernels[kid].__repr__()
+        for kid in range(len(self.tree_indep.target_kernels)):
+            kname = self.tree_indep.target_kernels[kid].__repr__()
             for lev, table in zip(
                     range(len(self.near_field_table[kname])),
                     self.near_field_table[kname]
@@ -210,9 +207,9 @@ class FPNDSumpyExpansionWrangler(
                 if not isinstance(self.n_tables, dict) and self.n_tables > 1:
                     if (
                         not abs(
-                            int(self.tree.root_extent / table_root_extent)
+                            int(traversal.tree.root_extent / table_root_extent)
                             * table_root_extent
-                            - self.tree.root_extent
+                            - traversal.tree.root_extent
                         )
                         < 1e-15
                     ):
@@ -225,13 +222,13 @@ class FPNDSumpyExpansionWrangler(
             if not isinstance(self.n_tables, dict) and self.n_tables > 1:
                 # this checks that the boxes at the highest level are covered
                 if (
-                    not tree.nlevels
+                    not traversal.tree.nlevels
                     <= len(self.near_field_table[kname]) + table_starting_level
                 ):
                     raise RuntimeError(
                         "Insufficient list of tables: the "
                         "finest level mesh cells at level "
-                        + str(tree.nlevels)
+                        + str(traversal.tree.nlevels)
                         + " are not covered."
                     )
 
@@ -239,86 +236,18 @@ class FPNDSumpyExpansionWrangler(
                 # deferred until trav.target_boxes is passed when invoking
                 # eval_direct
 
-        self.dtype = dtype
-
-        if source_extra_kwargs is None:
-            source_extra_kwargs = {}
-
-        if kernel_extra_kwargs is None:
-            kernel_extra_kwargs = {}
-
-        if self_extra_kwargs is None:
-            self_extra_kwargs = {}
-
-        if list1_extra_kwargs is None:
-            list1_extra_kwargs = {}
-
-        if not callable(fmm_level_to_order):
-            raise TypeError("fmm_level_to_order not passed")
-
-        base_kernel = code_container.get_base_kernel()
-        kernel_arg_set = frozenset(kernel_extra_kwargs.items())
-        self.level_orders = [
-            fmm_level_to_order(base_kernel, kernel_arg_set, tree, lev)
-            for lev in range(tree.nlevels)
-        ]
-
-        # print("Multipole order = ",self.level_orders)
-
-        self.source_extra_kwargs = source_extra_kwargs
-        self.kernel_extra_kwargs = kernel_extra_kwargs
-        self.self_extra_kwargs = self_extra_kwargs
-        self.list1_extra_kwargs = list1_extra_kwargs
-
-        self.extra_kwargs = source_extra_kwargs.copy()
-        self.extra_kwargs.update(self.kernel_extra_kwargs)
-
     # }}} End constructor
 
     # {{{ data vector utilities
 
-    def multipole_expansion_zeros(self):
-        return SumpyExpansionWrangler.multipole_expansion_zeros(self)
-
-    def local_expansion_zeros(self):
-        return SumpyExpansionWrangler.local_expansion_zeros(self)
-
-    def output_zeros(self):
-        return SumpyExpansionWrangler.output_zeros(self)
-
-    def reorder_sources(self, source_array):
-        return SumpyExpansionWrangler.reorder_sources(self, source_array)
-
     def reorder_targets(self, target_array):
         if not hasattr(self.tree, 'user_target_ids'):
-            self.tree.user_target_ids = inverse_id_map(
-                self.queue, self.tree.sorted_target_ids)
-        return target_array.with_queue(self.queue)[self.tree.user_target_ids]
-
-    def reorder_potentials(self, potentials):
-        return SumpyExpansionWrangler.reorder_potentials(self, potentials)
-
-    def finalize_potentials(self, potentials):
-        # return potentials
-        return SumpyExpansionWrangler.finalize_potentials(self, potentials)
+            self.traversal.tree.user_target_ids = inverse_id_map(
+                target_array.queue, self.traversal.tree.sorted_target_ids)
+        return target_array.with_queue(
+            target_array.queue)[self.traversal.tree.user_target_ids]
 
     # }}} End data vector utilities
-
-    # {{{ formation & coarsening of multipoles
-
-    def form_multipoles(self, level_start_source_box_nrs, source_boxes, src_weights):
-        return SumpyExpansionWrangler.form_multipoles(
-            self, level_start_source_box_nrs, source_boxes, src_weights
-        )
-
-    def coarsen_multipoles(
-        self, level_start_source_parent_box_nrs, source_parent_boxes, mpoles
-    ):
-        return SumpyExpansionWrangler.coarsen_multipoles(
-            self, level_start_source_parent_box_nrs, source_parent_boxes, mpoles
-        )
-
-    # }}} End formation & coarsening of multipoles
 
     # {{{ direct evaluation of near field interactions
 
@@ -484,11 +413,11 @@ class FPNDSumpyExpansionWrangler(
     ):
         pot = self.output_zeros()
         events = []
-        for i in range(len(self.code.target_kernels)):
+        for i in range(len(self.tree_indep.target_kernels)):
             # print("processing near-field of out_kernel", i)
             pot[i], evt = self.eval_direct_single_out_kernel(
                 pot[i],
-                self.code.target_kernels[i],
+                self.tree_indep.target_kernels[i],
                 target_boxes,
                 neighbor_source_boxes_starts,
                 neighbor_source_boxes_lists,
@@ -582,8 +511,7 @@ class FPNDSumpyExpansionWrangler(
 # {{{ fmmlib backend (for laplace, helmholtz)
 
 
-class FPNDFMMLibTreeIndependentDataForWrangler(
-        TreeIndependentDataForWranglerInterface):
+class FPNDFMMLibTreeIndependentDataForWrangler(FMMLibTreeIndependentDataForWrangler):
     """Objects of this type serve as a place to keep the code needed
     for ExpansionWrangler if it is using fmmlib to perform multipole
     expansion and manipulations.
@@ -607,8 +535,7 @@ class FPNDFMMLibTreeIndependentDataForWrangler(
         return FPNDFMMLibExpansionWrangler
 
 
-class FPNDFMMLibExpansionWrangler(
-        ExpansionWranglerInterface, FMMLibExpansionWrangler):
+class FPNDFMMLibExpansionWrangler(FMMLibExpansionWrangler):
     """This expansion wrangler uses "fpnd" strategy. That is, Far field is
     computed via Particle approximation and Near field is computed Directly.
     The FMM is performed using FMMLib backend.
@@ -912,22 +839,6 @@ class FPNDFMMLibExpansionWrangler(
         return FMMLibExpansionWrangler.finalize_potentials(self, potentials)
 
     # }}} End data vector utilities
-
-    # {{{ formation & coarsening of multipoles
-
-    def form_multipoles(self, level_start_source_box_nrs, source_boxes, src_weights):
-        return FMMLibExpansionWrangler.form_multipoles(
-            self, level_start_source_box_nrs, source_boxes, src_weights
-        )
-
-    def coarsen_multipoles(
-        self, level_start_source_parent_box_nrs, source_parent_boxes, mpoles
-    ):
-        return FMMLibExpansionWrangler.coarsen_multipoles(
-            self, level_start_source_parent_box_nrs, source_parent_boxes, mpoles
-        )
-
-    # }}} End formation & coarsening of multipoles
 
     # {{{ direct evaluation of near field interactions
 

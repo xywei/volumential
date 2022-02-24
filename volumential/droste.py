@@ -274,7 +274,7 @@ class DrosteBase(KernelCacheWrapper):
             id=None,
             assignee="knl_scaling",
             expression=sympy_conv(self.integral_knl.get_global_scaling_const()),
-            temp_var_type=lp.Optional(),
+            temp_var_type=lp.Optional()
         )
 
         return quad_kernel_insns + [scaling_assignment]
@@ -660,7 +660,7 @@ class DrosteBase(KernelCacheWrapper):
         import volumential.meshgen as mg
 
         q_points, _, _ = mg.make_uniform_cubic_grid(
-            degree=self.ntgt_points, level=1, dim=self.dim,
+            degree=self.ntgt_points - 1, level=1, dim=self.dim,
             queue=queue)
 
         # map to [0,1]^d

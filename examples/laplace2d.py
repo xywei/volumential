@@ -280,11 +280,9 @@ def main():
     exclude_self = True
 
     from volumential.expansion_wrangler_fpnd import (
-            FPNDExpansionWranglerCodeContainer,
-            FPNDExpansionWrangler
-            )
+        FPNDTreeIndependentDataForWrangler, FPNDExpansionWrangler)
 
-    wcc = FPNDExpansionWranglerCodeContainer(
+    tree_indep = FPNDTreeIndependentDataForWrangler(
         ctx,
         partial(mpole_expn_class, knl),
         partial(local_expn_class, knl),
@@ -299,12 +297,9 @@ def main():
         self_extra_kwargs = {}
 
     wrangler = FPNDExpansionWrangler(
-        code_container=wcc,
-        queue=queue,
-        tree=tree,
-        near_field_table=nftable,
-        dtype=dtype,
+        tree_indep, trav, dtype,
         fmm_level_to_order=lambda kernel, kernel_args, tree, lev: m_order,
+        near_field_table=nftable,
         quad_order=q_order,
         self_extra_kwargs=self_extra_kwargs,
     )

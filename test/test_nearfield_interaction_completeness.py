@@ -48,10 +48,11 @@ def drive_test_completeness(ctx, queue, dim, q_order):
     import volumential.meshgen as mg
 
     q_points, q_weights, _ = mg.make_uniform_cubic_grid(
-        nqpoints=q_order+1, level=n_levels, dim=dim)
+        degree=q_order-1, level=n_levels, dim=dim)
 
-    assert len(q_points) == dim
-    len(q_weights) == len(q_points[0])
+    assert len(q_points[0]) == dim
+    len(q_weights) == len(q_points)
+    q_points = q_points.T
 
     from pytools.obj_array import make_obj_array
 

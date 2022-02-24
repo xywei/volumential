@@ -31,7 +31,6 @@ import numpy as np
 import pyopencl as cl
 from pytools.obj_array import make_obj_array
 from boxtree.timing import TimingRecorder
-from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
 from volumential.expansion_wrangler_fpnd import (
         FPNDSumpyExpansionWrangler, FPNDFMMLibExpansionWrangler)
 
@@ -75,7 +74,6 @@ def drive_volume_fmm(traversal, expansion_wrangler, src_weights, src_func,
     Returns the potentials computed by *expansion_wrangler*.
     """
     wrangler = expansion_wrangler
-    assert issubclass(type(wrangler), ExpansionWranglerInterface)
 
     recorder = TimingRecorder()
     logger.info("start fmm")
