@@ -660,7 +660,7 @@ class DrosteBase(KernelCacheWrapper):
         import volumential.meshgen as mg
 
         q_points, _, _ = mg.make_uniform_cubic_grid(
-            degree=self.ntgt_points - 1, level=1, dim=self.dim,
+            degree=self.ntgt_points, level=1, dim=self.dim,
             queue=queue)
 
         # map to [0,1]^d
@@ -1371,7 +1371,15 @@ class DrosteReduced(DrosteBase):
             delattr(self, "_memoize_dic_get_cached_optimized_kernel")
         except Exception:  # noqa: B902
             pass
-        knl = self.get_cached_optimized_kernel()
+
+        if 1:
+            knl = self.get_cached_optimized_kernel()
+        else:
+            knl = self.get_kernel()
+            # knl = lp.set_options(knl, {"trace_assignment_values": True})
+            print(knl)
+            1/0
+
         evt, res = knl(
             queue, alpha=alpha, result=result_array,
             root_brick=root_brick,
@@ -1383,6 +1391,7 @@ class DrosteReduced(DrosteBase):
             **extra_kernel_kwargs, **self.brick_quadrature_kwargs)
 
         raw_cheb_table_case = res["result"]
+
 
         self.get_kernel_id = 1
         try:

@@ -304,7 +304,7 @@ class NearFieldInteractionTable(object):
                 queue = None
 
             q_points, _, _ = mg.make_uniform_cubic_grid(
-                degree=quad_order-1, level=1, dim=self.dim,
+                degree=quad_order, level=1, dim=self.dim,
                 queue=queue)
 
             # map to source box
@@ -427,7 +427,7 @@ class NearFieldInteractionTable(object):
 
     def get_mode(self, mode_index):
         """
-        normal modes are deined on the source box
+        normal modes are defined on the source box
         """
         assert mode_index >= 0 and mode_index < self.n_q_points
 

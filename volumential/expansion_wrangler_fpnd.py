@@ -131,7 +131,8 @@ class FPNDSumpyExpansionWrangler(SumpyExpansionWrangler):
             translation_classes_data,
             preprocessed_mpole_dtype)
 
-        self.list1_extra_kwargs = list1_extra_kwargs
+        self.list1_extra_kwargs = \
+            dict() if list1_extra_kwargs is None else list1_extra_kwargs
 
         self.near_field_table = {}
         # list of tables for a single out kernel
@@ -267,7 +268,8 @@ class FPNDSumpyExpansionWrangler(SumpyExpansionWrangler):
 
         if 0:
             print("Returns range for list1")
-            out_pot[:] = cl.array.to_device(self.queue, np.arange(len(out_pot)))
+            out_pot[:] = cl.array.to_device(
+                mode_coefs[0].queue, np.arange(len(out_pot)))
             return out_pot, None
 
         kname = out_kernel.__repr__()
@@ -279,11 +281,13 @@ class FPNDSumpyExpansionWrangler(SumpyExpansionWrangler):
         else:
             use_multilevel_tables = False
 
+        queue = mode_coefs[0].queue
+
         if use_multilevel_tables:
             # this checks that the boxes at the coarsest level
             # and allows for some round-off error
             min_lev = np.min(
-                self.tree.box_levels.get(self.queue)[target_boxes.get(self.queue)]
+                self.tree.box_levels.get(queue)[target_boxes.get(queue)]
             )
             largest_cell_extent = self.tree.root_extent * 0.5 ** min_lev
             if not self.near_field_table[kname][0].source_box_extent >= (
@@ -305,7 +309,7 @@ class FPNDSumpyExpansionWrangler(SumpyExpansionWrangler):
         shift = -min(distinct_numbers)
 
         case_indices_dev = cl.array.to_device(
-            self.queue, self.near_field_table[kname][0].case_indices
+            queue, self.near_field_table[kname][0].case_indices
         )
 
         # table.data
@@ -335,7 +339,7 @@ class FPNDSumpyExpansionWrangler(SumpyExpansionWrangler):
             exterior_mode_nmlz_combined[lev, :] = \
                 self.near_field_table[kname][lev].kernel_exterior_normalizers
 
-        self.queue.finish()
+        queue.finish()
         logger.info(
                 "table data for kernel "
                 + out_kernel.__repr__() + " congregated")
@@ -356,20 +360,17 @@ class FPNDSumpyExpansionWrangler(SumpyExpansionWrangler):
             potential_kind=self.potential_kind,
             **self.list1_extra_kwargs)
 
-        table_data_combined = cl.array.to_device(self.queue,
-                table_data_combined)
-        mode_nmlz_combined = cl.array.to_device(self.queue,
-                mode_nmlz_combined)
-        exterior_mode_nmlz_combined = cl.array.to_device(self.queue,
-            exterior_mode_nmlz_combined)
-        self.queue.finish()
+        table_data_combined = cl.array.to_device(queue, table_data_combined)
+        mode_nmlz_combined = cl.array.to_device(queue, mode_nmlz_combined)
+        exterior_mode_nmlz_combined = cl.array.to_device(queue, exterior_mode_nmlz_combined)
+        queue.finish()
         logger.info("sent table data to device")
 
         # NOTE: box_sources for this evaluation should be "box_targets".
         # This is due to the special features of how box-FMM works.
 
         res, evt = near_field(
-            self.queue,
+            queue,
             result=out_pot,
             box_centers=self.tree.box_centers,
             box_levels=self.tree.box_levels,
@@ -411,7 +412,7 @@ class FPNDSumpyExpansionWrangler(SumpyExpansionWrangler):
         neighbor_source_boxes_lists,
         mode_coefs,
     ):
-        pot = self.output_zeros()
+        pot = self.output_zeros(mode_coefs[0])
         events = []
         for i in range(len(self.tree_indep.target_kernels)):
             # print("processing near-field of out_kernel", i)
@@ -428,7 +429,7 @@ class FPNDSumpyExpansionWrangler(SumpyExpansionWrangler):
         for out_pot in pot:
             out_pot.finish()
 
-        return (pot, SumpyTimingFuture(self.queue, events))
+        return (pot, SumpyTimingFuture(mode_coefs[0].queue, events))
 
     # }}} End direct evaluation of near field interactions
 
@@ -870,11 +871,13 @@ class FPNDFMMLibExpansionWrangler(FMMLibExpansionWrangler):
         else:
             use_multilevel_tables = False
 
+        queue = mode_coefs[0].queue
+
         if use_multilevel_tables:
             # this checks that the boxes at the coarsest level
             # and allows for some round-off error
             min_lev = np.min(
-                self.tree.box_levels.get(self.queue)[target_boxes.get(self.queue)]
+                self.tree.box_levels.get(queue)[target_boxes.get(queue)]
             )
             largest_cell_extent = self.tree.root_extent * 0.5 ** min_lev
             if not self.near_field_table[kname][0].source_box_extent >= (
@@ -896,8 +899,7 @@ class FPNDFMMLibExpansionWrangler(FMMLibExpansionWrangler):
         shift = -min(distinct_numbers)
 
         case_indices_dev = cl.array.to_device(
-            self.queue, self.near_field_table[kname][0].case_indices
-        )
+            queue, self.near_field_table[kname][0].case_indices)
 
         # table.data
         table_data_combined = np.zeros(
@@ -952,7 +954,7 @@ class FPNDFMMLibExpansionWrangler(FMMLibExpansionWrangler):
             **self.list1_extra_kwargs)
 
         res, evt = near_field(
-            self.queue,
+            queue,
             result=out_pot,
             box_centers=self.tree.box_centers,
             box_levels=self.tree.box_levels,

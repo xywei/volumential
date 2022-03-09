@@ -26,6 +26,7 @@ import pytest
 import loopy as lp
 import numpy as np
 import pyopencl as cl
+import pyopencl.array
 from volumential.droste import DrosteReduced
 from numpy.polynomial.chebyshev import chebval
 
@@ -101,8 +102,6 @@ def drive_test_cheb_table(
             alpha=0, nlevels=1,
             n_brick_quad_points=n_brick_q_points,
             adaptive_level=False, adaptive_quadrature=False)
-
-    print(cheb_table)
 
     # handle AxisTargetDerivative to extract the component of interest
     # (pvfmm returns the full gradient)

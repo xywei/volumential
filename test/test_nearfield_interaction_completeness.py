@@ -129,10 +129,10 @@ def drive_test_completeness(ctx, queue, dim, q_order):
     mpole_expn_class = partial(VolumeTaylorMultipoleExpansion, use_rscale=None)
 
     from volumential.expansion_wrangler_fpnd import (
-            FPNDExpansionWranglerCodeContainer,
+            FPNDSumpyTreeIndependentDataForWrangler,
             FPNDExpansionWrangler)
 
-    wcc = FPNDExpansionWranglerCodeContainer(
+    wcc = FPNDSumpyTreeIndependentDataForWrangler(
         ctx,
         partial(mpole_expn_class, knl),
         partial(local_expn_class, knl),
@@ -141,9 +141,8 @@ def drive_test_completeness(ctx, queue, dim, q_order):
     )
 
     wrangler = FPNDExpansionWrangler(
-        code_container=wcc,
-        queue=queue,
-        tree=tree,
+        tree_indep=wcc,
+        traversal=trav,
         near_field_table=nft,
         dtype=dtype,
         fmm_level_to_order=lambda kernel, kernel_args, tree, lev: 1,
@@ -155,6 +154,7 @@ def drive_test_completeness(ctx, queue, dim, q_order):
         trav.target_boxes, trav.neighbor_source_boxes_starts,
         trav.neighbor_source_boxes_lists, mode_coefs=source_vals)
     pot = pot[0]
+    import pudb; pu.db
     for p in pot[0]:
         assert(abs(p - 2**dim) < 1e-8)
 

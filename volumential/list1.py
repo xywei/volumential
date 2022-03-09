@@ -288,7 +288,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
         else:
             logger.info("computing table level from box size")
             logger.info("(using multiple tables)")
-            code = "log(table_root_extent / BOX_extent) / log(2.0)"
+            code = "log(table_root_extent / BOX_extent) / log(2.0) + 0.5"
 
         return code.replace("BOX", box_name)
 
@@ -342,10 +342,10 @@ class NearFieldFromCSR(NearFieldEvalBase):
                     <> sbox_extent = root_extent * (1.0 / (2**sbox_level))
 
                     table_lev_tmp = GET_TABLE_LEVEL {id=tab_lev_tmp}
-                    table_lev = round(table_lev_tmp) {id=tab_lev,dep=tab_lev_tmp}
+                    table_lev = floor(table_lev_tmp) {id=tab_lev,dep=tab_lev_tmp}
 
                     vec_id_tmp = COMPUTE_VEC_ID {id=vec_id_tmp}
-                    vec_id = round(vec_id_tmp) {id=vec_id,dep=vec_id_tmp}
+                    vec_id = floor(vec_id_tmp) {id=vec_id,dep=vec_id_tmp}
                     <> case_id = case_indices[vec_id] {dep=vec_id}
 
                     <> scaling = COMPUTE_SCALING
@@ -355,7 +355,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
                         <> tgt_scaling = COMPUTE_TGT_SCALING
                         <> tgt_displacement = COMPUTE_TGT_DISPLACEMENT
                         tgt_table_lev_tmp = GET_TGT_TABLE_LEVEL {id=tgttab_lev_tmp}
-                        tgt_table_lev = round(tgt_table_lev_tmp) \
+                        tgt_table_lev = floor(tgt_table_lev_tmp) \
                                 {id=tgttab_lev,dep=tgttab_lev_tmp}
                         <> ext_nmlz = exterior_mode_nmlz[tgt_table_lev, tid] \
                                 * tgt_scaling + tgt_displacement \
@@ -502,7 +502,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
 
         extra_knl_args_from_init = {}
         for key, val in integral_kernel_init_kargs.items():
-            if key in knl.arg_dict:
+            if key in knl.default_entrypoint.arg_dict:
                 extra_knl_args_from_init[key] = val
 
         evt, res = knl(

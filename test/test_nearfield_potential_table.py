@@ -59,8 +59,6 @@ def interp_modes(q_order):
     yi = yi.flatten()
 
     val = np.zeros(xi.shape)
-    print(xi)
-    print(yi)
 
     for i in range(len(xi)):
         val[i] = interpolate_function(xi[i], yi[i])
@@ -69,7 +67,7 @@ def interp_modes(q_order):
 
 
 def test_modes():
-    for q in [1, 2, 3, 4, 5, 6, 7, 8]:
+    for q in [1, 2, 3, 4, 5, 6]:
         val = interp_modes(q)
         assert np.allclose(val, 1)
 
