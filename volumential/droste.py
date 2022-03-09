@@ -274,7 +274,7 @@ class DrosteBase(KernelCacheWrapper):
             id=None,
             assignee="knl_scaling",
             expression=sympy_conv(self.integral_knl.get_global_scaling_const()),
-            temp_var_type=lp.Optional()
+            temp_var_type=lp.Optional(None)
         )
 
         return quad_kernel_insns + [scaling_assignment]
@@ -787,6 +787,10 @@ class DrosteFull(DrosteBase):
         loopy_knl = lp.set_options(loopy_knl, write_cl=False)
         loopy_knl = lp.set_options(loopy_knl, return_dict=True)
 
+        loopy_knl = lp.add_and_infer_dtypes(
+            loopy_knl,
+            {"template_target": np.float64})
+
         try:
             loopy_knl = self.integral_knl.prepare_loopy_kernel(loopy_knl)
         except Exception:  # noqa: B902
@@ -1238,6 +1242,10 @@ class DrosteReduced(DrosteBase):
                 name="brick_map",
                 lang_version=(2018, 2),
             )
+
+            loopy_knl = lp.add_and_infer_dtypes(
+                loopy_knl,
+                {"template_target": np.float64})
 
         elif self.get_kernel_id == 1:
             loopy_knl = lp.make_kernel(  # NOQA
