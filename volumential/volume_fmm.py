@@ -85,6 +85,8 @@ def drive_volume_fmm(traversal, expansion_wrangler, src_weights, src_func,
     if src_func.ndim == 1:
         src_func = make_obj_array([src_func.astype(dtype)])
 
+    queue = src_func[0].queue
+
     assert (ns := len(src_weights)) == len(src_func)
     if ns > 1:
         raise NotImplementedError("Multiple outputs are not yet supported")
@@ -95,12 +97,12 @@ def drive_volume_fmm(traversal, expansion_wrangler, src_weights, src_func,
 
     elif isinstance(expansion_wrangler, FPNDFMMLibExpansionWrangler):
 
-        traversal = traversal.get(wrangler.queue)
+        traversal = traversal.get(queue)
 
         if isinstance(src_weights, cl.array.Array):
-            src_weights = src_weights.get(wrangler.queue)
+            src_weights = src_weights.get(queue)
         if isinstance(src_func, cl.array.Array):
-            src_func = src_func.get(wrangler.queue)
+            src_func = src_func.get(queue)
 
     if reorder_sources:
         logger.debug("reorder source weights")
@@ -187,7 +189,7 @@ def drive_volume_fmm(traversal, expansion_wrangler, src_weights, src_func,
         from sumpy import P2P
 
         p2p = P2P(
-            wrangler.queue.context,
+            queue.context,
             wrangler.code.target_kernels,
             exclude_self=wrangler.code.exclude_self,
             value_dtypes=[wrangler.dtype],
@@ -203,7 +205,7 @@ def drive_volume_fmm(traversal, expansion_wrangler, src_weights, src_func,
 
         for iw, sw in enumerate(src_weights):
             evt, (ref_pot,) = p2p(
-                wrangler.queue,
+                queue,
                 traversal.tree.targets,
                 traversal.tree.sources,
                 (sw,),
@@ -231,7 +233,7 @@ def drive_volume_fmm(traversal, expansion_wrangler, src_weights, src_func,
             result = wrangler.reorder_potentials(potentials)
 
         logger.debug("finalize potentials")
-        result = wrangler.finalize_potentials(result)
+        result = wrangler.finalize_potentials(result, None)
 
         logger.info("direct p2p complete")
 
@@ -350,7 +352,7 @@ def drive_volume_fmm(traversal, expansion_wrangler, src_weights, src_func,
         result = wrangler.reorder_potentials(potentials)
 
     logger.debug("finalize potentials")
-    result = wrangler.finalize_potentials(result)
+    result = wrangler.finalize_potentials(result, None)
 
     logger.info("fmm complete")
     # }}} End Reorder potentials
@@ -388,9 +390,7 @@ def interpolate_volume_potential(target_points, traversal, wrangler, potential,
     """
     Interpolate the volume potential, only works for tensor-product quadrature formulae.
     target_points and potential should be an cl array.
-
-    :arg wrangler: Used only for general info (nothing sumpy kernel specific). May also
-        be None if the needed information is passed by kwargs.
+https://github.com/riedat/gc        be None if the needed information is passed by kwargs.
     :arg potential_in_tree_order: Whether the potential is in tree order (as opposed to
         in user order).
     :lbl_lookup: a :class:`boxtree.LeavesToBallsLookup` that has the lookup information
@@ -401,16 +401,15 @@ def interpolate_volume_potential(target_points, traversal, wrangler, potential,
     if wrangler is not None:
         dim = next(iter(wrangler.near_field_table.values()))[0].dim
         tree = wrangler.tree
-        queue = wrangler.queue
         q_order = wrangler.quad_order
         dtype = wrangler.dtype
     else:
         dim = kwargs['dim']
         tree = kwargs['tree']
-        queue = kwargs['queue']
         q_order = kwargs['q_order']
         dtype = kwargs['dtype']
 
+    queue = potential.queue
     ctx = queue.context
     coord_dtype = tree.coord_dtype
     n_points = len(target_points[0])

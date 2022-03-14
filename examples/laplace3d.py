@@ -29,6 +29,7 @@ import logging
 
 import numpy as np
 import pyopencl as cl
+import pyopencl.array
 
 import pymbolic as pmbl
 import pymbolic.functions
@@ -293,10 +294,9 @@ def main():
 
     exclude_self = True
     from volumential.expansion_wrangler_fpnd import (
-            FPNDExpansionWrangler,
-            FPNDExpansionWranglerCodeContainer)
+        FPNDSumpyTreeIndependentDataForWrangler, FPNDExpansionWrangler)
 
-    wcc = FPNDExpansionWranglerCodeContainer(
+    wcc = FPNDSumpyTreeIndependentDataForWrangler(
         ctx,
         partial(mpole_expn_class, knl),
         partial(local_expn_class, knl),
@@ -311,9 +311,8 @@ def main():
         self_extra_kwargs = {}
 
     wrangler = FPNDExpansionWrangler(
-        code_container=wcc,
-        queue=queue,
-        tree=tree,
+        tree_indep=wcc,
+        traversal=trav,
         near_field_table=nftable,
         dtype=dtype,
         fmm_level_to_order=lambda kernel, kernel_args, tree, lev: m_order,
