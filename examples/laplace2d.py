@@ -387,8 +387,8 @@ def main():
         from mpl_toolkits.mplot3d import Axes3D
 
         plt3d = plt.figure()
-        ax = Axes3D(plt3d)  # noqa
-        surf = ax.plot_surface(oxx, oyy, opot.reshape(oxx.shape))  # noqa
+        ax = Axes3D(plt3d)
+        surf = ax.plot_surface(oxx, oyy, opot.reshape(oxx.shape))  # noqa: F841
         # ax.scatter(x, y, src.get())
         # ax.set_zlim(-0.25, 0.25)
 

@@ -474,7 +474,7 @@ class DrosteBase(KernelCacheWrapper):
     def get_kernel_code(self):
         return [
             self.make_dim_independent(
-                """  # noqa
+                """  # noqa: E501
         for iaxis
             <> root_center[iaxis] = 0.5 * (
                     root_brick[iaxis, 1] + root_brick[iaxis, 0]) {dup=iaxis}
@@ -763,7 +763,7 @@ class DrosteFull(DrosteBase):
         if "extra_kernel_kwarg_types" in kwargs:
             extra_kernel_kwarg_types = kwargs["extra_kernel_kwarg_types"]
 
-        loopy_knl = lp.make_kernel(  # NOQA
+        loopy_knl = lp.make_kernel(
             [domain],
             self.get_kernel_code()
             + self.get_sumpy_kernel_eval_insns(),
@@ -1210,7 +1210,7 @@ class DrosteReduced(DrosteBase):
             extra_kernel_kwarg_types = kwargs["extra_kernel_kwarg_types"]
 
         if self.get_kernel_id == 0:
-            loopy_knl = lp.make_kernel(  # NOQA
+            loopy_knl = lp.make_kernel(
                 [domain],
                 self.get_kernel_code()
                 # FIXME: cannot have expansion in the same kernel, since it
@@ -1238,7 +1238,7 @@ class DrosteReduced(DrosteBase):
             )
 
         elif self.get_kernel_id == 1:
-            loopy_knl = lp.make_kernel(  # NOQA
+            loopy_knl = lp.make_kernel(
                 [domain],
                 self.get_kernel_expansion_by_symmetry_code(),
                 [
@@ -1625,7 +1625,7 @@ class InverseDrosteReduced(DrosteReduced):
             self.reduce_by_symmetry.reduced_vecs[self.current_base_case][d] == 0
             for d in range(self.dim))
 
-        code = """  # noqa
+        code = """  # noqa: E501
             <> T0_tgt_IAXIS = 1
             <> T1_tgt_IAXIS = template_true_target[IAXIS] {dep=template_true_targets}
             <> Tprev_tgt_IAXIS = T0_tgt_IAXIS {id=t0_tgt_IAXIS}
@@ -1671,7 +1671,7 @@ class InverseDrosteReduced(DrosteReduced):
             self.reduce_by_symmetry.reduced_vecs[self.current_base_case][d] == 0
             for d in range(self.dim))
 
-        code = """  # noqa
+        code = """  # noqa: E501
             <> U0_tgt_IAXIS = 1
             <> U1_tgt_IAXIS = 2 * template_true_target[IAXIS] {dep=template_true_targets}
             <> Uprev_tgt_IAXIS = U0_tgt_IAXIS {id=u0_tgt_IAXIS}
@@ -1975,7 +1975,7 @@ class InverseDrosteReduced(DrosteReduced):
             extra_loopy_kernel_kwargs = kwargs["extra_loopy_kernel_kwargs"]
 
         if self.get_kernel_id == 0 or self.get_kernel_id == 1:
-            loopy_knl = lp.make_kernel(  # NOQA
+            loopy_knl = lp.make_kernel(
                 [domain],
                 self.get_kernel_code()
                 + self.get_sumpy_kernel_eval_insns(),
@@ -2002,7 +2002,7 @@ class InverseDrosteReduced(DrosteReduced):
             )
 
         elif self.get_kernel_id == 2:
-            loopy_knl = lp.make_kernel(  # NOQA
+            loopy_knl = lp.make_kernel(
                 [domain],
                 self.get_kernel_expansion_by_symmetry_code(),
                 [

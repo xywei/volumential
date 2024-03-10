@@ -311,7 +311,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
         else:
             potential_dtype = np.float64
 
-        lpknl = loopy.make_kernel(  # NOQA
+        lpknl = loopy.make_kernel(
             [
                 "{ [ tbox ] : 0 <= tbox < n_tgt_boxes }",
                 "{ [ tid, sbox ] : 0 <= tid < n_box_targets and \

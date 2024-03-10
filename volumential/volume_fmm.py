@@ -150,7 +150,7 @@ def drive_volume_fmm(traversal, expansion_wrangler, src_weights, src_func,
 
     # Return list 1 only, for debugging
     # 'list1_only' takes precedence over 'exclude_list1'
-    if 'list1_only' in kwargs and kwargs['list1_only']:
+    if "list1_only" in kwargs and kwargs["list1_only"]:
 
         if reorder_potentials:
             logger.debug("reorder potentials")
@@ -166,7 +166,7 @@ def drive_volume_fmm(traversal, expansion_wrangler, src_weights, src_func,
         return result
 
     # Do not include list 1
-    if 'exclude_list1' in kwargs and kwargs['exclude_list1']:
+    if "exclude_list1" in kwargs and kwargs["exclude_list1"]:
         logger.info("Using zeros for list 1")
         logger.warn("list 1 interactions are not included")
         potentials = wrangler.output_zeros()
@@ -389,17 +389,17 @@ def interpolate_volume_potential(target_points, traversal, wrangler, potential,
                                  potential_in_tree_order=False,
                                  target_radii=None, lbl_lookup=None, **kwargs):
     """
-    Interpolate the volume potential, only works for tensor-product quadrature formulae.
-    target_points and potential should be an cl array.
+    Interpolate the volume potential, only works for tensor-product quadrature
+    formulae. target_points and potential should be an cl array.
 
-    :arg wrangler: Used only for general info (nothing sumpy kernel specific). May also
-        be None if the needed information is passed by kwargs.
-    :arg potential_in_tree_order: Whether the potential is in tree order (as opposed to
-        in user order).
-    :lbl_lookup: a :class:`boxtree.LeavesToBallsLookup` that has the lookup information
-        for target points. Can be None if the lookup lists are provided separately in
-        kwargs. If it is None and no other information is provided, the lookup will be
-        built from scratch.
+    :arg wrangler: Used only for general info (nothing sumpy kernel specific).
+        May also be None if the needed information is passed by kwargs.
+    :arg potential_in_tree_order: Whether the potential is in tree order (as
+        opposed to in user order).
+    :lbl_lookup: a :class:`boxtree.LeavesToBallsLookup` that has the lookup
+        information for target points. Can be None if the lookup lists are
+        provided separately in kwargs. If it is None and no other information is
+        provided, the lookup will be built from scratch.
     """
     if wrangler is not None:
         dim = next(iter(wrangler.near_field_table.values()))[0].dim
@@ -496,9 +496,7 @@ def interpolate_volume_potential(target_points, traversal, wrangler, potential,
 
     import loopy
 
-    # FIXME: noqa for specific lines does not work here
-    # flake8: noqa
-    lpknl = loopy.make_kernel(  # noqa
+    lpknl = loopy.make_kernel(
         [
             "{ [ tbox, iaxis ] : 0 <= tbox < n_tgt_boxes " "and 0 <= iaxis < dim }",
             "{ [ tpt, mid, mjd, mkd ] : tpt_begin <= tpt < tpt_end "
@@ -593,7 +591,7 @@ def interpolate_volume_potential(target_points, traversal, wrangler, potential,
 
             end
 
-            """.replace(
+            """.replace(    # noqa: E501
             "TARGET_COORDS_ASSIGNMENT", code_target_coords_assignment
         )
         .replace("MODE_INDEX_ASSIGNMENT", code_mode_index_assignment)

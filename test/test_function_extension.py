@@ -26,7 +26,7 @@ import numpy.linalg as la
 import pytest
 
 import pyopencl as cl
-import pyopencl.clmath  # noqa
+import pyopencl.clmath
 from meshmode.discretization import Discretization
 from meshmode.discretization.poly_element import (
     InterpolatoryQuadratureSimplexGroupFactory)

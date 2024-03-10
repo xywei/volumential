@@ -203,7 +203,7 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
             for insn in [scalar_assignment]
         ]
 
-        loopy_knl = lp.make_kernel(  # NOQA
+        loopy_knl = lp.make_kernel(
             "{ [itgt]: 0<=itgt<n_targets }",
             [
                 """
@@ -427,7 +427,7 @@ class DiscreteLegendreTransform(BoxSpecificMap):
 
     def get_kernel(self, **kwargs):
 
-        loopy_knl = lp.make_kernel(  # NOQA
+        loopy_knl = lp.make_kernel(
                 [
                     "{ [ bid ] : 0 <= bid < n_boxes }",
                     "{ [ mid ] : 0 <= mid < n_box_nodes }",
@@ -592,7 +592,7 @@ class BoxSum(BoxSpecificReduction):
 
     def get_kernel(self, **kwargs):
 
-        loopy_knl = lp.make_kernel(  # NOQA
+        loopy_knl = lp.make_kernel(
                 [
                     "{ [ bid ] : 0 <= bid < n_boxes }",
                     "{ [ nid ] : 0 <= nid < n_box_nodes }"

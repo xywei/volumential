@@ -1247,7 +1247,7 @@ class NearFieldInteractionTable:
         if "extra_kernel_kwarg_types" in kwargs:
             extra_kernel_kwarg_types = kwargs["extra_kernel_kwarg_types"]
 
-        lpknl = lp.make_kernel(  # NOQA
+        lpknl = lp.make_kernel(
             "{ [iqpt, iaxis]: 0<=iqpt<n_q_points and 0<=iaxis<dim }",
             [
                 """

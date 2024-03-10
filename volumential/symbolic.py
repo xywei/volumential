@@ -30,7 +30,7 @@ from volumential.tools import ScalarFieldExpressionEvaluation
 
 # {{{ math functions
 
-CL_MATH_URL = r"https://www.khronos.org/registry/OpenCL/sdk/1.0/docs/man/xhtml/mathFunctions.html"  # noqa
+CL_MATH_URL = r"https://www.khronos.org/registry/OpenCL/sdk/1.0/docs/man/xhtml/mathFunctions.html"  # noqa: E501
 
 CL_MATH_FUNCS = [
         "acos",     "acosh",     "acospi",  "asin",

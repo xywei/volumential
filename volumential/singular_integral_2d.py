@@ -127,7 +127,7 @@ def qquad(
 
         # Using lambda for readability
         def outer_integrand(y):
-            return sint.quadrature(  # NOQA
+            return sint.quadrature(
                 lambda x: func(x, y, *args),
                 a,
                 b,
@@ -137,9 +137,7 @@ def qquad(
                 maxiteri,
                 vec_func,
                 miniteri,
-            )[
-                0
-            ]  # NOQA
+            )[0]
 
         # Is there a simple way to retrieve err info from the inner quad calls?
 
@@ -153,11 +151,9 @@ def qquad(
 
         # Using lambda for readability
         def outer_integrand(y):
-            return sp.integrate.fixed_quad(  # NOQA
+            return sp.integrate.fixed_quad(
                 np.vectorize(lambda x: func(x, y, *args)), a, b, (), maxiteri
-            )[
-                0
-            ]  # NOQA
+            )[0]
 
         # Is there a simple way to retrieve err info from the inner quad calls?
 
@@ -245,12 +241,12 @@ def solve_affine_map_2d(source_tria, target_tria):
     b = np.array([x[4], x[5]])
 
     # Using default value is the idiomatic way to "capture by value"
-    mapping = lambda x, a=a, b=b: a.dot(np.array(x)) + b  # NOQA
+    mapping = lambda x, a=a, b=b: a.dot(np.array(x)) + b  # noqa: E731
     jacob = np.linalg.det(a)
 
     inva = np.linalg.inv(a)
     invb = -inva.dot(b)
-    invmap = lambda x, a=inva, b=invb: inva.dot(np.array(x)) + invb  # NOQA
+    invmap = lambda x, a=inva, b=invb: inva.dot(np.array(x)) + invb  # noqa: E731
     inv_jacob = np.linalg.det(inva)
 
     assert np.abs(jacob * inv_jacob - 1) < 1e-12
