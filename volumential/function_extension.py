@@ -179,7 +179,7 @@ def compute_harmonic_extension(queue, target_discr,
 
     # {{{ postprocess
 
-    repr_kwargs = dict(qbx_forced_limit=None)
+    repr_kwargs = {"qbx_forced_limit": None}
     representation_sym = (
             sym.S(kernel, inv_sqrt_w_sigma, **repr_kwargs)
             + sym.D(kernel, inv_sqrt_w_sigma, **repr_kwargs))

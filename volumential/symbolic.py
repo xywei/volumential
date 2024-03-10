@@ -70,7 +70,10 @@ y = pmbl.var("y")
 z = pmbl.var("z")
 
 
-def der_laplacian(func, coord_vars=["x", "y", "z"]):
+def der_laplacian(func, coord_vars=None):
+    if coord_vars is None:
+        coord_vars = ["x", "y", "z"]
+
     return sum(pmbl.diff(pmbl.diff(func, var), var)
             for var in coord_vars)
 

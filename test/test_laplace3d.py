@@ -41,7 +41,7 @@ def test_patch_laplace():
 
     import random
 
-    for r in range(rep):
+    for _ in range(rep):
         center = [random.uniform(-1, 1) for d in range(dim)]
         patch = make_patch(center, size)
 

@@ -90,7 +90,7 @@ class DrosteBase(KernelCacheWrapper):
             )
         else:
             self.ncases = 0
-            case_vecs = list()
+            case_vecs = []
             self.interaction_case_vecs = np.array([])
 
         self.interaction_case_scls = np.array(
@@ -161,8 +161,8 @@ class DrosteBase(KernelCacheWrapper):
         else:
             ubound_pwaff = pwaffs[0] + n
 
-        from functools import reduce
         import operator
+        from functools import reduce
 
         return reduce(
             operator.and_,
@@ -176,8 +176,7 @@ class DrosteBase(KernelCacheWrapper):
         """
         # sps.legendre blows up easily at high order
         import scipy.special as sps
-        # legendre_nodes, _, legendre_weights = sps.legendre(
-        #        nquad_points).weights.T
+
         legendre_nodes, legendre_weights = sps.p_roots(self.nquad_points)
         legendre_nodes = legendre_nodes * 0.5 + 0.5
         legendre_weights = legendre_weights * 0.5
@@ -211,14 +210,18 @@ class DrosteBase(KernelCacheWrapper):
             ts_nodes = ts_nodes * 0.5 + 0.5
             ts_weights *= 0.5
 
-            return dict(quadrature_nodes=legendre_nodes,
-                        quadrature_weights=legendre_weights,
-                        radial_quadrature_nodes=ts_nodes,
-                        radial_quadrature_weights=ts_weights)
+            return {
+                "quadrature_nodes": legendre_nodes,
+                "quadrature_weights": legendre_weights,
+                "radial_quadrature_nodes": ts_nodes,
+                "radial_quadrature_weights": ts_weights,
+                }
 
         else:
-            return dict(quadrature_nodes=legendre_nodes,
-                        quadrature_weights=legendre_weights)
+            return {
+                "quadrature_nodes": legendre_nodes,
+                "quadrature_weights": legendre_weights,
+                }
 
     def get_sumpy_kernel_insns(self):
         # get sumpy kernel insns
@@ -242,7 +245,7 @@ class DrosteBase(KernelCacheWrapper):
 
         loopy_insns = to_loopy_insns(
             sac.assignments.items(),
-            vector_names=set(["dist"]),
+            vector_names={"dist"},
             pymbolic_expr_maps=[self.integral_knl.get_code_transformer()],
             retain_names=[result_name],
             complex_dtype=np.complex128,
@@ -684,7 +687,7 @@ class DrosteBase(KernelCacheWrapper):
         # transform to interpolatory basis functions
         # NOTE: the reversed order of indices, e.g.,
         #       mccoefs[f0, f1, f2], and cheb_table[f2, f1, f0]
-        concat_axes = [iaxis for iaxis in range(self.dim)]
+        concat_axes = list(range(self.dim))
         for mid in range(self.n_q_points):
             mccoefs = cheb_coefs[mid]
             nfp_table[mid] = np.tensordot(
@@ -794,6 +797,7 @@ class DrosteFull(DrosteBase):
     def get_optimized_kernel(self, ncpus=None, **kwargs):
         if ncpus is None:
             import multiprocessing
+
             # NOTE: this detects the number of logical cores, which
             # may result in suboptimal performance.
             ncpus = multiprocessing.cpu_count()
@@ -1122,18 +1126,12 @@ class DrosteReduced(DrosteBase):
             assert vid >= 0 and vid < self.dim
             return var[0] + str(self.dim - 1 - vid)
 
-        from itertools import product, permutations
+        from itertools import permutations, product
 
-        ext_ids = [
-            ext
-            for ext in product(
-                [fid for fid in product([0, 1], repeat=nflippables)],
-                *[
-                    [sid for sid in permutations(sgroup)]
-                    for sgroup in swappable_groups
-                    ]
-            )
-        ]
+        ext_ids = product(
+            product([0, 1], repeat=nflippables),
+            *[permutations(sgroup) for sgroup in swappable_groups]
+        )
 
         # The idea is that, any member of the hyperoctahedral group
         # has the decomposition m = f * s, where f is a flip and s
@@ -1432,23 +1430,17 @@ class DrosteReduced(DrosteBase):
             assert len(flippable) == self.dim
             flippable_ids = [i for i in range(self.dim) if flippable[i]]
 
-            from itertools import product, permutations
+            from itertools import permutations, product
 
-            ext_ids = [
-                ext
-                for ext in product(
-                    [fid for fid in product([0, 1], repeat=nflippables)],
-                    *[
-                        [sid for sid in permutations(sgroup)]
-                        for sgroup in swappable_groups
-                    ]
-                )
-            ]
+            ext_ids = product(
+                product([0, 1], repeat=nflippables),
+                *[permutations(sgroup) for sgroup in swappable_groups]
+            )
 
             base_case_vec = self.reduce_by_symmetry.full_vecs[case_id]
             assert (base_case_vec
                     == self.reduce_by_symmetry.reduced_vecs[base_case_id])
-            for ext_index, ext_id in zip(range(len(ext_ids)), ext_ids):
+            for _, ext_id in zip(range(len(ext_ids)), ext_ids):
                 # start from the base vec
                 ext_vec = list(base_case_vec)
                 swapped_axes = list(range(self.dim))
@@ -1625,8 +1617,9 @@ class InverseDrosteReduced(DrosteReduced):
         """
 
         # only valid for self-interactions
-        assert all([self.reduce_by_symmetry.reduced_vecs[
-            self.current_base_case][d] == 0 for d in range(self.dim)])
+        assert all(
+            self.reduce_by_symmetry.reduced_vecs[self.current_base_case][d] == 0
+            for d in range(self.dim))
 
         code = """  # noqa
             <> T0_tgt_IAXIS = 1
@@ -1670,8 +1663,9 @@ class InverseDrosteReduced(DrosteReduced):
         """
 
         # only valid for self-interactions
-        assert all([self.reduce_by_symmetry.reduced_vecs[
-            self.current_base_case][d] == 0 for d in range(self.dim)])
+        assert all(
+            self.reduce_by_symmetry.reduced_vecs[self.current_base_case][d] == 0
+            for d in range(self.dim))
 
         code = """  # noqa
             <> U0_tgt_IAXIS = 1
@@ -1754,8 +1748,9 @@ class InverseDrosteReduced(DrosteReduced):
         """
 
         # detect for self-interactions
-        if all([self.reduce_by_symmetry.reduced_vecs[
-                self.current_base_case][d] == 0 for d in range(self.dim)]):
+        if all(
+                self.reduce_by_symmetry.reduced_vecs[self.current_base_case][d] == 0
+                for d in range(self.dim)):
             target_box_is_source = True
         else:
             target_box_is_source = False

@@ -23,10 +23,4 @@ THE SOFTWARE.
 
 
 def test_import():
-    try:
-        # Silence flake8 on this import
-        import volumential  # NOQA
-
-        assert True
-    except ImportError:
-        assert False
+    import volumential  # noqa: F401

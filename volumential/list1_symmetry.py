@@ -31,7 +31,7 @@ class SymmetryOperationBase:
         self._index = index
 
     def __lt__(self, other):
-        if type(self) == type(other):
+        if type(self) is type(other):
             return self._index < other._index
 
         # differnt operations in lexicographical order
@@ -106,7 +106,7 @@ class CaseVecReduction:
 
         if tags is None:
             flippable += 1
-            swappable_groups.append({i for i in range(self.dim)})
+            swappable_groups.append(set(range(self.dim)))
             return flippable, swappable_groups
 
         for tag in tags:

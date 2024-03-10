@@ -139,7 +139,7 @@ knl = source_eval.get_kernel()
 # needed for using loopy.statistics
 knl = lp.add_and_infer_dtypes(
         knl,
-        dict(x0=np.float64, x1=np.float64, x2=np.float64))
+        {"x0": np.float64, "x1": np.float64, "x2": np.float64})
 knl = lp.set_options(knl, ignore_boostable_into=True)
 
 # {{{ wall time
@@ -178,7 +178,7 @@ print("Wall time w/t tag g.0:", t3 - t2)
 op_map = lp.get_op_map(knl, subgroup_size=ncpus, count_redundant_work=True,
         count_within_subscripts=True)
 
-params = dict(n_targets=pts.shape[1])
+params = {"n_targets": pts.shape[1]}
 print('Operation counts:')
 total_ops = 0
 for op in op_map.keys():

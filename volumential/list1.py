@@ -53,7 +53,7 @@ class NearFieldEvalBase(KernelCacheWrapper):
         integral_kernel,
         table_data_shapes,
         potential_kind=1,
-        options=[],
+        options=None,
         name=None,
         device=None,
         **kwargs
@@ -68,6 +68,8 @@ class NearFieldEvalBase(KernelCacheWrapper):
         The two kinds share the same far-field code, but the second kind requires
         exterior_mode_nmlz when computing the list1 interactions.
         """
+        if options is None:
+            options = []
 
         self.integral_kernel = integral_kernel
 
@@ -484,12 +486,10 @@ class NearFieldFromCSR(NearFieldEvalBase):
         table_data_combined = kwargs.pop("table_data_combined")
         target_boxes = kwargs.pop("target_boxes")
 
-        integral_kernel_init_kargs = {
-                name: val
-                for name, val in zip(
-                    self.integral_kernel.init_arg_names,
-                    self.integral_kernel.__getinitargs__())
-                }
+        integral_kernel_init_kargs = dict(
+            zip(self.integral_kernel.init_arg_names,
+                self.integral_kernel.__getinitargs__())
+        )
 
         # help loopy's type inference
         for key, val in integral_kernel_init_kargs.items():

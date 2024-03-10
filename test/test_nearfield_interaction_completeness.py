@@ -166,7 +166,7 @@ def drive_test_completeness(ctx, queue, dim, q_order):
         trav.neighbor_source_boxes_lists, mode_coefs=source_vals)
     pot = pot[0]
     for p in pot[0]:
-        assert(abs(p - 2**dim) < 1e-8)
+        assert abs(p - 2**dim) < 1.0e-8
 
 
 def test_completeness_1(ctx_factory):

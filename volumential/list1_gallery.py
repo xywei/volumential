@@ -159,7 +159,7 @@ def postprocess_interactions(near_neighbor_interactions):
     tb0, wb0 = near_neighbor_interactions[0]
     unique_interaction_vectors.add(tuple(tb0.center - tb0.center))
 
-    list1_interactions = sorted(list(unique_interaction_vectors))
+    list1_interactions = sorted(unique_interaction_vectors)
 
     return list1_interactions
 

@@ -52,7 +52,7 @@ def test_patch_laplace():
 
     import random
 
-    for r in range(rep):
+    for _ in range(rep):
         center_x = random.uniform(-1, 1)
         center_y = random.uniform(-1, 1)
         center = [center_x, center_y]

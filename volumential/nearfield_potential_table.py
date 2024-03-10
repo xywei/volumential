@@ -357,7 +357,7 @@ class NearFieldInteractionTable:
         """This is the inverse function of get_entry_index()
         """
 
-        index_info = dict()
+        index_info = {}
 
         case_id = entry_id // self.n_pairs
         pair_id = entry_id % self.n_pairs
@@ -712,7 +712,7 @@ class NearFieldInteractionTable:
                 pool = Pool(processes=None)
 
             for mode_id, nmlz in pool.imap_unordered(
-                self.compute_nmlz, [i for i in range(self.n_q_points)]
+                self.compute_nmlz, range(self.n_q_points)
             ):
                 self.mode_normalizers[mode_id] = nmlz
                 if pb is not None:
@@ -769,7 +769,7 @@ class NearFieldInteractionTable:
         if 0:
             # Then complete the table via symmetry lookup
             for entry_id, centry_id in pool.imap_unordered(
-                    self.lookup_by_symmetry, [i for i in range(len(self.data))]):
+                    self.lookup_by_symmetry, range(len(self.data))):
                 assert not np.isnan(self.data[centry_id])
                 if centry_id == entry_id:
                     continue

@@ -150,7 +150,7 @@ class FPNDSumpyExpansionWrangler(
 
         # dictionary of lists of tables
         elif isinstance(near_field_table, dict):
-            self.n_tables = dict()
+            self.n_tables = {}
             for out_knl in self.code.target_kernels:
                 if repr(out_knl) not in near_field_table:
                     raise RuntimeError(
@@ -599,8 +599,11 @@ class FPNDFMMLibExpansionWranglerCodeContainer(
         self.exclude_self = True
 
     def get_wrangler(self, queue, tree, dtype, fmm_level_to_order,
-            source_extra_kwargs={}, kernel_extra_kwargs=None,
+            source_extra_kwargs=None, kernel_extra_kwargs=None,
             *args, **kwargs):
+        if source_extra_kwargs is None:
+            source_extra_kwargs = {}
+
         return FPNDFMMLibExpansionWrangler(self, queue, tree,
                 dtype, fmm_level_to_order,
                 source_extra_kwargs, kernel_extra_kwargs,
@@ -725,7 +728,7 @@ class FPNDFMMLibExpansionWrangler(
 
         # dictionary of lists of tables
         elif isinstance(near_field_table, dict):
-            self.n_tables = dict()
+            self.n_tables = {}
             for out_knl in self.code.target_kernels:
                 if repr(out_knl) not in near_field_table:
                     raise RuntimeError(

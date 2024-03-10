@@ -31,9 +31,9 @@ from boxtree.pyfmmlib_integration import FMMLibRotationData
 class BoundingBoxFactory:
     def __init__(self, dim,
             center=None, radius=None,
-            dtype=np.dtype("float64")):
+            dtype=float):
         self.dim = dim
-        self.dtype = dtype
+        self.dtype = np.dtype(dtype)
 
         self.center = center
         self.radius = radius
