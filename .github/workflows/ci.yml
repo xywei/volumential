@@ -1,0 +1,105 @@
+name: CI
+on:
+  push:
+    branches: [ 'main' ]
+    pull_request: [ 'main' ]
+    schedule:
+      - cron: '17 3 * * 0'
+
+jobs:
+  flake8:
+    name: Linting (flake8)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          # matches compat target in setup.py
+          python-version: '3.8'
+      - name: "Main Script"
+        run: |
+          export CONDA_ENVIRONMENT=.test-conda-env-py3.yml
+
+          curl -L -O https://tiker.net/ci-support-v0
+          . ci-support-v0
+
+          build_py_project_in_conda_env
+          install_and_run_flake8 "$(get_proj_name)" examples/*.py test/*.py benchmarks/*.py
+
+  pytest:
+    name: Testing (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: "Main Script"
+        run: |
+          export CONDA_ENVIRONMENT=.test-conda-env-py3.yml
+          export PYTEST_FLAGS="--cov=volumential"
+
+          curl -L -O https://tiker.net/ci-support-v0
+          . ci-support-v0
+
+          build_py_project_in_conda_env
+          test_py_project
+
+  pytest_mac:
+    name: Testing (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: "Main Script"
+        run: |
+          export LC_ALL=en_US.UTF-8
+          export LANG=en_US.UTF-8
+
+          export CONDA_ENVIRONMENT=.test-conda-env-py3-macos.yml
+          export PYTEST_FLAGS="--cov=volumential"
+
+          curl -L -O https://tiker.net/ci-support-v0
+          . ci-support-v0
+
+          build_py_project_in_conda_env
+          test_py_project
+
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: "Main Script"
+        run: |
+          export CONDA_ENVIRONMENT=.test-conda-env-py3.yml
+
+          curl -L -O https://tiker.net/ci-support-v0
+          . ci-support-v0
+
+          build_py_project_in_conda_env
+          build_docs
+
+  examples:
+    name: Examples
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: "Main Script"
+        run: |
+          export CONDA_ENVIRONMENT=.test-conda-env-py3.yml
+
+          curl -L -O https://tiker.net/ci-support-v0
+          . ci-support-v0
+          build_py_project_in_conda_env
+          run_examples
+
+# vim: sw=2
