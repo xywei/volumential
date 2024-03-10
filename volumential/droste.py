@@ -238,11 +238,10 @@ class DrosteBase(KernelCacheWrapper):
             ),
         )
         sac.run_global_cse()
-        import six
         from sumpy.codegen import to_loopy_insns
 
         loopy_insns = to_loopy_insns(
-            six.iteritems(sac.assignments),
+            sac.assignments.items(),
             vector_names=set(["dist"]),
             pymbolic_expr_maps=[self.integral_knl.get_code_transformer()],
             retain_names=[result_name],

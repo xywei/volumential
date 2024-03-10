@@ -1,5 +1,3 @@
-import six
-
 __copyright__ = "Copyright (C) 2018 Xiaoyu Wei"
 
 __license__ = """
@@ -88,7 +86,7 @@ class KernelCacheWrapper:
             from volumential.version import KERNEL_VERSION
             cache_key = (
                     self.get_cache_key()
-                    + tuple(sorted(six.iteritems(kwargs)))
+                    + tuple(sorted(kwargs.items()))
                     + (loopy.version.DATA_MODEL_VERSION,)
                     + (SUMPY_KERNEL_VERSION,)
                     + (KERNEL_VERSION,)
