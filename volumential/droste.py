@@ -1167,8 +1167,8 @@ class DrosteReduced(DrosteBase):
             ext_tgt_ordering.reverse()
             ext_fun_ordering.reverse()
 
-            ext_instruction_ids = ':'.join([
-                'result_ext_' + str(eid)
+            ext_instruction_ids = ":".join([
+                "result_ext_" + str(eid)
                 for eid in range(len(ext_ids))
                 if eid != ext_index
                 ])
@@ -1501,7 +1501,7 @@ class DrosteReduced(DrosteBase):
     def get_cache_key(self):
         if self.reduce_by_symmetry.symmetry_tags is None:
             # Bn: the full n-dimensional hyperoctahedral group
-            symmetry_info = 'B%d' % self.dim
+            symmetry_info = "B%d" % self.dim
         else:
             symmetry_info = "Span{%s}" % ",".join([
                 repr(tag) for tag in
@@ -1739,7 +1739,7 @@ class InverseDrosteReduced(DrosteReduced):
             code.append("<> fc = if(1 - rndist > 0, exp(-1 / (1 - rndist)), 0)")
             code.append("<> windowing = 1 - fv / (fv + fc)")
 
-        return '\n'.join(code)
+        return "\n".join(code)
 
     def make_dim_independent(self, knlstring):
         r"""Produce the correct
@@ -1766,7 +1766,7 @@ class InverseDrosteReduced(DrosteReduced):
         if self.get_kernel_id == 0:
             resknl = resknl.replace(
                     "POSTPROCESS_KNL_VAL",
-                    '\n'.join([
+                    "\n".join([
                         self.codegen_windowing_function(),
                         "<> knl_val_post = windowing * knl_val {id=pp_kval}"
                         ])
@@ -1774,7 +1774,7 @@ class InverseDrosteReduced(DrosteReduced):
         elif self.get_kernel_id == 1:
             resknl = resknl.replace(
                     "POSTPROCESS_KNL_VAL",
-                    '\n'.join([
+                    "\n".join([
                         self.codegen_windowing_function(),
                         "<> knl_val_post = (1 - windowing) * knl_val {id=pp_kval}"
                         ])
@@ -1802,10 +1802,10 @@ class InverseDrosteReduced(DrosteReduced):
                         "PREPARE_BASIS_VALS",
                         "\n".join(basis_eval_insns + [
                             "... nop {id=basis_evals,dep=%s}"
-                            % ':'.join(
-                                ['basis%d' % i for i in range(self.dim)]
-                                + ['tgtbasis%d' % i for i in range(self.dim)]
-                                + ['tgtd2basis%d' % i for i in range(self.dim)]
+                            % ":".join(
+                                ["basis%d" % i for i in range(self.dim)]
+                                + ["tgtbasis%d" % i for i in range(self.dim)]
+                                + ["tgtd2basis%d" % i for i in range(self.dim)]
                                 ),
                             ])
                         )
@@ -1814,8 +1814,8 @@ class InverseDrosteReduced(DrosteReduced):
                         "PREPARE_BASIS_VALS",
                         "\n".join(basis_eval_insns + [
                             "... nop {id=basis_evals,dep=%s}"
-                            % ':'.join(
-                                ['basis%d' % i for i in range(self.dim)]
+                            % ":".join(
+                                ["basis%d" % i for i in range(self.dim)]
                                 ),
                             ])
                         )
@@ -1824,7 +1824,7 @@ class InverseDrosteReduced(DrosteReduced):
                 if target_box_is_source:
                     resknl = resknl.replace(
                             "DENSITY_VAL_ASSIGNMENT",
-                            ' '.join([
+                            " ".join([
                                 "0.5 * der2_basis_tgt_eval0 * (dist[0]**2)",
                                 ])
                             )
@@ -1838,7 +1838,7 @@ class InverseDrosteReduced(DrosteReduced):
                 if target_box_is_source:
                     resknl = resknl.replace(
                             "DENSITY_VAL_ASSIGNMENT",
-                            ' '.join([
+                            " ".join([
                                 "  0.5 * der2_basis_tgt_eval0 * basis_tgt_eval1 * (dist[0]**2)",  # noqa: E501
                                 "+ 0.5 * basis_tgt_eval0 * der2_basis_tgt_eval1 * (dist[1]**2)",  # noqa: E501
                                 ])
@@ -1853,7 +1853,7 @@ class InverseDrosteReduced(DrosteReduced):
                 if target_box_is_source:
                     resknl = resknl.replace(
                             "DENSITY_VAL_ASSIGNMENT",
-                            ' '.join([
+                            " ".join([
                                 "  0.5 * der2_basis_tgt_eval0 * basis_tgt_eval1 * basis_tgt_eval2 * (dist[0]**2)",  # noqa: E501
                                 "+ 0.5 * basis_tgt_eval0 * der2_basis_tgt_eval1 * basis_tgt_eval2 * (dist[1]**2)",  # noqa: E501
                                 "+ 0.5 * basis_tgt_eval0 * basis_tgt_eval1 * der2_basis_tgt_eval2 * (dist[2]**2)",  # noqa: E501
@@ -1876,18 +1876,18 @@ class InverseDrosteReduced(DrosteReduced):
                         "PREPARE_BASIS_VALS",
                         "\n".join(basis_eval_insns + [
                             "... nop {id=basis_evals,dep=%s}"
-                            % ':'.join(
-                                ['basis%d' % i for i in range(self.dim)]
-                                + ['tgtbasis%d' % i for i in range(self.dim)]
+                            % ":".join(
+                                ["basis%d" % i for i in range(self.dim)]
+                                + ["tgtbasis%d" % i for i in range(self.dim)]
                                 ),
                             ])
                         )
                 resknl = resknl.replace(
                         "DENSITY_VAL_ASSIGNMENT",
-                        ' - '.join([
-                            ' * '.join(
+                        " - ".join([
+                            " * ".join(
                                 ["basis_tgt_eval%d" % i for i in range(self.dim)]),
-                            ' * '.join(
+                            " * ".join(
                                 ["basis_eval%d" % i for i in range(self.dim)]),
                             ])
                         )
@@ -1897,14 +1897,14 @@ class InverseDrosteReduced(DrosteReduced):
                         "PREPARE_BASIS_VALS",
                         "\n".join(basis_eval_insns + [
                             "... nop {id=basis_evals,dep=%s}"
-                            % ':'.join(
-                                ['basis%d' % i for i in range(self.dim)]
+                            % ":".join(
+                                ["basis%d" % i for i in range(self.dim)]
                                 ),
                             ])
                         )
                 resknl = resknl.replace(
                         "DENSITY_VAL_ASSIGNMENT",
-                        ' - ' + ' * '.join(
+                        " - " + " * ".join(
                             ["basis_eval%d" % i for i in range(self.dim)]
                             )
                         )
@@ -2178,7 +2178,7 @@ class InverseDrosteReduced(DrosteReduced):
         except Exception:  # noqa: B902
             pass
         knl2 = self.get_cached_optimized_kernel()
-        result_array = res0['result'] + res1['result']
+        result_array = res0["result"] + res1["result"]
 
         evt2, res2 = knl2(
             queue,

@@ -40,7 +40,7 @@ def get_table(queue, q_order=1, dim=2):
         copyfile("nft.hdf5",
                  f"nft-test-table-manager-{pid}.hdf5")
 
-    subprocess.check_call(['rm', '-f', f'nft-test-table-manager-{pid}.hdf5'])
+    subprocess.check_call(["rm", "-f", f"nft-test-table-manager-{pid}.hdf5"])
 
     with NFTable(f"nft-test-table-manager-{pid}.hdf5",
                  progress_bar=True) as table_manager:

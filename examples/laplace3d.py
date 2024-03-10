@@ -222,9 +222,9 @@ def main():
         with open("table_urls.json") as fp:
             urls = json.load(fp)
 
-        print("Downloading table from %s" % urls['Laplace3D'])
+        print("Downloading table from %s" % urls["Laplace3D"])
         import subprocess
-        subprocess.call(["wget", "-q", urls['Laplace3D'], table_filename])
+        subprocess.call(["wget", "-q", urls["Laplace3D"], table_filename])
 
     tm = NearFieldInteractionTableManager(
         table_filename, root_extent=root_table_source_extent,
@@ -489,7 +489,7 @@ def main():
     # }}} End postprocess and plot
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
 
 

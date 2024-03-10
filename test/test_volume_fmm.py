@@ -202,7 +202,7 @@ def laplace_problem(ctx_factory):
 
     from volumential.table_manager import NearFieldInteractionTableManager
 
-    subprocess.check_call(['rm', '-f', 'nft-test-volume-fmm.hdf5'])
+    subprocess.check_call(["rm", "-f", "nft-test-volume-fmm.hdf5"])
     tm = NearFieldInteractionTableManager("nft-test-volume-fmm.hdf5")
     nftable, _ = tm.get_table(dim, "Laplace", q_order)
 

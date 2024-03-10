@@ -149,7 +149,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
             code = code + "+" + self.codegen_vec_component(d)
         return code
 
-    def codegen_compute_scaling(self, box_name='sbox'):
+    def codegen_compute_scaling(self, box_name="sbox"):
         """box_name: the name of the box whose extent is used.
         """
         if ("infer_kernel_scaling" in self.extra_kwargs) and (
@@ -204,17 +204,17 @@ class NearFieldFromCSR(NearFieldEvalBase):
 
         elif "kernel_scaling_code" in self.extra_kwargs:
             # user-defined scaling rule
-            assert isinstance(self.extra_kwargs['kernel_scaling_code'], str)
+            assert isinstance(self.extra_kwargs["kernel_scaling_code"], str)
             logger.info("Using scaling rule %s for %s.",
-                        self.extra_kwargs['kernel_scaling_code'], self.kname
+                        self.extra_kwargs["kernel_scaling_code"], self.kname
                         )
-            return self.extra_kwargs['kernel_scaling_code']
+            return self.extra_kwargs["kernel_scaling_code"]
         else:
             logger.info("not scaling for " + self.kname)
             logger.info("(using multiple tables)")
             return "1.0"
 
-    def codegen_compute_displacement(self, box_name='sbox'):
+    def codegen_compute_displacement(self, box_name="sbox"):
         if ("infer_kernel_scaling" in self.extra_kwargs) and (
             self.extra_kwargs["infer_kernel_scaling"]
         ):
@@ -250,12 +250,12 @@ class NearFieldFromCSR(NearFieldEvalBase):
         elif "kernel_displacement_code" in self.extra_kwargs:
             # user-defined displacement rule
             assert isinstance(
-                    self.extra_kwargs['kernel_displacement_code'], str)
+                    self.extra_kwargs["kernel_displacement_code"], str)
             logger.info("Using displacement %s for %s.",
-                        self.extra_kwargs['kernel_displacement_code'],
+                        self.extra_kwargs["kernel_displacement_code"],
                         self.kname
                         )
-            code = self.extra_kwargs['kernel_displacement_code']
+            code = self.extra_kwargs["kernel_displacement_code"]
         else:
             logger.info("no displacement for " + self.kname)
             logger.info("(using multiple tables)")
@@ -263,7 +263,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
 
         return code.replace("BOX", box_name)
 
-    def codegen_get_table_level(self, box_name='sbox'):
+    def codegen_get_table_level(self, box_name="sbox"):
         if ("infer_kernel_scaling" in self.extra_kwargs) and (
             self.extra_kwargs["infer_kernel_scaling"]
         ):
@@ -402,11 +402,11 @@ class NearFieldFromCSR(NearFieldEvalBase):
             .replace("COMPUTE_VEC_ID", self.codegen_vec_id())
             .replace("COMPUTE_SCALING", self.codegen_compute_scaling())
             .replace("COMPUTE_DISPLACEMENT", self.codegen_compute_displacement())
-            .replace("COMPUTE_TGT_SCALING", self.codegen_compute_scaling('tbox'))
+            .replace("COMPUTE_TGT_SCALING", self.codegen_compute_scaling("tbox"))
             .replace("COMPUTE_TGT_DISPLACEMENT",
-                    self.codegen_compute_displacement('tbox'))
+                    self.codegen_compute_displacement("tbox"))
             .replace("GET_TABLE_LEVEL", self.codegen_get_table_level())
-            .replace("GET_TGT_TABLE_LEVEL", self.codegen_get_table_level('tbox'))
+            .replace("GET_TGT_TABLE_LEVEL", self.codegen_get_table_level("tbox"))
             .replace("EXTERIOR_PART", self.codegen_exterior_part()),
             [
                 loopy.TemporaryVariable("vec_id", np.int32),
@@ -538,12 +538,12 @@ class NearFieldFromCSR(NearFieldEvalBase):
             **extra_knl_args_from_init
             )
 
-        res['result'].add_event(evt)
+        res["result"].add_event(evt)
         if isinstance(result, cl.array.Array):
             assert result is res["result"]
         else:
             assert isinstance(result, np.ndarray)
-            result = res['result'].get(queue)
+            result = res["result"].get(queue)
 
         queue.finish()
         logger.info("list1 evaluation finished")

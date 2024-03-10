@@ -285,7 +285,7 @@ class FPNDSumpyExpansionWrangler(
         return SumpyExpansionWrangler.reorder_sources(self, source_array)
 
     def reorder_targets(self, target_array):
-        if not hasattr(self.tree, 'user_target_ids'):
+        if not hasattr(self.tree, "user_target_ids"):
             self.tree.user_target_ids = inverse_id_map(
                 self.queue, self.tree.sorted_target_ids)
         return target_array.with_queue(self.queue)[self.tree.user_target_ids]
@@ -846,10 +846,10 @@ class FPNDFMMLibExpansionWrangler(
                         frozenset([("k", helmholtz_k)]), tree, level)
 
         rotation_data = None
-        if 'traversal' in kwargs:
+        if "traversal" in kwargs:
             # add rotation data if traversal is passed as a keyword argument
             from boxtree.pyfmmlib_integration import FMMLibRotationData
-            rotation_data = FMMLibRotationData(self.queue, kwargs['traversal'])
+            rotation_data = FMMLibRotationData(self.queue, kwargs["traversal"])
         else:
             logger.warning("Rotation data is not utilized since traversal is "
                            "not known to FPNDFMMLibExpansionWrangler.")
@@ -902,7 +902,7 @@ class FPNDFMMLibExpansionWrangler(
         return FMMLibExpansionWrangler.reorder_sources(self, source_array)
 
     def reorder_targets(self, target_array):
-        if not hasattr(self.tree, 'user_target_ids'):
+        if not hasattr(self.tree, "user_target_ids"):
             self.tree.user_target_ids = inverse_id_map(
                 self.queue, self.tree.sorted_target_ids)
         return target_array[self.tree.user_target_ids]

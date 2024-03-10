@@ -118,7 +118,7 @@ def drive_test_completeness(ctx, queue, dim, q_order):
 
     from volumential.table_manager import NearFieldInteractionTableManager
 
-    subprocess.check_call(['rm', '-f', 'nft-test-completeness.hdf5'])
+    subprocess.check_call(["rm", "-f", "nft-test-completeness.hdf5"])
     with NearFieldInteractionTableManager("nft-test-completeness.hdf5",
                                           progress_bar=False) as tm:
 

@@ -28,7 +28,7 @@ from numpy.polynomial.chebyshev import chebval, chebval2d, chebval3d
 
 def test_const_order_1():
     table = npt.NearFieldInteractionTable(
-        quad_order=1, build_method='Transform', progress_bar=False)
+        quad_order=1, build_method="Transform", progress_bar=False)
     table.build_table()
     for ary in table.data:
         assert np.allclose(ary, 1)
@@ -36,7 +36,7 @@ def test_const_order_1():
 
 def test_const_order_2(longrun):
     table = npt.NearFieldInteractionTable(
-        quad_order=2, build_method='Transform', progress_bar=False)
+        quad_order=2, build_method="Transform", progress_bar=False)
     table.build_table()
     for ary in table.data:
         assert np.allclose(ary, 0.25)
@@ -44,7 +44,7 @@ def test_const_order_2(longrun):
 
 def interp_modes(q_order):
     table = npt.NearFieldInteractionTable(
-            quad_order=q_order, build_method='Transform', progress_bar=False)
+            quad_order=q_order, build_method="Transform", progress_bar=False)
 
     modes = [table.get_mode(i) for i in range(table.n_q_points)]
 
@@ -81,12 +81,12 @@ def cheb_eval(dim, coefs, coords):
     elif dim == 3:
         return chebval3d(coords[0], coords[1], coords[2], coefs)
     else:
-        raise NotImplementedError('dimension %d not supported' % dim)
+        raise NotImplementedError("dimension %d not supported" % dim)
 
 
 def drive_test_modes_cheb_coeffs(dim, q, cheb_order):
     if not cheb_order >= q:
-        raise RuntimeError('Insufficient cheb_order to fully resolve the modes')
+        raise RuntimeError("Insufficient cheb_order to fully resolve the modes")
 
     sample_mode = np.random.randint(q**dim)
     table = npt.NearFieldInteractionTable(quad_order=q, dim=dim, progress_bar=False)

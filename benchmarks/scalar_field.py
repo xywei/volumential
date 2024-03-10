@@ -66,7 +66,7 @@ def math_func_mangler(target, name, arg_dtypes):
 
         fname = name.name
         if not (isinstance(name.aggregate, pmbl.primitives.Variable)
-                and name.aggregate.name == 'math'):
+                and name.aggregate.name == "math"):
             raise RuntimeError("unexpected aggregate '%s'" %
                     str(name.aggregate))
 
@@ -179,12 +179,12 @@ op_map = lp.get_op_map(knl, subgroup_size=ncpus, count_redundant_work=True,
         count_within_subscripts=True)
 
 params = {"n_targets": pts.shape[1]}
-print('Operation counts:')
+print("Operation counts:")
 total_ops = 0
 for op in op_map.keys():
     sub_count = op_map[op].eval_with_dict(params)
     total_ops += sub_count
-    print('\t', op.name, op_map[op], sub_count)
+    print("\t", op.name, op_map[op], sub_count)
 print("Total:", total_ops)
 
 # TODO: weight each operation by running micro-benchmarks

@@ -25,7 +25,7 @@ import pyopencl as cl
 from volumential.table_manager import NearFieldInteractionTableManager
 
 import logging
-logging.basicConfig(format='%(name)s:%(levelname)s: %(message)s')
+logging.basicConfig(format="%(name)s:%(levelname)s: %(message)s")
 
 
 def bench_table_build(queue):
@@ -68,5 +68,5 @@ def main():
     bench_table_build(queue)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

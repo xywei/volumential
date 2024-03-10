@@ -49,7 +49,7 @@ def drive_test_cheb_poly(queue, deg, nnodes):
                     results[f0, i] = basis_eval0
                 end
             end
-            """.replace('EVAL_CHEB_POINT', code)],
+            """.replace("EVAL_CHEB_POINT", code)],
             lang_version=(2018, 2)
             )
 

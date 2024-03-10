@@ -31,7 +31,7 @@ from functools import partial
 import volumential.list1_gallery as gallery
 import volumential.singular_integral_2d as squad
 
-logger = logging.getLogger('NearFieldInteractionTable')
+logger = logging.getLogger("NearFieldInteractionTable")
 
 
 def _self_tp(vec, tpd=2):
@@ -296,8 +296,8 @@ class NearFieldInteractionTable:
             # quad points in [-1,1]
             import volumential.meshgen as mg
 
-            if 'queue' in kwargs:
-                queue = kwargs['queue']
+            if "queue" in kwargs:
+                queue = kwargs["queue"]
             else:
                 queue = None
 
@@ -471,7 +471,7 @@ class NearFieldInteractionTable:
         mode = self.get_template_mode(mode_index)
         grid = np.meshgrid(
                 *[cheby_nodes for d in range(self.dim)],
-                indexing='ij')
+                indexing="ij")
         mvals = mode(*grid)
 
         from numpy.polynomial.chebyshev import Chebyshev
@@ -1166,7 +1166,7 @@ class NearFieldInteractionTable:
         from tempfile import mkdtemp
         from os.path import join
         temp_dir = mkdtemp(prefix="tmp_volumential_nft")
-        msh_filename = join(temp_dir, 'chinese_lucky_coin.msh')
+        msh_filename = join(temp_dir, "chinese_lucky_coin.msh")
         gmsh.write(msh_filename)
         gmsh.finalize()
 
@@ -1291,7 +1291,7 @@ class NearFieldInteractionTable:
 
         for target in self.q_points:
             evt, res = lpknl(queue, quad_points=nodes, target_point=target)
-            knl_vals = res['result']
+            knl_vals = res["result"]
 
             integ = bind(discr,
                     sym.integral(self.dim, self.dim, sym.var("integrand")))(

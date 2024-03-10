@@ -30,23 +30,23 @@ from volumential.tools import ScalarFieldExpressionEvaluation
 CL_MATH_URL = r"https://www.khronos.org/registry/OpenCL/sdk/1.0/docs/man/xhtml/mathFunctions.html"  # noqa
 
 CL_MATH_FUNCS = [
-        'acos',     'acosh',     'acospi',  'asin',
-        'asinh',    'asinpi',    'atan',    'atan2',
-        'atanh',    'atanpi',    'atan2pi', 'cbrt',
-        'ceil',     'copysign',  'cos',     'cosh',
-        'cospi',    'erfc',      'erf',     'exp',
-        'exp2',     'exp10',     'expm1',   'fabs',
-        'fdim',     'floor',     'fma',     'fmax',
-        'fmin',     'fmod',      'fract',   'frexp',
-        'hypot',    'ilogb',     'ldexp',   'lgamma',
-        'lgamma_r', 'log',       'log2',    'log10',
-        'log1p',    'logb',      'mad',     'modf',
-        'nan',      'nextafter', 'pow',     'pown',
-        'powr',     'remainder', 'remquo',  'rint',
-        'rootn',    'round',     'rsqrt',   'sin',
-        'sincos',   'sinh',      'sinpi',   'sqrt',
-        'tan',      'tanh',      'tanpi',   'tgamma',
-        'trunc',
+        "acos",     "acosh",     "acospi",  "asin",
+        "asinh",    "asinpi",    "atan",    "atan2",
+        "atanh",    "atanpi",    "atan2pi", "cbrt",
+        "ceil",     "copysign",  "cos",     "cosh",
+        "cospi",    "erfc",      "erf",     "exp",
+        "exp2",     "exp10",     "expm1",   "fabs",
+        "fdim",     "floor",     "fma",     "fmax",
+        "fmin",     "fmod",      "fract",   "frexp",
+        "hypot",    "ilogb",     "ldexp",   "lgamma",
+        "lgamma_r", "log",       "log2",    "log10",
+        "log1p",    "logb",      "mad",     "modf",
+        "nan",      "nextafter", "pow",     "pown",
+        "powr",     "remainder", "remquo",  "rint",
+        "rootn",    "round",     "rsqrt",   "sin",
+        "sincos",   "sinh",      "sinpi",   "sqrt",
+        "tan",      "tanh",      "tanpi",   "tgamma",
+        "trunc",
         ]
 
 clmath_decl_code = r"""
@@ -59,8 +59,8 @@ def FUNC_NAME(x):
 
 for fname in CL_MATH_FUNCS:
     code = clmath_decl_code.replace(
-            'FUNC_NAME', fname).replace(
-                    'CL_MATH_URL', CL_MATH_URL)
+            "FUNC_NAME", fname).replace(
+                    "CL_MATH_URL", CL_MATH_URL)
     exec(code)
 
 # }}} End math functions
@@ -88,7 +88,7 @@ def math_func_mangler(target, name, arg_dtypes):
 
         fname = name.name
         if not (isinstance(name.aggregate, pmbl.primitives.Variable)
-                and name.aggregate.name == 'math'):
+                and name.aggregate.name == "math"):
             raise RuntimeError("unexpected aggregate '%s'" %
                     str(name.aggregate))
 

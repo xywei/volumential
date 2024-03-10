@@ -405,11 +405,11 @@ def interpolate_volume_potential(target_points, traversal, wrangler, potential,
         q_order = wrangler.quad_order
         dtype = wrangler.dtype
     else:
-        dim = kwargs['dim']
-        tree = kwargs['tree']
-        queue = kwargs['queue']
-        q_order = kwargs['q_order']
-        dtype = kwargs['dtype']
+        dim = kwargs["dim"]
+        tree = kwargs["tree"]
+        queue = kwargs["queue"]
+        q_order = kwargs["q_order"]
+        dtype = kwargs["dtype"]
 
     ctx = queue.context
     coord_dtype = tree.coord_dtype

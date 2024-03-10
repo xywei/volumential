@@ -66,7 +66,7 @@ def write_git_revision(package_name):
     git_rev = find_git_revision(dn)
 
     with open(join(dn, package_name, "_git_rev.py"), "w") as outf:
-        outf.write("GIT_REVISION = %s\n" % repr(git_rev))
+        outf.write(f'GIT_REVISION = "{git_rev}"\n')
 
 
 # }}}
