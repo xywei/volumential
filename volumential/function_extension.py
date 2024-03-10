@@ -1,5 +1,3 @@
-from __future__ import absolute_import, division, print_function
-
 """Function extension with regularity contraints:
 
 1. :math:`L^2`: extend with constant value
@@ -255,7 +253,7 @@ class ComplexLogKernel(ExpressionKernel):
         else:
             raise NotImplementedError("unsupported dimensionality")
 
-        super(ComplexLogKernel, self).__init__(
+        super().__init__(
                 dim,
                 expression=expr,
                 global_scaling_const=scaling,
@@ -303,7 +301,7 @@ class ComplexLinearLogKernel(ExpressionKernel):
         else:
             raise NotImplementedError("unsupported dimensionality")
 
-        super(ComplexLinearLogKernel, self).__init__(
+        super().__init__(
                 dim,
                 expression=expr,
                 global_scaling_const=scaling,
@@ -332,7 +330,7 @@ class ComplexLinearKernel(ExpressionKernel):
         else:
             raise NotImplementedError("unsupported dimensionality")
 
-        super(ComplexLinearKernel, self).__init__(
+        super().__init__(
                 dim,
                 expression=expr,
                 global_scaling_const=scaling,
@@ -373,7 +371,7 @@ class ComplexFractionalKernel(ExpressionKernel):
         else:
             raise NotImplementedError("unsupported dimensionality")
 
-        super(ComplexFractionalKernel, self).__init__(
+        super().__init__(
                 dim,
                 expression=expr,
                 global_scaling_const=scaling,

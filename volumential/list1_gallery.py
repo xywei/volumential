@@ -1,5 +1,3 @@
-from __future__ import absolute_import, division, print_function
-
 __doc__ = """
 .. autofunction:: generate_list1_gallery
 """
@@ -95,8 +93,7 @@ def generate_boxes_on_level(box, ilevel):
     """
     if ilevel:
         for child in box.children:
-            for result in generate_boxes_on_level(child, ilevel - 1):
-                yield result
+            yield from generate_boxes_on_level(child, ilevel - 1)
     else:
         yield box
 
@@ -108,8 +105,7 @@ def generate_boxes(box):
     yield box
 
     for child in box.children:
-        for result in generate_boxes(child):
-            yield result
+        yield from generate_boxes(child)
 
 
 def linf_dist(box1, box2):

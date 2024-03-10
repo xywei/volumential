@@ -1,5 +1,3 @@
-from __future__ import absolute_import, division, print_function
-
 __copyright__ = "Copyright (C) 2018 Xiaoyu Wei"
 
 __license__ = """
@@ -45,7 +43,7 @@ provider = None
 # {{{ meshgen Python provider
 
 
-class MeshGenBase(object):
+class MeshGenBase:
     """Base class for Meshgen via BoxTree.
     The interface is similar to the Meshgen via Deal.II, except that
     the arguments a and b can also be of higher dimensions to allow

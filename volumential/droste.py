@@ -1,5 +1,3 @@
-from __future__ import absolute_import, division, print_function
-
 __copyright__ = "Copyright (C) 2018 Xiaoyu Wei"
 
 __license__ = """
@@ -720,7 +718,7 @@ class DrosteFull(DrosteBase):
                  n_brick_quad_points=50,
                  special_radial_quadrature=False,
                  nradial_quad_points=None):
-        super(DrosteFull, self).__init__(
+        super().__init__(
             integral_knl, quad_order, case_vecs, n_brick_quad_points,
             special_radial_quadrature, nradial_quad_points)
         self.name = "DrosteFull"
@@ -932,7 +930,7 @@ class DrosteReduced(DrosteBase):
         special_radial_quadrature=False,
         nradial_quad_points=None,
     ):
-        super(DrosteReduced, self).__init__(
+        super().__init__(
             integral_knl, quad_order, case_vecs, n_brick_quad_points,
             special_radial_quadrature, nradial_quad_points)
 
@@ -1601,7 +1599,7 @@ class InverseDrosteReduced(DrosteReduced):
         """
         :param auto_windowing: auto-detect window radius.
         """
-        super(InverseDrosteReduced, self).__init__(
+        super().__init__(
             integral_knl, quad_order, case_vecs,
             n_brick_quad_points, special_radial_quadrature,
             nradial_quad_points, knl_symmetry_tags)

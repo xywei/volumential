@@ -1,5 +1,3 @@
-from __future__ import absolute_import, division, print_function
-
 __copyright__ = "Copyright (C) 2019 Xiaoyu Wei"
 
 __license__ = """
@@ -30,7 +28,7 @@ from boxtree.pyfmmlib_integration import FMMLibRotationData
 # {{{ bounding box factory
 
 
-class BoundingBoxFactory():
+class BoundingBoxFactory:
     def __init__(self, dim,
             center=None, radius=None,
             dtype=np.dtype("float64")):
@@ -116,7 +114,7 @@ class BoundingBoxFactory():
 # {{{ box mesh data factory
 
 
-class BoxFMMGeometryFactory():
+class BoxFMMGeometryFactory:
     """Builds the geometry information needed for performing volume FMM.
     The objects of this class is designed to be "interactive", i.e., be
     manipulated repeatedly and on demand, produce a series of desired

@@ -80,7 +80,7 @@ def math_func_mangler(target, name, arg_dtypes):
                         arg_dtype)
 
             return lp.CallMangleInfo(
-                   target_name="%s_%s" % (tpname, fname),
+                   target_name=f"{tpname}_{fname}",
                    result_dtypes=(arg_dtype,),
                    arg_dtypes=(arg_dtype,))
 

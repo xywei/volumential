@@ -1,5 +1,3 @@
-from __future__ import division, absolute_import, print_function
-
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
 __doc__ = """
@@ -51,7 +49,7 @@ class ConstantKernel(ExpressionKernel):
         expr = 1
         scaling = 1
 
-        super(ConstantKernel, self).__init__(
+        super().__init__(
             dim, expression=expr,
             global_scaling_const=scaling, is_complex_valued=False
         )
@@ -75,7 +73,7 @@ class ConstantKernel(ExpressionKernel):
 # {{{ table dataset manager class
 
 
-class NearFieldInteractionTableManager(object):
+class NearFieldInteractionTableManager:
     """
     A class that manages near field interaction table computation and
     storage.
@@ -102,7 +100,7 @@ class NearFieldInteractionTableManager(object):
         if read_only == 'auto':
             try:
                 self.datafile = hdf.File(self.filename, "a")
-            except (IOError, OSError) as e:
+            except OSError as e:
                 from warnings import warn
                 warn("Trying to open in read/write mode failed: %s" % str(e))
                 warn("Opening table dataset %s in read-only mode." % self.filename)

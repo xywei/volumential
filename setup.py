@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-# -*- encoding: utf-8 -*-
 
 __copyright__ = "Copyright (C) 2017 Xiaoyu Wei"
 
@@ -47,8 +46,7 @@ def find_git_revision(tree_root):
     (git_rev, _) = p.communicate()
 
     import sys
-    if sys.version_info >= (3,):
-        git_rev = git_rev.decode()
+    git_rev = git_rev.decode()
 
     git_rev = git_rev.rstrip()
 
@@ -79,7 +77,7 @@ def main():
     init_filename = "volumential/version.py"
     os.environ["AKPYTHON_EXEC_FROM_WITHIN_WITHIN_SETUP_PY"] = "1"
     exec(compile(
-        open(init_filename, "r").read(), init_filename, "exec"),
+        open(init_filename).read(), init_filename, "exec"),
         version_dict)
 
     write_git_revision("volumential")

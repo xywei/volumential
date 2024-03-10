@@ -1,5 +1,3 @@
-from __future__ import absolute_import, division, print_function
-
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
 __license__ = """
@@ -185,7 +183,7 @@ def sumpy_kernel_to_lambda(sknl):
 # {{{ table data structure
 
 
-class NearFieldInteractionTable(object):
+class NearFieldInteractionTable:
     """Class for a near-field interaction table.
 
         A near-field interaction table stores precomputed singular integrals
@@ -1137,7 +1135,7 @@ class NearFieldInteractionTable(object):
         hs = self.source_box_extent / 2
         # radius of bouding sphere
         r = hs * np.sqrt(self.dim)
-        logger.debug("r_inner = %f, r_outer = %f" % (hs, r))
+        logger.debug(f"r_inner = {hs:f}, r_outer = {r:f}")
 
         if self.dim == 2:
             tag_box = gmsh.model.occ.addRectangle(x=0, y=0, z=0,

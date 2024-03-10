@@ -1,4 +1,3 @@
-from __future__ import absolute_import, division, print_function
 import six
 
 __copyright__ = "Copyright (C) 2018 Xiaoyu Wei"
@@ -62,7 +61,7 @@ def clean_file(filename, new_name=None):
 # {{{ loopy kernel cache wrapper
 
 
-class KernelCacheWrapper(object):
+class KernelCacheWrapper:
     # FIXME: largely code duplication with sumpy.
 
     def __init__(self):
@@ -97,16 +96,14 @@ class KernelCacheWrapper(object):
 
             try:
                 result = code_cache[cache_key]
-                logger.debug("%s: kernel cache hit [key=%s]" % (
-                    self.name, cache_key))
+                logger.debug(f"{self.name}: kernel cache hit [key={cache_key}]")
                 return result
             except KeyError:
                 pass
 
         logger.info("%s: kernel cache miss" % self.name)
         if CACHING_ENABLED:
-            logger.info("%s: kernel cache miss [key=%s]" % (
-                self.name, cache_key))
+            logger.info(f"{self.name}: kernel cache miss [key={cache_key}]")
 
         from pytools import MinRecursionLimit
         with MinRecursionLimit(3000):

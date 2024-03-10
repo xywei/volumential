@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 #
 # Volumential documentation build configuration file, created by
 # sphinx-quickstart on Mon Oct 23 10:27:37 2017.

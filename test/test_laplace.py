@@ -1,4 +1,3 @@
-from __future__ import absolute_import, division, print_function
 
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
@@ -153,4 +152,4 @@ def test_laplace_same_box_on_patch(longrun):
         print("f_vals", f_values)
         print("lap", lap)
 
-        assert max(abs((lap))) < 0.1
+        assert max(abs(lap)) < 0.1

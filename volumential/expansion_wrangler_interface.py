@@ -1,5 +1,3 @@
-from __future__ import absolute_import, division, print_function
-
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
 __license__ = """
@@ -37,7 +35,7 @@ __doc__ = """
 # NOTE: abstractmethod's signatures (arguement lists) are not enforced
 
 
-class ExpansionWranglerInterface(object):
+class ExpansionWranglerInterface:
     """
         Abstract expansion handling interface.
         The interface is adapted from, and stays compatible with boxtree/fmm.
@@ -216,7 +214,7 @@ class ExpansionWranglerInterface(object):
 # {{{ code container interface
 
 
-class ExpansionWranglerCodeContainerInterface(object):
+class ExpansionWranglerCodeContainerInterface:
     """
         Abstract expansion code container interface.
         The interface is adapted from, and stays compatible with boxtree/fmm.

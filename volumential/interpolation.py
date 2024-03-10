@@ -1,6 +1,4 @@
-__copyright__ = """
-Copyright (C) 2020 Xiaoyu Wei
-"""
+__copyright__ = "Copyright (C) 2020 Xiaoyu Wei"
 
 __license__ = """
 Permission is hereby granted, free of charge, to any person obtaining a copy
