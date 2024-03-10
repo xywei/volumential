@@ -21,9 +21,10 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
-import volumential.nearfield_potential_table as npt
 import numpy as np
 from numpy.polynomial.chebyshev import chebval, chebval2d, chebval3d
+
+import volumential.nearfield_potential_table as npt
 
 
 def test_const_order_1():

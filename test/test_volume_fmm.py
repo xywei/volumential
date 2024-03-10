@@ -21,15 +21,17 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
-import subprocess
 import logging
-import pytest
+import subprocess
+from functools import partial
 
 import numpy as np
+import pytest
+
 import pyopencl as cl
+
 import volumential.meshgen as mg
 
-from functools import partial
 
 logger = logging.getLogger(__name__)
 
@@ -210,15 +212,12 @@ def laplace_problem(ctx_factory):
 
     # {{{ sumpy expansion for laplace kernel
 
-    from sumpy.kernel import LaplaceKernel
-
+    from sumpy.expansion.local import LinearPDEConformingVolumeTaylorLocalExpansion
     # from sumpy.expansion.multipole import VolumeTaylorMultipoleExpansion
     # from sumpy.expansion.local import VolumeTaylorLocalExpansion
-
-    from sumpy.expansion.multipole import \
-        LinearPDEConformingVolumeTaylorMultipoleExpansion
-    from sumpy.expansion.local import \
-        LinearPDEConformingVolumeTaylorLocalExpansion
+    from sumpy.expansion.multipole import (
+        LinearPDEConformingVolumeTaylorMultipoleExpansion)
+    from sumpy.kernel import LaplaceKernel
 
     knl = LaplaceKernel(dim)
     out_kernels = [knl]
@@ -229,8 +228,7 @@ def laplace_problem(ctx_factory):
 
     exclude_self = True
     from volumential.expansion_wrangler_fpnd import (
-            FPNDExpansionWranglerCodeContainer,
-            FPNDExpansionWrangler)
+        FPNDExpansionWrangler, FPNDExpansionWranglerCodeContainer)
 
     wcc = FPNDExpansionWranglerCodeContainer(
         ctx,

@@ -23,14 +23,18 @@ THE SOFTWARE.
 import os
 import time
 import warnings
-import pyopencl as cl
-import pyopencl.clrandom
+
 import numpy as np
+
 import loopy as lp
 import pymbolic as pmbl
 import pymbolic.primitives as primitives
-from pymbolic.functions import sin, cos, exp, tan, log  # noqa: F401
+import pyopencl as cl
+import pyopencl.clrandom
+from pymbolic.functions import cos, exp, log, sin, tan  # noqa: F401
+
 from volumential.tools import ScalarFieldExpressionEvaluation
+
 
 # {{{ math functions
 

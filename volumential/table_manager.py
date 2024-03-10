@@ -30,15 +30,15 @@ import logging
 import h5py as hdf
 import numpy as np
 
-import volumential as vm
+from sumpy.kernel import ExpressionKernel
 
+import volumential as vm
 from volumential.nearfield_potential_table import NearFieldInteractionTable
+
 
 logger = logging.getLogger(__name__)
 
 # {{{ constant sumpy kernel
-
-from sumpy.kernel import ExpressionKernel
 
 
 class ConstantKernel(ExpressionKernel):
@@ -447,17 +447,17 @@ class NearFieldInteractionTableManager:
             return LaplaceKernel(dim)
 
         if kernel_type == "Laplace-Dx":
-            from sumpy.kernel import LaplaceKernel, AxisTargetDerivative
+            from sumpy.kernel import AxisTargetDerivative, LaplaceKernel
 
             return AxisTargetDerivative(0, LaplaceKernel(dim))
 
         if kernel_type == "Laplace-Dy":
-            from sumpy.kernel import LaplaceKernel, AxisTargetDerivative
+            from sumpy.kernel import AxisTargetDerivative, LaplaceKernel
 
             return AxisTargetDerivative(1, LaplaceKernel(dim))
 
         if kernel_type == "Laplace-Dz":
-            from sumpy.kernel import LaplaceKernel, AxisTargetDerivative
+            from sumpy.kernel import AxisTargetDerivative, LaplaceKernel
 
             assert dim >= 3
             return AxisTargetDerivative(2, LaplaceKernel(dim))
@@ -471,12 +471,12 @@ class NearFieldInteractionTableManager:
             return YukawaKernel(dim)
 
         elif kernel_type == "Yukawa-Dx":
-            from sumpy.kernel import YukawaKernel, AxisTargetDerivative
+            from sumpy.kernel import AxisTargetDerivative, YukawaKernel
 
             return AxisTargetDerivative(0, YukawaKernel(dim))
 
         elif kernel_type == "Yukawa-Dy":
-            from sumpy.kernel import YukawaKernel, AxisTargetDerivative
+            from sumpy.kernel import AxisTargetDerivative, YukawaKernel
 
             return AxisTargetDerivative(1, YukawaKernel(dim))
 
@@ -487,23 +487,19 @@ class NearFieldInteractionTableManager:
 
         elif kernel_type == "Cahn-Hilliard-Laplacian":
             from sumpy.kernel import (
-                FactorizedBiharmonicKernel,
-                LaplacianTargetDerivative,
-            )
+                FactorizedBiharmonicKernel, LaplacianTargetDerivative)
 
             return LaplacianTargetDerivative(FactorizedBiharmonicKernel(dim))
 
         elif kernel_type == "Cahn-Hilliard-Dx":
-            from sumpy.kernel import FactorizedBiharmonicKernel, AxisTargetDerivative
+            from sumpy.kernel import AxisTargetDerivative, FactorizedBiharmonicKernel
 
             return AxisTargetDerivative(0, FactorizedBiharmonicKernel(dim))
 
         elif kernel_type == "Cahn-Hilliard-Laplacian-Dx":
             from sumpy.kernel import (
-                FactorizedBiharmonicKernel,
-                LaplacianTargetDerivative,
-            )
-            from sumpy.kernel import AxisTargetDerivative
+                AxisTargetDerivative, FactorizedBiharmonicKernel,
+                LaplacianTargetDerivative)
 
             return AxisTargetDerivative(
                 0, LaplacianTargetDerivative(FactorizedBiharmonicKernel(dim))
@@ -511,17 +507,15 @@ class NearFieldInteractionTableManager:
 
         elif kernel_type == "Cahn-Hilliard-Laplacian-Dy":
             from sumpy.kernel import (
-                FactorizedBiharmonicKernel,
-                LaplacianTargetDerivative,
-            )
-            from sumpy.kernel import AxisTargetDerivative
+                AxisTargetDerivative, FactorizedBiharmonicKernel,
+                LaplacianTargetDerivative)
 
             return AxisTargetDerivative(
                 1, LaplacianTargetDerivative(FactorizedBiharmonicKernel(dim))
             )
 
         elif kernel_type == "Cahn-Hilliard-Dy":
-            from sumpy.kernel import FactorizedBiharmonicKernel, AxisTargetDerivative
+            from sumpy.kernel import AxisTargetDerivative, FactorizedBiharmonicKernel
 
             return AxisTargetDerivative(1, FactorizedBiharmonicKernel(dim))
 

@@ -27,17 +27,18 @@ __doc__ = """
    :members:
 """
 
+import logging
+
 import numpy as np
+
 import loopy
 import pyopencl as cl
 
 from volumential.tools import KernelCacheWrapper
 
-import logging
 
 logger = logging.getLogger(__name__)
 
-logging.basicConfig(level=logging.INFO)
 
 # {{{ near field eval base class
 
@@ -456,6 +457,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
     def get_optimized_kernel(self, ncpus=None):
         if ncpus is None:
             import multiprocessing
+
             # NOTE: this detects the number of logical cores, disable hyperthreading
             # for the optimal performance.
             ncpus = multiprocessing.cpu_count()

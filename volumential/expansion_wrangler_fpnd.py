@@ -20,23 +20,24 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
-import numpy as np
 import logging
+
+import numpy as np
+
 import pyopencl as cl
 import pyopencl.array
-from pytools.obj_array import make_obj_array
-
-# from pytools import memoize_method
-from volumential.nearfield_potential_table import NearFieldInteractionTable
-from volumential.expansion_wrangler_interface import (
-        ExpansionWranglerInterface, ExpansionWranglerCodeContainerInterface)
-from sumpy.fmm import SumpyExpansionWrangler, \
-        SumpyTimingFuture, SumpyExpansionWranglerCodeContainer
 from boxtree.pyfmmlib_integration import FMMLibExpansionWrangler
-
+from pytools.obj_array import make_obj_array
+from sumpy.fmm import (
+    SumpyExpansionWrangler, SumpyExpansionWranglerCodeContainer, SumpyTimingFuture)
 from sumpy.kernel import (
-        LaplaceKernel, HelmholtzKernel, AxisTargetDerivative,
-        DirectionalSourceDerivative)
+    AxisTargetDerivative, DirectionalSourceDerivative, HelmholtzKernel,
+    LaplaceKernel)
+
+from volumential.expansion_wrangler_interface import (
+    ExpansionWranglerCodeContainerInterface, ExpansionWranglerInterface)
+from volumential.nearfield_potential_table import NearFieldInteractionTable
+
 
 logger = logging.getLogger(__name__)
 

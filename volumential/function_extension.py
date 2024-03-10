@@ -39,12 +39,15 @@ THE SOFTWARE.
 import logging
 
 import numpy as np
+
 import pyopencl as cl
-from pytools.obj_array import make_obj_array
 from pymbolic import var
 from pytential import bind, sym
 from pytential.solve import gmres
-from pytential.symbolic.stokes import StressletWrapper, StokesletWrapper
+from pytential.symbolic.stokes import StokesletWrapper, StressletWrapper
+from pytools.obj_array import make_obj_array
+from sumpy.kernel import AxisTargetDerivative, ExpressionKernel
+
 
 # {{{ helper functions
 
@@ -234,8 +237,6 @@ def compute_harmonic_extension(queue, target_discr,
 # {{{ biharmonic extension
 
 # {{{ Goursat kernels
-
-from sumpy.kernel import ExpressionKernel, AxisTargetDerivative
 
 
 class ComplexLogKernel(ExpressionKernel):

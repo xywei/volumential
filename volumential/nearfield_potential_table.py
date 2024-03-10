@@ -21,15 +21,17 @@ THE SOFTWARE.
 """
 
 import logging
+from functools import partial
+
 import numpy as np
-import loopy as lp
-import pyopencl as cl
 from scipy.interpolate import BarycentricInterpolator as Interpolator
 
-from functools import partial
+import loopy as lp
+import pyopencl as cl
 
 import volumential.list1_gallery as gallery
 import volumential.singular_integral_2d as squad
+
 
 logger = logging.getLogger("NearFieldInteractionTable")
 
@@ -163,7 +165,7 @@ def get_cahn_hilliard_laplacian(dim, b=0, c=0):
 
 
 def sumpy_kernel_to_lambda(sknl):
-    from sympy import Symbol, symbols, lambdify
+    from sympy import Symbol, lambdify, symbols
 
     var_name_prefix = "x"
     var_names = " ".join([var_name_prefix + str(i) for i in range(sknl.dim)])
@@ -1108,16 +1110,15 @@ class NearFieldInteractionTable:
                     ) * fl_scaling(k=self.dim, s=s)
             return
 
-        from meshmode.array_context import PyOpenCLArrayContext
-        from meshmode.dof_array import thaw, flatten
-        from meshmode.mesh.io import read_gmsh
-        from meshmode.discretization import Discretization
-        from meshmode.discretization.poly_element import \
-            PolynomialWarpAndBlendGroupFactory
-
         # {{{ gmsh processing
-
         import gmsh
+
+        from meshmode.array_context import PyOpenCLArrayContext
+        from meshmode.discretization import Discretization
+        from meshmode.discretization.poly_element import (
+            PolynomialWarpAndBlendGroupFactory)
+        from meshmode.dof_array import flatten, thaw
+        from meshmode.mesh.io import read_gmsh
 
         gmsh.initialize()
         gmsh.option.setNumber("General.Terminal", 1)
@@ -1163,8 +1164,8 @@ class NearFieldInteractionTable:
         gmsh.model.occ.synchronize()
         gmsh.model.mesh.generate(self.dim)
 
-        from tempfile import mkdtemp
         from os.path import join
+        from tempfile import mkdtemp
         temp_dir = mkdtemp(prefix="tmp_volumential_nft")
         msh_filename = join(temp_dir, "chinese_lucky_coin.msh")
         gmsh.write(msh_filename)

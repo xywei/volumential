@@ -26,6 +26,7 @@ THE SOFTWARE.
 
 import logging
 
+
 logger = logging.getLogger(__name__)
 
 if 1:
@@ -35,12 +36,14 @@ else:
     # clean
     logging.basicConfig(level=logging.CRITICAL)
 
+from functools import partial
+
 import numpy as np
-import pyopencl as cl
-from volumential.tools import ScalarFieldExpressionEvaluation as Eval
 
 import pymbolic as pmbl
-from functools import partial
+import pyopencl as cl
+
+from volumential.tools import ScalarFieldExpressionEvaluation as Eval
 
 
 def main():
@@ -204,8 +207,9 @@ def main():
 
     # {{{ build near field potential table
 
-    from volumential.table_manager import NearFieldInteractionTableManager
     import os
+
+    from volumential.table_manager import NearFieldInteractionTableManager
 
     if download_table and (not os.path.isfile(table_filename)):
         import json
@@ -279,9 +283,7 @@ def main():
     exclude_self = True
 
     from volumential.expansion_wrangler_fpnd import (
-            FPNDExpansionWranglerCodeContainer,
-            FPNDExpansionWrangler
-            )
+        FPNDExpansionWrangler, FPNDExpansionWranglerCodeContainer)
 
     wcc = FPNDExpansionWranglerCodeContainer(
         ctx,
@@ -316,9 +318,9 @@ def main():
 
     # {{{ conduct fmm computation
 
-    from volumential.volume_fmm import drive_volume_fmm
-
     import time
+
+    from volumential.volume_fmm import drive_volume_fmm
     queue.finish()
 
     t0 = time.time()

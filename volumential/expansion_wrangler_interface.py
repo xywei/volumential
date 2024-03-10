@@ -21,10 +21,11 @@ THE SOFTWARE.
 """
 
 import logging
+from abc import ABCMeta, abstractmethod
+
 
 logger = logging.getLogger(__name__)
 
-from abc import ABCMeta, abstractmethod
 
 __doc__ = """
 .. autoclass::ExpansionWranglerInterface

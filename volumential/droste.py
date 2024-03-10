@@ -20,11 +20,14 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
+import logging
+
 import numpy as np
+
 import loopy as lp
+
 from volumential.tools import KernelCacheWrapper
 
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -1007,8 +1010,8 @@ class DrosteReduced(DrosteBase):
                     else:
                         prev_swappable[iaxis] = list(group)[axid - 1]
 
-        from functools import reduce
         import operator
+        from functools import reduce
 
         tgt_domain_ubounds = reduce(
             operator.and_,
@@ -1272,6 +1275,7 @@ class DrosteReduced(DrosteBase):
         # self.current_base_case, self.get_kernel_id
         if ncpus is None:
             import multiprocessing
+
             # NOTE: this detects the number of logical cores, which
             # may result in suboptimal performance.
             ncpus = multiprocessing.cpu_count()

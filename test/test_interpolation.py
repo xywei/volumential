@@ -19,20 +19,20 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
-import pytest
 import numpy as np
-import pyopencl as cl
+import pytest
 
+import pyopencl as cl
 from meshmode.array_context import PyOpenCLArrayContext
+from meshmode.discretization import Discretization
+from meshmode.discretization.poly_element import PolynomialWarpAndBlendGroupFactory
 from meshmode.dof_array import flatten, thaw
 from meshmode.mesh.generation import generate_regular_rect_mesh
-from meshmode.discretization import Discretization
-from meshmode.discretization.poly_element import (
-        PolynomialWarpAndBlendGroupFactory)
-from volumential.interpolation import (
-        ElementsToSourcesLookupBuilder, LeavesToNodesLookupBuilder,
-        interpolate_from_meshmode, interpolate_to_meshmode)
+
 from volumential.geometry import BoundingBoxFactory, BoxFMMGeometryFactory
+from volumential.interpolation import (
+    ElementsToSourcesLookupBuilder, LeavesToNodesLookupBuilder,
+    interpolate_from_meshmode, interpolate_to_meshmode)
 
 
 # {{{ test data

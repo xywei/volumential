@@ -25,16 +25,19 @@ __doc__ = """
 .. autofunction:: interpolate_volume_potential
 """
 
-import numpy as np
-import pyopencl as cl
-from pytools.obj_array import make_obj_array
-from boxtree.fmm import TimingRecorder
-from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
-from volumential.expansion_wrangler_fpnd import (
-        FPNDSumpyExpansionWrangler, FPNDFMMLibExpansionWrangler)
-
-
 import logging
+
+import numpy as np
+
+import pyopencl as cl
+from boxtree.fmm import TimingRecorder
+from pytools.obj_array import make_obj_array
+
+from volumential.expansion_wrangler_fpnd import (
+    FPNDFMMLibExpansionWrangler, FPNDSumpyExpansionWrangler)
+from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
+
+
 logger = logging.getLogger(__name__)
 
 

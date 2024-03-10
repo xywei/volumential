@@ -22,6 +22,7 @@ THE SOFTWARE.
 """
 
 import numpy as np
+
 import volumential.singular_integral_2d as sint
 
 

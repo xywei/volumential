@@ -21,9 +21,11 @@ THE SOFTWARE.
 """
 
 import numpy as np
+
 import pyopencl as cl
-from pytools.obj_array import make_obj_array
 from boxtree.pyfmmlib_integration import FMMLibRotationData
+from pytools.obj_array import make_obj_array
+
 
 # {{{ bounding box factory
 
@@ -95,8 +97,8 @@ class BoundingBoxFactory:
         self.lbounds = box_center - box_radius
         self.ubounds = box_center + box_radius
 
-        from boxtree.tools import AXIS_NAMES
         from boxtree.bounding_box import make_bounding_box_dtype
+        from boxtree.tools import AXIS_NAMES
 
         axis_names = AXIS_NAMES[:self.dim]
         bbox_type, _ = make_bounding_box_dtype(
@@ -164,6 +166,7 @@ class BoxFMMGeometryFactory:
         self.dim = dim
         if quadrature_formula is None:
             from modepy import LegendreGaussQuadrature
+
             # order = degree + 1
             self.quadrature_formula = LegendreGaussQuadrature(order - 1)
         else:

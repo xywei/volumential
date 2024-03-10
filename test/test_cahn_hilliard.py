@@ -21,8 +21,10 @@ THE SOFTWARE.
 """
 
 import numpy as np
-import volumential.nearfield_potential_table as npt
+
 from sumpy.point_calculus import CalculusPatch
+
+import volumential.nearfield_potential_table as npt
 
 
 dim = 2

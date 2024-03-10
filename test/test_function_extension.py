@@ -21,20 +21,18 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
-import pytest
-from volumential.function_extension import compute_harmonic_extension
 import numpy as np
-
 import numpy.linalg as la
+import pytest
+
 import pyopencl as cl
 import pyopencl.clmath  # noqa
-
 from meshmode.discretization import Discretization
-from meshmode.discretization.poly_element import \
-        InterpolatoryQuadratureSimplexGroupFactory
-
-from pytential import bind, sym, norm  # noqa
+from meshmode.discretization.poly_element import (
+    InterpolatoryQuadratureSimplexGroupFactory)
 from pytential.target import PointsTarget
+
+from volumential.function_extension import compute_harmonic_extension
 
 
 @pytest.mark.skip(reason="this test needs to be updated to use GeometryCollection")

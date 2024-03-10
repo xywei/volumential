@@ -21,18 +21,17 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
-import subprocess
 import glob
+import subprocess
+
+import pytest
 from filelock import FileLock
-import pytest  # noqa: F401
 
 # setup the ctx_factory fixture
 from pyopencl.tools import (  # NOQA
-    pytest_generate_tests_for_pyopencl as pytest_generate_tests,
-)
+    pytest_generate_tests_for_pyopencl as pytest_generate_tests)
 
-from volumential.table_manager import \
-    NearFieldInteractionTableManager as NFTManager
+from volumential.table_manager import NearFieldInteractionTableManager as NFTManager
 
 
 def pytest_addoption(parser):

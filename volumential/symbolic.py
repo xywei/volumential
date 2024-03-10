@@ -21,9 +21,12 @@ THE SOFTWARE.
 """
 
 import numpy as np
+
 import loopy as lp
 import pymbolic as pmbl
+
 from volumential.tools import ScalarFieldExpressionEvaluation
+
 
 # {{{ math functions
 

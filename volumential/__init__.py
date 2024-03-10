@@ -20,14 +20,15 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 import os
+
 from pytools.persistent_dict import WriteOncePersistentDict
 
-from volumential.singular_integral_2d import box_quad
-from volumential.version import VERSION_TEXT
-from volumential.table_manager import NearFieldInteractionTableManager  # noqa: F401
 from volumential.nearfield_potential_table import (  # noqa: F401
-    NearFieldInteractionTable,
-)
+    NearFieldInteractionTable)
+from volumential.singular_integral_2d import box_quad
+from volumential.table_manager import NearFieldInteractionTableManager  # noqa: F401
+from volumential.version import VERSION_TEXT
+
 
 volumential_version = VERSION_TEXT
 

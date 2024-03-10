@@ -20,15 +20,17 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
-import numpy as np
-import loopy as lp
-import pyopencl as cl
-import pymbolic as pmbl
-from pytools import memoize_method
-from pymbolic.primitives import Variable as VariableType
-from pymbolic.primitives import Expression as ExpressionType
-
 import logging
+
+import numpy as np
+
+import loopy as lp
+import pymbolic as pmbl
+import pyopencl as cl
+from pymbolic.primitives import (
+    Expression as ExpressionType, Variable as VariableType)
+from pytools import memoize_method
+
 
 logger = logging.getLogger(__name__)
 
@@ -78,11 +80,12 @@ class KernelCacheWrapper:
 
     @memoize_method
     def get_cached_optimized_kernel(self, **kwargs):
-        from sumpy import code_cache, CACHING_ENABLED, OPT_ENABLED
+        from sumpy import CACHING_ENABLED, OPT_ENABLED, code_cache
 
         if CACHING_ENABLED:
             import loopy.version
             from sumpy.version import KERNEL_VERSION as SUMPY_KERNEL_VERSION
+
             from volumential.version import KERNEL_VERSION
             cache_key = (
                     self.get_cache_key()
@@ -250,6 +253,7 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
         knl = self.get_kernel(**kwargs)
         if ncpus is None:
             import multiprocessing
+
             # NOTE: this detects the number of logical cores, which
             # may result in suboptimal performance.
             ncpus = multiprocessing.cpu_count()

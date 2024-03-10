@@ -20,11 +20,14 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
+import logging
 import time
+
 import pyopencl as cl
+
 from volumential.table_manager import NearFieldInteractionTableManager
 
-import logging
+
 logging.basicConfig(format="%(name)s:%(levelname)s: %(message)s")
 
 

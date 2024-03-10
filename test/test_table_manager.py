@@ -23,13 +23,15 @@ THE SOFTWARE.
 
 import os
 import subprocess
-import numpy as np
-import pyopencl as cl
-import pytest
-import volumential as vm
 from shutil import copyfile
-from volumential.table_manager import (
-        NearFieldInteractionTableManager as NFTable)
+
+import numpy as np
+import pytest
+
+import pyopencl as cl
+
+import volumential as vm
+from volumential.table_manager import NearFieldInteractionTableManager as NFTable
 
 
 def get_table(queue, q_order=1, dim=2):

@@ -22,10 +22,12 @@ THE SOFTWARE.
 """
 
 import subprocess
-import numpy as np
-import pyopencl as cl
-import pyopencl.array  # NOQA
 from functools import partial
+
+import numpy as np
+
+import pyopencl as cl
+import pyopencl.array  # noqa: F401
 
 
 def drive_test_completeness(ctx, queue, dim, q_order):
@@ -129,9 +131,9 @@ def drive_test_completeness(ctx, queue, dim, q_order):
 
     # {{{ expansion wrangler
 
-    from sumpy.kernel import LaplaceKernel
-    from sumpy.expansion.multipole import VolumeTaylorMultipoleExpansion
     from sumpy.expansion.local import VolumeTaylorLocalExpansion
+    from sumpy.expansion.multipole import VolumeTaylorMultipoleExpansion
+    from sumpy.kernel import LaplaceKernel
 
     knl = LaplaceKernel(dim)
     out_kernels = [knl]
@@ -139,8 +141,7 @@ def drive_test_completeness(ctx, queue, dim, q_order):
     mpole_expn_class = partial(VolumeTaylorMultipoleExpansion, use_rscale=None)
 
     from volumential.expansion_wrangler_fpnd import (
-            FPNDExpansionWranglerCodeContainer,
-            FPNDExpansionWrangler)
+        FPNDExpansionWrangler, FPNDExpansionWranglerCodeContainer)
 
     wcc = FPNDExpansionWranglerCodeContainer(
         ctx,

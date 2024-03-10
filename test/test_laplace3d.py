@@ -23,8 +23,8 @@ THE SOFTWARE.
 
 import numpy as np
 
-# import volumential.nearfield_potential_table as npt
 from sumpy.point_calculus import CalculusPatch
+
 
 dim = 3
 patch_order = 3
