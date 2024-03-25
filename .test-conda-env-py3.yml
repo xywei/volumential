@@ -3,35 +3,36 @@ channels:
   - conda-forge
   - defaults
 dependencies:
-  - git
-  - python>=3.8
-  - dealii
-  - pocl
-  - pyopencl
-  - pyfmmlib
-  - scipy
-  - numpy
-  - sympy
-  - matplotlib-base
-  - cgen
-  - cython
-  - toml
-  - py
-  - pluggy
-  - packaging
-  - iniconfig
   - attrs
-  - genpy
+  - cgen
+  - cmake
   - colorama
-  - islpy
-  - pyrsistent
+  - cython
+  - dealii
+  - genpy
+  - git
   - h5py
+  - iniconfig
+  - islpy
+  - matplotlib-base
+  - numpy
+  - packaging
+  - pluggy
+  - pocl
+  - py
   - pyevtk
+  - pyfmmlib
+  - pyopencl
+  - pyrsistent
   - pytest
   - pytest-cov
-  - cmake
-  - symengine
   - python-symengine
+  - python>=3.8
+  - pyvkfft
+  - scipy
+  - symengine
+  - sympy
+  - toml
 
   - pip
   - pip:

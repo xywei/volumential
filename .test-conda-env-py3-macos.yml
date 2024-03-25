@@ -3,37 +3,37 @@ channels:
   - conda-forge
   - defaults
 dependencies:
-  - git
-  - python>=3.8
-  - dealii
-  - pocl
-  - pyopencl
-  - pyfmmlib
-  - scipy
-  - numpy
-  - sympy
-  - symengine
-  - python-symengine
-  - cython
-  - cgen
-  - toml
-  - py
-  - pluggy
-  - packaging
-  - iniconfig
   - attrs
-  - genpy
+  - cgen
+  - clangdev
+  - cmake
   - colorama
-  - islpy
-  - pyrsistent
+  - cython
+  - dealii
+  - genpy
+  - git
   - h5py
+  - iniconfig
+  - islpy
+  - numpy
+  - openmp
+  - packaging
+  - pluggy
+  - pocl
+  - py
   - pyevtk
+  - pyfmmlib
+  - pyopencl
+  - pyrsistent
   - pytest
   - pytest-cov
-  - cmake
-  # enable openmp on osx
-  - openmp
-  - clangdev
+  - python-symengine
+  - python>=3.8
+  - pyvkfft
+  - scipy
+  - symengine
+  - sympy
+  - toml
 
   - pip
   - pip:
