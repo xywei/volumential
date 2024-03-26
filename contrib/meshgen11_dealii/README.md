@@ -13,9 +13,7 @@ To build `meshgen11`, you need:
 ## Usage
 
 The script `build.sh` also copies the built library to voluemential path so that you can use
-
-```
+```python
 import voluemential.meshgen
 ```
-
 directly.

@@ -605,6 +605,7 @@ py::tuple make_uniform_cubic_grid(int q, int level, int dim,
     return make_uniform_cubic_grid_details<3>(q, level);
   } else {
     std::cout << "Dimension must be 1,2 or 3." << std::endl;
+    return py::tuple();
   }
 }
 
