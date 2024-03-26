@@ -30,7 +30,7 @@ import logging
 import numpy as np
 
 import pyopencl as cl
-from boxtree.fmm import TimingRecorder
+from boxtree.timing import TimingRecorder
 from pytools.obj_array import make_obj_array
 
 from volumential.expansion_wrangler_fpnd import (
