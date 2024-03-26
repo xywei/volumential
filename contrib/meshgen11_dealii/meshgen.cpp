@@ -49,7 +49,7 @@ constexpr double b = 1;
 const d::UpdateFlags update_flags =
     d::update_quadrature_points | d::update_JxW_values;
 
-void greet() { std::cout << "Hello from meshgen11_dealii." << std::endl; }
+void greet() { std::cout << "Hello from mesh generation via deal.II." << std::endl; }
 
 // {{{ utils
 
