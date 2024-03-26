@@ -21,6 +21,7 @@ dependencies:
   - pluggy
   - pocl
   - py
+  - pybind11
   - pyevtk
   - pyfmmlib
   - pyopencl
@@ -28,7 +29,7 @@ dependencies:
   - pytest
   - pytest-cov
   - python-symengine
-  - python>=3.8
+  - python=3
   - pyvkfft
   - scipy
   - symengine
