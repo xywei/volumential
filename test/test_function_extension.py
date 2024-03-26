@@ -67,9 +67,10 @@ def test_harmonic_extension_exterior_3d(ctx_factory):
     density_discr = qbx.density_discr
 
     ntgts = 200
-    rho = np.random.rand(ntgts) * 3 + radius + 0.05
-    theta = np.random.rand(ntgts) * 2 * np.pi
-    phi = (np.random.rand(ntgts) - 0.5) * np.pi
+    rng = np.random.default_rng(seed=42)
+    rho = rng.random(ntgts) * 3 + radius + 0.05
+    theta = rng.random(ntgts) * 2 * np.pi
+    phi = (rng.random(ntgts) - 0.5) * np.pi
 
     nodes = density_discr.nodes().with_queue(queue)
     source = np.array([0, 1, 2])

@@ -44,8 +44,9 @@ def test_cl_ctx_getter(ctx_factory):
     ctx = ctx_factory()
     queue = cl.CommandQueue(ctx)
 
-    a_np = np.random.rand(50000).astype(np.float32)
-    b_np = np.random.rand(50000).astype(np.float32)
+    rng = np.random.default_rng(seed=42)
+    a_np = rng.random(50000, dtype=np.float32)
+    b_np = rng.random(50000, dtype=np.float32)
 
     mf = cl.mem_flags
     a_g = cl.Buffer(ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=a_np)
