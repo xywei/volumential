@@ -1,6 +1,3 @@
-from __future__ import absolute_import, division, print_function
-import six
-
 __copyright__ = "Copyright (C) 2018 Xiaoyu Wei"
 
 __license__ = """
@@ -23,15 +20,17 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
-import numpy as np
-import loopy as lp
-import pyopencl as cl
-import pymbolic as pmbl
-from pytools import memoize_method
-from pymbolic.primitives import Variable as VariableType
-from pymbolic.primitives import Expression as ExpressionType
-
 import logging
+
+import numpy as np
+
+import loopy as lp
+import pymbolic as pmbl
+import pyopencl as cl
+from pymbolic.primitives import (
+    Expression as ExpressionType, Variable as VariableType)
+from pytools import memoize_method
+
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +61,7 @@ def clean_file(filename, new_name=None):
 # {{{ loopy kernel cache wrapper
 
 
-class KernelCacheWrapper(object):
+class KernelCacheWrapper:
     # FIXME: largely code duplication with sumpy.
 
     def __init__(self):
@@ -81,15 +80,16 @@ class KernelCacheWrapper(object):
 
     @memoize_method
     def get_cached_optimized_kernel(self, **kwargs):
-        from sumpy import code_cache, CACHING_ENABLED, OPT_ENABLED
+        from sumpy import CACHING_ENABLED, OPT_ENABLED, code_cache
 
         if CACHING_ENABLED:
             import loopy.version
             from sumpy.version import KERNEL_VERSION as SUMPY_KERNEL_VERSION
+
             from volumential.version import KERNEL_VERSION
             cache_key = (
                     self.get_cache_key()
-                    + tuple(sorted(six.iteritems(kwargs)))
+                    + tuple(sorted(kwargs.items()))
                     + (loopy.version.DATA_MODEL_VERSION,)
                     + (SUMPY_KERNEL_VERSION,)
                     + (KERNEL_VERSION,)
@@ -97,16 +97,14 @@ class KernelCacheWrapper(object):
 
             try:
                 result = code_cache[cache_key]
-                logger.debug("%s: kernel cache hit [key=%s]" % (
-                    self.name, cache_key))
+                logger.debug(f"{self.name}: kernel cache hit [key={cache_key}]")
                 return result
             except KeyError:
                 pass
 
         logger.info("%s: kernel cache miss" % self.name)
         if CACHING_ENABLED:
-            logger.info("%s: kernel cache miss [key=%s]" % (
-                self.name, cache_key))
+            logger.info(f"{self.name}: kernel cache miss [key={cache_key}]")
 
         from pytools import MinRecursionLimit
         with MinRecursionLimit(3000):
@@ -205,7 +203,7 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
             for insn in [scalar_assignment]
         ]
 
-        loopy_knl = lp.make_kernel(  # NOQA
+        loopy_knl = lp.make_kernel(
             "{ [itgt]: 0<=itgt<n_targets }",
             [
                 """
@@ -255,6 +253,7 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
         knl = self.get_kernel(**kwargs)
         if ncpus is None:
             import multiprocessing
+
             # NOTE: this detects the number of logical cores, which
             # may result in suboptimal performance.
             ncpus = multiprocessing.cpu_count()
@@ -428,7 +427,7 @@ class DiscreteLegendreTransform(BoxSpecificMap):
 
     def get_kernel(self, **kwargs):
 
-        loopy_knl = lp.make_kernel(  # NOQA
+        loopy_knl = lp.make_kernel(
                 [
                     "{ [ bid ] : 0 <= bid < n_boxes }",
                     "{ [ mid ] : 0 <= mid < n_box_nodes }",
@@ -593,7 +592,7 @@ class BoxSum(BoxSpecificReduction):
 
     def get_kernel(self, **kwargs):
 
-        loopy_knl = lp.make_kernel(  # NOQA
+        loopy_knl = lp.make_kernel(
                 [
                     "{ [ bid ] : 0 <= bid < n_boxes }",
                     "{ [ nid ] : 0 <= nid < n_box_nodes }"

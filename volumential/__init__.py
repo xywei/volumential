@@ -1,5 +1,3 @@
-from __future__ import absolute_import, division, print_function
-
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
 __license__ = """
@@ -22,14 +20,15 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 import os
+
 from pytools.persistent_dict import WriteOncePersistentDict
 
-from volumential.singular_integral_2d import box_quad
-from volumential.version import VERSION_TEXT
-from volumential.table_manager import NearFieldInteractionTableManager  # noqa: F401
 from volumential.nearfield_potential_table import (  # noqa: F401
-    NearFieldInteractionTable,
-)
+    NearFieldInteractionTable)
+from volumential.singular_integral_2d import box_quad
+from volumential.table_manager import NearFieldInteractionTableManager  # noqa: F401
+from volumential.version import VERSION_TEXT
+
 
 volumential_version = VERSION_TEXT
 
@@ -73,7 +72,7 @@ def set_caching_enabled(flag):
     CACHING_ENABLED = flag
 
 
-class CacheMode(object):
+class CacheMode:
     """A context manager for setting whether :mod:`volumential` is allowed to use
     disk caches.
     """

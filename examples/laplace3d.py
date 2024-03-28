@@ -1,7 +1,6 @@
 """ This example evaluates the volume potential over
     [-1,1]^3 with the Laplace kernel.
 """
-from __future__ import absolute_import, division, print_function
 
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
@@ -26,15 +25,16 @@ THE SOFTWARE.
 """
 
 import logging
+from functools import partial
 
 import numpy as np
-import pyopencl as cl
 
 import pymbolic as pmbl
 import pymbolic.functions
+import pyopencl as cl
+
 from volumential.tools import ScalarFieldExpressionEvaluation as Eval
 
-from functools import partial
 
 verbose = True
 logger = logging.getLogger(__name__)
@@ -215,17 +215,18 @@ def main():
 
     # {{{ build near field potential table
 
-    from volumential.table_manager import NearFieldInteractionTableManager
     import os
+
+    from volumential.table_manager import NearFieldInteractionTableManager
 
     if download_table and (not os.path.isfile(table_filename)):
         import json
-        with open("table_urls.json", 'r') as fp:
+        with open("table_urls.json") as fp:
             urls = json.load(fp)
 
-        print("Downloading table from %s" % urls['Laplace3D'])
+        print("Downloading table from %s" % urls["Laplace3D"])
         import subprocess
-        subprocess.call(["wget", "-q", urls['Laplace3D'], table_filename])
+        subprocess.call(["wget", "-q", urls["Laplace3D"], table_filename])
 
     tm = NearFieldInteractionTableManager(
         table_filename, root_extent=root_table_source_extent,
@@ -293,8 +294,7 @@ def main():
 
     exclude_self = True
     from volumential.expansion_wrangler_fpnd import (
-            FPNDExpansionWrangler,
-            FPNDExpansionWranglerCodeContainer)
+        FPNDExpansionWrangler, FPNDExpansionWranglerCodeContainer)
 
     wcc = FPNDExpansionWranglerCodeContainer(
         ctx,
@@ -329,9 +329,9 @@ def main():
 
     # {{{ conduct fmm computation
 
-    from volumential.volume_fmm import drive_volume_fmm
-
     import time
+
+    from volumential.volume_fmm import drive_volume_fmm
     queue.finish()
 
     t0 = time.time()
@@ -425,11 +425,10 @@ def main():
         from meshmode.mesh.io import read_gmsh
 
         modemesh = read_gmsh("box_grid.msh", force_ambient_dim=None)
-        from meshmode.discretization.poly_element import (
-            LegendreGaussLobattoTensorProductGroupFactory,
-        )
         from meshmode.array_context import PyOpenCLArrayContext
         from meshmode.discretization import Discretization
+        from meshmode.discretization.poly_element import (
+            LegendreGaussLobattoTensorProductGroupFactory)
 
         actx = PyOpenCLArrayContext(queue)
         box_discr = Discretization(
@@ -490,7 +489,7 @@ def main():
     # }}} End postprocess and plot
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
 
 

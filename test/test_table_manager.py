@@ -1,4 +1,3 @@
-from __future__ import absolute_import, division, print_function
 
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
@@ -24,13 +23,15 @@ THE SOFTWARE.
 
 import os
 import subprocess
-import numpy as np
-import pyopencl as cl
-import pytest
-import volumential as vm
 from shutil import copyfile
-from volumential.table_manager import (
-        NearFieldInteractionTableManager as NFTable)
+
+import numpy as np
+import pytest
+
+import pyopencl as cl
+
+import volumential as vm
+from volumential.table_manager import NearFieldInteractionTableManager as NFTable
 
 
 def get_table(queue, q_order=1, dim=2):
@@ -41,7 +42,7 @@ def get_table(queue, q_order=1, dim=2):
         copyfile("nft.hdf5",
                  f"nft-test-table-manager-{pid}.hdf5")
 
-    subprocess.check_call(['rm', '-f', f'nft-test-table-manager-{pid}.hdf5'])
+    subprocess.check_call(["rm", "-f", f"nft-test-table-manager-{pid}.hdf5"])
 
     with NFTable(f"nft-test-table-manager-{pid}.hdf5",
                  progress_bar=True) as table_manager:

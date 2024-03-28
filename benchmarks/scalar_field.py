@@ -23,14 +23,18 @@ THE SOFTWARE.
 import os
 import time
 import warnings
-import pyopencl as cl
-import pyopencl.clrandom
+
 import numpy as np
+
 import loopy as lp
 import pymbolic as pmbl
 import pymbolic.primitives as primitives
-from pymbolic.functions import sin, cos, exp, tan, log  # noqa: F401
+import pyopencl as cl
+import pyopencl.clrandom
+from pymbolic.functions import cos, exp, log, sin, tan  # noqa: F401
+
 from volumential.tools import ScalarFieldExpressionEvaluation
+
 
 # {{{ math functions
 
@@ -66,7 +70,7 @@ def math_func_mangler(target, name, arg_dtypes):
 
         fname = name.name
         if not (isinstance(name.aggregate, pmbl.primitives.Variable)
-                and name.aggregate.name == 'math'):
+                and name.aggregate.name == "math"):
             raise RuntimeError("unexpected aggregate '%s'" %
                     str(name.aggregate))
 
@@ -80,7 +84,7 @@ def math_func_mangler(target, name, arg_dtypes):
                         arg_dtype)
 
             return lp.CallMangleInfo(
-                   target_name="%s_%s" % (tpname, fname),
+                   target_name=f"{tpname}_{fname}",
                    result_dtypes=(arg_dtype,),
                    arg_dtypes=(arg_dtype,))
 
@@ -139,7 +143,7 @@ knl = source_eval.get_kernel()
 # needed for using loopy.statistics
 knl = lp.add_and_infer_dtypes(
         knl,
-        dict(x0=np.float64, x1=np.float64, x2=np.float64))
+        {"x0": np.float64, "x1": np.float64, "x2": np.float64})
 knl = lp.set_options(knl, ignore_boostable_into=True)
 
 # {{{ wall time
@@ -178,13 +182,13 @@ print("Wall time w/t tag g.0:", t3 - t2)
 op_map = lp.get_op_map(knl, subgroup_size=ncpus, count_redundant_work=True,
         count_within_subscripts=True)
 
-params = dict(n_targets=pts.shape[1])
-print('Operation counts:')
+params = {"n_targets": pts.shape[1]}
+print("Operation counts:")
 total_ops = 0
 for op in op_map.keys():
     sub_count = op_map[op].eval_with_dict(params)
     total_ops += sub_count
-    print('\t', op.name, op_map[op], sub_count)
+    print("\t", op.name, op_map[op], sub_count)
 print("Total:", total_ops)
 
 # TODO: weight each operation by running micro-benchmarks

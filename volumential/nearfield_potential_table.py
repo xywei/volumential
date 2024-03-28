@@ -1,5 +1,3 @@
-from __future__ import absolute_import, division, print_function
-
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
 __license__ = """
@@ -23,17 +21,19 @@ THE SOFTWARE.
 """
 
 import logging
+from functools import partial
+
 import numpy as np
-import loopy as lp
-import pyopencl as cl
 from scipy.interpolate import BarycentricInterpolator as Interpolator
 
-from functools import partial
+import loopy as lp
+import pyopencl as cl
 
 import volumential.list1_gallery as gallery
 import volumential.singular_integral_2d as squad
 
-logger = logging.getLogger('NearFieldInteractionTable')
+
+logger = logging.getLogger("NearFieldInteractionTable")
 
 
 def _self_tp(vec, tpd=2):
@@ -165,7 +165,7 @@ def get_cahn_hilliard_laplacian(dim, b=0, c=0):
 
 
 def sumpy_kernel_to_lambda(sknl):
-    from sympy import Symbol, symbols, lambdify
+    from sympy import Symbol, lambdify, symbols
 
     var_name_prefix = "x"
     var_names = " ".join([var_name_prefix + str(i) for i in range(sknl.dim)])
@@ -185,7 +185,7 @@ def sumpy_kernel_to_lambda(sknl):
 # {{{ table data structure
 
 
-class NearFieldInteractionTable(object):
+class NearFieldInteractionTable:
     """Class for a near-field interaction table.
 
         A near-field interaction table stores precomputed singular integrals
@@ -298,8 +298,8 @@ class NearFieldInteractionTable(object):
             # quad points in [-1,1]
             import volumential.meshgen as mg
 
-            if 'queue' in kwargs:
-                queue = kwargs['queue']
+            if "queue" in kwargs:
+                queue = kwargs["queue"]
             else:
                 queue = None
 
@@ -359,7 +359,7 @@ class NearFieldInteractionTable(object):
         """This is the inverse function of get_entry_index()
         """
 
-        index_info = dict()
+        index_info = {}
 
         case_id = entry_id // self.n_pairs
         pair_id = entry_id % self.n_pairs
@@ -473,7 +473,7 @@ class NearFieldInteractionTable(object):
         mode = self.get_template_mode(mode_index)
         grid = np.meshgrid(
                 *[cheby_nodes for d in range(self.dim)],
-                indexing='ij')
+                indexing="ij")
         mvals = mode(*grid)
 
         from numpy.polynomial.chebyshev import Chebyshev
@@ -714,7 +714,7 @@ class NearFieldInteractionTable(object):
                 pool = Pool(processes=None)
 
             for mode_id, nmlz in pool.imap_unordered(
-                self.compute_nmlz, [i for i in range(self.n_q_points)]
+                self.compute_nmlz, range(self.n_q_points)
             ):
                 self.mode_normalizers[mode_id] = nmlz
                 if pb is not None:
@@ -771,7 +771,7 @@ class NearFieldInteractionTable(object):
         if 0:
             # Then complete the table via symmetry lookup
             for entry_id, centry_id in pool.imap_unordered(
-                    self.lookup_by_symmetry, [i for i in range(len(self.data))]):
+                    self.lookup_by_symmetry, range(len(self.data))):
                 assert not np.isnan(self.data[centry_id])
                 if centry_id == entry_id:
                     continue
@@ -1110,16 +1110,15 @@ class NearFieldInteractionTable(object):
                     ) * fl_scaling(k=self.dim, s=s)
             return
 
-        from meshmode.array_context import PyOpenCLArrayContext
-        from meshmode.dof_array import thaw, flatten
-        from meshmode.mesh.io import read_gmsh
-        from meshmode.discretization import Discretization
-        from meshmode.discretization.poly_element import \
-            PolynomialWarpAndBlendGroupFactory
-
         # {{{ gmsh processing
-
         import gmsh
+
+        from meshmode.array_context import PyOpenCLArrayContext
+        from meshmode.discretization import Discretization
+        from meshmode.discretization.poly_element import (
+            PolynomialWarpAndBlendGroupFactory)
+        from meshmode.dof_array import flatten, thaw
+        from meshmode.mesh.io import read_gmsh
 
         gmsh.initialize()
         gmsh.option.setNumber("General.Terminal", 1)
@@ -1137,7 +1136,7 @@ class NearFieldInteractionTable(object):
         hs = self.source_box_extent / 2
         # radius of bouding sphere
         r = hs * np.sqrt(self.dim)
-        logger.debug("r_inner = %f, r_outer = %f" % (hs, r))
+        logger.debug(f"r_inner = {hs:f}, r_outer = {r:f}")
 
         if self.dim == 2:
             tag_box = gmsh.model.occ.addRectangle(x=0, y=0, z=0,
@@ -1165,10 +1164,10 @@ class NearFieldInteractionTable(object):
         gmsh.model.occ.synchronize()
         gmsh.model.mesh.generate(self.dim)
 
-        from tempfile import mkdtemp
         from os.path import join
+        from tempfile import mkdtemp
         temp_dir = mkdtemp(prefix="tmp_volumential_nft")
-        msh_filename = join(temp_dir, 'chinese_lucky_coin.msh')
+        msh_filename = join(temp_dir, "chinese_lucky_coin.msh")
         gmsh.write(msh_filename)
         gmsh.finalize()
 
@@ -1248,7 +1247,7 @@ class NearFieldInteractionTable(object):
         if "extra_kernel_kwarg_types" in kwargs:
             extra_kernel_kwarg_types = kwargs["extra_kernel_kwarg_types"]
 
-        lpknl = lp.make_kernel(  # NOQA
+        lpknl = lp.make_kernel(
             "{ [iqpt, iaxis]: 0<=iqpt<n_q_points and 0<=iaxis<dim }",
             [
                 """
@@ -1293,7 +1292,7 @@ class NearFieldInteractionTable(object):
 
         for target in self.q_points:
             evt, res = lpknl(queue, quad_points=nodes, target_point=target)
-            knl_vals = res['result']
+            knl_vals = res["result"]
 
             integ = bind(discr,
                     sym.integral(self.dim, self.dim, sym.var("integrand")))(

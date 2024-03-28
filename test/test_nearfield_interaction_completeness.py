@@ -1,4 +1,3 @@
-from __future__ import absolute_import, division, print_function
 
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
@@ -23,10 +22,12 @@ THE SOFTWARE.
 """
 
 import subprocess
-import numpy as np
-import pyopencl as cl
-import pyopencl.array  # NOQA
 from functools import partial
+
+import numpy as np
+
+import pyopencl as cl
+import pyopencl.array  # noqa: F401
 
 
 def drive_test_completeness(ctx, queue, dim, q_order):
@@ -119,7 +120,7 @@ def drive_test_completeness(ctx, queue, dim, q_order):
 
     from volumential.table_manager import NearFieldInteractionTableManager
 
-    subprocess.check_call(['rm', '-f', 'nft-test-completeness.hdf5'])
+    subprocess.check_call(["rm", "-f", "nft-test-completeness.hdf5"])
     with NearFieldInteractionTableManager("nft-test-completeness.hdf5",
                                           progress_bar=False) as tm:
 
@@ -130,9 +131,9 @@ def drive_test_completeness(ctx, queue, dim, q_order):
 
     # {{{ expansion wrangler
 
-    from sumpy.kernel import LaplaceKernel
-    from sumpy.expansion.multipole import VolumeTaylorMultipoleExpansion
     from sumpy.expansion.local import VolumeTaylorLocalExpansion
+    from sumpy.expansion.multipole import VolumeTaylorMultipoleExpansion
+    from sumpy.kernel import LaplaceKernel
 
     knl = LaplaceKernel(dim)
     out_kernels = [knl]
@@ -140,8 +141,7 @@ def drive_test_completeness(ctx, queue, dim, q_order):
     mpole_expn_class = partial(VolumeTaylorMultipoleExpansion, use_rscale=None)
 
     from volumential.expansion_wrangler_fpnd import (
-            FPNDExpansionWranglerCodeContainer,
-            FPNDExpansionWrangler)
+        FPNDExpansionWrangler, FPNDExpansionWranglerCodeContainer)
 
     wcc = FPNDExpansionWranglerCodeContainer(
         ctx,
@@ -167,7 +167,7 @@ def drive_test_completeness(ctx, queue, dim, q_order):
         trav.neighbor_source_boxes_lists, mode_coefs=source_vals)
     pot = pot[0]
     for p in pot[0]:
-        assert(abs(p - 2**dim) < 1e-8)
+        assert abs(p - 2**dim) < 1.0e-8
 
 
 def test_completeness_1(ctx_factory):

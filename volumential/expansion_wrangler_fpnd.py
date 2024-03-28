@@ -1,5 +1,3 @@
-from __future__ import division, absolute_import, print_function
-
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
 __license__ = """
@@ -22,23 +20,24 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
-import numpy as np
 import logging
+
+import numpy as np
+
 import pyopencl as cl
 import pyopencl.array
-from pytools.obj_array import make_obj_array
-
-# from pytools import memoize_method
-from volumential.nearfield_potential_table import NearFieldInteractionTable
-from volumential.expansion_wrangler_interface import (
-        ExpansionWranglerInterface, ExpansionWranglerCodeContainerInterface)
-from sumpy.fmm import SumpyExpansionWrangler, \
-        SumpyTimingFuture, SumpyExpansionWranglerCodeContainer
 from boxtree.pyfmmlib_integration import FMMLibExpansionWrangler
-
+from pytools.obj_array import make_obj_array
+from sumpy.fmm import (
+    SumpyExpansionWrangler, SumpyExpansionWranglerCodeContainer, SumpyTimingFuture)
 from sumpy.kernel import (
-        LaplaceKernel, HelmholtzKernel, AxisTargetDerivative,
-        DirectionalSourceDerivative)
+    AxisTargetDerivative, DirectionalSourceDerivative, HelmholtzKernel,
+    LaplaceKernel)
+
+from volumential.expansion_wrangler_interface import (
+    ExpansionWranglerCodeContainerInterface, ExpansionWranglerInterface)
+from volumential.nearfield_potential_table import NearFieldInteractionTable
+
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +151,7 @@ class FPNDSumpyExpansionWrangler(
 
         # dictionary of lists of tables
         elif isinstance(near_field_table, dict):
-            self.n_tables = dict()
+            self.n_tables = {}
             for out_knl in self.code.target_kernels:
                 if repr(out_knl) not in near_field_table:
                     raise RuntimeError(
@@ -287,7 +286,7 @@ class FPNDSumpyExpansionWrangler(
         return SumpyExpansionWrangler.reorder_sources(self, source_array)
 
     def reorder_targets(self, target_array):
-        if not hasattr(self.tree, 'user_target_ids'):
+        if not hasattr(self.tree, "user_target_ids"):
             self.tree.user_target_ids = inverse_id_map(
                 self.queue, self.tree.sorted_target_ids)
         return target_array.with_queue(self.queue)[self.tree.user_target_ids]
@@ -601,8 +600,11 @@ class FPNDFMMLibExpansionWranglerCodeContainer(
         self.exclude_self = True
 
     def get_wrangler(self, queue, tree, dtype, fmm_level_to_order,
-            source_extra_kwargs={}, kernel_extra_kwargs=None,
+            source_extra_kwargs=None, kernel_extra_kwargs=None,
             *args, **kwargs):
+        if source_extra_kwargs is None:
+            source_extra_kwargs = {}
+
         return FPNDFMMLibExpansionWrangler(self, queue, tree,
                 dtype, fmm_level_to_order,
                 source_extra_kwargs, kernel_extra_kwargs,
@@ -727,7 +729,7 @@ class FPNDFMMLibExpansionWrangler(
 
         # dictionary of lists of tables
         elif isinstance(near_field_table, dict):
-            self.n_tables = dict()
+            self.n_tables = {}
             for out_knl in self.code.target_kernels:
                 if repr(out_knl) not in near_field_table:
                     raise RuntimeError(
@@ -845,10 +847,10 @@ class FPNDFMMLibExpansionWrangler(
                         frozenset([("k", helmholtz_k)]), tree, level)
 
         rotation_data = None
-        if 'traversal' in kwargs:
+        if "traversal" in kwargs:
             # add rotation data if traversal is passed as a keyword argument
             from boxtree.pyfmmlib_integration import FMMLibRotationData
-            rotation_data = FMMLibRotationData(self.queue, kwargs['traversal'])
+            rotation_data = FMMLibRotationData(self.queue, kwargs["traversal"])
         else:
             logger.warning("Rotation data is not utilized since traversal is "
                            "not known to FPNDFMMLibExpansionWrangler.")
@@ -901,7 +903,7 @@ class FPNDFMMLibExpansionWrangler(
         return FMMLibExpansionWrangler.reorder_sources(self, source_array)
 
     def reorder_targets(self, target_array):
-        if not hasattr(self.tree, 'user_target_ids'):
+        if not hasattr(self.tree, "user_target_ids"):
             self.tree.user_target_ids = inverse_id_map(
                 self.queue, self.tree.sorted_target_ids)
         return target_array[self.tree.user_target_ids]

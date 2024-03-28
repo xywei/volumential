@@ -1,5 +1,3 @@
-from __future__ import absolute_import, division, print_function
-
 """Function extension with regularity contraints:
 
 1. :math:`L^2`: extend with constant value
@@ -41,12 +39,15 @@ THE SOFTWARE.
 import logging
 
 import numpy as np
+
 import pyopencl as cl
-from pytools.obj_array import make_obj_array
 from pymbolic import var
 from pytential import bind, sym
 from pytential.solve import gmres
-from pytential.symbolic.stokes import StressletWrapper, StokesletWrapper
+from pytential.symbolic.stokes import StokesletWrapper, StressletWrapper
+from pytools.obj_array import make_obj_array
+from sumpy.kernel import AxisTargetDerivative, ExpressionKernel
+
 
 # {{{ helper functions
 
@@ -177,11 +178,11 @@ def compute_harmonic_extension(queue, target_discr,
     # }}}
 
     debugging_info = {}
-    debugging_info['gmres_result'] = gmres_result
+    debugging_info["gmres_result"] = gmres_result
 
     # {{{ postprocess
 
-    repr_kwargs = dict(qbx_forced_limit=None)
+    repr_kwargs = {"qbx_forced_limit": None}
     representation_sym = (
             sym.S(kernel, inv_sqrt_w_sigma, **repr_kwargs)
             + sym.D(kernel, inv_sqrt_w_sigma, **repr_kwargs))
@@ -189,9 +190,9 @@ def compute_harmonic_extension(queue, target_discr,
     qbx_stick_out = qbx.copy(
             target_association_tolerance=target_association_tolerance)
 
-    debugging_info['qbx'] = qbx_stick_out
-    debugging_info['representation'] = representation_sym
-    debugging_info['density'] = sigma
+    debugging_info["qbx"] = qbx_stick_out
+    debugging_info["representation"] = representation_sym
+    debugging_info["density"] = sigma
 
     ext_f = bind(
             (qbx_stick_out, target_discr),
@@ -226,7 +227,7 @@ def compute_harmonic_extension(queue, target_discr,
             (qbx_stick_out, target_discr),
             representation_sym)(queue, sigma=sigma).real + matching_const
 
-    debugging_info['eval_ext_f'] = eval_ext_f
+    debugging_info["eval_ext_f"] = eval_ext_f
 
     return ext_f, debugging_info
 
@@ -236,8 +237,6 @@ def compute_harmonic_extension(queue, target_discr,
 # {{{ biharmonic extension
 
 # {{{ Goursat kernels
-
-from sumpy.kernel import ExpressionKernel, AxisTargetDerivative
 
 
 class ComplexLogKernel(ExpressionKernel):
@@ -255,7 +254,7 @@ class ComplexLogKernel(ExpressionKernel):
         else:
             raise NotImplementedError("unsupported dimensionality")
 
-        super(ComplexLogKernel, self).__init__(
+        super().__init__(
                 dim,
                 expression=expr,
                 global_scaling_const=scaling,
@@ -303,7 +302,7 @@ class ComplexLinearLogKernel(ExpressionKernel):
         else:
             raise NotImplementedError("unsupported dimensionality")
 
-        super(ComplexLinearLogKernel, self).__init__(
+        super().__init__(
                 dim,
                 expression=expr,
                 global_scaling_const=scaling,
@@ -332,7 +331,7 @@ class ComplexLinearKernel(ExpressionKernel):
         else:
             raise NotImplementedError("unsupported dimensionality")
 
-        super(ComplexLinearKernel, self).__init__(
+        super().__init__(
                 dim,
                 expression=expr,
                 global_scaling_const=scaling,
@@ -373,7 +372,7 @@ class ComplexFractionalKernel(ExpressionKernel):
         else:
             raise NotImplementedError("unsupported dimensionality")
 
-        super(ComplexFractionalKernel, self).__init__(
+        super().__init__(
                 dim,
                 expression=expr,
                 global_scaling_const=scaling,
@@ -413,9 +412,9 @@ def get_extension_bie_symbolic_operator(loc_sign=1):
     bdry_op_sym = (
             loc_sign * 0.5 * sigma_sym
             - stresslet_obj.apply(sigma_sym, nvec_sym, mu_sym,
-                qbx_forced_limit='avg')
+                qbx_forced_limit="avg")
             - stokeslet_obj.apply(sigma_sym, mu_sym,
-                qbx_forced_limit='avg') + int_sigma)
+                qbx_forced_limit="avg") + int_sigma)
 
     return bdry_op_sym
 
@@ -587,11 +586,11 @@ def compute_biharmonic_extension(queue, target_discr,
             queue, integrand=omega_S_bdry+omega_D_bdry+omega_W_bdry)
 
     debugging_info = {}
-    debugging_info['omega_S'] = omega_S
-    debugging_info['omega_D'] = omega_D
-    debugging_info['omega_W'] = omega_W
-    debugging_info['omega_v1'] = v1
-    debugging_info['omega_D1'] = omega_D1
+    debugging_info["omega_S"] = omega_S
+    debugging_info["omega_D"] = omega_D
+    debugging_info["omega_W"] = omega_W
+    debugging_info["omega_v1"] = v1
+    debugging_info["omega_D1"] = omega_D1
 
     int_interior_func_bdry = bind(qbx, sym.integral(2, 1, var("integrand")))(
             queue, integrand=f)

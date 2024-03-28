@@ -1,5 +1,3 @@
-from __future__ import absolute_import, division, print_function
-
 __copyright__ = "Copyright (C) 2018 Xiaoyu Wei"
 
 __license__ = """
@@ -29,17 +27,18 @@ __doc__ = """
    :members:
 """
 
+import logging
+
 import numpy as np
+
 import loopy
 import pyopencl as cl
 
 from volumential.tools import KernelCacheWrapper
 
-import logging
 
 logger = logging.getLogger(__name__)
 
-logging.basicConfig(level=logging.INFO)
 
 # {{{ near field eval base class
 
@@ -55,7 +54,7 @@ class NearFieldEvalBase(KernelCacheWrapper):
         integral_kernel,
         table_data_shapes,
         potential_kind=1,
-        options=[],
+        options=None,
         name=None,
         device=None,
         **kwargs
@@ -70,6 +69,8 @@ class NearFieldEvalBase(KernelCacheWrapper):
         The two kinds share the same far-field code, but the second kind requires
         exterior_mode_nmlz when computing the list1 interactions.
         """
+        if options is None:
+            options = []
 
         self.integral_kernel = integral_kernel
 
@@ -149,7 +150,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
             code = code + "+" + self.codegen_vec_component(d)
         return code
 
-    def codegen_compute_scaling(self, box_name='sbox'):
+    def codegen_compute_scaling(self, box_name="sbox"):
         """box_name: the name of the box whose extent is used.
         """
         if ("infer_kernel_scaling" in self.extra_kwargs) and (
@@ -204,17 +205,17 @@ class NearFieldFromCSR(NearFieldEvalBase):
 
         elif "kernel_scaling_code" in self.extra_kwargs:
             # user-defined scaling rule
-            assert isinstance(self.extra_kwargs['kernel_scaling_code'], str)
+            assert isinstance(self.extra_kwargs["kernel_scaling_code"], str)
             logger.info("Using scaling rule %s for %s.",
-                        self.extra_kwargs['kernel_scaling_code'], self.kname
+                        self.extra_kwargs["kernel_scaling_code"], self.kname
                         )
-            return self.extra_kwargs['kernel_scaling_code']
+            return self.extra_kwargs["kernel_scaling_code"]
         else:
             logger.info("not scaling for " + self.kname)
             logger.info("(using multiple tables)")
             return "1.0"
 
-    def codegen_compute_displacement(self, box_name='sbox'):
+    def codegen_compute_displacement(self, box_name="sbox"):
         if ("infer_kernel_scaling" in self.extra_kwargs) and (
             self.extra_kwargs["infer_kernel_scaling"]
         ):
@@ -250,12 +251,12 @@ class NearFieldFromCSR(NearFieldEvalBase):
         elif "kernel_displacement_code" in self.extra_kwargs:
             # user-defined displacement rule
             assert isinstance(
-                    self.extra_kwargs['kernel_displacement_code'], str)
+                    self.extra_kwargs["kernel_displacement_code"], str)
             logger.info("Using displacement %s for %s.",
-                        self.extra_kwargs['kernel_displacement_code'],
+                        self.extra_kwargs["kernel_displacement_code"],
                         self.kname
                         )
-            code = self.extra_kwargs['kernel_displacement_code']
+            code = self.extra_kwargs["kernel_displacement_code"]
         else:
             logger.info("no displacement for " + self.kname)
             logger.info("(using multiple tables)")
@@ -263,7 +264,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
 
         return code.replace("BOX", box_name)
 
-    def codegen_get_table_level(self, box_name='sbox'):
+    def codegen_get_table_level(self, box_name="sbox"):
         if ("infer_kernel_scaling" in self.extra_kwargs) and (
             self.extra_kwargs["infer_kernel_scaling"]
         ):
@@ -310,7 +311,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
         else:
             potential_dtype = np.float64
 
-        lpknl = loopy.make_kernel(  # NOQA
+        lpknl = loopy.make_kernel(
             [
                 "{ [ tbox ] : 0 <= tbox < n_tgt_boxes }",
                 "{ [ tid, sbox ] : 0 <= tid < n_box_targets and \
@@ -402,11 +403,11 @@ class NearFieldFromCSR(NearFieldEvalBase):
             .replace("COMPUTE_VEC_ID", self.codegen_vec_id())
             .replace("COMPUTE_SCALING", self.codegen_compute_scaling())
             .replace("COMPUTE_DISPLACEMENT", self.codegen_compute_displacement())
-            .replace("COMPUTE_TGT_SCALING", self.codegen_compute_scaling('tbox'))
+            .replace("COMPUTE_TGT_SCALING", self.codegen_compute_scaling("tbox"))
             .replace("COMPUTE_TGT_DISPLACEMENT",
-                    self.codegen_compute_displacement('tbox'))
+                    self.codegen_compute_displacement("tbox"))
             .replace("GET_TABLE_LEVEL", self.codegen_get_table_level())
-            .replace("GET_TGT_TABLE_LEVEL", self.codegen_get_table_level('tbox'))
+            .replace("GET_TGT_TABLE_LEVEL", self.codegen_get_table_level("tbox"))
             .replace("EXTERIOR_PART", self.codegen_exterior_part()),
             [
                 loopy.TemporaryVariable("vec_id", np.int32),
@@ -456,6 +457,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
     def get_optimized_kernel(self, ncpus=None):
         if ncpus is None:
             import multiprocessing
+
             # NOTE: this detects the number of logical cores, disable hyperthreading
             # for the optimal performance.
             ncpus = multiprocessing.cpu_count()
@@ -486,12 +488,10 @@ class NearFieldFromCSR(NearFieldEvalBase):
         table_data_combined = kwargs.pop("table_data_combined")
         target_boxes = kwargs.pop("target_boxes")
 
-        integral_kernel_init_kargs = {
-                name: val
-                for name, val in zip(
-                    self.integral_kernel.init_arg_names,
-                    self.integral_kernel.__getinitargs__())
-                }
+        integral_kernel_init_kargs = dict(
+            zip(self.integral_kernel.init_arg_names,
+                self.integral_kernel.__getinitargs__())
+        )
 
         # help loopy's type inference
         for key, val in integral_kernel_init_kargs.items():
@@ -540,12 +540,12 @@ class NearFieldFromCSR(NearFieldEvalBase):
             **extra_knl_args_from_init
             )
 
-        res['result'].add_event(evt)
+        res["result"].add_event(evt)
         if isinstance(result, cl.array.Array):
             assert result is res["result"]
         else:
             assert isinstance(result, np.ndarray)
-            result = res['result'].get(queue)
+            result = res["result"].get(queue)
 
         queue.finish()
         logger.info("list1 evaluation finished")

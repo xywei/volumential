@@ -1,5 +1,3 @@
-from __future__ import absolute_import, division, print_function
-
 __copyright__ = "Copyright (C) 2018 Xiaoyu Wei"
 
 __license__ = """
@@ -22,18 +20,20 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
-import numpy as np
 import math
+
+import numpy as np
+
 
 # {{{ symmetry operations
 
 
-class SymmetryOperationBase(object):
+class SymmetryOperationBase:
     def __init__(self, index):
         self._index = index
 
     def __lt__(self, other):
-        if type(self) == type(other):
+        if type(self) is type(other):
             return self._index < other._index
 
         # differnt operations in lexicographical order
@@ -46,7 +46,7 @@ class Flip(SymmetryOperationBase):
     """
 
     def __init__(self, iaxis):
-        super(Flip, self).__init__(iaxis)
+        super().__init__(iaxis)
         self.axis = iaxis
 
     def __repr__(self):
@@ -60,7 +60,7 @@ class Swap(SymmetryOperationBase):
 
     def __init__(self, iaxis, jaxis):
         self.axes = (iaxis, jaxis)
-        super(Swap, self).__init__(sorted(self.axes))
+        super().__init__(sorted(self.axes))
 
     def __repr__(self):
         return "Swap(%d,%d)" % tuple(sorted(self.axes))
@@ -69,7 +69,7 @@ class Swap(SymmetryOperationBase):
 # }}} End symmetry operations
 
 
-class CaseVecReduction(object):
+class CaseVecReduction:
     """
     Reduce a set of case vectors based on symmetry.
     """
@@ -108,7 +108,7 @@ class CaseVecReduction(object):
 
         if tags is None:
             flippable += 1
-            swappable_groups.append({i for i in range(self.dim)})
+            swappable_groups.append(set(range(self.dim)))
             return flippable, swappable_groups
 
         for tag in tags:

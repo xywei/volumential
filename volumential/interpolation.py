@@ -1,6 +1,4 @@
-__copyright__ = """
-Copyright (C) 2020 Xiaoyu Wei
-"""
+__copyright__ = "Copyright (C) 2020 Xiaoyu Wei"
 
 __license__ = """
 Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -23,17 +21,21 @@ THE SOFTWARE.
 """
 
 import itertools
+import logging
+
 import numpy as np
-import pyopencl as cl
+
 import loopy as lp
-from pytools import memoize_method, ProcessLogger
-from pytools.obj_array import make_obj_array
+import pyopencl as cl
 from boxtree.tools import DeviceDataRecord
 from meshmode.array_context import PyOpenCLArrayContext
-from meshmode.dof_array import unflatten, flatten, thaw
+from meshmode.dof_array import flatten, thaw, unflatten
+from pytools import ProcessLogger, memoize_method
+from pytools.obj_array import make_obj_array
+
 from volumential.volume_fmm import interpolate_volume_potential
 
-import logging
+
 logger = logging.getLogger(__name__)
 
 

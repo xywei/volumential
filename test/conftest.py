@@ -1,4 +1,3 @@
-from __future__ import absolute_import, division, print_function
 
 __copyright__ = "Copyright (C) 2018 Xiaoyu Wei"
 
@@ -22,18 +21,17 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
-import subprocess
 import glob
+import subprocess
+
+import pytest
 from filelock import FileLock
-import pytest  # noqa: F401
 
 # setup the ctx_factory fixture
-from pyopencl.tools import (  # NOQA
-    pytest_generate_tests_for_pyopencl as pytest_generate_tests,
-)
+from pyopencl.tools import (  # noqa: F401
+    pytest_generate_tests_for_pyopencl as pytest_generate_tests)
 
-from volumential.table_manager import \
-    NearFieldInteractionTableManager as NFTManager
+from volumential.table_manager import NearFieldInteractionTableManager as NFTManager
 
 
 def pytest_addoption(parser):
@@ -42,17 +40,17 @@ def pytest_addoption(parser):
     --longrun  Skip expensive tests unless told otherwise.
 
     """
-    parser.addoption('--longrun', action='store_true', dest="longrun",
+    parser.addoption("--longrun", action="store_true", dest="longrun",
                      default=False, help="enable longrundecorated tests")
 
 
-@pytest.fixture(scope='session')
+@pytest.fixture(scope="session")
 def longrun(request):
     if not request.config.option.longrun:
         pytest.skip("needs --longrun option to run")
 
 
-@pytest.fixture(scope='session')
+@pytest.fixture(scope="session")
 def requires_pypvfmm(request):
     try:
         import pypvfmm  # noqa: F401
@@ -60,14 +58,14 @@ def requires_pypvfmm(request):
         pytest.skip("needs pypvfmm to run")
 
 
-@pytest.fixture(scope='session')
+@pytest.fixture(scope="session")
 def table_2d_order1(tmp_path_factory, worker_id):
     if not worker_id:
         # not executing in with multiple workers, just produce the data and let
         # pytest's fixture caching do its job
         with NFTManager("nft.hdf5", progress_bar=True) as table_manager:
             table, _ = table_manager.get_table(2, "Laplace", q_order=1)
-        subprocess.check_call(['rm', '-f', 'nft.hdf5'])
+        subprocess.check_call(["rm", "-f", "nft.hdf5"])
         return table
 
     # get the temp directory shared by all workers
@@ -84,4 +82,4 @@ def table_2d_order1(tmp_path_factory, worker_id):
 def pytest_sessionfinish(session, exitstatus):
     # remove table caches
     for table_file in glob.glob("*.hdf5"):
-        subprocess.call(['rm', '-f', table_file])
+        subprocess.call(["rm", "-f", table_file])

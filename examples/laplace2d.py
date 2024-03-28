@@ -1,7 +1,6 @@
 """ This example evaluates the volume potential over
     [-1,1]^2 with the Laplace kernel.
 """
-from __future__ import absolute_import, division, print_function
 
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
@@ -27,6 +26,7 @@ THE SOFTWARE.
 
 import logging
 
+
 logger = logging.getLogger(__name__)
 
 if 1:
@@ -36,12 +36,14 @@ else:
     # clean
     logging.basicConfig(level=logging.CRITICAL)
 
+from functools import partial
+
 import numpy as np
-import pyopencl as cl
-from volumential.tools import ScalarFieldExpressionEvaluation as Eval
 
 import pymbolic as pmbl
-from functools import partial
+import pyopencl as cl
+
+from volumential.tools import ScalarFieldExpressionEvaluation as Eval
 
 
 def main():
@@ -205,17 +207,18 @@ def main():
 
     # {{{ build near field potential table
 
-    from volumential.table_manager import NearFieldInteractionTableManager
     import os
+
+    from volumential.table_manager import NearFieldInteractionTableManager
 
     if download_table and (not os.path.isfile(table_filename)):
         import json
-        with open("table_urls.json", 'r') as fp:
+        with open("table_urls.json") as fp:
             urls = json.load(fp)
 
-        print("Downloading table from %s" % urls['Laplace2D'])
+        print("Downloading table from %s" % urls["Laplace2D"])
         import subprocess
-        subprocess.call(["wget", "-q", urls['Laplace2D'], table_filename])
+        subprocess.call(["wget", "-q", urls["Laplace2D"], table_filename])
 
     tm = NearFieldInteractionTableManager(
         table_filename, root_extent=root_table_source_extent,
@@ -280,9 +283,7 @@ def main():
     exclude_self = True
 
     from volumential.expansion_wrangler_fpnd import (
-            FPNDExpansionWranglerCodeContainer,
-            FPNDExpansionWrangler
-            )
+        FPNDExpansionWrangler, FPNDExpansionWranglerCodeContainer)
 
     wcc = FPNDExpansionWranglerCodeContainer(
         ctx,
@@ -317,9 +318,9 @@ def main():
 
     # {{{ conduct fmm computation
 
-    from volumential.volume_fmm import drive_volume_fmm
-
     import time
+
+    from volumential.volume_fmm import drive_volume_fmm
     queue.finish()
 
     t0 = time.time()
@@ -386,8 +387,8 @@ def main():
         from mpl_toolkits.mplot3d import Axes3D
 
         plt3d = plt.figure()
-        ax = Axes3D(plt3d)  # noqa
-        surf = ax.plot_surface(oxx, oyy, opot.reshape(oxx.shape))  # noqa
+        ax = Axes3D(plt3d)
+        surf = ax.plot_surface(oxx, oyy, opot.reshape(oxx.shape))  # noqa: F841
         # ax.scatter(x, y, src.get())
         # ax.set_zlim(-0.25, 0.25)
 
@@ -472,7 +473,7 @@ def main():
     # }}} End postprocess and plot
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
 
 

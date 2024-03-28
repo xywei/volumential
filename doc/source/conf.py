@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 #
 # Volumential documentation build configuration file, created by
 # sphinx-quickstart on Mon Oct 23 10:27:37 2017.
@@ -20,9 +19,11 @@
 import os
 import sys
 from datetime import datetime
+
 import volumential.version as __version__
 
-sys.path.insert(0, os.path.abspath('..'))
+
+sys.path.insert(0, os.path.abspath(".."))
 
 
 # -- General configuration ------------------------------------------------
@@ -35,35 +36,38 @@ sys.path.insert(0, os.path.abspath('..'))
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
 extensions = [
-        'sphinx.ext.autodoc',
-        'sphinx.ext.todo',
-        'sphinx.ext.autosummary',
-        'sphinx.ext.coverage',
-        'sphinx.ext.mathjax',
-        'sphinx.ext.ifconfig',
-        'sphinx.ext.viewcode',
-        'sphinx.ext.intersphinx',
-        'sphinx.ext.githubpages']
+        "sphinx.ext.autodoc",
+        "sphinx.ext.todo",
+        "sphinx.ext.autosummary",
+        "sphinx.ext.coverage",
+        "sphinx.ext.mathjax",
+        "sphinx.ext.ifconfig",
+        "sphinx.ext.viewcode",
+        "sphinx.ext.intersphinx",
+        "sphinx.ext.githubpages"]
 
 # Add any paths that contain templates here, relative to this directory.
-templates_path = ['_templates']
+templates_path = ["_templates"]
 
 # Set the mathjax CDN
-mathjax_path = "https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML"
+mathjax_path = (
+    "https://cdnjs.cloudflare.com/ajax/libs/"
+    "mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML"
+)
 
 # The suffix(es) of source filenames.
 # You can specify multiple suffix as a list of string:
 #
 # source_suffix = ['.rst', '.md']
-source_suffix = '.rst'
+source_suffix = ".rst"
 
 # The master toctree document.
-master_doc = 'index'
+master_doc = "index"
 
 # General information about the project.
-project = 'Volumential'
-copyright = '%s, Xiaoyu Wei' % str(datetime.today().year)
-author = 'Xiaoyu Wei'
+project = "Volumential"
+copyright = "%s, Xiaoyu Wei" % str(datetime.today().year)
+author = "Xiaoyu Wei"
 
 # The version info for the project you're documenting, acts as replacement for
 # |version| and |release|, also used in various other places throughout the
@@ -88,7 +92,7 @@ language = None
 exclude_patterns = []
 
 # The name of the Pygments (syntax highlighting) style to use.
-pygments_style = 'sphinx'
+pygments_style = "sphinx"
 
 # If true, `todo` and `todoList` produce output, else they produce nothing.
 todo_include_todos = True
@@ -99,7 +103,7 @@ todo_include_todos = True
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
 #
-html_theme = 'sphinx_rtd_theme'
+html_theme = "sphinx_rtd_theme"
 
 # Theme options are theme-specific and customize the look and feel of a theme
 # further.  For a list of options available for each theme, see the
@@ -110,7 +114,7 @@ html_theme = 'sphinx_rtd_theme'
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
-html_static_path = ['_static']
+html_static_path = ["_static"]
 
 # Custom sidebar templates, must be a dictionary that maps document names
 # to template names.
@@ -118,9 +122,9 @@ html_static_path = ['_static']
 # This is required for the alabaster theme
 # refs: http://alabaster.readthedocs.io/en/latest/installation.html#sidebars
 html_sidebars = {
-    '**': [
-        'relations.html',  # needs 'show_related': True theme option to display
-        'searchbox.html',
+    "**": [
+        "relations.html",  # needs 'show_related': True theme option to display
+        "searchbox.html",
     ]
 }
 
@@ -128,7 +132,7 @@ html_sidebars = {
 # -- Options for HTMLHelp output ------------------------------------------
 
 # Output file base name for HTML help builder.
-htmlhelp_basename = 'Volumentialdoc'
+htmlhelp_basename = "Volumentialdoc"
 
 # -- Options for LaTeX output ---------------------------------------------
 
@@ -154,8 +158,8 @@ latex_elements = {
 # (source start file, target name, title,
 #  author, documentclass [howto, manual, or own class]).
 latex_documents = [
-    (master_doc, 'Volumential.tex', 'Volumential Documentation',
-     'Xiaoyu Wei', 'manual'),
+    (master_doc, "Volumential.tex", "Volumential Documentation",
+     "Xiaoyu Wei", "manual"),
 ]
 
 
@@ -164,7 +168,7 @@ latex_documents = [
 # One entry per manual page. List of tuples
 # (source start file, name, description, authors, manual section).
 man_pages = [
-    (master_doc, 'volumential', 'Volumential Documentation',
+    (master_doc, "volumential", "Volumential Documentation",
      [author], 1)
 ]
 
@@ -175,7 +179,7 @@ man_pages = [
 # (source start file, target name, title, author,
 #  dir menu entry, description, category)
 texinfo_documents = [
-    (master_doc, 'Volumential', 'Volumential Documentation',
-     author, 'Volumential', 'One line description of project.',
-     'Miscellaneous'),
+    (master_doc, "Volumential", "Volumential Documentation",
+     author, "Volumential", "One line description of project.",
+     "Miscellaneous"),
 ]

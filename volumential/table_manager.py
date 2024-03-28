@@ -1,5 +1,3 @@
-from __future__ import division, absolute_import, print_function
-
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
 __doc__ = """
@@ -32,15 +30,15 @@ import logging
 import h5py as hdf
 import numpy as np
 
-import volumential as vm
+from sumpy.kernel import ExpressionKernel
 
+import volumential as vm
 from volumential.nearfield_potential_table import NearFieldInteractionTable
+
 
 logger = logging.getLogger(__name__)
 
 # {{{ constant sumpy kernel
-
-from sumpy.kernel import ExpressionKernel
 
 
 class ConstantKernel(ExpressionKernel):
@@ -51,7 +49,7 @@ class ConstantKernel(ExpressionKernel):
         expr = 1
         scaling = 1
 
-        super(ConstantKernel, self).__init__(
+        super().__init__(
             dim, expression=expr,
             global_scaling_const=scaling, is_complex_valued=False
         )
@@ -75,7 +73,7 @@ class ConstantKernel(ExpressionKernel):
 # {{{ table dataset manager class
 
 
-class NearFieldInteractionTableManager(object):
+class NearFieldInteractionTableManager:
     """
     A class that manages near field interaction table computation and
     storage.
@@ -91,7 +89,7 @@ class NearFieldInteractionTableManager(object):
 
     def __init__(self, dataset_filename="nft.hdf5",
             root_extent=1, dtype=np.float64,
-            read_only='auto', **kwargs):
+            read_only="auto", **kwargs):
         """Constructor.
         """
         self.dtype = dtype
@@ -99,10 +97,10 @@ class NearFieldInteractionTableManager(object):
         self.filename = dataset_filename
         self.root_extent = root_extent
 
-        if read_only == 'auto':
+        if read_only == "auto":
             try:
                 self.datafile = hdf.File(self.filename, "a")
-            except (IOError, OSError) as e:
+            except OSError as e:
                 from warnings import warn
                 warn("Trying to open in read/write mode failed: %s" % str(e))
                 warn("Opening table dataset %s in read-only mode." % self.filename)
@@ -347,17 +345,17 @@ class NearFieldInteractionTableManager(object):
         assert q_order == grp.attrs["quad_order"]
 
         if compute_method == "Transform":
-            if 'knl_func' not in kwargs:
+            if "knl_func" not in kwargs:
                 knl_func = self.get_kernel_function(dim, kernel_type, **kwargs)
             else:
-                knl_func = kwargs['knl_func']
+                knl_func = kwargs["knl_func"]
             sumpy_knl = None
         elif compute_method == "DrosteSum":
             knl_func = None
-            if 'sumpy_knl' not in kwargs:
+            if "sumpy_knl" not in kwargs:
                 sumpy_knl = self.get_sumpy_kernel(dim, kernel_type)
             else:
-                sumpy_knl = kwargs['sumpy_knl']
+                sumpy_knl = kwargs["sumpy_knl"]
         else:
             from warnings import warn
 
@@ -383,9 +381,9 @@ class NearFieldInteractionTableManager(object):
         # Load data
         table.q_points[...] = grp["q_points"]
         table.data[...] = grp["data"]
-        if 'mode_normalizers' in grp:
+        if "mode_normalizers" in grp:
             table.mode_normalizers[...] = grp["mode_normalizers"]
-        if 'kernel_exterior_normalizers' in grp:
+        if "kernel_exterior_normalizers" in grp:
             table.kernel_exterior_normalizers[...] = \
                     grp["kernel_exterior_normalizers"]
 
@@ -449,17 +447,17 @@ class NearFieldInteractionTableManager(object):
             return LaplaceKernel(dim)
 
         if kernel_type == "Laplace-Dx":
-            from sumpy.kernel import LaplaceKernel, AxisTargetDerivative
+            from sumpy.kernel import AxisTargetDerivative, LaplaceKernel
 
             return AxisTargetDerivative(0, LaplaceKernel(dim))
 
         if kernel_type == "Laplace-Dy":
-            from sumpy.kernel import LaplaceKernel, AxisTargetDerivative
+            from sumpy.kernel import AxisTargetDerivative, LaplaceKernel
 
             return AxisTargetDerivative(1, LaplaceKernel(dim))
 
         if kernel_type == "Laplace-Dz":
-            from sumpy.kernel import LaplaceKernel, AxisTargetDerivative
+            from sumpy.kernel import AxisTargetDerivative, LaplaceKernel
 
             assert dim >= 3
             return AxisTargetDerivative(2, LaplaceKernel(dim))
@@ -473,12 +471,12 @@ class NearFieldInteractionTableManager(object):
             return YukawaKernel(dim)
 
         elif kernel_type == "Yukawa-Dx":
-            from sumpy.kernel import YukawaKernel, AxisTargetDerivative
+            from sumpy.kernel import AxisTargetDerivative, YukawaKernel
 
             return AxisTargetDerivative(0, YukawaKernel(dim))
 
         elif kernel_type == "Yukawa-Dy":
-            from sumpy.kernel import YukawaKernel, AxisTargetDerivative
+            from sumpy.kernel import AxisTargetDerivative, YukawaKernel
 
             return AxisTargetDerivative(1, YukawaKernel(dim))
 
@@ -489,23 +487,19 @@ class NearFieldInteractionTableManager(object):
 
         elif kernel_type == "Cahn-Hilliard-Laplacian":
             from sumpy.kernel import (
-                FactorizedBiharmonicKernel,
-                LaplacianTargetDerivative,
-            )
+                FactorizedBiharmonicKernel, LaplacianTargetDerivative)
 
             return LaplacianTargetDerivative(FactorizedBiharmonicKernel(dim))
 
         elif kernel_type == "Cahn-Hilliard-Dx":
-            from sumpy.kernel import FactorizedBiharmonicKernel, AxisTargetDerivative
+            from sumpy.kernel import AxisTargetDerivative, FactorizedBiharmonicKernel
 
             return AxisTargetDerivative(0, FactorizedBiharmonicKernel(dim))
 
         elif kernel_type == "Cahn-Hilliard-Laplacian-Dx":
             from sumpy.kernel import (
-                FactorizedBiharmonicKernel,
-                LaplacianTargetDerivative,
-            )
-            from sumpy.kernel import AxisTargetDerivative
+                AxisTargetDerivative, FactorizedBiharmonicKernel,
+                LaplacianTargetDerivative)
 
             return AxisTargetDerivative(
                 0, LaplacianTargetDerivative(FactorizedBiharmonicKernel(dim))
@@ -513,17 +507,15 @@ class NearFieldInteractionTableManager(object):
 
         elif kernel_type == "Cahn-Hilliard-Laplacian-Dy":
             from sumpy.kernel import (
-                FactorizedBiharmonicKernel,
-                LaplacianTargetDerivative,
-            )
-            from sumpy.kernel import AxisTargetDerivative
+                AxisTargetDerivative, FactorizedBiharmonicKernel,
+                LaplacianTargetDerivative)
 
             return AxisTargetDerivative(
                 1, LaplacianTargetDerivative(FactorizedBiharmonicKernel(dim))
             )
 
         elif kernel_type == "Cahn-Hilliard-Dy":
-            from sumpy.kernel import FactorizedBiharmonicKernel, AxisTargetDerivative
+            from sumpy.kernel import AxisTargetDerivative, FactorizedBiharmonicKernel
 
             return AxisTargetDerivative(1, FactorizedBiharmonicKernel(dim))
 
@@ -601,17 +593,17 @@ class NearFieldInteractionTableManager(object):
         assert "Order_" + str(q_order) in self.datafile[str(dim) + "D"][kernel_type]
 
         if compute_method == "Transform":
-            if 'knl_func' not in kwargs:
+            if "knl_func" not in kwargs:
                 knl_func = self.get_kernel_function(dim, kernel_type, **kwargs)
             else:
-                knl_func = kwargs['knl_func']
+                knl_func = kwargs["knl_func"]
             sumpy_knl = None
         elif compute_method == "DrosteSum":
             knl_func = None
-            if 'sumpy_knl' not in kwargs:
+            if "sumpy_knl" not in kwargs:
                 sumpy_knl = self.get_sumpy_kernel(dim, kernel_type)
             else:
-                sumpy_knl = kwargs['sumpy_knl']
+                sumpy_knl = kwargs["sumpy_knl"]
         else:
             raise NotImplementedError("Unsupported compute_method.")
 
@@ -633,9 +625,9 @@ class NearFieldInteractionTableManager(object):
 
         if 0:
             # self-similarly shrink delta
-            if 'delta' in kwargs:
-                delta = kwargs.pop('delta') * (2 ** (-source_box_level))
-                kwargs['delta'] = delta
+            if "delta" in kwargs:
+                delta = kwargs.pop("delta") * (2 ** (-source_box_level))
+                kwargs["delta"] = delta
 
         table.build_table(cl_ctx, queue, **kwargs)
         assert table.is_built

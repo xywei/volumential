@@ -1,4 +1,3 @@
-from __future__ import absolute_import, division, print_function
 
 __copyright__ = "Copyright (C) 2019 Xiaoyu Wei"
 
@@ -22,12 +21,14 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
-import pytest
-import loopy as lp
 import numpy as np
-import pyopencl as cl
-from volumential.droste import DrosteReduced
+import pytest
 from numpy.polynomial.chebyshev import chebval
+
+import loopy as lp
+import pyopencl as cl
+
+from volumential.droste import DrosteReduced
 
 
 def drive_test_cheb_poly(queue, deg, nnodes):
@@ -50,7 +51,7 @@ def drive_test_cheb_poly(queue, deg, nnodes):
                     results[f0, i] = basis_eval0
                 end
             end
-            """.replace('EVAL_CHEB_POINT', code)],
+            """.replace("EVAL_CHEB_POINT", code)],
             lang_version=(2018, 2)
             )
 
@@ -154,7 +155,8 @@ def drive_test_cheb_tables_laplace3d(requires_pypvfmm, ctx_factory, q_order):
 
 def drive_test_cheb_tables_grad_laplace3d(
         requires_pypvfmm, ctx_factory, q_order, axis):
-    from sumpy.kernel import LaplaceKernel, AxisTargetDerivative
+    from sumpy.kernel import AxisTargetDerivative, LaplaceKernel
+
     from volumential.list1_symmetry import Flip, Swap
 
     cl_ctx = ctx_factory()

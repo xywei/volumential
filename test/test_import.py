@@ -1,4 +1,3 @@
-from __future__ import absolute_import, division, print_function
 
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
@@ -24,10 +23,4 @@ THE SOFTWARE.
 
 
 def test_import():
-    try:
-        # Silence flake8 on this import
-        import volumential  # NOQA
-
-        assert True
-    except ImportError:
-        assert False
+    import volumential  # noqa: F401

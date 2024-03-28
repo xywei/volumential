@@ -1,5 +1,3 @@
-from __future__ import absolute_import, division, print_function
-
 __copyright__ = "Copyright (C) 2017 Xiaoyu Wei"
 
 __license__ = """
@@ -23,8 +21,10 @@ THE SOFTWARE.
 """
 
 import numpy as np
-import volumential.nearfield_potential_table as npt
+
 from sumpy.point_calculus import CalculusPatch
+
+import volumential.nearfield_potential_table as npt
 
 
 dim = 2
@@ -51,7 +51,7 @@ def test_patch_cahn_hilliard():
 
     import random
 
-    for r in range(rep):
+    for _ in range(rep):
         center_x = random.uniform(-1, 1)
         center_y = random.uniform(-1, 1)
         center = [center_x, center_y]
@@ -119,7 +119,7 @@ def test_cahn_hilliard_same_box_on_patch(longrun):
     # inside the box
     import random
 
-    for r in range(rep):
+    for _ in range(rep):
         center_x = random.uniform(size / 2, 1 - size / 2)
         center_y = random.uniform(size / 2, 1 - size / 2)
         center = [center_x, center_y]

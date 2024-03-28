@@ -1,4 +1,3 @@
-from __future__ import absolute_import, division, print_function
 
 __copyright__ = "Copyright (C) 2018 Xiaoyu Wei"
 
@@ -24,8 +23,8 @@ THE SOFTWARE.
 
 import numpy as np
 
-# import volumential.nearfield_potential_table as npt
 from sumpy.point_calculus import CalculusPatch
+
 
 dim = 3
 patch_order = 3
@@ -42,7 +41,7 @@ def test_patch_laplace():
 
     import random
 
-    for r in range(rep):
+    for _ in range(rep):
         center = [random.uniform(-1, 1) for d in range(dim)]
         patch = make_patch(center, size)
 

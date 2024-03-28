@@ -1,5 +1,3 @@
-from __future__ import absolute_import, division, print_function
-
 __copyright__ = "Copyright (C) 2019 Xiaoyu Wei"
 
 __license__ = """
@@ -23,19 +21,21 @@ THE SOFTWARE.
 """
 
 import numpy as np
+
 import pyopencl as cl
-from pytools.obj_array import make_obj_array
 from boxtree.pyfmmlib_integration import FMMLibRotationData
+from pytools.obj_array import make_obj_array
+
 
 # {{{ bounding box factory
 
 
-class BoundingBoxFactory():
+class BoundingBoxFactory:
     def __init__(self, dim,
             center=None, radius=None,
-            dtype=np.dtype("float64")):
+            dtype=float):
         self.dim = dim
-        self.dtype = dtype
+        self.dtype = np.dtype(dtype)
 
         self.center = center
         self.radius = radius
@@ -97,8 +97,8 @@ class BoundingBoxFactory():
         self.lbounds = box_center - box_radius
         self.ubounds = box_center + box_radius
 
-        from boxtree.tools import AXIS_NAMES
         from boxtree.bounding_box import make_bounding_box_dtype
+        from boxtree.tools import AXIS_NAMES
 
         axis_names = AXIS_NAMES[:self.dim]
         bbox_type, _ = make_bounding_box_dtype(
@@ -116,7 +116,7 @@ class BoundingBoxFactory():
 # {{{ box mesh data factory
 
 
-class BoxFMMGeometryFactory():
+class BoxFMMGeometryFactory:
     """Builds the geometry information needed for performing volume FMM.
     The objects of this class is designed to be "interactive", i.e., be
     manipulated repeatedly and on demand, produce a series of desired
@@ -166,6 +166,7 @@ class BoxFMMGeometryFactory():
         self.dim = dim
         if quadrature_formula is None:
             from modepy import LegendreGaussQuadrature
+
             # order = degree + 1
             self.quadrature_formula = LegendreGaussQuadrature(order - 1)
         else:

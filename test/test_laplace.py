@@ -1,4 +1,3 @@
-from __future__ import absolute_import, division, print_function
 
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
@@ -23,8 +22,10 @@ THE SOFTWARE.
 """
 
 import numpy as np
-import volumential.nearfield_potential_table as npt
+
 from sumpy.point_calculus import CalculusPatch
+
+import volumential.nearfield_potential_table as npt
 
 
 # Directly evaluate volume integrals on a calculus patch to
@@ -53,7 +54,7 @@ def test_patch_laplace():
 
     import random
 
-    for r in range(rep):
+    for _ in range(rep):
         center_x = random.uniform(-1, 1)
         center_y = random.uniform(-1, 1)
         center = [center_x, center_y]
@@ -153,4 +154,4 @@ def test_laplace_same_box_on_patch(longrun):
         print("f_vals", f_values)
         print("lap", lap)
 
-        assert max(abs((lap))) < 0.1
+        assert max(abs(lap)) < 0.1

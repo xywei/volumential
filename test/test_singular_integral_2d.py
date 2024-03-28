@@ -1,4 +1,3 @@
-from __future__ import absolute_import, division, print_function
 
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
@@ -23,6 +22,7 @@ THE SOFTWARE.
 """
 
 import numpy as np
+
 import volumential.singular_integral_2d as sint
 
 

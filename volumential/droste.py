@@ -1,5 +1,3 @@
-from __future__ import absolute_import, division, print_function
-
 __copyright__ = "Copyright (C) 2018 Xiaoyu Wei"
 
 __license__ = """
@@ -22,11 +20,14 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
+import logging
+
 import numpy as np
+
 import loopy as lp
+
 from volumential.tools import KernelCacheWrapper
 
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +93,7 @@ class DrosteBase(KernelCacheWrapper):
             )
         else:
             self.ncases = 0
-            case_vecs = list()
+            case_vecs = []
             self.interaction_case_vecs = np.array([])
 
         self.interaction_case_scls = np.array(
@@ -163,8 +164,8 @@ class DrosteBase(KernelCacheWrapper):
         else:
             ubound_pwaff = pwaffs[0] + n
 
-        from functools import reduce
         import operator
+        from functools import reduce
 
         return reduce(
             operator.and_,
@@ -178,8 +179,7 @@ class DrosteBase(KernelCacheWrapper):
         """
         # sps.legendre blows up easily at high order
         import scipy.special as sps
-        # legendre_nodes, _, legendre_weights = sps.legendre(
-        #        nquad_points).weights.T
+
         legendre_nodes, legendre_weights = sps.p_roots(self.nquad_points)
         legendre_nodes = legendre_nodes * 0.5 + 0.5
         legendre_weights = legendre_weights * 0.5
@@ -213,14 +213,18 @@ class DrosteBase(KernelCacheWrapper):
             ts_nodes = ts_nodes * 0.5 + 0.5
             ts_weights *= 0.5
 
-            return dict(quadrature_nodes=legendre_nodes,
-                        quadrature_weights=legendre_weights,
-                        radial_quadrature_nodes=ts_nodes,
-                        radial_quadrature_weights=ts_weights)
+            return {
+                "quadrature_nodes": legendre_nodes,
+                "quadrature_weights": legendre_weights,
+                "radial_quadrature_nodes": ts_nodes,
+                "radial_quadrature_weights": ts_weights,
+                }
 
         else:
-            return dict(quadrature_nodes=legendre_nodes,
-                        quadrature_weights=legendre_weights)
+            return {
+                "quadrature_nodes": legendre_nodes,
+                "quadrature_weights": legendre_weights,
+                }
 
     def get_sumpy_kernel_insns(self):
         # get sumpy kernel insns
@@ -240,12 +244,11 @@ class DrosteBase(KernelCacheWrapper):
             ),
         )
         sac.run_global_cse()
-        import six
         from sumpy.codegen import to_loopy_insns
 
         loopy_insns = to_loopy_insns(
-            six.iteritems(sac.assignments),
-            vector_names=set(["dist"]),
+            sac.assignments.items(),
+            vector_names={"dist"},
             pymbolic_expr_maps=[self.integral_knl.get_code_transformer()],
             retain_names=[result_name],
             complex_dtype=np.complex128,
@@ -471,7 +474,7 @@ class DrosteBase(KernelCacheWrapper):
     def get_kernel_code(self):
         return [
             self.make_dim_independent(
-                """  # noqa
+                """  # noqa: E501
         for iaxis
             <> root_center[iaxis] = 0.5 * (
                     root_brick[iaxis, 1] + root_brick[iaxis, 0]) {dup=iaxis}
@@ -687,7 +690,7 @@ class DrosteBase(KernelCacheWrapper):
         # transform to interpolatory basis functions
         # NOTE: the reversed order of indices, e.g.,
         #       mccoefs[f0, f1, f2], and cheb_table[f2, f1, f0]
-        concat_axes = [iaxis for iaxis in range(self.dim)]
+        concat_axes = list(range(self.dim))
         for mid in range(self.n_q_points):
             mccoefs = cheb_coefs[mid]
             nfp_table[mid] = np.tensordot(
@@ -720,7 +723,7 @@ class DrosteFull(DrosteBase):
                  n_brick_quad_points=50,
                  special_radial_quadrature=False,
                  nradial_quad_points=None):
-        super(DrosteFull, self).__init__(
+        super().__init__(
             integral_knl, quad_order, case_vecs, n_brick_quad_points,
             special_radial_quadrature, nradial_quad_points)
         self.name = "DrosteFull"
@@ -760,7 +763,7 @@ class DrosteFull(DrosteBase):
         if "extra_kernel_kwarg_types" in kwargs:
             extra_kernel_kwarg_types = kwargs["extra_kernel_kwarg_types"]
 
-        loopy_knl = lp.make_kernel(  # NOQA
+        loopy_knl = lp.make_kernel(
             [domain],
             self.get_kernel_code()
             + self.get_sumpy_kernel_eval_insns(),
@@ -797,6 +800,7 @@ class DrosteFull(DrosteBase):
     def get_optimized_kernel(self, ncpus=None, **kwargs):
         if ncpus is None:
             import multiprocessing
+
             # NOTE: this detects the number of logical cores, which
             # may result in suboptimal performance.
             ncpus = multiprocessing.cpu_count()
@@ -932,7 +936,7 @@ class DrosteReduced(DrosteBase):
         special_radial_quadrature=False,
         nradial_quad_points=None,
     ):
-        super(DrosteReduced, self).__init__(
+        super().__init__(
             integral_knl, quad_order, case_vecs, n_brick_quad_points,
             special_radial_quadrature, nradial_quad_points)
 
@@ -1006,8 +1010,8 @@ class DrosteReduced(DrosteBase):
                     else:
                         prev_swappable[iaxis] = list(group)[axid - 1]
 
-        from functools import reduce
         import operator
+        from functools import reduce
 
         tgt_domain_ubounds = reduce(
             operator.and_,
@@ -1125,18 +1129,12 @@ class DrosteReduced(DrosteBase):
             assert vid >= 0 and vid < self.dim
             return var[0] + str(self.dim - 1 - vid)
 
-        from itertools import product, permutations
+        from itertools import permutations, product
 
-        ext_ids = [
-            ext
-            for ext in product(
-                [fid for fid in product([0, 1], repeat=nflippables)],
-                *[
-                    [sid for sid in permutations(sgroup)]
-                    for sgroup in swappable_groups
-                    ]
-            )
-        ]
+        ext_ids = product(
+            product([0, 1], repeat=nflippables),
+            *[permutations(sgroup) for sgroup in swappable_groups]
+        )
 
         # The idea is that, any member of the hyperoctahedral group
         # has the decomposition m = f * s, where f is a flip and s
@@ -1172,8 +1170,8 @@ class DrosteReduced(DrosteBase):
             ext_tgt_ordering.reverse()
             ext_fun_ordering.reverse()
 
-            ext_instruction_ids = ':'.join([
-                'result_ext_' + str(eid)
+            ext_instruction_ids = ":".join([
+                "result_ext_" + str(eid)
                 for eid in range(len(ext_ids))
                 if eid != ext_index
                 ])
@@ -1212,7 +1210,7 @@ class DrosteReduced(DrosteBase):
             extra_kernel_kwarg_types = kwargs["extra_kernel_kwarg_types"]
 
         if self.get_kernel_id == 0:
-            loopy_knl = lp.make_kernel(  # NOQA
+            loopy_knl = lp.make_kernel(
                 [domain],
                 self.get_kernel_code()
                 # FIXME: cannot have expansion in the same kernel, since it
@@ -1240,7 +1238,7 @@ class DrosteReduced(DrosteBase):
             )
 
         elif self.get_kernel_id == 1:
-            loopy_knl = lp.make_kernel(  # NOQA
+            loopy_knl = lp.make_kernel(
                 [domain],
                 self.get_kernel_expansion_by_symmetry_code(),
                 [
@@ -1277,6 +1275,7 @@ class DrosteReduced(DrosteBase):
         # self.current_base_case, self.get_kernel_id
         if ncpus is None:
             import multiprocessing
+
             # NOTE: this detects the number of logical cores, which
             # may result in suboptimal performance.
             ncpus = multiprocessing.cpu_count()
@@ -1435,23 +1434,17 @@ class DrosteReduced(DrosteBase):
             assert len(flippable) == self.dim
             flippable_ids = [i for i in range(self.dim) if flippable[i]]
 
-            from itertools import product, permutations
+            from itertools import permutations, product
 
-            ext_ids = [
-                ext
-                for ext in product(
-                    [fid for fid in product([0, 1], repeat=nflippables)],
-                    *[
-                        [sid for sid in permutations(sgroup)]
-                        for sgroup in swappable_groups
-                    ]
-                )
-            ]
+            ext_ids = product(
+                product([0, 1], repeat=nflippables),
+                *[permutations(sgroup) for sgroup in swappable_groups]
+            )
 
             base_case_vec = self.reduce_by_symmetry.full_vecs[case_id]
             assert (base_case_vec
                     == self.reduce_by_symmetry.reduced_vecs[base_case_id])
-            for ext_index, ext_id in zip(range(len(ext_ids)), ext_ids):
+            for _, ext_id in zip(range(len(ext_ids)), ext_ids):
                 # start from the base vec
                 ext_vec = list(base_case_vec)
                 swapped_axes = list(range(self.dim))
@@ -1512,7 +1505,7 @@ class DrosteReduced(DrosteBase):
     def get_cache_key(self):
         if self.reduce_by_symmetry.symmetry_tags is None:
             # Bn: the full n-dimensional hyperoctahedral group
-            symmetry_info = 'B%d' % self.dim
+            symmetry_info = "B%d" % self.dim
         else:
             symmetry_info = "Span{%s}" % ",".join([
                 repr(tag) for tag in
@@ -1601,7 +1594,7 @@ class InverseDrosteReduced(DrosteReduced):
         """
         :param auto_windowing: auto-detect window radius.
         """
-        super(InverseDrosteReduced, self).__init__(
+        super().__init__(
             integral_knl, quad_order, case_vecs,
             n_brick_quad_points, special_radial_quadrature,
             nradial_quad_points, knl_symmetry_tags)
@@ -1628,10 +1621,11 @@ class InverseDrosteReduced(DrosteReduced):
         """
 
         # only valid for self-interactions
-        assert all([self.reduce_by_symmetry.reduced_vecs[
-            self.current_base_case][d] == 0 for d in range(self.dim)])
+        assert all(
+            self.reduce_by_symmetry.reduced_vecs[self.current_base_case][d] == 0
+            for d in range(self.dim))
 
-        code = """  # noqa
+        code = """  # noqa: E501
             <> T0_tgt_IAXIS = 1
             <> T1_tgt_IAXIS = template_true_target[IAXIS] {dep=template_true_targets}
             <> Tprev_tgt_IAXIS = T0_tgt_IAXIS {id=t0_tgt_IAXIS}
@@ -1673,10 +1667,11 @@ class InverseDrosteReduced(DrosteReduced):
         """
 
         # only valid for self-interactions
-        assert all([self.reduce_by_symmetry.reduced_vecs[
-            self.current_base_case][d] == 0 for d in range(self.dim)])
+        assert all(
+            self.reduce_by_symmetry.reduced_vecs[self.current_base_case][d] == 0
+            for d in range(self.dim))
 
-        code = """  # noqa
+        code = """  # noqa: E501
             <> U0_tgt_IAXIS = 1
             <> U1_tgt_IAXIS = 2 * template_true_target[IAXIS] {dep=template_true_targets}
             <> Uprev_tgt_IAXIS = U0_tgt_IAXIS {id=u0_tgt_IAXIS}
@@ -1748,7 +1743,7 @@ class InverseDrosteReduced(DrosteReduced):
             code.append("<> fc = if(1 - rndist > 0, exp(-1 / (1 - rndist)), 0)")
             code.append("<> windowing = 1 - fv / (fv + fc)")
 
-        return '\n'.join(code)
+        return "\n".join(code)
 
     def make_dim_independent(self, knlstring):
         r"""Produce the correct
@@ -1757,8 +1752,9 @@ class InverseDrosteReduced(DrosteReduced):
         """
 
         # detect for self-interactions
-        if all([self.reduce_by_symmetry.reduced_vecs[
-                self.current_base_case][d] == 0 for d in range(self.dim)]):
+        if all(
+                self.reduce_by_symmetry.reduced_vecs[self.current_base_case][d] == 0
+                for d in range(self.dim)):
             target_box_is_source = True
         else:
             target_box_is_source = False
@@ -1774,7 +1770,7 @@ class InverseDrosteReduced(DrosteReduced):
         if self.get_kernel_id == 0:
             resknl = resknl.replace(
                     "POSTPROCESS_KNL_VAL",
-                    '\n'.join([
+                    "\n".join([
                         self.codegen_windowing_function(),
                         "<> knl_val_post = windowing * knl_val {id=pp_kval}"
                         ])
@@ -1782,7 +1778,7 @@ class InverseDrosteReduced(DrosteReduced):
         elif self.get_kernel_id == 1:
             resknl = resknl.replace(
                     "POSTPROCESS_KNL_VAL",
-                    '\n'.join([
+                    "\n".join([
                         self.codegen_windowing_function(),
                         "<> knl_val_post = (1 - windowing) * knl_val {id=pp_kval}"
                         ])
@@ -1810,10 +1806,10 @@ class InverseDrosteReduced(DrosteReduced):
                         "PREPARE_BASIS_VALS",
                         "\n".join(basis_eval_insns + [
                             "... nop {id=basis_evals,dep=%s}"
-                            % ':'.join(
-                                ['basis%d' % i for i in range(self.dim)]
-                                + ['tgtbasis%d' % i for i in range(self.dim)]
-                                + ['tgtd2basis%d' % i for i in range(self.dim)]
+                            % ":".join(
+                                ["basis%d" % i for i in range(self.dim)]
+                                + ["tgtbasis%d" % i for i in range(self.dim)]
+                                + ["tgtd2basis%d" % i for i in range(self.dim)]
                                 ),
                             ])
                         )
@@ -1822,8 +1818,8 @@ class InverseDrosteReduced(DrosteReduced):
                         "PREPARE_BASIS_VALS",
                         "\n".join(basis_eval_insns + [
                             "... nop {id=basis_evals,dep=%s}"
-                            % ':'.join(
-                                ['basis%d' % i for i in range(self.dim)]
+                            % ":".join(
+                                ["basis%d" % i for i in range(self.dim)]
                                 ),
                             ])
                         )
@@ -1832,7 +1828,7 @@ class InverseDrosteReduced(DrosteReduced):
                 if target_box_is_source:
                     resknl = resknl.replace(
                             "DENSITY_VAL_ASSIGNMENT",
-                            ' '.join([
+                            " ".join([
                                 "0.5 * der2_basis_tgt_eval0 * (dist[0]**2)",
                                 ])
                             )
@@ -1846,7 +1842,7 @@ class InverseDrosteReduced(DrosteReduced):
                 if target_box_is_source:
                     resknl = resknl.replace(
                             "DENSITY_VAL_ASSIGNMENT",
-                            ' '.join([
+                            " ".join([
                                 "  0.5 * der2_basis_tgt_eval0 * basis_tgt_eval1 * (dist[0]**2)",  # noqa: E501
                                 "+ 0.5 * basis_tgt_eval0 * der2_basis_tgt_eval1 * (dist[1]**2)",  # noqa: E501
                                 ])
@@ -1861,7 +1857,7 @@ class InverseDrosteReduced(DrosteReduced):
                 if target_box_is_source:
                     resknl = resknl.replace(
                             "DENSITY_VAL_ASSIGNMENT",
-                            ' '.join([
+                            " ".join([
                                 "  0.5 * der2_basis_tgt_eval0 * basis_tgt_eval1 * basis_tgt_eval2 * (dist[0]**2)",  # noqa: E501
                                 "+ 0.5 * basis_tgt_eval0 * der2_basis_tgt_eval1 * basis_tgt_eval2 * (dist[1]**2)",  # noqa: E501
                                 "+ 0.5 * basis_tgt_eval0 * basis_tgt_eval1 * der2_basis_tgt_eval2 * (dist[2]**2)",  # noqa: E501
@@ -1884,18 +1880,18 @@ class InverseDrosteReduced(DrosteReduced):
                         "PREPARE_BASIS_VALS",
                         "\n".join(basis_eval_insns + [
                             "... nop {id=basis_evals,dep=%s}"
-                            % ':'.join(
-                                ['basis%d' % i for i in range(self.dim)]
-                                + ['tgtbasis%d' % i for i in range(self.dim)]
+                            % ":".join(
+                                ["basis%d" % i for i in range(self.dim)]
+                                + ["tgtbasis%d" % i for i in range(self.dim)]
                                 ),
                             ])
                         )
                 resknl = resknl.replace(
                         "DENSITY_VAL_ASSIGNMENT",
-                        ' - '.join([
-                            ' * '.join(
+                        " - ".join([
+                            " * ".join(
                                 ["basis_tgt_eval%d" % i for i in range(self.dim)]),
-                            ' * '.join(
+                            " * ".join(
                                 ["basis_eval%d" % i for i in range(self.dim)]),
                             ])
                         )
@@ -1905,14 +1901,14 @@ class InverseDrosteReduced(DrosteReduced):
                         "PREPARE_BASIS_VALS",
                         "\n".join(basis_eval_insns + [
                             "... nop {id=basis_evals,dep=%s}"
-                            % ':'.join(
-                                ['basis%d' % i for i in range(self.dim)]
+                            % ":".join(
+                                ["basis%d" % i for i in range(self.dim)]
                                 ),
                             ])
                         )
                 resknl = resknl.replace(
                         "DENSITY_VAL_ASSIGNMENT",
-                        ' - ' + ' * '.join(
+                        " - " + " * ".join(
                             ["basis_eval%d" % i for i in range(self.dim)]
                             )
                         )
@@ -1979,7 +1975,7 @@ class InverseDrosteReduced(DrosteReduced):
             extra_loopy_kernel_kwargs = kwargs["extra_loopy_kernel_kwargs"]
 
         if self.get_kernel_id == 0 or self.get_kernel_id == 1:
-            loopy_knl = lp.make_kernel(  # NOQA
+            loopy_knl = lp.make_kernel(
                 [domain],
                 self.get_kernel_code()
                 + self.get_sumpy_kernel_eval_insns(),
@@ -2006,7 +2002,7 @@ class InverseDrosteReduced(DrosteReduced):
             )
 
         elif self.get_kernel_id == 2:
-            loopy_knl = lp.make_kernel(  # NOQA
+            loopy_knl = lp.make_kernel(
                 [domain],
                 self.get_kernel_expansion_by_symmetry_code(),
                 [
@@ -2186,7 +2182,7 @@ class InverseDrosteReduced(DrosteReduced):
         except Exception:  # noqa: B902
             pass
         knl2 = self.get_cached_optimized_kernel()
-        result_array = res0['result'] + res1['result']
+        result_array = res0["result"] + res1["result"]
 
         evt2, res2 = knl2(
             queue,

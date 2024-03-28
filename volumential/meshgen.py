@@ -1,5 +1,3 @@
-from __future__ import absolute_import, division, print_function
-
 __copyright__ = "Copyright (C) 2018 Xiaoyu Wei"
 
 __license__ = """
@@ -34,9 +32,12 @@ Mesh generation
 """
 
 import logging
+
 import numpy as np
+
 import pyopencl as cl
 from pytools.obj_array import make_obj_array
+
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,7 @@ provider = None
 # {{{ meshgen Python provider
 
 
-class MeshGenBase(object):
+class MeshGenBase:
     """Base class for Meshgen via BoxTree.
     The interface is similar to the Meshgen via Deal.II, except that
     the arguments a and b can also be of higher dimensions to allow
@@ -264,11 +265,7 @@ except ImportError as e:
 else:
     # noexcept on importing meshgen_dealii
     logger.info("Using Meshgen via Deal.II interface.")
-    from volumential.meshgen_dealii import (  # noqa: F401
-        greet,
-        MeshGen2D,
-        MeshGen3D,
-    )
+    from volumential.meshgen_dealii import MeshGen2D, MeshGen3D, greet  # noqa: F401
 
     def make_uniform_cubic_grid(degree, level, dim, queue=None):
         from volumential.meshgen_dealii import make_uniform_cubic_grid as _mucg
