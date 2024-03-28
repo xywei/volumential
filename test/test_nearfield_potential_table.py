@@ -89,7 +89,8 @@ def drive_test_modes_cheb_coeffs(dim, q, cheb_order):
     if not cheb_order >= q:
         raise RuntimeError("Insufficient cheb_order to fully resolve the modes")
 
-    sample_mode = np.random.randint(q**dim)
+    rng = np.random.default_rng(seed=42)
+    sample_mode = rng.integers(q**dim)
     table = npt.NearFieldInteractionTable(quad_order=q, dim=dim, progress_bar=False)
     ccoefs = table.get_mode_cheb_coeffs(sample_mode, cheb_order)
     shape = (cheb_order, ) * dim

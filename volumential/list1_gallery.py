@@ -79,7 +79,7 @@ def build_tree(dimensions):
     nlevels = 4
     root_radius = 2 ** (nlevels - 1)
     root = TreeBox(
-        center=np.array(dimensions * [root_radius], np.int),
+        center=np.array(dimensions * [root_radius], np.int64),
         radius=root_radius,
         child_nlevels=nlevels - 1,
     )

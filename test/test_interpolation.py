@@ -40,9 +40,8 @@ from volumential.interpolation import (
 def random_polynomial_func(dim, degree, seed=None):
     """Makes a random polynomial function.
     """
-    if seed is not None:
-        np.random.seed(seed)
-    coefs = np.random.rand(*((degree + 1, ) * dim))
+    rng = np.random.default_rng(seed=seed)
+    coefs = rng.random((degree + 1,) * dim)
 
     def poly_func(pts):
         if dim == 1 and len(pts.shape) == 1:
