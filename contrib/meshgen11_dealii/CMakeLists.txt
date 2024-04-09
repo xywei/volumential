@@ -38,10 +38,7 @@ deal_ii_initialize_cached_variables()
 
 # Python
 find_package(Python REQUIRED COMPONENTS Interpreter Development)
-find_package(pybind11 CONFIG)
-if (NOT pybind11_FOUND)
-    add_subdirectory(pybind11)
-endif()
+find_package(pybind11 REQUIRED CONFIG)
 
 pybind11_add_module(meshgen11 meshgen.cpp)
 set_target_properties(meshgen11 PROPERTIES
