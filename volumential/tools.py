@@ -271,7 +271,7 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
         """
         # handle target_points given as an obj_array of coords
         if (isinstance(target_points, np.ndarray)
-                and target_points.dtype == np.object
+                and target_points.dtype == object
                 and isinstance(target_points[0], cl.array.Array)):
             target_points = cl.array.concatenate(
                     target_points).reshape([self.dim, -1])
