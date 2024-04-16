@@ -32,6 +32,7 @@ import numpy as np
 import pymbolic as pmbl
 import pymbolic.functions
 import pyopencl as cl
+import pyopencl.array
 
 from volumential.tools import ScalarFieldExpressionEvaluation as Eval
 

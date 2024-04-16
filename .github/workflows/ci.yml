@@ -24,7 +24,6 @@ jobs:
           curl -L -O https://tiker.net/ci-support-v0
           . ci-support-v0
 
-          build_py_project_in_conda_env
           install_and_run_flake8 "$(get_proj_name)" examples/*.py test/*.py benchmarks/*.py
 
   pytest:
@@ -32,9 +31,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
       - name: "Main Script"
         run: |
           export CONDA_ENVIRONMENT=.test-conda-env-py3.yml
@@ -44,6 +40,10 @@ jobs:
           . ci-support-v0
 
           build_py_project_in_conda_env
+          pushd contrib/meshgen11_dealii
+          bash build.sh
+          popd
+
           test_py_project
 
   pytest_mac:
@@ -51,9 +51,6 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
       - name: "Main Script"
         run: |
           export LC_ALL=en_US.UTF-8
@@ -66,6 +63,10 @@ jobs:
           . ci-support-v0
 
           build_py_project_in_conda_env
+          pushd contrib/meshgen11_dealii
+          bash build.sh
+          popd
+
           test_py_project
 
   docs:
@@ -73,9 +74,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
       - name: "Main Script"
         run: |
           export CONDA_ENVIRONMENT=.test-conda-env-py3.yml
@@ -84,6 +82,10 @@ jobs:
           . ci-support-v0
 
           build_py_project_in_conda_env
+          pushd contrib/meshgen11_dealii
+          bash build.sh
+          popd
+
           build_docs
 
   examples:
@@ -91,16 +93,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
       - name: "Main Script"
         run: |
           export CONDA_ENVIRONMENT=.test-conda-env-py3.yml
 
           curl -L -O https://tiker.net/ci-support-v0
           . ci-support-v0
+
           build_py_project_in_conda_env
+          pushd contrib/meshgen11_dealii
+          bash build.sh
+          popd
+
           run_examples
 
 # vim: sw=2

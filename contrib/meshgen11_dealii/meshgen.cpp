@@ -49,7 +49,7 @@ constexpr double b = 1;
 const d::UpdateFlags update_flags =
     d::update_quadrature_points | d::update_JxW_values;
 
-void greet() { std::cout << "Hello from meshgen11_dealii." << std::endl; }
+void greet() { std::cout << "Hello from mesh generation via deal.II." << std::endl; }
 
 // {{{ utils
 
@@ -605,6 +605,7 @@ py::tuple make_uniform_cubic_grid(int q, int level, int dim,
     return make_uniform_cubic_grid_details<3>(q, level);
   } else {
     std::cout << "Dimension must be 1,2 or 3." << std::endl;
+    return py::tuple();
   }
 }
 
