@@ -21,11 +21,10 @@ THE SOFTWARE.
 """
 
 import logging
+from numbers import Number
 
 import numpy as np
 import scipy as sp
-import scipy.integrate as sint
-from scipy.integrate import quadrature as quad  # noqa:F401
 
 
 __doc__ = """The 2D singular integrals are computed using the transform
@@ -41,6 +40,114 @@ logger = logging.getLogger(__name__)
 quad_points_x = np.array([])
 quad_points_y = np.array([])
 quad_weights = np.array([])
+
+
+def _to_float_or_array(value):
+    if isinstance(value, Number):
+        return float(value)
+
+    arr = np.asarray(value)
+    if arr.ndim == 0 or arr.size == 1:
+        return float(arr.reshape(-1)[0])
+
+    return arr
+
+
+def _meets_tolerance(current, previous, tol, rtol):
+    delta = np.asarray(current) - np.asarray(previous)
+    err = np.linalg.norm(np.ravel(delta), ord=np.inf)
+    scale = np.linalg.norm(np.ravel(np.asarray(current)), ord=np.inf)
+    return err <= tol or err <= rtol * scale, err
+
+
+def adaptive_quadrature(
+    func,
+    a,
+    b,
+    args=(),
+    tol=1.49e-08,
+    rtol=1.49e-08,
+    maxiter=50,
+    vec_func=False,
+    miniter=1,
+):
+    """Approximate the removed ``scipy.integrate.quadrature`` API.
+
+    The legacy code relied on quadrature order refinement semantics from older
+    SciPy. Recreate the essential behavior by increasing the fixed Gauss order
+    until successive iterates stabilize.
+    """
+
+    if maxiter < 1:
+        raise ValueError("maxiter must be positive")
+
+    miniter = max(1, miniter)
+    maxiter = max(miniter, maxiter)
+
+    def wrapped_func(x, *fargs):
+        x_arr = np.atleast_1d(np.asarray(x))
+
+        if vec_func:
+            result = func(x_arr, *fargs)
+        else:
+            result = np.array([func(xi, *fargs) for xi in x_arr])
+
+        result = np.asarray(result)
+        if np.ndim(x) == 0:
+            return result.reshape(-1)[0]
+
+        return result
+
+    previous = None
+    current = None
+    err = np.inf
+    had_comparison = False
+
+    for order in range(miniter, maxiter + 1):
+        current = _to_float_or_array(
+            sp.integrate.fixed_quad(wrapped_func, a, b, args=args, n=order)[0]
+        )
+
+        if previous is not None:
+            had_comparison = True
+            converged, err = _meets_tolerance(current, previous, tol, rtol)
+            if converged:
+                return current, err
+
+        previous = current
+
+    if current is None:
+        raise RuntimeError("adaptive quadrature did not execute any iterations")
+
+    if not had_comparison:
+        err = 0.0
+
+    return current, err
+
+
+quad = adaptive_quadrature
+
+
+def _tensor_product_fixed_quad(
+    func, a, b, c, d, args=(), order_o=1, order_i=1, vec_func=False
+):
+    x_nodes, x_weights = np.polynomial.legendre.leggauss(order_i)
+    y_nodes, y_weights = np.polynomial.legendre.leggauss(order_o)
+
+    x_mapped = 0.5 * (b - a) * x_nodes + 0.5 * (a + b)
+    y_mapped = 0.5 * (d - c) * y_nodes + 0.5 * (c + d)
+
+    if vec_func:
+        x_grid, y_grid = np.meshgrid(x_mapped, y_mapped, indexing="xy")
+        values = np.asarray(func(x_grid, y_grid, *args))
+    else:
+        values = np.empty((order_o, order_i), dtype=np.float64)
+        for iy, y_val in enumerate(y_mapped):
+            for ix, x_val in enumerate(x_mapped):
+                values[iy, ix] = _to_float_or_array(func(x_val, y_val, *args))
+
+    weights = np.outer(y_weights, x_weights)
+    return 0.25 * (b - a) * (d - c) * np.sum(weights * values, axis=(-2, -1))
 
 
 def update_qquad_leggauss_formula(deg1, deg2):
@@ -120,33 +227,41 @@ def qquad(
     l2 = d - c
     assert l1 > 0
     assert l2 > 0
-    toli = tol / l2
-    rtoli = rtol / l2
 
     if method == "Adaptive":
+        previous = None
+        val = None
+        err = np.inf
+        had_comparison = False
+        max_steps = max(maxiteri - miniteri, maxitero - minitero) + 1
 
-        # Using lambda for readability
-        def outer_integrand(y):
-            return sint.quadrature(
-                lambda x: func(x, y, *args),
+        for istep in range(max_steps):
+            order_i = min(maxiteri, miniteri + istep)
+            order_o = min(maxitero, minitero + istep)
+            val = _tensor_product_fixed_quad(
+                func,
                 a,
                 b,
-                (),
-                toli,
-                rtoli,
-                maxiteri,
-                vec_func,
-                miniteri,
-            )[0]
+                c,
+                d,
+                args=args,
+                order_o=order_o,
+                order_i=order_i,
+                vec_func=vec_func,
+            )
 
-        # Is there a simple way to retrieve err info from the inner quad calls?
+            if previous is not None:
+                had_comparison = True
+                converged, err = _meets_tolerance(val, previous, tol, rtol)
+                if converged:
+                    break
 
-        val, err = sint.quadrature(
-            outer_integrand, c, d, (), tol, rtol, maxitero, vec_func, minitero
-        )
+            previous = val
+
+        if not had_comparison:
+            err = 0.0
 
     elif method == "Gauss":
-
         # Gauss quadrature with orders equal to maxiters
 
         # Using lambda for readability
@@ -164,7 +279,6 @@ def qquad(
         assert err is None
 
     else:
-
         raise NotImplementedError("Unsupported quad method: " + method)
 
     return (val, err)
@@ -177,22 +291,22 @@ def qquad(
 
 def solve_affine_map_2d(source_tria, target_tria):
     """Computes the affine map and its inverse that maps the source_tria to
-       target_tria.
+    target_tria.
 
-       :param source_tria: The triangle to be mapped.
-       :type source_tria:
-            tuple(tuple(float,float),tuple(float,float),tuple(float,float)).
-       :param target_tria: The triangle to map to.
-       :type target_tria:
-            tuple(tuple(float,float),tuple(float,float),tuple(float,float)).
+    :param source_tria: The triangle to be mapped.
+    :type source_tria:
+         tuple(tuple(float,float),tuple(float,float),tuple(float,float)).
+    :param target_tria: The triangle to map to.
+    :type target_tria:
+         tuple(tuple(float,float),tuple(float,float),tuple(float,float)).
 
-       :returns:
-        - **mapping**: the forward map.
-        - **J**: the Jacobian.
-        - **invmap**: the inverse map.
-        - **invJ**: the Jacobian of inverse map.
-       :rtype:
-        tuple(lambda, float, lambda, float)
+    :returns:
+     - **mapping**: the forward map.
+     - **J**: the Jacobian.
+     - **invmap**: the inverse map.
+     - **invJ**: the Jacobian of inverse map.
+    :rtype:
+     tuple(lambda, float, lambda, float)
     """
     assert len(source_tria) == 3
     for p in source_tria:
@@ -261,15 +375,15 @@ def solve_affine_map_2d(source_tria, target_tria):
 
 def tria2rect_map_2d():
     """Returns the mapping and its inverse that maps a template triangle to a
-       template rectangle.
+    template rectangle.
 
-            - Template triangle [T]: (0,0)--(1,0)--(0,1)--(0,0)
-            - Template rectangle [R]: (0,0)--(1,0)--(1,pi/2)--(0,pi/2)--(0,0)
+         - Template triangle [T]: (0,0)--(1,0)--(0,1)--(0,0)
+         - Template rectangle [R]: (0,0)--(1,0)--(1,pi/2)--(0,pi/2)--(0,0)
 
-       :returns: The mapping, its Jacobian, its inverse, and the Jacobian of its
-                inverse. Note that the Jacobians are returned as lambdas since
-                they are not constants.
-       :rtype: tuple(lambda, lambda, lambda, lambda)
+    :returns: The mapping, its Jacobian, its inverse, and the Jacobian of its
+             inverse. Note that the Jacobians are returned as lambdas since
+             they are not constants.
+    :rtype: tuple(lambda, lambda, lambda, lambda)
     """
 
     # (x,y) --> (rho, theta): T --> R
@@ -293,11 +407,11 @@ def tria2rect_map_2d():
 def is_in_t(pt):
     """Checks if a point is in the template triangle T.
 
-       :param pt: The point to be checked.
-       :type pt: tuple(float,float).
+    :param pt: The point to be checked.
+    :type pt: tuple(float,float).
 
-       :returns: True if pt is in T.
-       :rtype: bool.
+    :returns: True if pt is in T.
+    :rtype: bool.
     """
     flag = True
     if pt[0] < 0 or pt[1] < 0:
@@ -310,11 +424,11 @@ def is_in_t(pt):
 def is_in_r(pt, a=0, b=1, c=0, d=np.pi / 2):
     """Checks if a point is in the (template) rectangle R.
 
-       :param pt: The point to be checked.
-       :type pt: tuple(float,float).
+    :param pt: The point to be checked.
+    :type pt: tuple(float,float).
 
-       :returns: True if pt is in R.
-       :rtype: bool.
+    :returns: True if pt is in R.
+    :rtype: bool.
     """
     flag = True
     if pt[0] < a or pt[1] < c:

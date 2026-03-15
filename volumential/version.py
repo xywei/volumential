@@ -30,12 +30,17 @@ if os.environ.get("AKPYTHON_EXEC_FROM_WITHIN_WITHIN_SETUP_PY") is not None:
     _git_rev = None
 
 else:
-    import volumential._git_rev as _git_rev_mod
-    _git_rev = _git_rev_mod.GIT_REVISION
+    try:
+        import volumential._git_rev as _git_rev_mod
+    except ImportError:
+        _git_rev = None
+    else:
+        _git_rev = _git_rev_mod.GIT_REVISION
 
     # If we're running from a dev tree, the last install (and hence the most
     # recent update of the above git rev) could have taken place very long ago.
     from pytools import find_module_git_revision
+
     _runtime_git_rev = find_module_git_revision(__file__, n_levels_up=1)
     if _runtime_git_rev is not None:
         _git_rev = _runtime_git_rev

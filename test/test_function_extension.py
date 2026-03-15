@@ -1,108 +1,101 @@
-
-__copyright__ = "Copyright (C) 2019 Xiaoyu Wei"
-
-__license__ = """
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
-"""
-
 import numpy as np
-import numpy.linalg as la
-import pytest
 
 import pyopencl as cl
-import pyopencl.clmath
 from meshmode.discretization import Discretization
 from meshmode.discretization.poly_element import (
-    InterpolatoryQuadratureSimplexGroupFactory)
+    InterpolatoryQuadratureSimplexGroupFactory,
+)
+from pytential.array_context import PyOpenCLArrayContext
 from pytential.target import PointsTarget
 
-from volumential.function_extension import compute_harmonic_extension
+from volumential.function_extension import (
+    compute_constant_extension,
+    compute_harmonic_extension,
+)
 
 
-@pytest.mark.skip(reason="this test needs to be updated to use GeometryCollection")
-def test_harmonic_extension_exterior_3d(ctx_factory):
+def _skip_unstable_backend(ctx):
+    platform_names = {dev.platform.name for dev in ctx.devices}
+    if any(name == "Intel(R) OpenCL" for name in platform_names):
+        import pytest
 
-    dim = 3  # noqa: F841
-    mesh_order = 8
-    fmm_order = 3
-    bdry_quad_order = mesh_order
-    bdry_ovsmp_quad_order = 4 * bdry_quad_order
-    qbx_order = mesh_order
+        pytest.skip("QBX function-extension tests are unstable on Intel(R) OpenCL")
 
-    cl_ctx = ctx_factory()
-    queue = cl.CommandQueue(cl_ctx)
 
-    from meshmode.mesh.generation import generate_icosphere
-    from meshmode.mesh.refinement import refine_uniformly
+def _make_test_qbx(actx, nelements=40, order=4, qbx_order=3):
+    from functools import partial
 
-    radius = 2.5
-    base_mesh = generate_icosphere(radius, order=mesh_order)
-    mesh = refine_uniformly(base_mesh, 1)
-
-    pre_density_discr = Discretization(
-            cl_ctx, mesh,
-            InterpolatoryQuadratureSimplexGroupFactory(bdry_quad_order))
-
+    from meshmode.mesh.generation import make_curve_mesh
+    from meshmode.mesh.generation import ellipse
     from pytential.qbx import QBXLayerPotentialSource
-    qbx, _ = QBXLayerPotentialSource(
-            pre_density_discr, fine_order=bdry_ovsmp_quad_order, qbx_order=qbx_order,
-            fmm_order=fmm_order,
-            ).with_refinement()
-    density_discr = qbx.density_discr
 
-    ntgts = 200
-    rng = np.random.default_rng(seed=42)
-    rho = rng.random(ntgts) * 3 + radius + 0.05
-    theta = rng.random(ntgts) * 2 * np.pi
-    phi = (rng.random(ntgts) - 0.5) * np.pi
-
-    nodes = density_discr.nodes().with_queue(queue)
-    source = np.array([0, 1, 2])
-
-    def test_func(x):
-        return 1.0/la.norm(x.get()-source[:, None], axis=0)
-
-    f = cl.array.to_device(queue, test_func(nodes))
-
-    targets = cl.array.to_device(queue,
-            np.array([
-                rho * np.cos(phi) * np.cos(theta),
-                rho * np.cos(phi) * np.sin(theta),
-                rho * np.sin(phi)])
-            )
-
-    exact_f = test_func(targets)
-
-    ext_f, _ = compute_harmonic_extension(
-            queue, PointsTarget(targets), qbx, density_discr,
-            f, loc_sign=1)
-
-    assert np.linalg.norm(exact_f - ext_f.get()) < 1e-3 * np.linalg.norm(exact_f)
+    mesh = make_curve_mesh(
+        partial(ellipse, 1.0), np.linspace(0, 1, nelements + 1), order
+    )
+    discr = Discretization(
+        actx, mesh, InterpolatoryQuadratureSimplexGroupFactory(order)
+    )
+    qbx = QBXLayerPotentialSource(
+        discr,
+        fine_order=4 * order,
+        qbx_order=qbx_order,
+        fmm_order=False,
+    )
+    return qbx, discr
 
 
-if __name__ == "__main__":
-    import sys
+def test_constant_extension_geometry_collection(ctx_factory):
+    ctx = ctx_factory()
+    _skip_unstable_backend(ctx)
+    queue = cl.CommandQueue(ctx)
+    actx = PyOpenCLArrayContext(queue)
 
-    if len(sys.argv) > 1:
-        exec(sys.argv[1])
-    else:
-        pytest.main([__file__])
+    qbx, density_discr = _make_test_qbx(actx)
+    targets = np.array([[1.5, -1.25, 0.0], [0.0, 0.5, -1.75]], dtype=np.float64)
+    target_discr = PointsTarget(actx.freeze(actx.from_numpy(targets)))
+
+    ext_f, _ = compute_constant_extension(
+        queue,
+        target_discr,
+        qbx,
+        density_discr,
+        constant_val=2.5,
+        actx=actx,
+    )
+
+    np.testing.assert_allclose(actx.to_numpy(ext_f), 2.5)
 
 
-# vim: filetype=pyopencl:foldmethod=marker
+def test_harmonic_extension_geometry_collection_smoke(ctx_factory):
+    ctx = ctx_factory()
+    _skip_unstable_backend(ctx)
+    queue = cl.CommandQueue(ctx)
+    actx = PyOpenCLArrayContext(queue)
+
+    qbx, density_discr = _make_test_qbx(actx)
+    nodes = actx.thaw(density_discr.nodes())
+    f = nodes[0]
+
+    target_points = np.array(
+        [[0.5, -0.4, 0.0, 0.2], [0.0, 0.4, -0.6, 0.1]],
+        dtype=np.float64,
+    )
+    target_discr = PointsTarget(actx.freeze(actx.from_numpy(target_points)))
+
+    ext_f, debug = compute_harmonic_extension(
+        queue,
+        target_discr,
+        qbx,
+        density_discr,
+        f,
+        loc_sign=-1,
+        target_association_tolerance=0.05,
+        gmres_tolerance=1e-10,
+        actx=actx,
+    )
+
+    result = actx.to_numpy(ext_f)
+
+    assert debug["gmres_result"].state == "success"
+    assert result.shape == (target_points.shape[1],)
+    assert np.isfinite(result).all()

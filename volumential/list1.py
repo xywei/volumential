@@ -28,6 +28,7 @@ __doc__ = """
 """
 
 import logging
+from dataclasses import fields
 
 import numpy as np
 
@@ -44,8 +45,7 @@ logger = logging.getLogger(__name__)
 
 
 class NearFieldEvalBase(KernelCacheWrapper):
-    """Base class of near-field evalulator.
-    """
+    """Base class of near-field evalulator."""
 
     default_name = "near_field_eval_base"
 
@@ -57,7 +57,7 @@ class NearFieldEvalBase(KernelCacheWrapper):
         options=None,
         name=None,
         device=None,
-        **kwargs
+        **kwargs,
     ):
         """potential_kind:
 
@@ -95,11 +95,13 @@ class NearFieldEvalBase(KernelCacheWrapper):
 
         # Do not infer scaling rules when user defined rules are present
         if ("kernel_scaling_code" in self.extra_kwargs) or (
-                "kernel_displacement_code" in self.extra_kwargs):
+            "kernel_displacement_code" in self.extra_kwargs
+        ):
             self.extra_kwargs["infer_kernel_scaling"] = False
             # the two codes must be simultaneously given
             assert ("kernel_scaling_code" in self.extra_kwargs) and (
-                "kernel_displacement_code" in self.extra_kwargs)
+                "kernel_displacement_code" in self.extra_kwargs
+            )
 
         self.kname = self.integral_kernel.__repr__()
         self.dim = self.integral_kernel.dim
@@ -124,6 +126,31 @@ class NearFieldFromCSR(NearFieldEvalBase):
     """
 
     default_name = "near_field_from_csr"
+
+    def _base_kernel(self):
+        return self.integral_kernel.get_base_kernel()
+
+    def _is_laplace_kernel(self, dim):
+        from sumpy.kernel import LaplaceKernel
+
+        return isinstance(self._base_kernel(), LaplaceKernel) and self.dim == dim
+
+    def _is_constant_kernel(self, dim):
+        return self.kname in {f"CstKnl{dim}D", f"ConstantKernel{dim}D"} or (
+            self._base_kernel().__class__.__name__ == "ConstantKernel"
+            and self.dim == dim
+        )
+
+    def _is_axis_target_derivative_of_laplace(self, dim):
+        from sumpy.kernel import AxisTargetDerivative, LaplaceKernel
+
+        return (
+            isinstance(self.integral_kernel, AxisTargetDerivative)
+            and isinstance(
+                self.integral_kernel.inner_kernel.get_base_kernel(), LaplaceKernel
+            )
+            and self.dim == dim
+        )
 
     def codegen_vec_component(self, d=None):
         if d is None:
@@ -151,44 +178,38 @@ class NearFieldFromCSR(NearFieldEvalBase):
         return code
 
     def codegen_compute_scaling(self, box_name="sbox"):
-        """box_name: the name of the box whose extent is used.
-        """
+        """box_name: the name of the box whose extent is used."""
         if ("infer_kernel_scaling" in self.extra_kwargs) and (
             self.extra_kwargs["infer_kernel_scaling"]
         ):
             # Laplace 2D
-            if self.kname == "LapKnl2D":
+            if self._is_laplace_kernel(2):
                 logger.info("scaling for LapKnl2D")
                 code = "BOX_extent * BOX_extent / \
                         (table_root_extent * table_root_extent)"
 
-            elif self.kname in (
-                    "AxisTargetDerivative(0, LapKnl2D)",
-                    "AxisTargetDerivative(1, LapKnl2D)"):
+            elif self._is_axis_target_derivative_of_laplace(2):
                 logger.info("scaling for Grad(LapKnl2D)")
                 code = "BOX_extent / table_root_extent"
 
             # Constant 2D
-            elif self.kname == "CstKnl2D":
+            elif self._is_constant_kernel(2):
                 logger.info("scaling for CstKnl2D")
                 code = "BOX_extent * BOX_extent / \
                         (table_root_extent * table_root_extent)"
 
             # Laplace 3D
-            elif self.kname == "LapKnl3D":
+            elif self._is_laplace_kernel(3):
                 logger.info("scaling for Lapknl3D")
                 code = "BOX_extent * BOX_extent / \
                         (table_root_extent * table_root_extent)"
 
-            elif self.kname in (
-                    "AxisTargetDerivative(0, LapKnl3D)",
-                    "AxisTargetDerivative(1, LapKnl3D)",
-                    "AxisTargetDerivative(2, LapKnl3D)"):
+            elif self._is_axis_target_derivative_of_laplace(3):
                 logger.info("scaling for Grad(LapKnl3D)")
                 code = "BOX_extent / table_root_extent"
 
             # Constant 3D
-            elif self.kname == "CstKnl3D":
+            elif self._is_constant_kernel(3):
                 logger.info("scaling for CstKnl3D")
                 code = "BOX_extent * BOX_extent * BOX_extent / \
                         (table_root_extent * table_root_extent * table_root_extent)"
@@ -206,9 +227,11 @@ class NearFieldFromCSR(NearFieldEvalBase):
         elif "kernel_scaling_code" in self.extra_kwargs:
             # user-defined scaling rule
             assert isinstance(self.extra_kwargs["kernel_scaling_code"], str)
-            logger.info("Using scaling rule %s for %s.",
-                        self.extra_kwargs["kernel_scaling_code"], self.kname
-                        )
+            logger.info(
+                "Using scaling rule %s for %s.",
+                self.extra_kwargs["kernel_scaling_code"],
+                self.kname,
+            )
             return self.extra_kwargs["kernel_scaling_code"]
         else:
             logger.info("not scaling for " + self.kname)
@@ -220,24 +243,25 @@ class NearFieldFromCSR(NearFieldEvalBase):
             self.extra_kwargs["infer_kernel_scaling"]
         ):
             # Laplace 2D
-            if self.kname == "LapKnl2D":
+            if self._is_laplace_kernel(2):
                 logger.info("displacement for laplace 2D")
                 s = "-0.5 / PI * scaling * \
                         log(BOX_extent / table_root_extent) * \
                         mode_nmlz[table_lev, sid]"
                 import math
+
                 code = s.replace("PI", str(math.pi))
 
             # Constant 2D
-            elif self.kname == "CstKnl2D":
+            elif self._is_constant_kernel(2):
                 logger.info("no displacement for CstKnl2D")
                 code = "0.0"
             # Laplace 3D
-            elif self.kname == "LapKnl3D":
+            elif self._is_laplace_kernel(3):
                 logger.info("no displacement for LapKnl3D")
                 code = "0.0"
             # Constant 3D
-            elif self.kname == "CstKnl3D":
+            elif self._is_constant_kernel(3):
                 logger.info("no displacement for CstKnl3D")
                 code = "0.0"
             else:
@@ -250,12 +274,12 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 code = "0.0"
         elif "kernel_displacement_code" in self.extra_kwargs:
             # user-defined displacement rule
-            assert isinstance(
-                    self.extra_kwargs["kernel_displacement_code"], str)
-            logger.info("Using displacement %s for %s.",
-                        self.extra_kwargs["kernel_displacement_code"],
-                        self.kname
-                        )
+            assert isinstance(self.extra_kwargs["kernel_displacement_code"], str)
+            logger.info(
+                "Using displacement %s for %s.",
+                self.extra_kwargs["kernel_displacement_code"],
+                self.kname,
+            )
             code = self.extra_kwargs["kernel_displacement_code"]
         else:
             logger.info("no displacement for " + self.kname)
@@ -269,10 +293,10 @@ class NearFieldFromCSR(NearFieldEvalBase):
             self.extra_kwargs["infer_kernel_scaling"]
         ):
             if (
-                self.kname == "LapKnl2D"
-                or self.kname == "LapKnl3D"
-                or self.kname == "CstKnl2D"
-                or self.kname == "CstKnl3D"
+                self._is_laplace_kernel(2)
+                or self._is_laplace_kernel(3)
+                or self._is_constant_kernel(2)
+                or self._is_constant_kernel(3)
             ):
                 logger.info("scaling from table[0] for " + self.kname)
                 code = "0.0"
@@ -322,7 +346,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
             for tbox
                 <> target_box_id    = target_boxes[tbox]
                 <> box_target_beg   = box_target_starts[target_box_id]
-                <> n_box_targets    = box_target_counts_cumul[target_box_id]
+                <> n_box_targets    = box_target_counts_nonchild[target_box_id]
 
                 <> sbox_begin = neighbor_source_boxes_starts[tbox]
                 <> sbox_end   = neighbor_source_boxes_starts[tbox+1]
@@ -336,17 +360,17 @@ class NearFieldFromCSR(NearFieldEvalBase):
 
                 for tid, sbox
                     <> source_box_id  = source_boxes[sbox]
-                    <> n_box_sources  = box_source_counts_cuml[source_box_id]
+                    <> n_box_sources  = box_source_counts_nonchild[source_box_id]
                     <> box_source_beg = box_source_starts[source_box_id]
 
                     <> sbox_level  = box_levels[source_box_id]
                     <> sbox_extent = root_extent * (1.0 / (2**sbox_level))
 
                     table_lev_tmp = GET_TABLE_LEVEL {id=tab_lev_tmp}
-                    table_lev = round(table_lev_tmp) {id=tab_lev,dep=tab_lev_tmp}
+                    table_lev = table_lev_tmp + 0.5 {id=tab_lev,dep=tab_lev_tmp}
 
                     vec_id_tmp = COMPUTE_VEC_ID {id=vec_id_tmp}
-                    vec_id = round(vec_id_tmp) {id=vec_id,dep=vec_id_tmp}
+                    vec_id = vec_id_tmp + 0.5 {id=vec_id,dep=vec_id_tmp}
                     <> case_id = case_indices[vec_id] {dep=vec_id}
 
                     <> scaling = COMPUTE_SCALING
@@ -356,17 +380,17 @@ class NearFieldFromCSR(NearFieldEvalBase):
                         <> tgt_scaling = COMPUTE_TGT_SCALING
                         <> tgt_displacement = COMPUTE_TGT_DISPLACEMENT
                         tgt_table_lev_tmp = GET_TGT_TABLE_LEVEL {id=tgttab_lev_tmp}
-                        tgt_table_lev = round(tgt_table_lev_tmp) \
+                        tgt_table_lev = tgt_table_lev_tmp + 0.5 \
                                 {id=tgttab_lev,dep=tgttab_lev_tmp}
-                        <> ext_nmlz = exterior_mode_nmlz[tgt_table_lev, tid] \
+                        <> target_point_id = target_point_ids[target_id]
+                        <> ext_nmlz = exterior_mode_nmlz[tgt_table_lev, target_point_id] \
                                 * tgt_scaling + tgt_displacement \
                                 {id=extnmlz,dep=tgttab_lev}
 
                         <> source_id = box_source_beg + sid
-                        <> pair_id = sid * n_box_targets + tid
-                        <> entry_id = case_id * \
-                                      (n_box_targets * n_box_sources) \
-                                      + pair_id
+                        <> source_mode_id = source_mode_ids[source_id]
+                        <> pair_id = source_mode_id * n_q_points + target_point_id
+                        <> entry_id = case_id * (n_q_points * n_q_points) + pair_id
 
                         <> displacement = COMPUTE_DISPLACEMENT
 
@@ -399,13 +423,13 @@ class NearFieldFromCSR(NearFieldEvalBase):
 
                 end
             end
-            """
-            .replace("COMPUTE_VEC_ID", self.codegen_vec_id())
+            """.replace("COMPUTE_VEC_ID", self.codegen_vec_id())
             .replace("COMPUTE_SCALING", self.codegen_compute_scaling())
             .replace("COMPUTE_DISPLACEMENT", self.codegen_compute_displacement())
             .replace("COMPUTE_TGT_SCALING", self.codegen_compute_scaling("tbox"))
-            .replace("COMPUTE_TGT_DISPLACEMENT",
-                    self.codegen_compute_displacement("tbox"))
+            .replace(
+                "COMPUTE_TGT_DISPLACEMENT", self.codegen_compute_displacement("tbox")
+            )
             .replace("GET_TABLE_LEVEL", self.codegen_get_table_level())
             .replace("GET_TGT_TABLE_LEVEL", self.codegen_get_table_level("tbox"))
             .replace("EXTERIOR_PART", self.codegen_exterior_part()),
@@ -417,24 +441,33 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 loopy.TemporaryVariable("tgt_table_lev", np.int32),
                 loopy.TemporaryVariable("tgt_table_lev_tmp", np.float64),
                 loopy.ValueArg("encoding_base", np.int32),
-                loopy.GlobalArg("mode_nmlz", potential_dtype,
-                                "n_tables, n_q_points"),
-                loopy.GlobalArg("exterior_mode_nmlz", potential_dtype,
-                                "n_tables, n_q_points"),
-                loopy.GlobalArg("table_data", potential_dtype,
-                                "n_tables, n_table_entries"),
+                loopy.GlobalArg("mode_nmlz", potential_dtype, "n_tables, n_q_points"),
+                loopy.GlobalArg(
+                    "exterior_mode_nmlz", potential_dtype, "n_tables, n_q_points"
+                ),
+                loopy.GlobalArg(
+                    "table_data", potential_dtype, "n_tables, n_table_entries"
+                ),
                 loopy.GlobalArg("source_boxes", np.int32, "n_source_boxes"),
                 loopy.GlobalArg("box_centers", None, "dim, aligned_nboxes"),
+                loopy.GlobalArg(
+                    "box_source_counts_nonchild", np.int32, "aligned_nboxes"
+                ),
+                loopy.GlobalArg(
+                    "box_target_counts_nonchild", np.int32, "aligned_nboxes"
+                ),
+                loopy.GlobalArg("source_mode_ids", np.int32, "n_source_particles"),
+                loopy.GlobalArg("target_point_ids", np.int32, "n_target_particles"),
                 loopy.ValueArg("aligned_nboxes", np.int32),
                 loopy.ValueArg("table_root_extent", np.float64),
                 loopy.ValueArg(
-                    "dim, n_source_boxes, n_tables, " "n_q_points, n_table_entries",
+                    "dim, n_source_boxes, n_tables, n_q_points, n_table_entries, n_source_particles, n_target_particles",
                     np.int32,
                 ),
                 "...",
             ],
             name="near_field",
-            lang_version=(2018, 2)
+            lang_version=(2018, 2),
         )
 
         # lpknl = loopy.set_options(lpknl, write_code=True)
@@ -445,6 +478,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
     def get_cache_key(self):
         return (
             type(self).__name__,
+            "kernel-v6",
             self.name,
             self.kname,
             "complex_kernel=" + str(self.integral_kernel.is_complex_valued),
@@ -455,25 +489,19 @@ class NearFieldFromCSR(NearFieldEvalBase):
         )
 
     def get_optimized_kernel(self, ncpus=None):
-        if ncpus is None:
-            import multiprocessing
-
-            # NOTE: this detects the number of logical cores, disable hyperthreading
-            # for the optimal performance.
-            ncpus = multiprocessing.cpu_count()
         knl = self.get_kernel()
-        knl = loopy.split_iname(knl, "tbox", ncpus, inner_tag="g.0")
         return knl
 
     def __call__(self, queue, **kwargs):
         knl = self.get_cached_optimized_kernel()
+        entry_knl = knl.default_entrypoint
 
         result = kwargs.pop("result")
         box_centers = kwargs.pop("box_centers")
         box_levels = kwargs.pop("box_levels")
-        box_source_counts_cumul = kwargs.pop("box_source_counts_cumul")
+        box_source_counts_nonchild = kwargs.pop("box_source_counts_nonchild")
         box_source_starts = kwargs.pop("box_source_starts")
-        box_target_counts_cumul = kwargs.pop("box_target_counts_cumul")
+        box_target_counts_nonchild = kwargs.pop("box_target_counts_nonchild")
         box_target_starts = kwargs.pop("box_target_starts")
         case_indices = kwargs.pop("case_indices")
         encoding_base = kwargs.pop("encoding_base")
@@ -487,11 +515,13 @@ class NearFieldFromCSR(NearFieldEvalBase):
         mode_coefs = kwargs.pop("mode_coefs")
         table_data_combined = kwargs.pop("table_data_combined")
         target_boxes = kwargs.pop("target_boxes")
+        source_mode_ids = kwargs.pop("source_mode_ids")
+        target_point_ids = kwargs.pop("target_point_ids")
 
-        integral_kernel_init_kargs = dict(
-            zip(self.integral_kernel.init_arg_names,
-                self.integral_kernel.__getinitargs__())
-        )
+        integral_kernel_init_kargs = {
+            field.name: getattr(self.integral_kernel, field.name)
+            for field in fields(self.integral_kernel)
+        }
 
         # help loopy's type inference
         for key, val in integral_kernel_init_kargs.items():
@@ -502,7 +532,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
 
         extra_knl_args_from_init = {}
         for key, val in integral_kernel_init_kargs.items():
-            if key in knl.arg_dict:
+            if key in entry_knl.arg_dict:
                 extra_knl_args_from_init[key] = val
 
         evt, res = knl(
@@ -516,9 +546,9 @@ class NearFieldFromCSR(NearFieldEvalBase):
             # db_entry_id=np.zeros(out_pot.shape),
             box_centers=box_centers,
             box_levels=box_levels,
-            box_source_counts_cuml=box_source_counts_cumul,
+            box_source_counts_nonchild=box_source_counts_nonchild,
             box_source_starts=box_source_starts,
-            box_target_counts_cumul=box_target_counts_cumul,
+            box_target_counts_nonchild=box_target_counts_nonchild,
             box_target_starts=box_target_starts,
             case_indices=case_indices,
             n_tables=self.n_tables,
@@ -533,12 +563,16 @@ class NearFieldFromCSR(NearFieldEvalBase):
             root_extent=root_extent,
             source_boxes=neighbor_source_boxes_lists,
             n_source_boxes=len(neighbor_source_boxes_lists),
+            source_mode_ids=source_mode_ids,
+            n_source_particles=len(source_mode_ids),
             source_coefs=mode_coefs,
             table_data=table_data_combined,
             target_boxes=target_boxes,
+            target_point_ids=target_point_ids,
+            n_target_particles=len(target_point_ids),
             table_root_extent=table_root_extent,
-            **extra_knl_args_from_init
-            )
+            **extra_knl_args_from_init,
+        )
 
         res["result"].add_event(evt)
         if isinstance(result, cl.array.Array):

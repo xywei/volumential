@@ -1,4 +1,3 @@
-
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
 __license__ = """
@@ -80,54 +79,48 @@ def drive_test_completeness(ctx, queue, dim, q_order):
 
     # {{{ build tree and traversals
 
-    from boxtree.tools import AXIS_NAMES
-
-    axis_names = AXIS_NAMES[:dim]
-
-    from pytools import single_valued
-
-    coord_dtype = single_valued(coord.dtype for coord in q_points)
-    from boxtree.bounding_box import make_bounding_box_dtype
-
-    bbox_type, _ = make_bounding_box_dtype(ctx.devices[0], dim, coord_dtype)
-
-    bbox = np.empty(1, bbox_type)
-    for ax in axis_names:
-        bbox["min_" + ax] = a
-        bbox["max_" + ax] = b
-
     # tune max_particles_in_box to reconstruct the mesh
     # TODO: use points from FieldPlotter are used as target points for better
     # visuals
     from boxtree import TreeBuilder
+    from boxtree.array_context import PyOpenCLArrayContext
 
-    tb = TreeBuilder(ctx)
+    actx = PyOpenCLArrayContext(queue)
+
+    tb = TreeBuilder(actx)
     tree, _ = tb(
-        queue,
+        actx,
         particles=q_points,
         targets=q_points,
-        bbox=bbox,
-        max_particles_in_box=q_order ** dim * (2 ** dim) - 1,
+        max_particles_in_box=q_order**dim * (2**dim) - 1,
         kind="adaptive-level-restricted",
     )
 
     from boxtree.traversal import FMMTraversalBuilder
 
-    tg = FMMTraversalBuilder(ctx)
-    trav, _ = tg(queue, tree)
+    tg = FMMTraversalBuilder(actx)
+    trav, _ = tg(actx, tree)
 
     # }}} End build tree and traversals
 
     from volumential.table_manager import NearFieldInteractionTableManager
 
     subprocess.check_call(["rm", "-f", "nft-test-completeness.hdf5"])
-    with NearFieldInteractionTableManager("nft-test-completeness.hdf5",
-                                          progress_bar=False) as tm:
-
+    with NearFieldInteractionTableManager(
+        "nft-test-completeness.hdf5", progress_bar=False
+    ) as tm:
         nft, _ = tm.get_table(
-            dim, "Constant", q_order, queue=queue, n_levels=1, alpha=0,
-            compute_method="DrosteSum", n_brick_quad_points=50,
-            adaptive_level=False, use_symmetry=True)
+            dim,
+            "Constant",
+            q_order,
+            queue=queue,
+            n_levels=1,
+            alpha=0,
+            compute_method="DrosteSum",
+            n_brick_quad_points=50,
+            adaptive_level=False,
+            use_symmetry=True,
+        )
 
     # {{{ expansion wrangler
 
@@ -141,7 +134,9 @@ def drive_test_completeness(ctx, queue, dim, q_order):
     mpole_expn_class = partial(VolumeTaylorMultipoleExpansion, use_rscale=None)
 
     from volumential.expansion_wrangler_fpnd import (
-        FPNDExpansionWrangler, FPNDExpansionWranglerCodeContainer)
+        FPNDExpansionWrangler,
+        FPNDExpansionWranglerCodeContainer,
+    )
 
     wcc = FPNDExpansionWranglerCodeContainer(
         ctx,
@@ -154,7 +149,7 @@ def drive_test_completeness(ctx, queue, dim, q_order):
     wrangler = FPNDExpansionWrangler(
         code_container=wcc,
         queue=queue,
-        tree=tree,
+        traversal=trav,
         near_field_table=nft,
         dtype=dtype,
         fmm_level_to_order=lambda kernel, kernel_args, tree, lev: 1,
@@ -163,8 +158,11 @@ def drive_test_completeness(ctx, queue, dim, q_order):
 
     # }}} End sumpy expansion for laplace kernel
     pot = wrangler.eval_direct(
-        trav.target_boxes, trav.neighbor_source_boxes_starts,
-        trav.neighbor_source_boxes_lists, mode_coefs=source_vals)
+        trav.target_boxes,
+        trav.neighbor_source_boxes_starts,
+        trav.neighbor_source_boxes_lists,
+        mode_coefs=source_vals,
+    )
     pot = pot[0]
     for p in pot[0]:
         assert abs(p - 2**dim) < 1.0e-8

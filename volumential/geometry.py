@@ -31,9 +31,7 @@ from pytools.obj_array import make_obj_array
 
 
 class BoundingBoxFactory:
-    def __init__(self, dim,
-            center=None, radius=None,
-            dtype=float):
+    def __init__(self, dim, center=None, radius=None, dtype=float):
         self.dim = dim
         self.dtype = np.dtype(dtype)
 
@@ -50,10 +48,9 @@ class BoundingBoxFactory:
         """Returns true if the bounding box is readily determined,
         i.e., the __call__() method has been called.
         """
-        return (self.box_center is not None)
+        return self.box_center is not None
 
-    def __call__(self, ctx,
-            expand_to_hold_mesh=None, mesh_padding_factor=0.05):
+    def __call__(self, ctx, expand_to_hold_mesh=None, mesh_padding_factor=0.05):
         """If expand the box to be large enough to enclose a
         mesh object.
 
@@ -73,8 +70,8 @@ class BoundingBoxFactory:
         if not expand_to_hold_mesh:
             if (self.center is None) or (self.radius is None):
                 raise ValueError(
-                        "A bounding box without presets "
-                        "must be adapted to an mesh.")
+                    "A bounding box without presets must be adapted to an mesh."
+                )
             box_center = self.center
             box_radius = self.radius
         else:
@@ -100,9 +97,8 @@ class BoundingBoxFactory:
         from boxtree.bounding_box import make_bounding_box_dtype
         from boxtree.tools import AXIS_NAMES
 
-        axis_names = AXIS_NAMES[:self.dim]
-        bbox_type, _ = make_bounding_box_dtype(
-                ctx.devices[0], self.dim, self.dtype)
+        axis_names = AXIS_NAMES[: self.dim]
+        bbox_type, _ = make_bounding_box_dtype(ctx.devices[0], self.dim, self.dtype)
 
         bbox = np.empty(1, bbox_type)
         for ax, iaxis in zip(axis_names, range(self.dim)):
@@ -110,6 +106,7 @@ class BoundingBoxFactory:
             bbox["max_" + ax] = self.ubounds[iaxis]
 
         return bbox
+
 
 # }}} End bounding box factory
 
@@ -141,10 +138,18 @@ class BoxFMMGeometryFactory:
         Box mesh generator that implements the
         :class:`volumential.meshgen.MeshGenBase` interface.
     """
+
     def __init__(
-            self, cl_ctx, dim, order, nlevels, bbox_getter,
-            quadrature_formula=None,
-            expand_to_hold_mesh=None, mesh_padding_factor=0.05):
+        self,
+        cl_ctx,
+        dim,
+        order,
+        nlevels,
+        bbox_getter,
+        quadrature_formula=None,
+        expand_to_hold_mesh=None,
+        mesh_padding_factor=0.05,
+    ):
         """
         :arg bbox_getter: A :class:`BoundingBoxFactory` object.
 
@@ -158,9 +163,11 @@ class BoxFMMGeometryFactory:
             raise NotImplementedError()
         elif dim == 2:
             from volumential.meshgen import MeshGen2D
+
             self._engine_class = MeshGen2D
         elif dim == 3:
             from volumential.meshgen import MeshGen3D
+
             self._engine_class = MeshGen3D
 
         self.dim = dim
@@ -175,8 +182,9 @@ class BoxFMMGeometryFactory:
         self.bbox_getter = bbox_getter
 
         self.cl_context = cl_ctx
-        self._bbox = bbox_getter(self.cl_context,
-                expand_to_hold_mesh, mesh_padding_factor)
+        self._bbox = bbox_getter(
+            self.cl_context, expand_to_hold_mesh, mesh_padding_factor
+        )
 
         self.order = order
         self.nlevels = nlevels
@@ -187,9 +195,13 @@ class BoxFMMGeometryFactory:
         self.engine = self._engine_class(self.order, self.nlevels, a, b)
 
     def reinit(
-            self, order=None, nlevels=None,
-            quadrature_formula=None,
-            expand_to_hold_mesh=None, mesh_padding_factor=None):
+        self,
+        order=None,
+        nlevels=None,
+        quadrature_formula=None,
+        expand_to_hold_mesh=None,
+        mesh_padding_factor=None,
+    ):
         """Resets the engine to its initial state, and optionally also
         changes some parameters.
         """
@@ -200,8 +212,9 @@ class BoxFMMGeometryFactory:
             self.nlevels = nlevels
 
         if expand_to_hold_mesh is not None:
-            self._bbox = self.bbox_getter(self.cl_context,
-                    expand_to_hold_mesh, mesh_padding_factor)
+            self._bbox = self.bbox_getter(
+                self.cl_context, expand_to_hold_mesh, mesh_padding_factor
+            )
 
         # the engine generates meshes centered at the origin
         a = -1 * self.bbox_getter.radius
@@ -219,8 +232,8 @@ class BoxFMMGeometryFactory:
             return q_points
         else:
             return make_obj_array(
-                    [cl.array.to_device(queue, q_points[i])
-                     for i in range(self.dim)])
+                [cl.array.to_device(queue, q_points[i]) for i in range(self.dim)]
+            )
 
     def _get_q_weights(self, queue=None):
         q_weights = self.engine.get_q_weights()
@@ -240,8 +253,8 @@ class BoxFMMGeometryFactory:
             return cell_centers
         else:
             return make_obj_array(
-                    [cl.array.to_device(queue, cell_centers[i])
-                     for i in range(self.dim)])
+                [cl.array.to_device(queue, cell_centers[i]) for i in range(self.dim)]
+            )
 
     def _get_active_cell_measures(self, queue=None):
         cell_measures = self.engine.get_cell_measures()
@@ -269,25 +282,35 @@ class BoxFMMGeometryFactory:
         if queue is None:
             queue = cl.CommandQueue(self.cl_context)
 
+        from boxtree.array_context import PyOpenCLArrayContext
+
+        actx = PyOpenCLArrayContext(queue)
+
         from boxtree import TreeBuilder
-        tb = TreeBuilder(self.cl_context)
+
+        tb = TreeBuilder(actx)
 
         q_points = self._get_q_points(queue)
 
-        tree, _ = tb(queue, particles=q_points, targets=q_points,
-                     bbox=self._bbox, max_particles_in_box=(
-                         (self.n_q_points_per_cell**self.dim) * (2**self.dim)
-                         - 1),
-                     kind="adaptive-level-restricted")
+        tree, _ = tb(
+            actx,
+            particles=q_points,
+            targets=q_points,
+            max_particles_in_box=(
+                (self.n_q_points_per_cell**self.dim) * (2**self.dim) - 1
+            ),
+            kind="adaptive-level-restricted",
+        )
 
         from boxtree.traversal import FMMTraversalBuilder
-        tg = FMMTraversalBuilder(self.cl_context)
-        trav, _ = tg(queue, tree)
+
+        tg = FMMTraversalBuilder(actx)
+        trav, _ = tg(actx, tree)
 
         return BoxFMMGeometryData(
-                self.cl_context,
-                q_points, self._get_q_weights(queue),
-                tree, trav)
+            self.cl_context, q_points, self._get_q_weights(queue), tree, trav
+        )
+
 
 # }}} End box mesh data factory
 
@@ -301,6 +324,7 @@ class BoxFMMGeometryData(FMMLibRotationData):
     .. attribute:: tree
     .. attribute:: traversal
     """
+
     def __init__(self, cl_context, q_points, q_weights, tree, trav):
         self.cl_context = cl_context
         self.queue = cl.CommandQueue(cl_context)

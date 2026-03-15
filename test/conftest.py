@@ -1,4 +1,3 @@
-
 __copyright__ = "Copyright (C) 2018 Xiaoyu Wei"
 
 __license__ = """
@@ -29,9 +28,21 @@ from filelock import FileLock
 
 # setup the ctx_factory fixture
 from pyopencl.tools import (  # noqa: F401
-    pytest_generate_tests_for_pyopencl as pytest_generate_tests)
+    pytest_generate_tests_for_pyopencl as pytest_generate_tests,
+)
 
 from volumential.table_manager import NearFieldInteractionTableManager as NFTManager
+
+
+UNSUPPORTED_OPENCL_PLATFORMS = {
+    "Intel(R) OpenCL",
+}
+
+
+def _is_unsupported_ctx_factory(ctx_factory):
+    ctx = ctx_factory()
+    platform_names = {dev.platform.name for dev in ctx.devices}
+    return any(name in UNSUPPORTED_OPENCL_PLATFORMS for name in platform_names)
 
 
 def pytest_addoption(parser):
@@ -40,8 +51,24 @@ def pytest_addoption(parser):
     --longrun  Skip expensive tests unless told otherwise.
 
     """
-    parser.addoption("--longrun", action="store_true", dest="longrun",
-                     default=False, help="enable longrundecorated tests")
+    parser.addoption(
+        "--longrun",
+        action="store_true",
+        dest="longrun",
+        default=False,
+        help="enable longrundecorated tests",
+    )
+
+
+def pytest_runtest_setup(item):
+    callspec = getattr(item, "callspec", None)
+    if callspec is None or "ctx_factory" not in callspec.params:
+        return
+
+    ctx_factory = callspec.params["ctx_factory"]
+    if _is_unsupported_ctx_factory(ctx_factory):
+        unsupported = ", ".join(sorted(UNSUPPORTED_OPENCL_PLATFORMS))
+        pytest.skip(f"unsupported OpenCL backend for this stack: {unsupported}")
 
 
 @pytest.fixture(scope="session")
@@ -59,7 +86,9 @@ def requires_pypvfmm(request):
 
 
 @pytest.fixture(scope="session")
-def table_2d_order1(tmp_path_factory, worker_id):
+def table_2d_order1(tmp_path_factory, request):
+    worker_id = getattr(request.config, "workerinput", {}).get("workerid")
+
     if not worker_id:
         # not executing in with multiple workers, just produce the data and let
         # pytest's fixture caching do its job
