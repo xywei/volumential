@@ -20,8 +20,6 @@ dependencies:
   - packaging
   - pluggy
   - pocl
-  - py
-  - pyevtk
   - pyfmmlib
   - pyopencl
   - pyrsistent
@@ -33,7 +31,6 @@ dependencies:
   - scipy
   - symengine
   - sympy
-  - toml
 
   - pip
   - pip:
