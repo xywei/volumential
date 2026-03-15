@@ -27,16 +27,31 @@ import numpy as np
 
 import loopy as lp
 import pyopencl as cl
+from arraycontext import flatten, unflatten
+from boxtree.array_context import PyOpenCLArrayContext as BoxtreePyOpenCLArrayContext
 from boxtree.tools import DeviceDataRecord
-from meshmode.array_context import PyOpenCLArrayContext
-from meshmode.dof_array import flatten, thaw, unflatten
+from meshmode.array_context import PyOpenCLArrayContext as MeshmodePyOpenCLArrayContext
+from meshmode.dof_array import DOFArray
 from pytools import ProcessLogger, memoize_method
 from pytools.obj_array import make_obj_array
 
-from volumential.volume_fmm import interpolate_volume_potential
-
-
 logger = logging.getLogger(__name__)
+
+
+def _get_boxtree_actx(context):
+    if isinstance(context, cl.CommandQueue):
+        return BoxtreePyOpenCLArrayContext(context)
+
+    if isinstance(context, cl.Context):
+        return BoxtreePyOpenCLArrayContext(cl.CommandQueue(context))
+
+    if isinstance(context, BoxtreePyOpenCLArrayContext):
+        return context
+
+    if hasattr(context, "queue"):
+        return BoxtreePyOpenCLArrayContext(context.queue)
+
+    raise TypeError(f"unsupported context type: {type(context).__name__}")
 
 
 __doc__ = r"""
@@ -68,6 +83,7 @@ To :mod:`meshmode`
 
 
 # {{{ output
+
 
 class ElementsToSourcesLookup(DeviceDataRecord):
     """
@@ -142,10 +158,12 @@ class LeavesToNodesLookup(DeviceDataRecord):
     .. automethod:: get
     """
 
+
 # }}} End output
 
 
 # {{{ elements-to-sources lookup builder
+
 
 class ElementsToSourcesLookupBuilder:
     """Given a :mod:`meshmod` mesh and a :mod:`boxtree.Tree`, both discretizing
@@ -164,24 +182,27 @@ class ElementsToSourcesLookupBuilder:
         assert tree.dimensions == discr.dim
         self.dim = discr.dim
         self.context = context
+        self.boxtree_actx = _get_boxtree_actx(context)
         self.tree = tree
         self.discr = discr
 
         from pyopencl.algorithm import KeyValueSorter
+
         self.key_value_sorter = KeyValueSorter(context)
 
         from boxtree.area_query import AreaQueryBuilder
-        self.area_query_builder = AreaQueryBuilder(self.context)
+
+        self.area_query_builder = AreaQueryBuilder(self.boxtree_actx)
 
     # {{{ kernel generation
 
     @memoize_method
     def codegen_get_dimension_specific_snippets(self):
-        """Dimension-dependent code loopy instructions.
-        """
+        """Dimension-dependent code loopy instructions."""
         import sympy as sp
+
         axis_names = ["x", "y", "z"]
-        axis_names = axis_names[:self.dim]
+        axis_names = axis_names[: self.dim]
 
         # tolerance
         tol = -1e-12
@@ -200,11 +221,9 @@ class ElementsToSourcesLookupBuilder:
             return str(mat0.det())
 
         if self.dim == 2:
-
             # {{{ 2d
 
-            code_get_simplex = \
-                """
+            code_get_simplex = """
                 <> Ax = mesh_vertices_0[mesh_vertex_indices[iel, 0]]
                 <> Ay = mesh_vertices_1[mesh_vertex_indices[iel, 0]]
                 <> Bx = mesh_vertices_0[mesh_vertex_indices[iel, 1]]
@@ -212,8 +231,7 @@ class ElementsToSourcesLookupBuilder:
                 <> Cx = mesh_vertices_0[mesh_vertex_indices[iel, 2]]
                 <> Cy = mesh_vertices_1[mesh_vertex_indices[iel, 2]]
                 """
-            code_get_point = \
-                """
+            code_get_point = """
                 <> Px = source_points_0[source_id]
                 <> Py = source_points_1[source_id]
                 """
@@ -221,24 +239,24 @@ class ElementsToSourcesLookupBuilder:
             code_s0 = get_simplex_measure(["P", "B", "C"])
             code_s1 = get_simplex_measure(["A", "P", "C"])
             code_s2 = get_simplex_measure(["A", "B", "P"])
-            code_compute_simplex_measures = \
-                f"""
+            code_compute_simplex_measures = f"""
                 <> s0 = {code_s0}
                 <> s1 = {code_s1}
                 <> s2 = {code_s2}
                 """
-            code_measures_have_common_sign = " and ".join([
-                f"s{c1} * s{c2} >= {tol}"
-                for c1, c2 in itertools.combinations(["0", "1"], 2)])
+            code_measures_have_common_sign = " and ".join(
+                [
+                    f"s{c1} * s{c2} >= {tol}"
+                    for c1, c2 in itertools.combinations(["0", "1"], 2)
+                ]
+            )
 
             # }}} End 2d
 
         elif self.dim == 3:
-
             # {{{ 3d
 
-            code_get_simplex = \
-                """
+            code_get_simplex = """
                 <> Ax = mesh_vertices_0[mesh_vertex_indices[iel, 0]]
                 <> Ay = mesh_vertices_1[mesh_vertex_indices[iel, 0]]
                 <> Az = mesh_vertices_2[mesh_vertex_indices[iel, 0]]
@@ -252,8 +270,7 @@ class ElementsToSourcesLookupBuilder:
                 <> Dy = mesh_vertices_1[mesh_vertex_indices[iel, 3]]
                 <> Dz = mesh_vertices_2[mesh_vertex_indices[iel, 3]]
                 """
-            code_get_point = \
-                """
+            code_get_point = """
                 <> Px = source_points_0[source_id]
                 <> Py = source_points_1[source_id]
                 <> Pz = source_points_2[source_id]
@@ -263,27 +280,30 @@ class ElementsToSourcesLookupBuilder:
             code_s1 = get_simplex_measure(["A", "P", "C", "D"])
             code_s2 = get_simplex_measure(["A", "B", "P", "D"])
             code_s3 = get_simplex_measure(["A", "B", "C", "P"])
-            code_compute_simplex_measures = \
-                f"""
+            code_compute_simplex_measures = f"""
                 <> s0 = {code_s0}
                 <> s1 = {code_s1}
                 <> s2 = {code_s2}
                 <> s3 = {code_s3}
                 """
-            code_measures_have_common_sign = " and ".join([
-                f"s{c1} * s{c2} >= {tol}"
-                for c1, c2 in itertools.combinations(["0", "1", "2"], 2)])
+            code_measures_have_common_sign = " and ".join(
+                [
+                    f"s{c1} * s{c2} >= {tol}"
+                    for c1, c2 in itertools.combinations(["0", "1", "2"], 2)
+                ]
+            )
 
             # }}} End 3d
 
         else:
             raise NotImplementedError()
 
-        return {"code_get_simplex": code_get_simplex,
-                "code_get_point": code_get_point,
-                "code_compute_simplex_measures": code_compute_simplex_measures,
-                "code_measures_have_common_sign": code_measures_have_common_sign,
-                }
+        return {
+            "code_get_simplex": code_get_simplex,
+            "code_get_point": code_get_point,
+            "code_compute_simplex_measures": code_compute_simplex_measures,
+            "code_measures_have_common_sign": code_measures_have_common_sign,
+        }
 
     @memoize_method
     def get_simplex_lookup_kernel(self):
@@ -300,11 +320,13 @@ class ElementsToSourcesLookupBuilder:
 
         snippets = self.codegen_get_dimension_specific_snippets()
         loopy_knl = lp.make_kernel(
-            ["{ [ iel ]: 0 <= iel < nelements }",
-             "{ [ ineighbor ]: nearby_leaves_beg <= ineighbor < nearby_leaves_end }",
-             "{ [ isrc ]: 0 <= isrc < n_box_sources }"
-             ],
-            ["""
+            [
+                "{ [ iel ]: 0 <= iel < nelements }",
+                "{ [ ineighbor ]: nearby_leaves_beg <= ineighbor < nearby_leaves_end }",
+                "{ [ isrc ]: 0 <= isrc < n_box_sources }",
+            ],
+            [
+                """
             for iel
                 <> nearby_leaves_beg = leaves_near_ball_starts[iel]
                 <> nearby_leaves_end = leaves_near_ball_starts[iel + 1]
@@ -329,14 +351,17 @@ class ElementsToSourcesLookupBuilder:
                     end
                 end
             end
-            """.format(**snippets)],
-            [lp.ValueArg("nelements, dim, nboxes, nsources", np.int32),
-             lp.GlobalArg("mesh_vertex_indices", np.int32, "nelements, dim+1"),
-             lp.GlobalArg("box_source_starts", np.int32, "nboxes"),
-             lp.GlobalArg("box_source_counts_cumul", np.int32, "nboxes"),
-             lp.GlobalArg("leaves_near_ball_lists", np.int32, None),
-             lp.GlobalArg("result", np.int32, "nsources", for_atomic=True),
-             "..."],
+            """.format(**snippets)
+            ],
+            [
+                lp.ValueArg("nelements, dim, nboxes, nsources", np.int32),
+                lp.GlobalArg("mesh_vertex_indices", np.int32, "nelements, dim+1"),
+                lp.GlobalArg("box_source_starts", np.int32, "nboxes"),
+                lp.GlobalArg("box_source_counts_cumul", np.int32, "nboxes"),
+                lp.GlobalArg("leaves_near_ball_lists", np.int32, None),
+                lp.GlobalArg("result", np.int32, "nsources", for_atomic=True),
+                "...",
+            ],
             name="build_sources_in_simplex_lookup",
             lang_version=(2018, 2),
         )
@@ -347,14 +372,16 @@ class ElementsToSourcesLookupBuilder:
     # }}} End kernel generation
 
     def compute_short_lists(self, actx, wait_for=None):
-        """balls --> overlapping leaves
-        """
-        if not isinstance(actx, PyOpenCLArrayContext):
+        """balls --> overlapping leaves"""
+        if not isinstance(actx, MeshmodePyOpenCLArrayContext):
             if isinstance(actx, cl.CommandQueue):
                 from warnings import warn
-                warn("Command queue passed to the interpolator. "
-                     "Supply an array context to enable proper caching.")
-                actx = PyOpenCLArrayContext(actx)
+
+                warn(
+                    "Command queue passed to the interpolator. "
+                    "Supply an array context to enable proper caching."
+                )
+                actx = MeshmodePyOpenCLArrayContext(actx)
             else:
                 raise ValueError
 
@@ -362,40 +389,54 @@ class ElementsToSourcesLookupBuilder:
         if len(mesh.groups) > 1:
             raise NotImplementedError("Mixed elements not supported")
         melgrp = mesh.groups[0]
-        ball_centers_host = (np.max(melgrp.nodes, axis=2)
-                             + np.min(melgrp.nodes, axis=2)) / 2
-        ball_radii_host = np.max(
-                np.max(melgrp.nodes, axis=2) - np.min(melgrp.nodes, axis=2),
-                axis=0) / 2
+        ball_centers_host = (
+            np.max(melgrp.nodes, axis=2) + np.min(melgrp.nodes, axis=2)
+        ) / 2
+        ball_radii_host = (
+            np.max(np.max(melgrp.nodes, axis=2) - np.min(melgrp.nodes, axis=2), axis=0)
+            / 2
+        )
 
-        ball_centers = make_obj_array([
-            cl.array.to_device(actx.queue, center_coord_comp)
-            for center_coord_comp in ball_centers_host])
+        ball_centers = make_obj_array(
+            [
+                cl.array.to_device(actx.queue, center_coord_comp)
+                for center_coord_comp in ball_centers_host
+            ]
+        )
         ball_radii = cl.array.to_device(actx.queue, ball_radii_host)
 
         area_query_result, evt = self.area_query_builder(
-            actx.queue, self.tree, ball_centers, ball_radii,
-            peer_lists=None, wait_for=wait_for)
+            self.boxtree_actx,
+            self.tree,
+            ball_centers,
+            ball_radii,
+            peer_lists=None,
+            wait_for=wait_for,
+        )
         return area_query_result, evt
 
     def __call__(self, actx, balls_to_leaves_lookup=None, wait_for=None):
         """
         :arg queue: a :class:`pyopencl.CommandQueue`
         """
-        if not isinstance(actx, PyOpenCLArrayContext):
+        if not isinstance(actx, MeshmodePyOpenCLArrayContext):
             if isinstance(actx, cl.CommandQueue):
                 from warnings import warn
-                warn("Command queue passed to the interpolator. "
-                     "Supply an array context to enable proper caching.")
-                actx = PyOpenCLArrayContext(actx)
+
+                warn(
+                    "Command queue passed to the interpolator. "
+                    "Supply an array context to enable proper caching."
+                )
+                actx = MeshmodePyOpenCLArrayContext(actx)
             else:
                 raise ValueError
 
         slk_plog = ProcessLogger(logger, "element-to-source lookup: run area query")
 
         if balls_to_leaves_lookup is None:
-            balls_to_leaves_lookup, evt = \
-                self.compute_short_lists(actx.queue, wait_for=wait_for)
+            balls_to_leaves_lookup, evt = self.compute_short_lists(
+                actx, wait_for=wait_for
+            )
             wait_for = [evt]
 
         # -----------------------------------------------------------------
@@ -405,31 +446,40 @@ class ElementsToSourcesLookupBuilder:
 
         element_lookup_kernel = self.get_simplex_lookup_kernel()
 
-        vertices_dev = make_obj_array([
-            cl.array.to_device(actx.queue, verts)
-            for verts in self.discr.mesh.vertices])
+        vertices_dev = make_obj_array(
+            [
+                cl.array.to_device(actx.queue, verts)
+                for verts in self.discr.mesh.vertices
+            ]
+        )
 
         mesh_vertices_kwargs = {
-            f"mesh_vertices_{iaxis}": vertices_dev[iaxis]
-            for iaxis in range(self.dim)}
+            f"mesh_vertices_{iaxis}": vertices_dev[iaxis] for iaxis in range(self.dim)
+        }
 
         source_points_kwargs = {
             f"source_points_{iaxis}": self.tree.sources[iaxis]
-            for iaxis in range(self.dim)}
+            for iaxis in range(self.dim)
+        }
 
         evt, res = element_lookup_kernel(
-            actx.queue, dim=self.dim, nboxes=self.tree.nboxes,
-            nelements=self.discr.mesh.nelements, nsources=self.tree.nsources,
-            result=cl.array.zeros(actx.queue,
-                                  self.tree.nsources, dtype=np.int32) - 1,
+            actx.queue,
+            dim=self.dim,
+            nboxes=self.tree.nboxes,
+            nelements=self.discr.mesh.nelements,
+            nsources=self.tree.nsources,
+            result=cl.array.zeros(actx.queue, self.tree.nsources, dtype=np.int32) - 1,
             mesh_vertex_indices=self.discr.mesh.groups[0].vertex_indices,
             box_source_starts=self.tree.box_source_starts,
             box_source_counts_cumul=self.tree.box_source_counts_cumul,
             leaves_near_ball_starts=balls_to_leaves_lookup.leaves_near_ball_starts,
             leaves_near_ball_lists=balls_to_leaves_lookup.leaves_near_ball_lists,
-            wait_for=wait_for, **mesh_vertices_kwargs, **source_points_kwargs)
+            wait_for=wait_for,
+            **mesh_vertices_kwargs,
+            **source_points_kwargs,
+        )
 
-        source_to_element_lookup, = res
+        (source_to_element_lookup,) = res
 
         wait_for = [evt]
 
@@ -441,27 +491,34 @@ class ElementsToSourcesLookupBuilder:
 
         logger.debug("element-to-source lookup: key-value sort")
 
-        sources_in_element_starts, sources_in_element_lists, evt = \
+        sources_in_element_starts, sources_in_element_lists, evt = (
             self.key_value_sorter(
                 actx.queue,
                 keys=source_to_element_lookup,
                 values=cl.array.arange(
-                    actx.queue, self.tree.nsources, dtype=self.tree.box_id_dtype),
+                    actx.queue, self.tree.nsources, dtype=self.tree.box_id_dtype
+                ),
                 nkeys=self.discr.mesh.nelements,
                 starts_dtype=self.tree.box_id_dtype,
-                wait_for=wait_for)
+                wait_for=wait_for,
+            )
+        )
 
         slk_plog.done()
 
         return ElementsToSourcesLookup(
-            tree=self.tree, discr=self.discr,
+            tree=self.tree,
+            discr=self.discr,
             sources_in_element_starts=sources_in_element_starts,
-            sources_in_element_lists=sources_in_element_lists), evt
+            sources_in_element_lists=sources_in_element_lists,
+        ), evt
+
 
 # }}} End elements-to-sources lookup builder
 
 
 # {{{ leaves-to-nodes lookup builder
+
 
 class LeavesToNodesLookupBuilder:
     """Given a :mod:`meshmod` mesh and a :mod:`boxtree.Tree`, both discretizing
@@ -480,12 +537,15 @@ class LeavesToNodesLookupBuilder:
         assert trav.tree.dimensions == discr.dim
         self.dim = discr.dim
         self.context = context
+        self.boxtree_actx = _get_boxtree_actx(context)
         self.trav = trav
         self.discr = discr
 
         from boxtree.area_query import LeavesToBallsLookupBuilder
-        self.leaves_to_balls_lookup_builder = \
-            LeavesToBallsLookupBuilder(self.context)
+
+        self.leaves_to_balls_lookup_builder = LeavesToBallsLookupBuilder(
+            self.boxtree_actx
+        )
 
     def __call__(self, actx, tol=1e-12, wait_for=None):
         """
@@ -493,30 +553,38 @@ class LeavesToNodesLookupBuilder:
         :tol: nodes close enough to the boundary will be treated as
             lying on the boundary, whose interpolated values are averaged.
         """
-        if not isinstance(actx, PyOpenCLArrayContext):
+        if not isinstance(actx, MeshmodePyOpenCLArrayContext):
             if isinstance(actx, cl.CommandQueue):
                 from warnings import warn
-                warn("Command queue passed to the interpolator. "
-                     "Supply an array context to enable proper caching.")
-                actx = PyOpenCLArrayContext(actx)
+
+                warn(
+                    "Command queue passed to the interpolator. "
+                    "Supply an array context to enable proper caching."
+                )
+                actx = MeshmodePyOpenCLArrayContext(actx)
             else:
                 raise ValueError
 
-        nodes = flatten(thaw(actx, self.discr.nodes()))
+        nodes = flatten(actx.thaw(self.discr.nodes()), actx, leaf_class=DOFArray)
         radii = cl.array.zeros_like(nodes[0]) + tol
 
         lbl_lookup, evt = self.leaves_to_balls_lookup_builder(
-            actx.queue, self.trav.tree, nodes, radii, wait_for=wait_for)
+            self.boxtree_actx, self.trav.tree, nodes, radii, wait_for=wait_for
+        )
 
         return LeavesToNodesLookup(
-            trav=self.trav, discr=self.discr,
+            trav=self.trav,
+            discr=self.discr,
             nodes_in_leaf_starts=lbl_lookup.balls_near_box_starts,
-            nodes_in_leaf_lists=lbl_lookup.balls_near_box_lists), evt
+            nodes_in_leaf_lists=lbl_lookup.balls_near_box_lists,
+        ), evt
+
 
 # }}} End leaves-to-nodes lookup builder
 
 
 # {{{ transform helper
+
 
 def compute_affine_transform(source_simplex, target_simplex):
     """Computes A and b for the affine transform :math:`y = A x + b`
@@ -563,16 +631,17 @@ def invert_affine_transform(mat_a, disp_b):
     :param disp_b: a dim*(dim+1) :mod:`numpy` array
     """
     iva = np.linalg.inv(mat_a)
-    ivb = - iva @ disp_b
+    ivb = -iva @ disp_b
     return iva, ivb
+
 
 # }}} End transform helper
 
 
 # {{{ from meshmode interpolation
 
-def interpolate_from_meshmode(actx, dof_vec, elements_to_sources_lookup,
-                              order="tree"):
+
+def interpolate_from_meshmode(actx, dof_vec, elements_to_sources_lookup, order="tree"):
     """Interpolate a DoF vector from :mod:`meshmode`.
 
     :arg dof_vec: a DoF vector representing a field in :mod:`meshmode`
@@ -594,12 +663,15 @@ def interpolate_from_meshmode(actx, dof_vec, elements_to_sources_lookup,
     if not isinstance(dof_vec, cl.array.Array):
         raise TypeError("non-array passed to interpolator")
 
-    if not isinstance(actx, PyOpenCLArrayContext):
+    if not isinstance(actx, MeshmodePyOpenCLArrayContext):
         if isinstance(actx, cl.CommandQueue):
             from warnings import warn
-            warn("Command queue passed to the interpolator. "
-                 "Supply an array context to enable proper caching.")
-            actx = PyOpenCLArrayContext(actx)
+
+            warn(
+                "Command queue passed to the interpolator. "
+                "Supply an array context to enable proper caching."
+            )
+            actx = MeshmodePyOpenCLArrayContext(actx)
         else:
             raise ValueError
 
@@ -611,7 +683,8 @@ def interpolate_from_meshmode(actx, dof_vec, elements_to_sources_lookup,
     if not degroup.is_affine:
         raise ValueError(
             "interpolation requires global-to-local map, "
-            "which is only available for affinely mapped elements")
+            "which is only available for affinely mapped elements"
+        )
 
     mesh = elements_to_sources_lookup.discr.mesh
     dim = elements_to_sources_lookup.discr.dim
@@ -627,14 +700,17 @@ def interpolate_from_meshmode(actx, dof_vec, elements_to_sources_lookup,
     # This step computes `unit_sources`, the list of inversely
     # mapped source points.
 
-    sources_in_element_starts = \
+    sources_in_element_starts = (
         elements_to_sources_lookup.sources_in_element_starts.get(actx.queue)
-    sources_in_element_lists = \
-        elements_to_sources_lookup.sources_in_element_lists.get(actx.queue)
-    tree = elements_to_sources_lookup.tree.get(actx.queue)
+    )
+    sources_in_element_lists = elements_to_sources_lookup.sources_in_element_lists.get(
+        actx.queue
+    )
+    tree = _get_boxtree_actx(actx).to_numpy(elements_to_sources_lookup.tree)
 
     unit_sources_host = make_obj_array(
-            [np.zeros_like(srccrd) for srccrd in tree.sources])
+        [np.zeros_like(srccrd) for srccrd in tree.sources]
+    )
 
     for iel in range(degroup.nelements):
         vertex_ids = megroup.vertex_indices[iel]
@@ -645,15 +721,16 @@ def interpolate_from_meshmode(actx, dof_vec, elements_to_sources_lookup,
         end = sources_in_element_starts[iel + 1]
         source_ids_in_el = sources_in_element_lists[beg:end]
         sources_in_el = np.vstack(
-            [tree.sources[iaxis][source_ids_in_el] for iaxis in range(dim)])
+            [tree.sources[iaxis][source_ids_in_el] for iaxis in range(dim)]
+        )
 
         ivmapped_el_sources = afa @ sources_in_el + afb.reshape([dim, 1])
         for iaxis in range(dim):
-            unit_sources_host[iaxis][source_ids_in_el] = \
-                ivmapped_el_sources[iaxis, :]
+            unit_sources_host[iaxis][source_ids_in_el] = ivmapped_el_sources[iaxis, :]
 
     unit_sources = make_obj_array(
-        [cl.array.to_device(actx.queue, usc) for usc in unit_sources_host])
+        [cl.array.to_device(actx.queue, usc) for usc in unit_sources_host]
+    )
 
     # -----------------------------------------------------
     # Carry out evaluations in the local (template) frames.
@@ -668,17 +745,18 @@ def interpolate_from_meshmode(actx, dof_vec, elements_to_sources_lookup,
     # that the previous step can be swapped with a kernel without
     # interrupting the followed computation.
 
-    mapped_sources = np.vstack(
-        [usc.get(actx.queue) for usc in unit_sources])
+    mapped_sources = np.vstack([usc.get(actx.queue) for usc in unit_sources])
 
-    basis_funcs = degroup.basis()
+    basis_funcs = degroup.basis_obj().functions
 
-    dof_vec_view = unflatten(
-            actx, elements_to_sources_lookup.discr, dof_vec)[0]
+    from arraycontext.impl.pyopencl.taggable_cl_array import to_tagged_cl_array
+
+    dof_template = elements_to_sources_lookup.discr.zeros(actx, dtype=dof_vec.dtype)
+    dof_vec_view = unflatten(dof_template, to_tagged_cl_array(dof_vec), actx)[0]
     dof_vec_view = dof_vec_view.get()
 
     sym_shape = dof_vec.shape[:-1]
-    source_vec = np.zeros(sym_shape + (tree.nsources, ))
+    source_vec = np.zeros(sym_shape + (tree.nsources,))
 
     for iel in range(degroup.nelements):
         beg = sources_in_element_starts[iel]
@@ -689,19 +767,21 @@ def interpolate_from_meshmode(actx, dof_vec, elements_to_sources_lookup,
 
         # resampling matrix built from Vandermonde matrices
         import modepy as mp
+
         rsplm = mp.resampling_matrix(
-                basis=basis_funcs,
-                new_nodes=mapped_sources_in_el,
-                old_nodes=degroup.unit_nodes)
+            basis=basis_funcs,
+            new_nodes=mapped_sources_in_el,
+            old_nodes=degroup.unit_nodes,
+        )
 
         if len(sym_shape) == 0:
             local_coeffs = local_dof_vec
             source_vec[source_ids_in_el] = rsplm @ local_coeffs
         else:
             from pytools import indices_in_shape
+
             for sym_id in indices_in_shape(sym_shape):
-                source_vec[sym_id + (source_ids_in_el, )] = \
-                    rsplm @ local_dof_vec[sym_id]
+                source_vec[sym_id + (source_ids_in_el,)] = rsplm @ local_dof_vec[sym_id]
 
     source_vec = cl.array.to_device(actx.queue, source_vec)
 
@@ -714,13 +794,14 @@ def interpolate_from_meshmode(actx, dof_vec, elements_to_sources_lookup,
 
     return source_vec
 
+
 # }}} End from meshmode interpolation
 
 
 # {{{ to meshmode interpolation
 
-def interpolate_to_meshmode(actx, potential, leaves_to_nodes_lookup,
-                            order="tree"):
+
+def interpolate_to_meshmode(actx, potential, leaves_to_nodes_lookup, order="tree"):
     """
     :arg potential: a DoF vector representing a field in :mod:`volumential`,
         in tree order.
@@ -737,39 +818,56 @@ def interpolate_to_meshmode(actx, potential, leaves_to_nodes_lookup,
     else:
         raise ValueError(f"order must be 'tree' or 'user' (got {order}).")
 
-    if not isinstance(actx, PyOpenCLArrayContext):
+    if not isinstance(actx, MeshmodePyOpenCLArrayContext):
         if isinstance(actx, cl.CommandQueue):
             from warnings import warn
-            warn("Command queue passed to the interpolator. "
-                 "Supply an array context to enable proper caching.")
-            actx = PyOpenCLArrayContext(actx)
+
+            warn(
+                "Command queue passed to the interpolator. "
+                "Supply an array context to enable proper caching."
+            )
+            actx = MeshmodePyOpenCLArrayContext(actx)
         else:
             raise ValueError
 
-    target_points = flatten(thaw(actx, leaves_to_nodes_lookup.discr.nodes()))
+    target_points = flatten(
+        actx.thaw(leaves_to_nodes_lookup.discr.nodes()),
+        actx,
+        leaf_class=DOFArray,
+    )
 
     traversal = leaves_to_nodes_lookup.trav
     tree = leaves_to_nodes_lookup.trav.tree
 
     dim = tree.dimensions
 
+    from volumential.volume_fmm import interpolate_volume_potential
+
     # infer q_order from tree
     pts_per_box = tree.ntargets // traversal.ntarget_boxes
     assert pts_per_box * traversal.ntarget_boxes == tree.ntargets
 
     # allow for +/- 0.25 floating point error
-    q_order = int(pts_per_box**(1 / dim) + 0.25)
+    q_order = int(pts_per_box ** (1 / dim) + 0.25)
     assert q_order**dim == pts_per_box
 
     interp_p = interpolate_volume_potential(
-            target_points=target_points, traversal=traversal,
-            wrangler=None, potential=potential,
-            potential_in_tree_order=potential_in_tree_order,
-            dim=dim, tree=tree, queue=actx.queue, q_order=q_order,
-            dtype=potential.dtype, lbl_lookup=None,
-            balls_near_box_starts=leaves_to_nodes_lookup.nodes_in_leaf_starts,
-            balls_near_box_lists=leaves_to_nodes_lookup.nodes_in_leaf_lists)
+        target_points=target_points,
+        traversal=traversal,
+        wrangler=None,
+        potential=potential,
+        potential_in_tree_order=potential_in_tree_order,
+        dim=dim,
+        tree=tree,
+        queue=actx.queue,
+        q_order=q_order,
+        dtype=potential.dtype,
+        lbl_lookup=None,
+        balls_near_box_starts=leaves_to_nodes_lookup.nodes_in_leaf_starts,
+        balls_near_box_lists=leaves_to_nodes_lookup.nodes_in_leaf_lists,
+    )
 
     return interp_p
+
 
 # }}} End to meshmode interpolation

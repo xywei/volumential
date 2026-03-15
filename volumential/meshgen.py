@@ -34,9 +34,10 @@ Mesh generation
 import logging
 
 import numpy as np
-
 import pyopencl as cl
 from pytools.obj_array import make_obj_array
+
+from volumential.tree_interactive_build import BoxTree, QuadratureOnBoxTree
 
 
 logger = logging.getLogger(__name__)
@@ -85,7 +86,7 @@ class MeshGenBase:
 
         # plug in dimension-specific details
         self.dimension_specific_setup()
-        self.n_q_points = self.degree ** self.dim
+        self.n_q_points = self.degree**self.dim
 
         self.boxtree = BoxTree()
         self.boxtree.generate_uniform_boxtree(
@@ -94,9 +95,19 @@ class MeshGenBase:
             root_extent=self.root_extent,
             root_vertex=self.root_vertex,
         )
-        self.quadrature = QuadratureOnBoxTree(
-            self.boxtree, self.quadrature_formula
-        )
+        self.quadrature = QuadratureOnBoxTree(self.boxtree, self.quadrature_formula)
+
+    def _leaf_boxes(self):
+        return self.boxtree.active_boxes.get()
+
+    def _leaf_levels(self):
+        return self.boxtree.box_levels.get()[self._leaf_boxes()]
+
+    def _leaf_centers(self):
+        return self.boxtree.box_centers.get()[:, self._leaf_boxes()].T
+
+    def _leaf_side_lengths(self):
+        return self.boxtree.root_extent / (2 ** self._leaf_levels())
 
     def dimension_specific_setup(self):
         pass
@@ -116,15 +127,13 @@ class MeshGenBase:
         return self.quadrature.get_q_weights(self.queue)
 
     def get_q_weights(self):
-        q_weights_dev = self.get_q_weights_dev()
-        return q_weights_dev.get(self.queue)
+        return self.get_q_weights_dev().get(self.queue)
 
     def get_cell_measures_dev(self):
         return self.quadrature.get_cell_measures(self.queue)
 
     def get_cell_measures(self):
-        cell_measures_dev = self.get_cell_measures_dev()
-        return cell_measures_dev.get(self.queue)
+        return self.get_cell_measures_dev().get(self.queue)
 
     def get_cell_centers_dev(self):
         return self.quadrature.get_cell_centers(self.queue)
@@ -147,17 +156,45 @@ class MeshGenBase:
     def n_active_cells(self):
         return self.boxtree.n_active_boxes
 
-    def update_mesh(
-        self, criteria, top_fraction_of_cells, bottom_fraction_of_cells
-    ):
-        # TODO
-        raise NotImplementedError
+    def update_mesh(self, criteria, top_fraction_of_cells, bottom_fraction_of_cells):
+        criteria = np.asarray(criteria)
+        leaf_boxes = self._leaf_boxes()
+
+        if len(criteria) != len(leaf_boxes):
+            raise ValueError("criteria must match the number of active cells")
+
+        nleaves = len(leaf_boxes)
+        if nleaves == 0:
+            return
+
+        refine_count = min(nleaves, int(np.ceil(top_fraction_of_cells * nleaves)))
+        coarsen_count = min(nleaves, int(np.floor(bottom_fraction_of_cells * nleaves)))
+
+        refine_flags = np.zeros(self.boxtree.nboxes, dtype=bool)
+        coarsen_flags = np.zeros(self.boxtree.nboxes, dtype=bool)
+
+        order = np.argsort(criteria)
+
+        if refine_count:
+            refine_leaf_boxes = leaf_boxes[order[-refine_count:]]
+            refine_flags[refine_leaf_boxes] = True
+
+        if coarsen_count:
+            coarsen_leaf_boxes = leaf_boxes[order[:coarsen_count]]
+            coarsen_flags[coarsen_leaf_boxes] = True
+
+        coarsen_flags[refine_flags] = False
+
+        self.boxtree.refine_and_coarsen(
+            refine_flags=refine_flags,
+            coarsen_flags=coarsen_flags,
+            error_on_ignored_flags=False,
+        )
 
     def print_info(self, logging_func=logger.info):
         logging_func("Number of cells: " + str(self.n_cells()))
         logging_func("Number of active cells: " + str(self.n_active_cells()))
-        logging_func("Number of quad points per cell: "
-                + str(self.n_q_points))
+        logging_func("Number of quad points per cell: " + str(self.n_q_points))
 
     def generate_gmsh(self, filename):
         """
@@ -182,8 +219,12 @@ except ImportError as e:
     logger.warning("Meshgen via Deal.II is not present or unusable.")
 
     try:
-        logger.info("Trying out BoxTree.TreeInteractiveBuild interface.")
-        import boxtree.tree_interactive_build  # noqa: F401
+        logger.info("Trying out current boxtree tree-of-boxes interface.")
+        from boxtree import (
+            make_tree_of_boxes_root,
+            refine_and_coarsen_tree_of_boxes,
+            uniformly_refine_tree_of_boxes,
+        )
         from modepy import LegendreGaussQuadrature
 
         provider = "meshgen_boxtree"
@@ -195,8 +236,7 @@ except ImportError as e:
 
     else:
         # {{{ Meshgen via BoxTree
-        logger.info("Using Meshgen via BoxTree interface.")
-        from boxtree.tree_interactive_build import BoxTree, QuadratureOnBoxTree
+        logger.info("Using meshgen via current boxtree tree-of-boxes interface.")
 
         def greet():
             return "Hello from Meshgen via BoxTree!"
@@ -213,32 +253,22 @@ except ImportError as e:
             if "level" in kwargs:
                 nlevels = kwargs["level"]
 
-            tree = BoxTree()
-            tree.generate_uniform_boxtree(
-                queue, nlevels=nlevels, root_extent=2, root_vertex=np.zeros(dim) - 1
-            )
-            quad_rule = LegendreGaussQuadrature(degree - 1)
-            quad = QuadratureOnBoxTree(tree, quad_rule)
-            q_weights = quad.get_q_weights(queue).get(queue)
-            q_points_dev = quad.get_q_points(queue)
-            n_all_q_points = len(q_weights)
-            q_points = np.zeros((n_all_q_points, dim))
-            for d in range(dim):
-                q_points[:, d] = q_points_dev[d].get(queue)
+            mesh_cls = {1: MeshGen1D, 2: MeshGen2D, 3: MeshGen3D}[dim]
+            mesh = mesh_cls(degree, nlevels, a=-1, b=1, queue=queue)
+            q_points = mesh.get_q_points()
+            q_weights = mesh.get_q_weights()
 
             # Adding a placeholder for deprecated point radii
             return (q_points, q_weights, None)
 
         class MeshGen1D(MeshGenBase):
-            """Meshgen in 1D
-            """
+            """Meshgen in 1D"""
 
             def dimension_specific_setup(self):
                 assert self.dim == 1
 
         class MeshGen2D(MeshGenBase):
-            """Meshgen in 2D
-            """
+            """Meshgen in 2D"""
 
             def dimension_specific_setup(self):
                 if self.dim == 1:
@@ -249,8 +279,7 @@ except ImportError as e:
                     assert self.dim == 2
 
         class MeshGen3D(MeshGenBase):
-            """Meshgen in 3D
-            """
+            """Meshgen in 3D"""
 
             def dimension_specific_setup(self):
                 if self.dim == 1:
@@ -269,13 +298,14 @@ else:
 
     def make_uniform_cubic_grid(degree, level, dim, queue=None):
         from volumential.meshgen_dealii import make_uniform_cubic_grid as _mucg
+
         return _mucg(degree, level, dim)
 
 
 # {{{ mesh utils
 
-def build_geometry_info(ctx, queue, dim, q_order, mesh,
-                             bbox=None, a=None, b=None):
+
+def build_geometry_info(ctx, queue, dim, q_order, mesh, bbox=None, a=None, b=None):
     """Build tree, traversal and other geo info for FMM computation,
     given the box mesh over/encompassing the domain.
 
@@ -305,31 +335,36 @@ def build_geometry_info(ctx, queue, dim, q_order, mesh,
     q_points = np.ascontiguousarray(np.transpose(q_points))
 
     q_points = make_obj_array(
-            [cl.array.to_device(queue, q_points[i])
-                for i in range(dim)])
+        [cl.array.to_device(queue, q_points[i]) for i in range(dim)]
+    )
     q_weights = cl.array.to_device(queue, q_weights)
 
     if bbox is None:
         assert np.isscalar(a) and np.isscalar(b)
-        bbox = np.array([[a, b], ] * dim)
+        bbox = np.array([[a, b]] * dim)
 
     from boxtree import TreeBuilder
-    tb = TreeBuilder(ctx)
+    from boxtree.array_context import PyOpenCLArrayContext
+
+    actx = PyOpenCLArrayContext(queue)
+
+    tb = TreeBuilder(actx)
 
     tree, _ = tb(
-        queue,
+        actx,
         particles=q_points,
         targets=q_points,
-        bbox=bbox,
         max_particles_in_box=q_order**dim * (2**dim) - 1,
         kind="adaptive-level-restricted",
     )
 
     from boxtree.traversal import FMMTraversalBuilder
-    tg = FMMTraversalBuilder(ctx)
-    trav, _ = tg(queue, tree)
+
+    tg = FMMTraversalBuilder(actx)
+    trav, _ = tg(actx, tree)
 
     return q_points, q_weights, tree, trav
+
 
 # }}} End mesh utils
 

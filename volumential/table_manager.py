@@ -49,12 +49,13 @@ class ConstantKernel(ExpressionKernel):
         expr = 1
         scaling = 1
 
-        super().__init__(
-            dim, expression=expr,
-            global_scaling_const=scaling, is_complex_valued=False
-        )
+        super().__init__(dim, expression=expr, global_scaling_const=scaling)
 
     has_efficient_scale_adjustment = True
+
+    @property
+    def is_complex_valued(self):
+        return False
 
     def adjust_for_kernel_scaling(self, expr, rscale, nderivatives):
         return expr / rscale
@@ -87,11 +88,15 @@ class NearFieldInteractionTableManager:
     back to read-only if that fails.
     """
 
-    def __init__(self, dataset_filename="nft.hdf5",
-            root_extent=1, dtype=np.float64,
-            read_only="auto", **kwargs):
-        """Constructor.
-        """
+    def __init__(
+        self,
+        dataset_filename="nft.hdf5",
+        root_extent=1,
+        dtype=np.float64,
+        read_only="auto",
+        **kwargs,
+    ):
+        """Constructor."""
         self.dtype = dtype
 
         self.filename = dataset_filename
@@ -102,6 +107,7 @@ class NearFieldInteractionTableManager:
                 self.datafile = hdf.File(self.filename, "a")
             except OSError as e:
                 from warnings import warn
+
                 warn("Trying to open in read/write mode failed: %s" % str(e))
                 warn("Opening table dataset %s in read-only mode." % self.filename)
                 self.datafile = hdf.File(self.filename, "r")
@@ -115,9 +121,7 @@ class NearFieldInteractionTableManager:
 
         # If the file exists, it must be for the same root_extent
         if "root_extent" in self.datafile.attrs:
-            if not abs(
-                    self.datafile.attrs["root_extent"] - self.root_extent
-                    ) < 1e-15:
+            if not abs(self.datafile.attrs["root_extent"] - self.root_extent) < 1e-15:
                 raise RuntimeError(
                     "The table cache file "
                     + self.filename
@@ -159,7 +163,7 @@ class NearFieldInteractionTableManager:
         force_recompute=False,
         compute_method=None,
         queue=None,
-        **kwargs
+        **kwargs,
     ):
         """Primary user interface. Get the specified table regardless of how.
         In the case of a cache miss or a forced re-computation, the method
@@ -206,7 +210,7 @@ class NearFieldInteractionTableManager:
                 source_box_level,
                 compute_method,
                 queue=queue,
-                **kwargs
+                **kwargs,
             )
 
         elif force_recompute:
@@ -219,23 +223,21 @@ class NearFieldInteractionTableManager:
                 source_box_level,
                 compute_method,
                 queue=queue,
-                **kwargs
+                **kwargs,
             )
 
         else:
             try:
-
                 table = self.load_saved_table(
                     dim,
                     kernel_type,
                     q_order,
                     source_box_level,
                     compute_method,
-                    **kwargs
+                    **kwargs,
                 )
 
             except KeyError:
-
                 import traceback
 
                 logger.debug(traceback.format_exc())
@@ -249,7 +251,7 @@ class NearFieldInteractionTableManager:
                     source_box_level,
                     compute_method,
                     queue=queue,
-                    **kwargs
+                    **kwargs,
                 )
 
             # Ensure loaded table matches requirements specified in kwargs
@@ -317,10 +319,9 @@ class NearFieldInteractionTableManager:
         q_order,
         source_box_level=0,
         compute_method=None,
-        **kwargs
+        **kwargs,
     ):
-        """Load a table saved in the hdf5 file.
-        """
+        """Load a table saved in the hdf5 file."""
 
         q_order = int(q_order)
         assert q_order >= 1
@@ -372,7 +373,7 @@ class NearFieldInteractionTableManager:
             kernel_type=self.get_kernel_function_type(dim, kernel_type),
             sumpy_kernel=sumpy_knl,
             source_box_extent=self.root_extent * (2 ** (-source_box_level)),
-            **self.table_extra_kwargs
+            **self.table_extra_kwargs,
         )
 
         assert abs(table.source_box_extent - grp.attrs["source_box_extent"]) < 1e-15
@@ -384,8 +385,7 @@ class NearFieldInteractionTableManager:
         if "mode_normalizers" in grp:
             table.mode_normalizers[...] = grp["mode_normalizers"]
         if "kernel_exterior_normalizers" in grp:
-            table.kernel_exterior_normalizers[...] = \
-                    grp["kernel_exterior_normalizers"]
+            table.kernel_exterior_normalizers[...] = grp["kernel_exterior_normalizers"]
 
         tmp_case_vecs = np.array(table.interaction_case_vecs)
         tmp_case_vecs[...] = grp["interaction_case_vecs"]
@@ -438,8 +438,7 @@ class NearFieldInteractionTableManager:
         return knl_func
 
     def get_sumpy_kernel(self, dim, kernel_type):
-        """Sumpy (symbolic) version of the kernel.
-        """
+        """Sumpy (symbolic) version of the kernel."""
 
         if kernel_type == "Laplace":
             from sumpy.kernel import LaplaceKernel
@@ -487,7 +486,9 @@ class NearFieldInteractionTableManager:
 
         elif kernel_type == "Cahn-Hilliard-Laplacian":
             from sumpy.kernel import (
-                FactorizedBiharmonicKernel, LaplacianTargetDerivative)
+                FactorizedBiharmonicKernel,
+                LaplacianTargetDerivative,
+            )
 
             return LaplacianTargetDerivative(FactorizedBiharmonicKernel(dim))
 
@@ -498,8 +499,10 @@ class NearFieldInteractionTableManager:
 
         elif kernel_type == "Cahn-Hilliard-Laplacian-Dx":
             from sumpy.kernel import (
-                AxisTargetDerivative, FactorizedBiharmonicKernel,
-                LaplacianTargetDerivative)
+                AxisTargetDerivative,
+                FactorizedBiharmonicKernel,
+                LaplacianTargetDerivative,
+            )
 
             return AxisTargetDerivative(
                 0, LaplacianTargetDerivative(FactorizedBiharmonicKernel(dim))
@@ -507,8 +510,10 @@ class NearFieldInteractionTableManager:
 
         elif kernel_type == "Cahn-Hilliard-Laplacian-Dy":
             from sumpy.kernel import (
-                AxisTargetDerivative, FactorizedBiharmonicKernel,
-                LaplacianTargetDerivative)
+                AxisTargetDerivative,
+                FactorizedBiharmonicKernel,
+                LaplacianTargetDerivative,
+            )
 
             return AxisTargetDerivative(
                 1, LaplacianTargetDerivative(FactorizedBiharmonicKernel(dim))
@@ -548,8 +553,7 @@ class NearFieldInteractionTableManager:
             return None
 
     def update_dataset(self, group, dataset_name, data_array):
-        """Update stored data.
-        """
+        """Update stored data."""
         if data_array is None:
             logger.debug("No data to save for %s" % dataset_name)
             return
@@ -574,10 +578,9 @@ class NearFieldInteractionTableManager:
         compute_method=None,
         cl_ctx=None,
         queue=None,
-        **kwargs
+        **kwargs,
     ):
-        """Performs the precomputation and stores the results.
-        """
+        """Performs the precomputation and stores the results."""
 
         if compute_method is None:
             logger.debug("Using default compute_method (Transform)")
@@ -620,7 +623,7 @@ class NearFieldInteractionTableManager:
             sumpy_kernel=sumpy_knl,
             build_method=compute_method,
             source_box_extent=self.root_extent * (2 ** (-source_box_level)),
-            **self.table_extra_kwargs
+            **self.table_extra_kwargs,
         )
 
         if 0:
@@ -644,8 +647,7 @@ class NearFieldInteractionTableManager:
         grp.attrs["dim"] = table.dim
         grp.attrs["n_pairs"] = table.n_pairs
         grp.attrs["source_box_level"] = source_box_level
-        grp.attrs["source_box_extent"] = self.root_extent * (
-                2 ** (-source_box_level))
+        grp.attrs["source_box_extent"] = self.root_extent * (2 ** (-source_box_level))
 
         for key, kval in kwargs.items():
             if isinstance(kval, (int, float, complex, str)):
@@ -654,10 +656,10 @@ class NearFieldInteractionTableManager:
         self.update_dataset(grp, "q_points", table.q_points)
         self.update_dataset(grp, "data", table.data)
         self.update_dataset(grp, "mode_normalizers", table.mode_normalizers)
-        self.update_dataset(grp, "kernel_exterior_normalizers",
-                table.kernel_exterior_normalizers)
-        self.update_dataset(grp, "interaction_case_vecs",
-                table.interaction_case_vecs)
+        self.update_dataset(
+            grp, "kernel_exterior_normalizers", table.kernel_exterior_normalizers
+        )
+        self.update_dataset(grp, "interaction_case_vecs", table.interaction_case_vecs)
         self.update_dataset(grp, "case_indices", table.case_indices)
 
         distinct_numbers = set()
