@@ -23,6 +23,7 @@ THE SOFTWARE.
 import logging
 from numbers import Number
 
+import mpmath
 import numpy as np
 import scipy as sp
 
@@ -540,12 +541,14 @@ def tria_quad(
         return inv_afmp(inv_nlmp((rho, theta)))
 
     def inv_jacobian(rho, theta):
-        return j_inv_afmp * j_inv_nlmp((rho, theta))
+        value = np.asarray(j_inv_afmp * j_inv_nlmp((rho, theta)))
+        return float(value.reshape(-1)[0])
 
     # Transformed function is defined on [0,1]X[0,pi/2]
     def transformed_func(rho, theta):
         preimage = inv_mapping(rho, theta)
-        return func(preimage[0], preimage[1], *args)
+        value = np.asarray(func(preimage[0], preimage[1], *args))
+        return float(value.reshape(-1)[0])
 
     # Transformed function, when multiplied by jacobian, should have no
     # singularity (numerically special treatment still needed)
@@ -576,6 +579,361 @@ def tria_quad(
         miniteri=miniter,
         minitero=miniter,
     )
+
+
+def tria_quad_duffy_radial(
+    func,
+    tria,
+    args=(),
+    radial_rule="tanh-sinh",
+    deg_theta=20,
+    radial_quad_order=61,
+    mp_dps=50,
+):
+    assert len(tria) == 3
+    for p in tria:
+        assert len(p) == 2
+
+    if is_collinear(*tria):
+        return (0.0, 0.0)
+
+    assert np.isfinite(func(tria[1][0], tria[1][1], *args))
+    assert np.isfinite(func(tria[2][0], tria[2][1], *args))
+
+    template_tria = ((0, 0), (1, 0), (0, 1))
+    afmp, j_afmp, inv_afmp, j_inv_afmp = solve_affine_map_2d(tria, template_tria)
+    nlmp, j_nlmp, inv_nlmp, j_inv_nlmp = tria2rect_map_2d()
+
+    def inv_mapping(rho, theta):
+        return inv_afmp(inv_nlmp((rho, theta)))
+
+    def inv_jacobian(rho, theta):
+        return j_inv_afmp * j_inv_nlmp((rho, theta))
+
+    def transformed_func(rho, theta):
+        preimage = inv_mapping(rho, theta)
+        return func(preimage[0], preimage[1], *args)
+
+    def integrand(rho, theta):
+        prior = np.asarray(transformed_func(rho, theta) * inv_jacobian(rho, theta))
+        prior = float(prior.reshape(-1)[0])
+        if not np.isfinite(prior):
+            if rho < 1.0e-14:
+                return 0.0
+            raise FloatingPointError((rho, theta, prior))
+        return prior
+
+    th_nodes, th_weights = sp.special.p_roots(deg_theta)
+    th_nodes = 0.25 * np.pi * (th_nodes + 1.0)
+    th_weights = 0.25 * np.pi * th_weights
+
+    total = 0.0
+    if radial_rule == "tanh-sinh":
+        old_dps = mpmath.mp.dps
+        mpmath.mp.dps = mp_dps
+        try:
+            for theta, wt in zip(th_nodes, th_weights):
+                radial_val = mpmath.quadts(
+                    lambda rho: integrand(float(rho), theta), [0, 1]
+                )
+                total += wt * float(radial_val)
+        finally:
+            mpmath.mp.dps = old_dps
+    elif radial_rule == "tanh-sinh-fast":
+        n = max(3, int(radial_quad_order))
+        h = 1.0 / np.sqrt(n)
+        k = np.arange(-n, n + 1, dtype=np.float64)
+        t = h * k
+        sh_t = np.sinh(t)
+        ch_t = np.cosh(t)
+        arg = 0.5 * np.pi * sh_t
+        rho_nodes = 0.5 * (1.0 + np.tanh(arg))
+        rho_weights = 0.25 * np.pi * h * ch_t / np.cosh(arg) ** 2
+
+        mask = (rho_nodes > 0.0) & (rho_nodes < 1.0) & np.isfinite(rho_weights)
+        rho_nodes = rho_nodes[mask]
+        rho_weights = rho_weights[mask]
+
+        for theta, wt in zip(th_nodes, th_weights):
+            vals = np.array(
+                [integrand(rho, theta) for rho in rho_nodes], dtype=np.float64
+            )
+            total += wt * np.dot(rho_weights, vals)
+    elif radial_rule == "adaptive":
+        for theta, wt in zip(th_nodes, th_weights):
+            radial_val, _ = adaptive_quadrature(
+                lambda rho: integrand(rho, theta),
+                0,
+                1,
+                tol=1.0e-12,
+                rtol=1.0e-12,
+                maxiter=80,
+                vec_func=False,
+                miniter=3,
+            )
+            total += wt * float(radial_val)
+    else:
+        raise ValueError(f"unsupported radial_rule: {radial_rule}")
+
+    return total, 0.0
+
+
+def quadri_quad_duffy_radial(
+    func,
+    quadrilateral,
+    singular_point,
+    args=(),
+    radial_rule="tanh-sinh",
+    deg_theta=20,
+    radial_quad_order=61,
+    mp_dps=50,
+):
+    assert len(quadrilateral) == 4
+    for p in quadrilateral:
+        assert len(p) == 2
+
+    trias = [
+        (singular_point, quadrilateral[0], quadrilateral[1]),
+        (singular_point, quadrilateral[1], quadrilateral[2]),
+        (singular_point, quadrilateral[2], quadrilateral[3]),
+        (singular_point, quadrilateral[3], quadrilateral[0]),
+    ]
+
+    val = np.zeros(4)
+    err = np.zeros(4)
+    for i in range(4):
+        val[i], err[i] = tria_quad_duffy_radial(
+            func,
+            trias[i],
+            args=args,
+            radial_rule=radial_rule,
+            deg_theta=deg_theta,
+            radial_quad_order=radial_quad_order,
+            mp_dps=mp_dps,
+        )
+
+    return np.sum(val), np.linalg.norm(err)
+
+
+def box_quad_duffy_radial(
+    func,
+    a,
+    b,
+    c,
+    d,
+    singular_point,
+    args=(),
+    radial_rule="tanh-sinh",
+    deg_theta=20,
+    radial_quad_order=61,
+    mp_dps=50,
+):
+    box = ((a, c), (b, c), (b, d), (a, d))
+
+    if not isinstance(singular_point, tuple):
+        singular_point = (singular_point[0], singular_point[1])
+
+    singular_point = (max(singular_point[0], a), max(singular_point[1], c))
+    singular_point = (min(singular_point[0], b), min(singular_point[1], d))
+
+    return quadri_quad_duffy_radial(
+        func,
+        box,
+        singular_point,
+        args=args,
+        radial_rule=radial_rule,
+        deg_theta=deg_theta,
+        radial_quad_order=radial_quad_order,
+        mp_dps=mp_dps,
+    )
+
+
+def tria_quad_tanh_sinh_radial(func, tria, args=(), deg_theta=20, mp_dps=50):
+    return tria_quad_duffy_radial(
+        func,
+        tria,
+        args=args,
+        radial_rule="tanh-sinh",
+        deg_theta=deg_theta,
+        radial_quad_order=61,
+        mp_dps=mp_dps,
+    )
+
+
+def quadri_quad_tanh_sinh_radial(
+    func, quadrilateral, singular_point, args=(), deg_theta=20, mp_dps=50
+):
+    return quadri_quad_duffy_radial(
+        func,
+        quadrilateral,
+        singular_point,
+        args=args,
+        radial_rule="tanh-sinh",
+        deg_theta=deg_theta,
+        mp_dps=mp_dps,
+    )
+
+
+def box_quad_tanh_sinh_radial(
+    func, a, b, c, d, singular_point, args=(), deg_theta=20, mp_dps=50
+):
+    return box_quad_duffy_radial(
+        func,
+        a,
+        b,
+        c,
+        d,
+        singular_point,
+        args=args,
+        radial_rule="tanh-sinh",
+        deg_theta=deg_theta,
+        mp_dps=mp_dps,
+    )
+
+
+def _duffy_regular_nodes_weights(dim_minus_one, deg_regular):
+    if dim_minus_one == 0:
+        return [np.array([], dtype=np.float64)], [1.0]
+
+    nodes_1d, weights_1d = sp.special.p_roots(deg_regular)
+    nodes_1d = 0.5 * (nodes_1d + 1.0)
+    weights_1d = 0.5 * weights_1d
+
+    grids = np.meshgrid(*([nodes_1d] * dim_minus_one), indexing="ij")
+    wgrids = np.meshgrid(*([weights_1d] * dim_minus_one), indexing="ij")
+    nodes = np.stack([g.ravel() for g in grids], axis=-1)
+    weights = np.prod(np.array(wgrids), axis=0).ravel()
+    return nodes, weights
+
+
+def _duffy_radial_nodes_weights(radial_rule, radial_quad_order, mp_dps):
+    if radial_rule == "tanh-sinh-fast":
+        n = max(3, int(radial_quad_order))
+        h = 1.0 / np.sqrt(n)
+        k = np.arange(-n, n + 1, dtype=np.float64)
+        t = h * k
+        sh_t = np.sinh(t)
+        ch_t = np.cosh(t)
+        arg = 0.5 * np.pi * sh_t
+        rho_nodes = 0.5 * (1.0 + np.tanh(arg))
+        rho_weights = 0.25 * np.pi * h * ch_t / np.cosh(arg) ** 2
+        mask = (rho_nodes > 0.0) & (rho_nodes < 1.0) & np.isfinite(rho_weights)
+        return rho_nodes[mask], rho_weights[mask]
+    elif radial_rule == "tanh-sinh":
+        old_dps = mpmath.mp.dps
+        mpmath.mp.dps = mp_dps
+        try:
+            ts = mpmath.calculus.quadrature.TanhSinh(mpmath.mp)
+            prec = int(np.log(10) / np.log(2) * mpmath.mp.dps)
+            nodes = ts.calc_nodes(degree=max(3, int(radial_quad_order // 5)), prec=prec)
+            rho_nodes = np.array([float(p[0]) for p in nodes], dtype=np.float64)
+            rho_weights = np.array([float(p[1]) for p in nodes], dtype=np.float64)
+        finally:
+            mpmath.mp.dps = old_dps
+        rho_nodes = 0.5 * (rho_nodes + 1.0)
+        rho_weights = 0.5 * rho_weights
+        return rho_nodes, rho_weights
+    else:
+        raise ValueError(f"unsupported radial_rule node set: {radial_rule}")
+
+
+def box_quad_duffy_radial_nd(
+    func,
+    bounds,
+    singular_point,
+    args=(),
+    radial_rule="tanh-sinh-fast",
+    deg_regular=20,
+    radial_quad_order=61,
+    mp_dps=50,
+):
+    dim = len(bounds)
+    assert len(singular_point) == dim
+    singular_point = tuple(
+        min(max(float(singular_point[i]), bounds[i][0]), bounds[i][1])
+        for i in range(dim)
+    )
+
+    regular_nodes, regular_weights = _duffy_regular_nodes_weights(dim - 1, deg_regular)
+
+    if radial_rule == "adaptive":
+        radial_nodes = radial_weights = None
+    else:
+        radial_nodes, radial_weights = _duffy_radial_nodes_weights(
+            radial_rule, radial_quad_order, mp_dps
+        )
+
+    total = 0.0
+    from itertools import permutations, product
+
+    for signs in product([-1.0, 1.0], repeat=dim):
+        lengths = np.array(
+            [
+                singular_point[i] - bounds[i][0]
+                if signs[i] < 0
+                else bounds[i][1] - singular_point[i]
+                for i in range(dim)
+            ],
+            dtype=np.float64,
+        )
+        if np.any(lengths <= 0):
+            continue
+
+        box_scale = float(np.prod(lengths))
+
+        for perm in permutations(range(dim)):
+            perm = list(perm)
+
+            def eval_at_r(radial_r, tail_rs):
+                rs = np.empty(dim, dtype=np.float64)
+                rs[0] = radial_r
+                if dim > 1:
+                    rs[1:] = tail_rs
+
+                u = np.empty(dim, dtype=np.float64)
+                cumulative = 1.0
+                for i, axis in enumerate(perm):
+                    cumulative *= rs[i]
+                    u[axis] = cumulative
+
+                x = (
+                    np.array(singular_point, dtype=np.float64)
+                    + np.array(signs) * lengths * u
+                )
+                jac = box_scale * np.prod(
+                    [rs[i] ** (dim - 1 - i) for i in range(dim - 1)]
+                )
+                val = np.asarray(func(*x, *args))
+                val = float(val.reshape(-1)[0])
+                prior = val * jac
+                if not np.isfinite(prior):
+                    if radial_r < 1.0e-14:
+                        return 0.0
+                    raise FloatingPointError((radial_r, tail_rs, prior, x))
+                return prior
+
+            if radial_rule == "adaptive":
+                for tail_rs, w_tail in zip(regular_nodes, regular_weights):
+                    radial_val, _ = adaptive_quadrature(
+                        lambda rho: eval_at_r(rho, tail_rs),
+                        0,
+                        1,
+                        tol=1.0e-12,
+                        rtol=1.0e-12,
+                        maxiter=80,
+                        vec_func=False,
+                        miniter=3,
+                    )
+                    total += w_tail * float(radial_val)
+            else:
+                for tail_rs, w_tail in zip(regular_nodes, regular_weights):
+                    vals = np.array(
+                        [eval_at_r(rho, tail_rs) for rho in radial_nodes],
+                        dtype=np.float64,
+                    )
+                    total += w_tail * np.dot(radial_weights, vals)
+
+    return total, 0.0
 
 
 # }}}

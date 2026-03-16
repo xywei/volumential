@@ -351,12 +351,23 @@ class NearFieldInteractionTableManager:
             else:
                 knl_func = kwargs["knl_func"]
             sumpy_knl = None
+        elif compute_method == "DuffyRadial":
+            if "knl_func" not in kwargs:
+                knl_func = self.get_kernel_function(dim, kernel_type, **kwargs)
+            else:
+                knl_func = kwargs["knl_func"]
+            sumpy_knl = None
         elif compute_method == "DrosteSum":
-            knl_func = None
             if "sumpy_knl" not in kwargs:
                 sumpy_knl = self.get_sumpy_kernel(dim, kernel_type)
             else:
                 sumpy_knl = kwargs["sumpy_knl"]
+            if dim in (2, 3):
+                knl_func = vm.nearfield_potential_table.sumpy_kernel_to_lambda(
+                    sumpy_knl
+                )
+            else:
+                knl_func = None
         else:
             from warnings import warn
 
@@ -601,12 +612,23 @@ class NearFieldInteractionTableManager:
             else:
                 knl_func = kwargs["knl_func"]
             sumpy_knl = None
+        elif compute_method == "DuffyRadial":
+            if "knl_func" not in kwargs:
+                knl_func = self.get_kernel_function(dim, kernel_type, **kwargs)
+            else:
+                knl_func = kwargs["knl_func"]
+            sumpy_knl = None
         elif compute_method == "DrosteSum":
-            knl_func = None
             if "sumpy_knl" not in kwargs:
                 sumpy_knl = self.get_sumpy_kernel(dim, kernel_type)
             else:
                 sumpy_knl = kwargs["sumpy_knl"]
+            if dim in (2, 3):
+                knl_func = vm.nearfield_potential_table.sumpy_kernel_to_lambda(
+                    sumpy_knl
+                )
+            else:
+                knl_func = None
         else:
             raise NotImplementedError("Unsupported compute_method.")
 

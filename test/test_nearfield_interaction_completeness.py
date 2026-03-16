@@ -47,9 +47,11 @@ def drive_test_completeness(ctx, queue, dim, q_order):
 
     import volumential.meshgen as mg
 
-    q_points, q_weights, q_radii = mg.make_uniform_cubic_grid(
-        degree=q_order, level=n_levels, dim=dim
-    )
+    mesh_cls = {2: mg.MeshGen2D, 3: mg.MeshGen3D}[dim]
+    mesh = mesh_cls(q_order, n_levels, a, b)
+    q_points = mesh.get_q_points()
+    q_weights = mesh.get_q_weights()
+    q_radii = None
 
     assert len(q_points) == len(q_weights)
     assert q_points.shape[1] == dim
@@ -82,19 +84,11 @@ def drive_test_completeness(ctx, queue, dim, q_order):
     # tune max_particles_in_box to reconstruct the mesh
     # TODO: use points from FieldPlotter are used as target points for better
     # visuals
-    from boxtree import TreeBuilder
     from boxtree.array_context import PyOpenCLArrayContext
+    from volumential.tree_interactive_build import build_particle_tree_from_box_tree
 
     actx = PyOpenCLArrayContext(queue)
-
-    tb = TreeBuilder(actx)
-    tree, _ = tb(
-        actx,
-        particles=q_points,
-        targets=q_points,
-        max_particles_in_box=q_order**dim * (2**dim) - 1,
-        kind="adaptive-level-restricted",
-    )
+    tree = build_particle_tree_from_box_tree(actx, mesh.boxtree, q_points_org)
 
     from boxtree.traversal import FMMTraversalBuilder
 
@@ -116,7 +110,8 @@ def drive_test_completeness(ctx, queue, dim, q_order):
             queue=queue,
             n_levels=1,
             alpha=0,
-            compute_method="DrosteSum",
+            compute_method="DuffyRadial",
+            radial_rule="tanh-sinh-fast",
             n_brick_quad_points=50,
             adaptive_level=False,
             use_symmetry=True,
@@ -163,7 +158,7 @@ def drive_test_completeness(ctx, queue, dim, q_order):
         trav.neighbor_source_boxes_lists,
         mode_coefs=source_vals,
     )
-    pot = pot[0]
+    pot = actx.to_numpy(pot[0])
     for p in pot[0]:
         assert abs(p - 2**dim) < 1.0e-8
 
