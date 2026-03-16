@@ -28,6 +28,7 @@ from scipy.interpolate import BarycentricInterpolator as Interpolator
 
 import loopy as lp
 import pyopencl as cl
+from pytools import memoize_method
 
 import volumential.list1_gallery as gallery
 import volumential.singular_integral_2d as squad
@@ -723,6 +724,256 @@ class NearFieldInteractionTable:
 
         return (entry_id, integral)
 
+    def _get_barycentric_data(self):
+        xi = np.array([p[self.dim - 1] for p in self.q_points[: self.quad_order]])
+        bw = np.ones(self.quad_order, dtype=self.dtype)
+        for i in range(self.quad_order):
+            for j in range(self.quad_order):
+                if i != j:
+                    bw[i] /= xi[i] - xi[j]
+        return xi.astype(self.dtype), bw.astype(self.dtype)
+
+    @memoize_method
+    def _get_invariant_entry_info(self):
+        invariant_entry_ids = [
+            i for i in range(len(self.data)) if self.lookup_by_symmetry(i) == (i, i)
+        ]
+        entry_info = np.array(
+            [self.decode_index(i) for i in invariant_entry_ids], dtype=object
+        )
+        case_indices = np.array(
+            [info["case_index"] for info in entry_info], dtype=np.int32
+        )
+        target_point_indices = np.array(
+            [info["target_point_index"] for info in entry_info], dtype=np.int32
+        )
+        source_mode_indices = np.array(
+            [info["source_mode_index"] for info in entry_info], dtype=np.int32
+        )
+        mode_axes = np.array(
+            [self.unwrap_mode_index(idx) for idx in source_mode_indices],
+            dtype=np.int32,
+        )
+        return {
+            "entry_ids": invariant_entry_ids,
+            "case_indices": case_indices,
+            "target_point_indices": target_point_indices,
+            "source_mode_indices": source_mode_indices,
+            "mode_axes": mode_axes,
+        }
+
+    @memoize_method
+    def _get_case_target_points(self):
+        target_points = np.empty(
+            (self.dim, self.n_cases, self.n_q_points), dtype=self.dtype
+        )
+        for case_index in range(self.n_cases):
+            for tid in range(self.n_q_points):
+                target_points[:, case_index, tid] = np.asarray(
+                    self.find_target_point(tid, case_index), dtype=self.dtype
+                )
+        return target_points
+
+    @memoize_method
+    def _get_fused_invariant_duffy_table_2d_tunit(self):
+        from sumpy.assignment_collection import SymbolicAssignmentCollection
+        from sumpy.codegen import to_loopy_insns
+        from sumpy.symbolic import SympyToPymbolicMapper, make_sym_vector
+
+        dvec = make_sym_vector("dist", self.dim)
+        sac = SymbolicAssignmentCollection()
+        result_name = sac.assign_unique(
+            "knl_val",
+            self.integral_knl.postprocess_at_target(
+                self.integral_knl.postprocess_at_source(
+                    self.integral_knl.get_expression(dvec), dvec
+                ),
+                dvec,
+            ),
+        )
+        sac.run_global_cse()
+        loopy_insns = to_loopy_insns(
+            sac.assignments.items(),
+            vector_names={"dist"},
+            pymbolic_expr_maps=[self.integral_knl.get_code_transformer()],
+            retain_names=[result_name],
+            complex_dtype=np.complex128,
+        )
+        quad_inames = frozenset(["ientry", "itri", "itheta", "irho"])
+        quad_kernel_insns = [
+            insn.copy(within_inames=insn.within_inames | quad_inames)
+            for insn in loopy_insns
+        ]
+        sympy_conv = SympyToPymbolicMapper()
+        scaling_assignment = lp.Assignment(
+            id=None,
+            assignee="knl_scaling",
+            expression=sympy_conv(self.integral_knl.get_global_scaling_const()),
+            temp_var_type=lp.Optional(),
+        )
+
+        tunit = lp.make_kernel(
+            "{[ientry,itri,itheta,irho,iaxis,jq]: 0<=ientry<n_entries and 0<=itri<n_tri and 0<=itheta<n_theta and 0<=irho<n_rho and 0<=iaxis<dim and 0<=jq<q_order}",
+            [
+                r"""
+            for ientry, itri, itheta, irho
+                <> c2 = cos(theta_nodes[itheta])**2
+                <> s2 = sin(theta_nodes[itheta])**2
+                <> rho = rho_nodes[irho]
+                for iaxis
+                    <> edge1 = tri_v1[iaxis, ientry, itri] - tri_v0[iaxis, ientry, itri]
+                    <> edge2 = tri_v2[iaxis, ientry, itri] - tri_v0[iaxis, ientry, itri]
+                    <> quad_point = tri_v0[iaxis, ientry, itri] + rho*(c2*edge1 + s2*edge2)
+                    <> dist[iaxis] = quad_point - target_points[iaxis, ientry]
+                end
+                <> det = fabs((tri_v1[0, ientry, itri] - tri_v0[0, ientry, itri])*(tri_v2[1, ientry, itri] - tri_v0[1, ientry, itri]) - (tri_v1[1, ientry, itri] - tri_v0[1, ientry, itri])*(tri_v2[0, ientry, itri] - tri_v0[0, ientry, itri]))
+                <> qx = tri_v0[0, ientry, itri] + rho*(c2*(tri_v1[0, ientry, itri] - tri_v0[0, ientry, itri]) + s2*(tri_v2[0, ientry, itri] - tri_v0[0, ientry, itri]))
+                <> qy = tri_v0[1, ientry, itri] + rho*(c2*(tri_v1[1, ientry, itri] - tri_v0[1, ientry, itri]) + s2*(tri_v2[1, ientry, itri] - tri_v0[1, ientry, itri]))
+                <> denx = sum(jq, bary_w[jq] / (qx - interp_nodes[jq]))
+                <> deny = sum(jq, bary_w[jq] / (qy - interp_nodes[jq]))
+                <> basisx = (bary_w[mode_i0[ientry]] / (qx - interp_nodes[mode_i0[ientry]])) / denx
+                <> basisy = (bary_w[mode_i1[ientry]] / (qy - interp_nodes[mode_i1[ientry]])) / deny
+                <> quad_w = theta_weights[itheta] * rho_weights[irho] * det * rho * sin(2*theta_nodes[itheta])
+            end"""
+            ]
+            + quad_kernel_insns
+            + [scaling_assignment]
+            + [
+                r"""
+            result[ientry] = sum((itri, itheta, irho), knl_val * knl_scaling * quad_w * basisx * basisy)
+            """
+            ],
+            [
+                lp.ValueArg("dim,n_entries,n_tri,n_theta,n_rho,q_order", np.int32),
+                lp.GlobalArg("tri_v0", self.dtype, "dim,n_entries,n_tri"),
+                lp.GlobalArg("tri_v1", self.dtype, "dim,n_entries,n_tri"),
+                lp.GlobalArg("tri_v2", self.dtype, "dim,n_entries,n_tri"),
+                lp.GlobalArg("target_points", self.dtype, "dim,n_entries"),
+                lp.GlobalArg("theta_nodes", self.dtype, "n_theta"),
+                lp.GlobalArg("theta_weights", self.dtype, "n_theta"),
+                lp.GlobalArg("rho_nodes", self.dtype, "n_rho"),
+                lp.GlobalArg("rho_weights", self.dtype, "n_rho"),
+                lp.GlobalArg("interp_nodes", self.dtype, "q_order"),
+                lp.GlobalArg("bary_w", self.dtype, "q_order"),
+                lp.GlobalArg("mode_i0", np.int32, "n_entries"),
+                lp.GlobalArg("mode_i1", np.int32, "n_entries"),
+                lp.GlobalArg("result", self.dtype, "n_entries", is_output=True),
+                lp.TemporaryVariable("knl_scaling", self.dtype),
+            ],
+            name="duffy_invariant_2d_fused_table",
+            lang_version=(2018, 2),
+        )
+        tunit = lp.fix_parameters(tunit, dim=self.dim)
+        tunit = lp.set_options(tunit, return_dict=True, no_numpy=True)
+        tunit = lp.split_reduction_outward(tunit, "itheta,irho")
+        tunit = lp.split_iname(tunit, "ientry", 64, outer_tag="g.0", inner_tag="l.0")
+        tunit = lp.tag_inames(
+            tunit,
+            {
+                "itri": "unr",
+                "itri": "unr",
+                "iaxis": "unr",
+                "jq": "unr",
+            },
+        )
+        return tunit
+
+    def _get_fused_invariant_duffy_table_2d_program(
+        self, queue, n_entries, n_tri, n_theta, n_rho
+    ):
+        knl = lp.fix_parameters(
+            self._get_fused_invariant_duffy_table_2d_tunit(),
+            n_entries=n_entries,
+            n_tri=n_tri,
+            n_theta=n_theta,
+            n_rho=n_rho,
+            q_order=self.quad_order,
+        )
+        return knl.bind_to_context(queue.context)
+
+    def build_table_via_duffy_radial_batched_2d(
+        self,
+        queue,
+        radial_rule="tanh-sinh-fast",
+        deg_theta=20,
+        radial_quad_order=61,
+        mp_dps=50,
+    ):
+        assert self.dim == 2
+        if self.integral_knl is None:
+            raise ValueError("batched DuffyRadial path requires integral_knl")
+        th_nodes, th_weights = sp.special.p_roots(deg_theta)
+        th_nodes = 0.25 * np.pi * (th_nodes + 1.0)
+        th_weights = 0.25 * np.pi * th_weights
+        rho_nodes, rho_weights = squad._duffy_radial_nodes_weights(
+            radial_rule, radial_quad_order, mp_dps
+        )
+
+        invariant_info = self._get_invariant_entry_info()
+        invariant_entry_ids = invariant_info["entry_ids"]
+        n_entries = len(invariant_entry_ids)
+        n_tri = 4
+        n_theta = len(th_nodes)
+        n_rho = len(rho_nodes)
+
+        all_target_points = self._get_case_target_points()
+        target_points = np.empty((self.dim, n_entries), dtype=self.dtype)
+        tri_v0 = np.empty((self.dim, n_entries, n_tri), dtype=self.dtype)
+        tri_v1 = np.empty((self.dim, n_entries, n_tri), dtype=self.dtype)
+        tri_v2 = np.empty((self.dim, n_entries, n_tri), dtype=self.dtype)
+        mode_axes = invariant_info["mode_axes"]
+        box = np.array(
+            [
+                [0.0, 0.0],
+                [self.source_box_extent, 0.0],
+                [self.source_box_extent, self.source_box_extent],
+                [0.0, self.source_box_extent],
+            ],
+            dtype=self.dtype,
+        )
+        for ientry, (case_index, tid) in enumerate(
+            zip(invariant_info["case_indices"], invariant_info["target_point_indices"])
+        ):
+            target = all_target_points[:, case_index, tid]
+            target_points[:, ientry] = target
+            tris = [
+                (target, box[0], box[1]),
+                (target, box[1], box[2]),
+                (target, box[2], box[3]),
+                (target, box[3], box[0]),
+            ]
+            for itri, (v0, v1, v2) in enumerate(tris):
+                tri_v0[:, ientry, itri] = v0
+                tri_v1[:, ientry, itri] = v1
+                tri_v2[:, ientry, itri] = v2
+
+        xi, bw = self._get_barycentric_data()
+        prg = self._get_fused_invariant_duffy_table_2d_program(
+            queue, n_entries, n_tri, n_theta, n_rho
+        )
+        evt, res = prg(
+            queue,
+            tri_v0=tri_v0,
+            tri_v1=tri_v1,
+            tri_v2=tri_v2,
+            target_points=target_points,
+            theta_nodes=th_nodes.astype(self.dtype),
+            theta_weights=th_weights.astype(self.dtype),
+            rho_nodes=rho_nodes.astype(self.dtype),
+            rho_weights=rho_weights.astype(self.dtype),
+            interp_nodes=xi,
+            bary_w=bw,
+            mode_i0=mode_axes[:, 0],
+            mode_i1=mode_axes[:, 1],
+        )
+        table_host = res["result"].get()
+        for ientry, entry_id in enumerate(invariant_entry_ids):
+            self.data[entry_id] = table_host[ientry]
+        for entry_id in range(len(self.data)):
+            _, centry_id = self.lookup_by_symmetry(entry_id)
+            self.data[entry_id] = self.data[centry_id]
+        self.is_built = True
+
     def compute_nmlz(self, mode_id):
         mode_func = self.get_mode(mode_id)
         nmlz, err = squad.qquad(
@@ -844,11 +1095,27 @@ class NearFieldInteractionTable:
     def build_table_via_duffy_radial(
         self,
         radial_rule="tanh-sinh-fast",
-        deg_theta=20,
+        regular_quad_order=20,
         radial_quad_order=61,
         mp_dps=50,
+        queue=None,
         **kwargs,
     ):
+        if (
+            self.dim == 2
+            and queue is not None
+            and self.integral_knl is not None
+            and radial_rule in {"tanh-sinh-fast", "tanh-sinh"}
+        ):
+            logger.warning("Using batched GPU-backed 2D DuffyRadial table builder")
+            return self.build_table_via_duffy_radial_batched_2d(
+                queue,
+                radial_rule=radial_rule,
+                deg_theta=regular_quad_order,
+                radial_quad_order=radial_quad_order,
+                mp_dps=mp_dps,
+            )
+
         if self.pb is not None:
             self.pb.draw()
 
@@ -866,7 +1133,7 @@ class NearFieldInteractionTable:
             _, entry_val = self.compute_table_entry_duffy_radial(
                 entry_id,
                 radial_rule=radial_rule,
-                deg_theta=deg_theta,
+                deg_theta=regular_quad_order,
                 radial_quad_order=radial_quad_order,
                 mp_dps=mp_dps,
             )
@@ -956,11 +1223,11 @@ class NearFieldInteractionTable:
     ):
         if self.dim in (2, 3) and not self.inverse_droste:
             radial_rule = kwargs.pop("radial_rule", "tanh-sinh-fast")
-            default_deg_regular = 20 if self.dim == 2 else 6
-            deg_theta = kwargs.pop(
-                "deg_theta",
+            default_regular_quad_order = 20 if self.dim == 2 else 6
+            regular_quad_order = kwargs.pop(
+                "regular_quad_order",
                 max(
-                    default_deg_regular,
+                    default_regular_quad_order,
                     n_brick_quad_points // (2 if self.dim == 2 else 8),
                 ),
             )
@@ -979,7 +1246,7 @@ class NearFieldInteractionTable:
             )
             return self.build_table_via_duffy_radial(
                 radial_rule=radial_rule,
-                deg_theta=deg_theta,
+                regular_quad_order=regular_quad_order,
                 radial_quad_order=radial_quad_order,
                 mp_dps=mp_dps,
                 **kwargs,
