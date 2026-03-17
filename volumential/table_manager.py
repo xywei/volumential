@@ -71,10 +71,10 @@ def _serialize_scalar(value):
         return "int", int(value)
 
     if isinstance(value, (float, np.floating)):
-        return "float", repr(value)
+        return "float", repr(float(value))
 
     if isinstance(value, (complex, np.complexfloating)):
-        return "complex", repr(value)
+        return "complex", repr(complex(value))
 
     if isinstance(value, str):
         return "str", value
@@ -442,6 +442,12 @@ class NearFieldInteractionTableManager:
         assert source_box_level >= 0
 
         if not self._record_exists(dim, kernel_type, q_order, source_box_level):
+            if self._read_only:
+                raise RuntimeError(
+                    "Table cache miss in read-only mode for "
+                    f"(dim={dim}, kernel_type={kernel_type}, q_order={q_order}, "
+                    f"source_box_level={source_box_level})."
+                )
             logger.info("Table cache missing. Invoking fresh computation.")
             is_recomputed = True
             table = self.compute_and_update_table(
@@ -455,6 +461,8 @@ class NearFieldInteractionTableManager:
             )
 
         elif force_recompute:
+            if self._read_only:
+                raise RuntimeError("force_recompute is not supported in read-only mode")
             logger.info("Invoking fresh computation since force_recompute is set")
             is_recomputed = True
             table = self.compute_and_update_table(
@@ -482,6 +490,12 @@ class NearFieldInteractionTableManager:
                 import traceback
 
                 logger.debug(traceback.format_exc())
+
+                if self._read_only:
+                    raise RuntimeError(
+                        "Cached table data is unavailable in read-only mode and "
+                        "cannot be recomputed."
+                    )
 
                 logger.info("Recomputing due to table data corruption.")
                 is_recomputed = True
