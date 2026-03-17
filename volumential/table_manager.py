@@ -26,8 +26,10 @@ THE SOFTWARE.
 """
 
 import logging
+import sqlite3
+from io import BytesIO
+from urllib.parse import quote
 
-import h5py as hdf
 import numpy as np
 
 from sumpy.kernel import ExpressionKernel
@@ -37,6 +39,75 @@ from volumential.nearfield_potential_table import NearFieldInteractionTable
 
 
 logger = logging.getLogger(__name__)
+
+
+_HDF5_SIGNATURE = b"\x89HDF\r\n\x1a\n"
+
+
+def _quote_sqlite_path(path):
+    return "file:{}".format(quote(str(path), safe="/"))
+
+
+def _sqlite_uri(path, mode):
+    return "{}?mode={}".format(_quote_sqlite_path(path), mode)
+
+
+def _serialize_array(array):
+    with BytesIO() as f:
+        np.save(f, np.array(array), allow_pickle=False)
+        return f.getvalue()
+
+
+def _deserialize_array(blob):
+    with BytesIO(blob) as f:
+        return np.load(f, allow_pickle=False)
+
+
+def _serialize_scalar(value):
+    if isinstance(value, (bool, np.bool_)):
+        return "bool", int(value)
+
+    if isinstance(value, (int, np.integer)):
+        return "int", int(value)
+
+    if isinstance(value, (float, np.floating)):
+        return "float", repr(float(value))
+
+    if isinstance(value, (complex, np.complexfloating)):
+        return "complex", repr(complex(value))
+
+    if isinstance(value, str):
+        return "str", value
+
+    raise TypeError(f"Unsupported value type: {type(value)!r}")
+
+
+def _deserialize_scalar(ty, value):
+    if ty == "bool":
+        return bool(int(value))
+
+    if ty == "int":
+        return int(value)
+
+    if ty == "float":
+        return float(value)
+
+    if ty == "complex":
+        return complex(value)
+
+    if ty == "str":
+        return str(value)
+
+    raise ValueError("Unsupported serialized value type: %s" % ty)
+
+
+def _looks_like_hdf5_file(path):
+    try:
+        with open(path, "rb") as f:
+            return f.read(len(_HDF5_SIGNATURE)) == _HDF5_SIGNATURE
+    except OSError:
+        return False
+
 
 # {{{ constant sumpy kernel
 
@@ -79,8 +150,8 @@ class NearFieldInteractionTableManager:
     A class that manages near field interaction table computation and
     storage.
 
-    Tables are stored under 'Dimension/KernelName/QuadOrder/BoxLevel/dataset_name'
-    e.g., '2D/Laplace/Order_1/Level_0/data'
+    Tables are stored in an SQLite database and keyed by
+    (dimension, kernel_type, quadrature order, source_box_level).
 
     Only one table manager can exist for a dataset file with write access.
     The access can be controlled with the read_only argument. By default,
@@ -97,6 +168,7 @@ class NearFieldInteractionTableManager:
         **kwargs,
     ):
         """Constructor."""
+
         self.dtype = dtype
 
         self.filename = dataset_filename
@@ -104,32 +176,44 @@ class NearFieldInteractionTableManager:
 
         if read_only == "auto":
             try:
-                self.datafile = hdf.File(self.filename, "a")
-            except OSError as e:
+                self._read_only = False
+                conn = sqlite3.connect(_sqlite_uri(self.filename, "rwc"), uri=True)
+            except sqlite3.OperationalError as e:
                 from warnings import warn
 
                 warn("Trying to open in read/write mode failed: %s" % str(e))
                 warn("Opening table dataset %s in read-only mode." % self.filename)
-                self.datafile = hdf.File(self.filename, "r")
+                self._read_only = True
+                conn = sqlite3.connect(_sqlite_uri(self.filename, "ro"), uri=True)
         elif read_only:
-            self.datafile = hdf.File(self.filename, "r")
+            self._read_only = True
+            conn = sqlite3.connect(_sqlite_uri(self.filename, "ro"), uri=True)
         else:
             # Read/write if exists, create otherwise
-            self.datafile = hdf.File(self.filename, "a")
+            self._read_only = False
+            conn = sqlite3.connect(_sqlite_uri(self.filename, "rwc"), uri=True)
 
-        self.table_extra_kwargs = kwargs
+        self.datafile = conn
+        self.datafile.row_factory = sqlite3.Row
 
-        # If the file exists, it must be for the same root_extent
-        if "root_extent" in self.datafile.attrs:
-            if not abs(self.datafile.attrs["root_extent"] - self.root_extent) < 1e-15:
+        self.datafile.execute("PRAGMA foreign_keys = ON")
+
+        try:
+            self._init_schema()
+            self._initialize_root_extent()
+        except sqlite3.DatabaseError as exc:
+            self.datafile.close()
+            if _looks_like_hdf5_file(self.filename):
                 raise RuntimeError(
                     "The table cache file "
                     + self.filename
-                    + " was built with root_extent = "
-                    + str(self.datafile.attrs["root_extent"])
-                    + ", which is different from the requested value "
-                    + str(self.root_extent)
-                )
+                    + " appears to be in the legacy HDF5 format. "
+                    "SQLite is now required. Remove this file to rebuild "
+                    "the cache."
+                ) from exc
+            raise
+
+        self.table_extra_kwargs = kwargs
 
         self.supported_kernels = [
             "Laplace",
@@ -148,11 +232,184 @@ class NearFieldInteractionTableManager:
             "Cahn-Hilliard-Laplacian-Dy",
         ]
 
+    def _init_schema(self):
+        """Create missing tables for a new cache file."""
+
+        self.datafile.execute(
+            """
+            CREATE TABLE IF NOT EXISTS nearfield_cache (
+                dim INTEGER NOT NULL,
+                kernel_type TEXT NOT NULL,
+                q_order INTEGER NOT NULL,
+                source_box_level INTEGER NOT NULL,
+
+                n_q_points INTEGER NOT NULL,
+                quad_order INTEGER NOT NULL,
+                n_pairs INTEGER NOT NULL,
+                source_box_extent REAL NOT NULL,
+                source_box_level_stored INTEGER NOT NULL,
+                case_encoding_base INTEGER,
+                case_encoding_shift INTEGER,
+
+                build_method TEXT,
+                kernel_type_cached TEXT,
+
+                q_points BLOB NOT NULL,
+                data BLOB NOT NULL,
+                mode_normalizers BLOB,
+                kernel_exterior_normalizers BLOB,
+                interaction_case_vecs BLOB,
+                case_indices BLOB,
+
+                PRIMARY KEY (dim, kernel_type, q_order, source_box_level)
+            )
+            """
+        )
+
+        self.datafile.execute(
+            """
+            CREATE TABLE IF NOT EXISTS nearfield_cache_kwargs (
+                dim INTEGER NOT NULL,
+                kernel_type TEXT NOT NULL,
+                q_order INTEGER NOT NULL,
+                source_box_level INTEGER NOT NULL,
+                key TEXT NOT NULL,
+                value_type TEXT NOT NULL,
+                value_text TEXT NOT NULL,
+
+                PRIMARY KEY (
+                    dim, kernel_type, q_order, source_box_level, key
+                ),
+                FOREIGN KEY (
+                    dim, kernel_type, q_order, source_box_level
+                ) REFERENCES nearfield_cache (
+                    dim, kernel_type, q_order, source_box_level
+                ) ON DELETE CASCADE
+            )
+            """
+        )
+
+        self.datafile.execute(
+            """
+            CREATE TABLE IF NOT EXISTS nearfield_cache_meta (
+                key TEXT PRIMARY KEY,
+                value_type TEXT NOT NULL,
+                value_text TEXT NOT NULL
+            )
+            """
+        )
+
+        self.datafile.commit()
+
+    def _initialize_root_extent(self):
+        row = self.datafile.execute(
+            "SELECT value_type, value_text FROM nearfield_cache_meta WHERE key='root_extent'"
+        ).fetchone()
+
+        if row is None:
+            if self._read_only:
+                return
+
+            self._store_root_extent(self.root_extent)
+            return
+
+        stored_root_extent = _deserialize_scalar(row["value_type"], row["value_text"])
+        if abs(stored_root_extent - self.root_extent) >= 1e-15:
+            raise RuntimeError(
+                "The table cache file "
+                + self.filename
+                + " was built with root_extent = "
+                + str(stored_root_extent)
+                + ", which is different from the requested value "
+                + str(self.root_extent)
+            )
+
+    def _store_root_extent(self, root_extent):
+        value_type, value_text = _serialize_scalar(root_extent)
+        self.datafile.execute(
+            "INSERT OR REPLACE INTO nearfield_cache_meta (key, value_type, value_text) "
+            "VALUES ('root_extent', ?, ?)",
+            (value_type, str(value_text)),
+        )
+        self.datafile.commit()
+
+    def _record_exists(self, dim, kernel_type, q_order, source_box_level):
+        row = self.datafile.execute(
+            "SELECT 1 FROM nearfield_cache WHERE dim=? AND kernel_type=? "
+            "AND q_order=? AND source_box_level=?",
+            (dim, kernel_type, q_order, source_box_level),
+        ).fetchone()
+
+        return row is not None
+
+    def _load_record(self, dim, kernel_type, q_order, source_box_level):
+        return self.datafile.execute(
+            "SELECT * FROM nearfield_cache WHERE dim=? AND kernel_type=? "
+            "AND q_order=? AND source_box_level=?",
+            (dim, kernel_type, q_order, source_box_level),
+        ).fetchone()
+
+    def _load_record_kwargs(self, dim, kernel_type, q_order, source_box_level):
+        rows = self.datafile.execute(
+            "SELECT key, value_type, value_text FROM nearfield_cache_kwargs "
+            "WHERE dim=? AND kernel_type=? AND q_order=? AND source_box_level=?",
+            (dim, kernel_type, q_order, source_box_level),
+        ).fetchall()
+
+        kwargs = {}
+        for row in rows:
+            kwargs[row["key"]] = _deserialize_scalar(
+                row["value_type"], row["value_text"]
+            )
+
+        return kwargs
+
+    def _store_record_kwargs(self, dim, kernel_type, q_order, source_box_level, kwargs):
+        self.datafile.execute(
+            "DELETE FROM nearfield_cache_kwargs WHERE dim=? AND kernel_type=? "
+            "AND q_order=? AND source_box_level=?",
+            (dim, kernel_type, q_order, source_box_level),
+        )
+
+        rows = []
+        for key, value in kwargs.items():
+            if value is None:
+                continue
+
+            try:
+                value_type, value_text = _serialize_scalar(value)
+            except TypeError:
+                continue
+
+            if isinstance(value, str):
+                value_text = str(value)
+
+            rows.append(
+                (
+                    dim,
+                    kernel_type,
+                    q_order,
+                    source_box_level,
+                    key,
+                    value_type,
+                    str(value_text),
+                )
+            )
+
+        if rows:
+            self.datafile.executemany(
+                "INSERT INTO nearfield_cache_kwargs "
+                "(dim, kernel_type, q_order, source_box_level, key, value_type, value_text) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                rows,
+            )
+
     def __enter__(self):
         return self
 
     def __exit__(self, exception_type, exception_value, traceback):
-        self.datafile.__exit__(exception_type, exception_value, traceback)
+        self.datafile.commit()
+        self.datafile.close()
 
     def get_table(
         self,
@@ -184,25 +441,15 @@ class NearFieldInteractionTableManager:
         source_box_level = int(source_box_level)
         assert source_box_level >= 0
 
-        if str(dim) + "D" not in self.datafile:
-            self.datafile.create_group(str(dim) + "D")
-
-        grp = self.datafile[str(dim) + "D"]
-
-        if kernel_type not in grp:
-            grp.create_group(kernel_type)
-
-        grp = grp[kernel_type]
-
-        if "Order_" + str(q_order) not in grp:
-            grp.create_group("Order_" + str(q_order))
-
-        grp = grp["Order_" + str(q_order)]
-
-        if "Level_" + str(source_box_level) not in grp:
+        if not self._record_exists(dim, kernel_type, q_order, source_box_level):
+            if self._read_only:
+                raise RuntimeError(
+                    "Table cache miss in read-only mode for "
+                    f"(dim={dim}, kernel_type={kernel_type}, q_order={q_order}, "
+                    f"source_box_level={source_box_level})."
+                )
             logger.info("Table cache missing. Invoking fresh computation.")
             is_recomputed = True
-            grp.create_group("Level_" + str(source_box_level))
             table = self.compute_and_update_table(
                 dim,
                 kernel_type,
@@ -214,6 +461,8 @@ class NearFieldInteractionTableManager:
             )
 
         elif force_recompute:
+            if self._read_only:
+                raise RuntimeError("force_recompute is not supported in read-only mode")
             logger.info("Invoking fresh computation since force_recompute is set")
             is_recomputed = True
             table = self.compute_and_update_table(
@@ -241,6 +490,12 @@ class NearFieldInteractionTableManager:
                 import traceback
 
                 logger.debug(traceback.format_exc())
+
+                if self._read_only:
+                    raise RuntimeError(
+                        "Cached table data is unavailable in read-only mode and "
+                        "cannot be recomputed."
+                    )
 
                 logger.info("Recomputing due to table data corruption.")
                 is_recomputed = True
@@ -302,7 +557,7 @@ class NearFieldInteractionTableManager:
                                 "(kwarg specified but cannot be loaded). "
                                 "NOTE: this is most likely due to non-standard "
                                 "arguements being passed, since only "
-                                "(int, float, complex, str) "
+                                "(int, float, complex, bool, str) "
                                 "are stored in the cache. "
                                 "Also, some parameters related to method for "
                                 "table building are not critical for "
@@ -321,7 +576,7 @@ class NearFieldInteractionTableManager:
         compute_method=None,
         **kwargs,
     ):
-        """Load a table saved in the hdf5 file."""
+        """Load a table saved in the SQLite cache."""
 
         q_order = int(q_order)
         assert q_order >= 1
@@ -329,21 +584,14 @@ class NearFieldInteractionTableManager:
         source_box_level = int(source_box_level)
         assert source_box_level >= 0
 
-        # Check data table integrity
-        assert str(dim) + "D" in self.datafile
-        assert kernel_type in self.datafile[str(dim) + "D"]
-        assert "Order_" + str(q_order) in self.datafile[str(dim) + "D"][kernel_type]
-        assert (
-            "Level_" + str(source_box_level)
-            in self.datafile[str(dim) + "D"][kernel_type]["Order_" + str(q_order)]
-        )
+        record = self._load_record(dim, kernel_type, q_order, source_box_level)
+        if record is None:
+            raise KeyError("missing table record")
 
-        grp = self.datafile[str(dim) + "D"][kernel_type]["Order_" + str(q_order)][
-            "Level_" + str(source_box_level)
-        ]
-
-        assert dim == grp.attrs["dim"]
-        assert q_order == grp.attrs["quad_order"]
+        if dim != record["dim"]:
+            raise AssertionError("cache record dimension mismatch")
+        if q_order != record["quad_order"]:
+            raise AssertionError("cache record quad order mismatch")
 
         if compute_method == "Transform":
             if "knl_func" not in kwargs:
@@ -387,29 +635,33 @@ class NearFieldInteractionTableManager:
             **self.table_extra_kwargs,
         )
 
-        assert abs(table.source_box_extent - grp.attrs["source_box_extent"]) < 1e-15
-        assert source_box_level == grp.attrs["source_box_level"]
+        assert abs(table.source_box_extent - record["source_box_extent"]) < 1e-15
+        assert source_box_level == record["source_box_level_stored"]
 
         # Load data
-        table.q_points[...] = grp["q_points"]
-        table.data[...] = grp["data"]
-        if "mode_normalizers" in grp:
-            table.mode_normalizers[...] = grp["mode_normalizers"]
-        if "kernel_exterior_normalizers" in grp:
-            table.kernel_exterior_normalizers[...] = grp["kernel_exterior_normalizers"]
+        table.q_points[:] = _deserialize_array(record["q_points"])
+        table.data[:] = _deserialize_array(record["data"])
+
+        if record["mode_normalizers"] is not None:
+            table.mode_normalizers[:] = _deserialize_array(record["mode_normalizers"])
+
+        if record["kernel_exterior_normalizers"] is not None:
+            table.kernel_exterior_normalizers[:] = _deserialize_array(
+                record["kernel_exterior_normalizers"]
+            )
 
         tmp_case_vecs = np.array(table.interaction_case_vecs)
-        tmp_case_vecs[...] = grp["interaction_case_vecs"]
+        tmp_case_vecs[...] = _deserialize_array(record["interaction_case_vecs"])
         table.interaction_case_vecs = [list(vec) for vec in tmp_case_vecs]
 
-        table.case_indices[...] = grp["case_indices"]
+        table.case_indices[:] = _deserialize_array(record["case_indices"])
 
-        assert table.n_q_points == grp.attrs["n_q_points"]
-        assert table.n_pairs == grp.attrs["n_pairs"]
-        assert table.quad_order == grp.attrs["quad_order"]
+        assert table.n_q_points == record["n_q_points"]
+        assert table.n_pairs == record["n_pairs"]
+        assert table.quad_order == record["quad_order"]
 
-        base = grp.attrs["case_encoding_base"]
-        shift = grp.attrs["case_encoding_shift"]
+        base = record["case_encoding_base"]
+        shift = record["case_encoding_shift"]
 
         def case_encode(case_vec):
             table_id = 0
@@ -419,8 +671,20 @@ class NearFieldInteractionTableManager:
 
         table.case_encode = case_encode
 
+        table.source_box_level = source_box_level
+        table.dim = record["dim"]
+        table.n_q_points = record["n_q_points"]
+        table.n_pairs = record["n_pairs"]
+        table.case_encoding_base = base
+        table.case_encoding_shift = shift
+        table.build_method = record["build_method"]
+        table.kernel_type_cached = record["kernel_type_cached"]
+        table.source_box_extent = record["source_box_extent"]
+
         # load extra kwargs
-        for atkey, atval in grp.attrs.items():
+        for atkey, atval in self._load_record_kwargs(
+            dim, kernel_type, q_order, source_box_level
+        ).items():
             setattr(table, atkey, atval)
 
         table.is_built = True
@@ -563,23 +827,6 @@ class NearFieldInteractionTableManager:
         else:
             return None
 
-    def update_dataset(self, group, dataset_name, data_array):
-        """Update stored data."""
-        if data_array is None:
-            logger.debug("No data to save for %s" % dataset_name)
-            return
-
-        data_array = np.array(data_array)
-
-        if dataset_name not in group:
-            dset = group.create_dataset(
-                dataset_name, data_array.shape, dtype=data_array.dtype
-            )
-        else:
-            dset = group[dataset_name]
-
-        dset[...] = data_array
-
     def compute_and_update_table(
         self,
         dim,
@@ -597,14 +844,8 @@ class NearFieldInteractionTableManager:
             logger.debug("Using default compute_method (Transform)")
             compute_method = "Transform"
 
-        self.datafile.attrs["root_extent"] = self.root_extent
-
         q_order = int(q_order)
         assert q_order >= 1
-
-        assert str(dim) + "D" in self.datafile
-        assert kernel_type in self.datafile[str(dim) + "D"]
-        assert "Order_" + str(q_order) in self.datafile[str(dim) + "D"][kernel_type]
 
         if compute_method == "Transform":
             if "knl_func" not in kwargs:
@@ -660,29 +901,7 @@ class NearFieldInteractionTableManager:
         # update database
         logger.debug("Start updating database.")
 
-        grp = self.datafile[str(dim) + "D"][kernel_type]["Order_" + str(q_order)][
-            "Level_" + str(source_box_level)
-        ]
-
-        grp.attrs["n_q_points"] = table.n_q_points
-        grp.attrs["quad_order"] = table.quad_order
-        grp.attrs["dim"] = table.dim
-        grp.attrs["n_pairs"] = table.n_pairs
-        grp.attrs["source_box_level"] = source_box_level
-        grp.attrs["source_box_extent"] = self.root_extent * (2 ** (-source_box_level))
-
-        for key, kval in kwargs.items():
-            if isinstance(kval, (int, float, complex, str)):
-                grp.attrs[key] = kval
-
-        self.update_dataset(grp, "q_points", table.q_points)
-        self.update_dataset(grp, "data", table.data)
-        self.update_dataset(grp, "mode_normalizers", table.mode_normalizers)
-        self.update_dataset(
-            grp, "kernel_exterior_normalizers", table.kernel_exterior_normalizers
-        )
-        self.update_dataset(grp, "interaction_case_vecs", table.interaction_case_vecs)
-        self.update_dataset(grp, "case_indices", table.case_indices)
+        source_box_extent = self.root_extent * (2 ** (-source_box_level))
 
         distinct_numbers = set()
         for vec in table.interaction_case_vecs:
@@ -691,8 +910,65 @@ class NearFieldInteractionTableManager:
         base = len(range(min(distinct_numbers), max(distinct_numbers) + 1))
         shift = -min(distinct_numbers)
 
-        grp.attrs["case_encoding_base"] = base
-        grp.attrs["case_encoding_shift"] = shift
+        record_values = (
+            dim,
+            kernel_type,
+            q_order,
+            source_box_level,
+            table.n_q_points,
+            table.quad_order,
+            table.n_pairs,
+            source_box_extent,
+            source_box_level,
+            base,
+            shift,
+            compute_method,
+            self.get_kernel_function_type(dim, kernel_type),
+            _serialize_array(table.q_points),
+            _serialize_array(table.data),
+            _serialize_array(table.mode_normalizers),
+            _serialize_array(table.kernel_exterior_normalizers),
+            _serialize_array(table.interaction_case_vecs),
+            _serialize_array(table.case_indices),
+        )
+
+        self.datafile.execute(
+            """
+            INSERT INTO nearfield_cache (
+                dim, kernel_type, q_order, source_box_level,
+                n_q_points, quad_order, n_pairs,
+                source_box_extent, source_box_level_stored,
+                case_encoding_base, case_encoding_shift,
+                build_method, kernel_type_cached,
+                q_points, data, mode_normalizers,
+                kernel_exterior_normalizers, interaction_case_vecs,
+                case_indices
+            ) VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            )
+            ON CONFLICT(dim, kernel_type, q_order, source_box_level) DO UPDATE SET
+                n_q_points=excluded.n_q_points,
+                quad_order=excluded.quad_order,
+                n_pairs=excluded.n_pairs,
+                source_box_extent=excluded.source_box_extent,
+                source_box_level_stored=excluded.source_box_level_stored,
+                case_encoding_base=excluded.case_encoding_base,
+                case_encoding_shift=excluded.case_encoding_shift,
+                build_method=excluded.build_method,
+                kernel_type_cached=excluded.kernel_type_cached,
+                q_points=excluded.q_points,
+                data=excluded.data,
+                mode_normalizers=excluded.mode_normalizers,
+                kernel_exterior_normalizers=excluded.kernel_exterior_normalizers,
+                interaction_case_vecs=excluded.interaction_case_vecs,
+                case_indices=excluded.case_indices
+            """,
+            record_values,
+        )
+
+        self._store_record_kwargs(dim, kernel_type, q_order, source_box_level, kwargs)
+
+        self.datafile.commit()
 
         return table
 
