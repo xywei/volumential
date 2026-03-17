@@ -167,6 +167,27 @@ def test_droste_sum_routes_queue_to_batched_duffy(monkeypatch):
     assert seen["queue"] is q
 
 
+def test_mode_remap_is_elementwise_for_vectorized_inputs():
+    table = npt.NearFieldInteractionTable(
+        quad_order=3,
+        build_method="Transform",
+        progress_bar=False,
+    )
+
+    mode = table.get_mode(0)
+
+    x = np.array([-0.8, 0.25], dtype=np.float64)
+    y = np.array([0.4, 0.5], dtype=np.float64)
+
+    scalar_vals = np.array(
+        [mode(float(ix), float(iy)) for ix, iy in zip(x, y)],
+        dtype=np.float64,
+    )
+    vector_vals = mode(x, y)
+
+    assert np.allclose(scalar_vals, vector_vals)
+
+
 def test_duffy_radial_batched_initializes_normalizers(monkeypatch):
     table = npt.NearFieldInteractionTable(
         quad_order=2,
@@ -202,6 +223,93 @@ def test_duffy_radial_batched_initializes_normalizers(monkeypatch):
     assert seen["normalizers"]
     assert table.has_normalizers
     assert table.mode_normalizers[0] == 2
+
+
+def test_duffy_radial_batched_clamps_decomposition_vertex(monkeypatch):
+    table = npt.NearFieldInteractionTable(
+        quad_order=2,
+        build_method="DuffyRadial",
+        dim=2,
+        progress_bar=False,
+    )
+    table.integral_knl = object()
+
+    captured = {}
+
+    def fake_build_normalizer_table(self, pool=None, pb=None):
+        self.mode_normalizers[:] = 1
+
+    def fake_invariant_entry_info(self):
+        return {
+            "entry_ids": np.array([0], dtype=np.int32),
+            "case_indices": np.array([0], dtype=np.int32),
+            "target_point_indices": np.array([0], dtype=np.int32),
+            "source_mode_indices": np.array([0], dtype=np.int32),
+            "mode_axes": np.array([[0, 0]], dtype=np.int32),
+        }
+
+    def fake_case_points(self):
+        return np.array(
+            [
+                [[2.10, 0.15, 0.32, 0.75]],
+                [[-0.10, 1.20, 0.60, -0.10]],
+            ],
+            dtype=np.float64,
+        )
+
+    class FakeResult:
+        def __init__(self, value):
+            self.value = value
+
+        def get(self):
+            return self.value
+
+    def fake_program_factory(self, queue, n_entries, n_tri, n_theta, n_rho):
+        def fake_program(*args, **kwargs):
+            captured["tri_v0"] = kwargs["tri_v0"]
+            captured["target_points"] = kwargs["target_points"]
+            return None, {"result": FakeResult(np.zeros(n_entries, dtype=table.dtype))}
+
+        return fake_program
+
+    def identity_lookup_by_symmetry(self, entry_id):
+        return entry_id, entry_id
+
+    monkeypatch.setattr(
+        npt.NearFieldInteractionTable,
+        "build_normalizer_table",
+        fake_build_normalizer_table,
+    )
+    monkeypatch.setattr(
+        npt.NearFieldInteractionTable,
+        "_get_invariant_entry_info",
+        fake_invariant_entry_info,
+    )
+    monkeypatch.setattr(
+        npt.NearFieldInteractionTable,
+        "_get_case_target_points",
+        fake_case_points,
+    )
+    monkeypatch.setattr(
+        npt.NearFieldInteractionTable,
+        "_get_fused_invariant_duffy_table_2d_program",
+        fake_program_factory,
+    )
+    monkeypatch.setattr(
+        npt.NearFieldInteractionTable,
+        "lookup_by_symmetry",
+        identity_lookup_by_symmetry,
+    )
+
+    table.build_table_via_duffy_radial(queue=object())
+
+    tri_v0 = captured["tri_v0"]
+    target_points = captured["target_points"]
+
+    assert np.all(tri_v0 >= 0)
+    assert np.all(tri_v0 <= table.source_box_extent)
+    assert np.allclose(tri_v0[:, 0, 0], np.array([1.0, 0.0]))
+    assert np.allclose(target_points[:, 0], np.array([2.10, -0.10]))
 
 
 if __name__ == "__main__":

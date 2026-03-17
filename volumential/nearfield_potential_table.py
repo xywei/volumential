@@ -449,9 +449,12 @@ class NearFieldInteractionTable:
 
         def _to_source_box_coords(coord):
             coord = np.asarray(coord)
-            if np.any(coord < 0) or np.any(coord > self.source_box_extent):
-                return 0.5 * (coord + self.source_box_extent)
-            return coord
+            remapped = 0.5 * (coord + self.source_box_extent)
+            return np.where(
+                np.logical_or(coord < 0, coord > self.source_box_extent),
+                remapped,
+                coord,
+            )
 
         def mode(*coords):
             assert len(coords) == self.dim
@@ -920,7 +923,9 @@ class NearFieldInteractionTable:
         assert self.dim == 2
         if self.integral_knl is None:
             raise ValueError("batched DuffyRadial path requires integral_knl")
-        th_nodes, th_weights = sp.special.p_roots(deg_theta)
+        import scipy.special as sp
+
+        th_nodes, th_weights = sp.p_roots(deg_theta)
         th_nodes = 0.25 * np.pi * (th_nodes + 1.0)
         th_weights = 0.25 * np.pi * th_weights
         rho_nodes, rho_weights = squad._duffy_radial_nodes_weights(
@@ -953,12 +958,13 @@ class NearFieldInteractionTable:
             zip(invariant_info["case_indices"], invariant_info["target_point_indices"])
         ):
             target = all_target_points[:, case_index, tid]
+            decomposition_target = np.clip(target, 0.0, self.source_box_extent)
             target_points[:, ientry] = target
             tris = [
-                (target, box[0], box[1]),
-                (target, box[1], box[2]),
-                (target, box[2], box[3]),
-                (target, box[3], box[0]),
+                (decomposition_target, box[0], box[1]),
+                (decomposition_target, box[1], box[2]),
+                (decomposition_target, box[2], box[3]),
+                (decomposition_target, box[3], box[0]),
             ]
             for itri, (v0, v1, v2) in enumerate(tris):
                 tri_v0[:, ientry, itri] = v0
