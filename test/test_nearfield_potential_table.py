@@ -167,6 +167,46 @@ def test_droste_sum_routes_queue_to_batched_duffy(monkeypatch):
     assert seen["queue"] is q
 
 
+def test_droste_sum_keeps_legacy_deg_theta_alias(monkeypatch):
+    table = npt.NearFieldInteractionTable(
+        quad_order=2,
+        build_method="DrosteSum",
+        dim=2,
+        sumpy_kernel=object(),
+        progress_bar=False,
+    )
+
+    seen = {}
+
+    def fake_build_normalizer_table(self, pool=None, pb=None):
+        pass
+
+    def fake_batched(
+        self, queue, radial_rule, regular_quad_order, radial_quad_order, mp_dps
+    ):
+        seen["called"] = True
+        seen["regular_quad_order"] = regular_quad_order
+
+    monkeypatch.setattr(
+        npt.NearFieldInteractionTable,
+        "build_normalizer_table",
+        fake_build_normalizer_table,
+    )
+    monkeypatch.setattr(
+        npt.NearFieldInteractionTable,
+        "build_table_via_duffy_radial_batched_2d",
+        fake_batched,
+    )
+
+    table.build_table_via_droste_bricks(
+        queue=object(),
+        deg_theta=17,
+    )
+
+    assert seen["called"]
+    assert seen["regular_quad_order"] == 17
+
+
 def test_mode_remap_is_elementwise_for_vectorized_inputs():
     table = npt.NearFieldInteractionTable(
         quad_order=3,

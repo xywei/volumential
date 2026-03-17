@@ -1125,6 +1125,11 @@ class NearFieldInteractionTable:
         queue=None,
         **kwargs,
     ):
+        if "deg_theta" in kwargs:
+            legacy_deg_theta = kwargs.pop("deg_theta")
+            if legacy_deg_theta is not None:
+                regular_quad_order = legacy_deg_theta
+
         if self.pb is not None:
             self.pb.draw()
 
@@ -1258,6 +1263,10 @@ class NearFieldInteractionTable:
                     n_brick_quad_points // (2 if self.dim == 2 else 8),
                 ),
             )
+            if "deg_theta" in kwargs:
+                legacy_deg_theta = kwargs.pop("deg_theta")
+                if legacy_deg_theta is not None:
+                    regular_quad_order = legacy_deg_theta
             radial_quad_order = kwargs.pop(
                 "radial_quad_order",
                 max(
