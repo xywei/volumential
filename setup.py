@@ -120,7 +120,6 @@ def main():
         install_requires=[
             "arraycontext",
             "boxtree",
-            "h5py",
             "loopy",
             "meshmode",
             "modepy",
