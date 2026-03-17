@@ -413,12 +413,18 @@ class NearFieldInteractionTable:
 
         def mode(*coords):
             assert len(coords) == self.dim
-            if isinstance(coords[0], (int, float, complex)):
-                fvals = np.ones(1)
-            else:
-                fvals = np.ones(np.array(coords[0]).shape)
+            coords0 = np.asarray(coords[0])
+            is_scalar = all(np.asarray(coord).ndim == 0 for coord in coords)
+            fvals = np.ones(coords0.shape, dtype=self.dtype)
             for d, coord in zip(range(self.dim), coords):
-                fvals = np.multiply(fvals, axis_interp[d](np.array(coord)))
+                val = axis_interp[d](np.array(coord))
+                if is_scalar:
+                    val = np.asarray(val)
+                    if val.size == 1:
+                        val = val.item()
+                fvals = np.multiply(fvals, val)
+            if is_scalar and fvals.size == 1:
+                return fvals.item()
             return fvals
 
         return mode
@@ -441,14 +447,26 @@ class NearFieldInteractionTable:
 
         axis_interp = [Interpolator(xi, yi[d]) for d in range(self.dim)]
 
+        def _to_source_box_coords(coord):
+            coord = np.asarray(coord)
+            if np.any(coord < 0) or np.any(coord > self.source_box_extent):
+                return 0.5 * (coord + self.source_box_extent)
+            return coord
+
         def mode(*coords):
             assert len(coords) == self.dim
-            if isinstance(coords[0], (int, float, complex)):
-                fvals = np.ones(1)
-            else:
-                fvals = np.ones(np.array(coords[0]).shape)
+            coords0 = _to_source_box_coords(coords[0])
+            is_scalar = all(np.asarray(coord).ndim == 0 for coord in coords)
+            fvals = np.ones(coords0.shape, dtype=self.dtype)
             for d, coord in zip(range(self.dim), coords):
-                fvals = np.multiply(fvals, axis_interp[d](np.array(coord)))
+                val = axis_interp[d](_to_source_box_coords(coord))
+                if is_scalar:
+                    val = np.asarray(val)
+                    if val.size == 1:
+                        val = val.item()
+                fvals = np.multiply(fvals, val)
+            if is_scalar and fvals.size == 1:
+                return fvals.item()
             return fvals
 
         return mode
@@ -1101,21 +1119,6 @@ class NearFieldInteractionTable:
         queue=None,
         **kwargs,
     ):
-        if (
-            self.dim == 2
-            and queue is not None
-            and self.integral_knl is not None
-            and radial_rule in {"tanh-sinh-fast", "tanh-sinh"}
-        ):
-            logger.warning("Using batched GPU-backed 2D DuffyRadial table builder")
-            return self.build_table_via_duffy_radial_batched_2d(
-                queue,
-                radial_rule=radial_rule,
-                deg_theta=regular_quad_order,
-                radial_quad_order=radial_quad_order,
-                mp_dps=mp_dps,
-            )
-
         if self.pb is not None:
             self.pb.draw()
 
@@ -1124,6 +1127,24 @@ class NearFieldInteractionTable:
             self.has_normalizers = True
         else:
             self.has_normalizers = False
+
+        if (
+            self.dim == 2
+            and queue is not None
+            and self.integral_knl is not None
+            and radial_rule in {"tanh-sinh-fast", "tanh-sinh"}
+        ):
+            logger.warning("Using batched GPU-backed 2D DuffyRadial table builder")
+            return_value = self.build_table_via_duffy_radial_batched_2d(
+                queue,
+                radial_rule=radial_rule,
+                deg_theta=regular_quad_order,
+                radial_quad_order=radial_quad_order,
+                mp_dps=mp_dps,
+            )
+            if self.pb is not None:
+                self.pb.finished()
+            return return_value
 
         invariant_entry_ids = [
             i for i in range(len(self.data)) if self.lookup_by_symmetry(i) == (i, i)
@@ -1245,6 +1266,7 @@ class NearFieldInteractionTable:
                 radial_rule,
             )
             return self.build_table_via_duffy_radial(
+                queue=queue,
                 radial_rule=radial_rule,
                 regular_quad_order=regular_quad_order,
                 radial_quad_order=radial_quad_order,
@@ -1485,7 +1507,7 @@ class NearFieldInteractionTable:
             self.build_table_via_transform()
         elif method == "DuffyRadial":
             logger.info("Building table with Duffy+radial method")
-            self.build_table_via_duffy_radial(**kwargs)
+            self.build_table_via_duffy_radial(queue=queue, **kwargs)
         elif method == "DrosteSum":
             logger.info("Building table with Droste method")
             self.build_table_via_droste_bricks(cl_ctx=cl_ctx, queue=queue, **kwargs)

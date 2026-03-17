@@ -1,4 +1,3 @@
-
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
 __license__ = """
@@ -29,7 +28,8 @@ import volumential.nearfield_potential_table as npt
 
 def test_const_order_1():
     table = npt.NearFieldInteractionTable(
-        quad_order=1, build_method="Transform", progress_bar=False)
+        quad_order=1, build_method="Transform", progress_bar=False
+    )
     table.build_table()
     for ary in table.data:
         assert np.allclose(ary, 1)
@@ -37,7 +37,8 @@ def test_const_order_1():
 
 def test_const_order_2(longrun):
     table = npt.NearFieldInteractionTable(
-        quad_order=2, build_method="Transform", progress_bar=False)
+        quad_order=2, build_method="Transform", progress_bar=False
+    )
     table.build_table()
     for ary in table.data:
         assert np.allclose(ary, 0.25)
@@ -45,7 +46,8 @@ def test_const_order_2(longrun):
 
 def interp_modes(q_order):
     table = npt.NearFieldInteractionTable(
-            quad_order=q_order, build_method="Transform", progress_bar=False)
+        quad_order=q_order, build_method="Transform", progress_bar=False
+    )
 
     modes = [table.get_mode(i) for i in range(table.n_q_points)]
 
@@ -93,7 +95,7 @@ def drive_test_modes_cheb_coeffs(dim, q, cheb_order):
     sample_mode = rng.integers(q**dim)
     table = npt.NearFieldInteractionTable(quad_order=q, dim=dim, progress_bar=False)
     ccoefs = table.get_mode_cheb_coeffs(sample_mode, cheb_order)
-    shape = (cheb_order, ) * dim
+    shape = (cheb_order,) * dim
     ccoefs = ccoefs.reshape(*shape)
 
     # Evaluate the mode at the interpolation nodes via
@@ -101,9 +103,7 @@ def drive_test_modes_cheb_coeffs(dim, q, cheb_order):
     #
     # NOTE: table.q_points are over [0, 1]^dim,
     # while cheb_eval assumes points are over [-1, 1]^dim
-    targets = np.array([
-        [qpt[i] for qpt in table.q_points]
-        for i in range(dim)]) * 2 - 1
+    targets = np.array([[qpt[i] for qpt in table.q_points] for i in range(dim)]) * 2 - 1
 
     mode_vals = cheb_eval(dim, ccoefs, targets)
     mode_vals[np.abs(mode_vals) < 8 * np.finfo(mode_vals.dtype).eps] = 0
@@ -128,6 +128,80 @@ def test_modes_cheb_coeffs():
     drive_test_modes_cheb_coeffs(3, 5, 5)
     drive_test_modes_cheb_coeffs(3, 5, 10)
     drive_test_modes_cheb_coeffs(3, 10, 10)
+
+
+def test_droste_sum_routes_queue_to_batched_duffy(monkeypatch):
+    table = npt.NearFieldInteractionTable(
+        quad_order=2,
+        build_method="DrosteSum",
+        dim=2,
+        sumpy_kernel=object(),
+        progress_bar=False,
+    )
+
+    seen = {}
+
+    def fake_build_normalizer_table(self, pool=None, pb=None):
+        self.mode_normalizers[:] = 1
+
+    def fake_batched(self, queue, radial_rule, deg_theta, radial_quad_order, mp_dps):
+        seen["queue"] = queue
+        seen["called"] = True
+        self.is_built = True
+
+    monkeypatch.setattr(
+        npt.NearFieldInteractionTable,
+        "build_normalizer_table",
+        fake_build_normalizer_table,
+    )
+    monkeypatch.setattr(
+        npt.NearFieldInteractionTable,
+        "build_table_via_duffy_radial_batched_2d",
+        fake_batched,
+    )
+
+    q = object()
+    table.build_table_via_droste_bricks(queue=q)
+
+    assert seen["called"]
+    assert seen["queue"] is q
+
+
+def test_duffy_radial_batched_initializes_normalizers(monkeypatch):
+    table = npt.NearFieldInteractionTable(
+        quad_order=2,
+        build_method="DuffyRadial",
+        dim=2,
+        progress_bar=False,
+    )
+    table.integral_knl = object()
+
+    seen = {}
+
+    def fake_build_normalizer_table(self, pool=None, pb=None):
+        self.mode_normalizers[:] = 2
+        seen["normalizers"] = True
+
+    def fake_batched(self, queue, radial_rule, deg_theta, radial_quad_order, mp_dps):
+        assert seen["normalizers"]
+        self.is_built = True
+
+    monkeypatch.setattr(
+        npt.NearFieldInteractionTable,
+        "build_normalizer_table",
+        fake_build_normalizer_table,
+    )
+    monkeypatch.setattr(
+        npt.NearFieldInteractionTable,
+        "build_table_via_duffy_radial_batched_2d",
+        fake_batched,
+    )
+
+    table.build_table_via_duffy_radial(queue=object())
+
+    assert seen["normalizers"]
+    assert table.has_normalizers
+    assert table.mode_normalizers[0] == 2
 
 
 if __name__ == "__main__":
