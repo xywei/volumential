@@ -181,11 +181,9 @@ def test_droste_sum_keeps_legacy_deg_theta_alias(monkeypatch):
     def fake_build_normalizer_table(self, pool=None, pb=None):
         pass
 
-    def fake_batched(
-        self, queue, radial_rule, regular_quad_order, radial_quad_order, mp_dps
-    ):
+    def fake_batched(self, queue, radial_rule, deg_theta, radial_quad_order, mp_dps):
         seen["called"] = True
-        seen["regular_quad_order"] = regular_quad_order
+        seen["regular_quad_order"] = deg_theta
 
     monkeypatch.setattr(
         npt.NearFieldInteractionTable,
