@@ -24,6 +24,7 @@ THE SOFTWARE.
 """
 
 import logging
+
 logger = logging.getLogger(__name__)
 verbose = False
 if verbose:
@@ -56,7 +57,6 @@ param_bq_orders = np.array([10 for i in range(20)])
 
 for i in range(4, 5):
     for sl in range(1):
-
         t0 = time()
 
         print("")
@@ -66,35 +66,50 @@ for i in range(4, 5):
 
         diff = 1
 
-        order1 = int(param_bq_orders[i-1])
+        order1 = int(param_bq_orders[i - 1])
         last_diff = 10
 
         alpha = param_alpha
 
         print("Brick quad order =", order1)
-        tm1 = NearFieldInteractionTableManager(table_filename,
-                root_extent=root_extent)
-        table1, rec_flag = tm1.get_table(dim, "Laplace", q_order=i,
-                source_box_level=sl,
-                force_recompute=False, compute_method="DrosteSum", queue=queue,
-                n_brick_quad_points=order1, adaptive_level=False, alpha=alpha,
-                use_symmetry=True, n_levels=n_levels1)
+        tm1 = NearFieldInteractionTableManager(table_filename, root_extent=root_extent)
+        table1, rec_flag = tm1.get_table(
+            dim,
+            "Laplace",
+            q_order=i,
+            source_box_level=sl,
+            force_recompute=False,
+            compute_method="DuffyRadial",
+            queue=queue,
+            radial_rule="tanh-sinh-fast",
+            regular_quad_order=max(6, order1 // 8),
+            radial_quad_order=max(21, order1 // 2),
+        )
 
         while diff <= last_diff:
-
             order2 = max(int(order1 * 1.1), order1 + 5)
             print("Brick quad order =", order2)
-            tm2 = NearFieldInteractionTableManager(table_filename,
-                    root_extent=root_extent)
-            # last 2 extra kwargs are for logging (all kwargs are stored in the hdf5)
-            table2, _ = tm2.get_table(dim, "Laplace", q_order=i, source_box_level=sl,
-                    force_recompute=True, compute_method="DrosteSum", queue=queue,
-                    n_brick_quad_points=order2, adaptive_level=False, alpha=alpha,
-                    use_symmetry=True, n_levels=n_levels1)
+            tm2 = NearFieldInteractionTableManager(
+                table_filename, root_extent=root_extent
+            )
+            # last 2 extra kwargs are for logging (all kwargs are stored in SQLite)
+            table2, _ = tm2.get_table(
+                dim,
+                "Laplace",
+                q_order=i,
+                source_box_level=sl,
+                force_recompute=True,
+                compute_method="DuffyRadial",
+                queue=queue,
+                radial_rule="tanh-sinh-fast",
+                regular_quad_order=max(6, order2 // 8),
+                radial_quad_order=max(21, order2 // 2),
+            )
 
             last_diff = diff
-            diff = np.max(
-                    np.abs(table1.data - table2.data)) / np.max(np.abs(table2.data))
+            diff = np.max(np.abs(table1.data - table2.data)) / np.max(
+                np.abs(table2.data)
+            )
             print("diff =", diff)
 
             tm1 = tm2
@@ -107,4 +122,5 @@ for i in range(4, 5):
         print("Wall time:", t1 - t0)
 
         import gc
+
         gc.collect()

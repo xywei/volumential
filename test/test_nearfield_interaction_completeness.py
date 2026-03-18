@@ -24,6 +24,7 @@ import subprocess
 from functools import partial
 
 import numpy as np
+import pytest
 
 import pyopencl as cl
 import pyopencl.array  # noqa: F401
@@ -167,6 +168,18 @@ def test_completeness_1(ctx_factory):
 
     drive_test_completeness(ctx, queue, 2, 1)
     drive_test_completeness(ctx, queue, 3, 1)
+
+
+def test_completeness_q2_cpu_smoke(ctx_factory):
+
+    ctx = ctx_factory()
+    if not any(dev.type & cl.device_type.CPU for dev in ctx.devices):
+        pytest.skip("q2 completeness smoke test runs on CPU contexts only")
+
+    queue = cl.CommandQueue(ctx)
+
+    drive_test_completeness(ctx, queue, 2, 2)
+    drive_test_completeness(ctx, queue, 3, 2)
 
 
 def test_completeness(longrun, ctx_factory):

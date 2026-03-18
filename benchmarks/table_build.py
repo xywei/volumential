@@ -51,13 +51,11 @@ def bench_table_build(queue):
         "Laplace",
         q_order,
         force_recompute=force_recompute,
-        compute_method="DrosteSum",
+        compute_method="DuffyRadial",
         queue=queue,
-        n_brick_quad_points=120,
-        adaptive_level=True,
-        adaptive_quadrature=True,
-        use_symmetry=True,
-        alpha=0, n_levels=1,
+        radial_rule="tanh-sinh-fast",
+        regular_quad_order=15,
+        radial_quad_order=60,
     )
     queue.finish()
     t1 = time.time()

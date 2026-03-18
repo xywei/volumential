@@ -1,6 +1,7 @@
-""" This example evaluates the volume potential and its derivatives
-    over [-1,1]^3 with the Laplace kernel.
+"""This example evaluates the volume potential and its derivatives
+over [-1,1]^3 with the Laplace kernel.
 """
+
 from __future__ import absolute_import, division, print_function
 
 __copyright__ = "Copyright (C) 2019 Xiaoyu Wei"
@@ -83,12 +84,12 @@ y = pmbl.var("y")
 z = pmbl.var("z")
 expp = pmbl.var("exp")
 
-norm2 = x ** 2 + y ** 2 + z ** 2
-source_expr = -(4 * alpha ** 2 * norm2 - 6 * alpha) * expp(-alpha * norm2)
+norm2 = x**2 + y**2 + z**2
+source_expr = -(4 * alpha**2 * norm2 - 6 * alpha) * expp(-alpha * norm2)
 solu_expr = expp(-alpha * norm2)
-solu_dx_expr = (-alpha) * solu_expr * (2*x)
-solu_dy_expr = (-alpha) * solu_expr * (2*y)
-solu_dz_expr = (-alpha) * solu_expr * (2*z)
+solu_dx_expr = (-alpha) * solu_expr * (2 * x)
+solu_dy_expr = (-alpha) * solu_expr * (2 * y)
+solu_dz_expr = (-alpha) * solu_expr * (2 * z)
 
 logger.info("Source expr: " + str(source_expr))
 logger.info("Solu expr: " + str(solu_expr))
@@ -143,6 +144,7 @@ if 0:
     legacy_msh_file = True
     if legacy_msh_file:
         import os
+
         os.system("gmsh box_grid.msh convert_grid -")
 
 assert len(q_points) == len(q_weights)
@@ -201,7 +203,7 @@ tree, _ = tb(
     particles=q_points,
     targets=q_points,
     bbox=bbox,
-    max_particles_in_box=q_order ** 3 * 8 - 1,
+    max_particles_in_box=q_order**3 * 8 - 1,
     kind="adaptive-level-restricted",
 )
 
@@ -235,75 +237,101 @@ if use_multilevel_table:
     for l in range(0, tree.nlevels + 1):
         if 1:
             print("Getting table at level", l)
-            tb, _ = tm.get_table(dim, "Laplace", q_order,
-                source_box_level=l, compute_method="DrosteSum",
-                queue=queue, n_brick_quad_points=120,
-                adaptive_level=False, use_symmetry=True,
-                alpha=0, n_levels=1,
+            tb, _ = tm.get_table(
+                dim,
+                "Laplace",
+                q_order,
+                source_box_level=l,
+                compute_method="DuffyRadial",
+                queue=queue,
+                radial_rule="tanh-sinh-fast",
+                regular_quad_order=15,
+                radial_quad_order=60,
             )
             nftable_list.append(tb)
 
         if 1:
             print("Getting table Dx at level", l)
-            tb, _ = tm.get_table(dim, "Laplace-Dx", q_order,
-                source_box_level=l, compute_method="DrosteSum",
-                queue=queue, n_brick_quad_points=120,
-                adaptive_level=False, use_symmetry=False,
-                alpha=0, n_levels=1,
+            tb, _ = tm.get_table(
+                dim,
+                "Laplace-Dx",
+                q_order,
+                source_box_level=l,
+                compute_method="DuffyRadial",
+                queue=queue,
+                radial_rule="tanh-sinh-fast",
+                regular_quad_order=15,
+                radial_quad_order=60,
             )
             nftable_dx_list.append(tb)
 
     print("Using table list of length", len(nftable))
     nftable = {
-            nftable_list[0].integral_knl.__repr__(): nftable_list,
-            nftable_dx_list[0].integral_knl.__repr__(): nftable_dx_list,
-            # nftable_dy_list[0].integral_knl.__repr__(): nftable_dy_list,
-            }
+        nftable_list[0].integral_knl.__repr__(): nftable_list,
+        nftable_dx_list[0].integral_knl.__repr__(): nftable_dx_list,
+        # nftable_dy_list[0].integral_knl.__repr__(): nftable_dy_list,
+    }
 
 else:
     logger.info("Using single level table")
     if 1:
         print("Getting table")
-        tb, _ = tm.get_table(dim, "Laplace", q_order,
-                compute_method="DrosteSum", queue=queue,
-                n_brick_quad_points=120, adaptive_level=False,
-                use_symmetry=True,
-                alpha=0, n_levels=1,
-                )
+        tb, _ = tm.get_table(
+            dim,
+            "Laplace",
+            q_order,
+            compute_method="DuffyRadial",
+            queue=queue,
+            radial_rule="tanh-sinh-fast",
+            regular_quad_order=15,
+            radial_quad_order=60,
+        )
 
     if 1:
         print("Getting table Dx")
-        tb_dx, _ = tm.get_table(dim, "Laplace-Dx", q_order,
-                    compute_method="DrosteSum", queue=queue,
-                    n_brick_quad_points=120, adaptive_level=False,
-                    use_symmetry=False,
-                    alpha=0, n_levels=1,
-                    )
+        tb_dx, _ = tm.get_table(
+            dim,
+            "Laplace-Dx",
+            q_order,
+            compute_method="DuffyRadial",
+            queue=queue,
+            radial_rule="tanh-sinh-fast",
+            regular_quad_order=15,
+            radial_quad_order=60,
+        )
 
     if 1:
         print("Getting table Dy")
-        tb_dy, _ = tm.get_table(dim, "Laplace-Dy", q_order,
-                    compute_method="DrosteSum", queue=queue,
-                    n_brick_quad_points=120, adaptive_level=False,
-                    use_symmetry=False,
-                    alpha=0, n_levels=1,
-                    )
+        tb_dy, _ = tm.get_table(
+            dim,
+            "Laplace-Dy",
+            q_order,
+            compute_method="DuffyRadial",
+            queue=queue,
+            radial_rule="tanh-sinh-fast",
+            regular_quad_order=15,
+            radial_quad_order=60,
+        )
 
     if 1:
         print("Getting table Dz")
-        tb_dz, _ = tm.get_table(dim, "Laplace-Dz", q_order,
-                    compute_method="DrosteSum", queue=queue,
-                    n_brick_quad_points=120, adaptive_level=False,
-                    use_symmetry=False,
-                    alpha=0, n_levels=1,
-                    )
+        tb_dz, _ = tm.get_table(
+            dim,
+            "Laplace-Dz",
+            q_order,
+            compute_method="DuffyRadial",
+            queue=queue,
+            radial_rule="tanh-sinh-fast",
+            regular_quad_order=15,
+            radial_quad_order=60,
+        )
 
     nftable = {
         tb.integral_knl.__repr__(): tb,
         tb_dx.integral_knl.__repr__(): tb_dx,
         tb_dy.integral_knl.__repr__(): tb_dy,
         tb_dz.integral_knl.__repr__(): tb_dz,
-        }
+    }
 
 # }}} End build near field potential table
 
@@ -324,8 +352,9 @@ mpole_expn_class = expn_factory.get_multipole_expansion_class(knl)
 
 exclude_self = True
 from volumential.expansion_wrangler_fpnd import (
-        FPNDExpansionWranglerCodeContainer,
-        FPNDExpansionWrangler)
+    FPNDExpansionWranglerCodeContainer,
+    FPNDExpansionWrangler,
+)
 
 wcc = FPNDExpansionWranglerCodeContainer(
     ctx,
@@ -363,6 +392,7 @@ print("*************************")
 from volumential.volume_fmm import drive_volume_fmm
 
 import time
+
 queue.finish()
 
 t0 = time.time()
@@ -378,9 +408,7 @@ pot = drive_volume_fmm(
 t1 = time.time()
 
 print("Finished in %.2f seconds." % (t1 - t0))
-print("(%e points per second)" % (
-    len(q_weights) / (t1 - t0)
-    ))
+print("(%e points per second)" % (len(q_weights) / (t1 - t0)))
 
 # }}} End conduct fmm computation
 
@@ -459,7 +487,7 @@ if 0:
 
 if 0:
     print("Performing P2P")
-    pot_direct, = drive_volume_fmm(
+    (pot_direct,) = drive_volume_fmm(
         trav, wrangler, source_vals * q_weights, source_vals, direct_evaluation=True
     )
     zds = pot_direct.get()

@@ -20,12 +20,10 @@ complicated control flow (inefficient to parallelize). Thus it only supports CPU
 
 .. automodule:: volumential.singular_integral_2d
 
-Droste Method
-*************
+Duffy + Radial Method
+*********************
 
-Use recursive brick-shaped subdivision, combined with simple bilinear transforms. The implementation is for 2/3D, written in ``loopy`` and is optimized to take advantage of symmetries.
-
-.. automodule:: volumential.droste
+Use Duffy-type radial desingularization quadrature to build near-field tables in 2D and 3D. The active implementation is in :py:mod:`volumential.nearfield_potential_table` and :py:mod:`volumential.singular_integral_2d`.
 
 Near-Field Tabulation
 ---------------------
@@ -60,7 +58,7 @@ This module produces table lookup schemes given information about the kernel and
 Table and Table Manager
 ***********************
 
-The tables are stored in ``hdf5`` format and managed through :class:`NearFieldInteractionTableManager`.
+The tables are stored in SQLite format and managed through :class:`NearFieldInteractionTableManager`.
 
 .. automodule:: volumential.nearfield_potential_table
    :members:

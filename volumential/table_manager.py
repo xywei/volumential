@@ -26,7 +26,9 @@ THE SOFTWARE.
 """
 
 import logging
+import re
 import sqlite3
+import time
 from io import BytesIO
 from urllib.parse import quote
 
@@ -42,6 +44,24 @@ logger = logging.getLogger(__name__)
 
 
 _HDF5_SIGNATURE = b"\x89HDF\r\n\x1a\n"
+
+
+TABLE_CACHE_SCHEMA_VERSION = "2.0.0"
+TABLE_CACHE_MIN_READABLE_SCHEMA_VERSION = "1.0.0"
+_LEGACY_UNVERSIONED_SCHEMA_VERSION = "1.0.0"
+
+
+def _parse_semver(version_text, what="version"):
+    if not isinstance(version_text, str):
+        raise ValueError(f"Invalid {what}: expected string, got {type(version_text)!r}")
+
+    match = re.match(r"^(\d+)\.(\d+)\.(\d+)$", version_text)
+    if match is None:
+        raise ValueError(
+            f"Invalid {what} {version_text!r}: expected semantic version MAJOR.MINOR.PATCH"
+        )
+
+    return tuple(int(part) for part in match.groups())
 
 
 def _quote_sqlite_path(path):
@@ -61,6 +81,42 @@ def _serialize_array(array):
 def _deserialize_array(blob):
     with BytesIO(blob) as f:
         return np.load(f, allow_pickle=False)
+
+
+def _serialize_table_payload(table):
+    data = np.array(table.data)
+    table_data_is_symmetry_reduced = bool(
+        getattr(table, "table_data_is_symmetry_reduced", False)
+    )
+
+    payload = {
+        "q_points": np.array(table.q_points),
+        "mode_normalizers": np.array(table.mode_normalizers),
+        "kernel_exterior_normalizers": np.array(table.kernel_exterior_normalizers),
+        "interaction_case_vecs": np.array(table.interaction_case_vecs),
+        "case_indices": np.array(table.case_indices),
+        "table_data_is_symmetry_reduced": np.array(
+            [int(table_data_is_symmetry_reduced)],
+            dtype=np.int8,
+        ),
+    }
+
+    if table_data_is_symmetry_reduced:
+        reduced_entry_ids = np.flatnonzero(np.isfinite(data)).astype(np.int64)
+        payload["reduced_entry_ids"] = reduced_entry_ids
+        payload["reduced_data"] = data[reduced_entry_ids]
+    else:
+        payload["data"] = data
+
+    with BytesIO() as f:
+        np.savez(f, **payload)
+        return f.getvalue()
+
+
+def _deserialize_table_payload(blob):
+    with BytesIO(blob) as f:
+        with np.load(f, allow_pickle=False) as payload:
+            return {name: payload[name] for name in payload.files}
 
 
 def _serialize_scalar(value):
@@ -173,6 +229,9 @@ class NearFieldInteractionTableManager:
 
         self.filename = dataset_filename
         self.root_extent = root_extent
+        self.last_compute_timings = None
+        self.last_load_timings = None
+        self.last_get_table_timings = None
 
         if read_only == "auto":
             try:
@@ -197,6 +256,14 @@ class NearFieldInteractionTableManager:
         self.datafile.row_factory = sqlite3.Row
 
         self.datafile.execute("PRAGMA foreign_keys = ON")
+        try:
+            self.datafile.execute("PRAGMA temp_store = MEMORY")
+            self.datafile.execute("PRAGMA cache_size = -200000")
+            if not self._read_only:
+                self.datafile.execute("PRAGMA journal_mode = WAL")
+                self.datafile.execute("PRAGMA synchronous = NORMAL")
+        except sqlite3.DatabaseError:
+            logger.warning("Failed to apply one or more SQLite tuning pragmas")
 
         try:
             self._init_schema()
@@ -260,6 +327,7 @@ class NearFieldInteractionTableManager:
                 kernel_exterior_normalizers BLOB,
                 interaction_case_vecs BLOB,
                 case_indices BLOB,
+                payload BLOB,
 
                 PRIMARY KEY (dim, kernel_type, q_order, source_box_level)
             )
@@ -299,22 +367,142 @@ class NearFieldInteractionTableManager:
             """
         )
 
+        columns = {
+            row["name"]
+            for row in self.datafile.execute("PRAGMA table_info(nearfield_cache)")
+        }
+        if "payload" not in columns:
+            if self._read_only:
+                logger.warning(
+                    "Table cache file %s uses legacy schema without payload column; "
+                    "read-only mode cannot apply migrations.",
+                    self.filename,
+                )
+            else:
+                self.datafile.execute(
+                    "ALTER TABLE nearfield_cache ADD COLUMN payload BLOB"
+                )
+                columns.add("payload")
+
+        self._initialize_schema_version(columns)
+
         self.datafile.commit()
 
-    def _initialize_root_extent(self):
+    def _get_meta_value(self, key):
         row = self.datafile.execute(
-            "SELECT value_type, value_text FROM nearfield_cache_meta WHERE key='root_extent'"
+            "SELECT value_type, value_text FROM nearfield_cache_meta WHERE key=?",
+            (key,),
         ).fetchone()
 
         if row is None:
+            return None
+
+        return _deserialize_scalar(row["value_type"], row["value_text"])
+
+    def _store_meta_value(self, key, value):
+        value_type, value_text = _serialize_scalar(value)
+        self.datafile.execute(
+            "INSERT OR REPLACE INTO nearfield_cache_meta (key, value_type, value_text) "
+            "VALUES (?, ?, ?)",
+            (key, value_type, str(value_text)),
+        )
+
+    def _infer_schema_version_from_columns(self, cache_columns):
+        if "payload" in cache_columns:
+            return TABLE_CACHE_SCHEMA_VERSION
+        return _LEGACY_UNVERSIONED_SCHEMA_VERSION
+
+    def _initialize_schema_version(self, cache_columns):
+        current_version_tuple = _parse_semver(
+            TABLE_CACHE_SCHEMA_VERSION,
+            what="current table cache schema version",
+        )
+        min_readable_version_tuple = _parse_semver(
+            TABLE_CACHE_MIN_READABLE_SCHEMA_VERSION,
+            what="minimum readable table cache schema version",
+        )
+
+        stored_schema_version = self._get_meta_value("schema_version")
+        has_stored_schema_version = stored_schema_version is not None
+
+        if has_stored_schema_version:
+            if not isinstance(stored_schema_version, str):
+                raise RuntimeError(
+                    "The table cache file "
+                    + self.filename
+                    + " has invalid schema_version metadata type "
+                    + str(type(stored_schema_version))
+                )
+            schema_version = stored_schema_version
+        else:
+            schema_version = self._infer_schema_version_from_columns(cache_columns)
+
+        try:
+            schema_version_tuple = _parse_semver(
+                schema_version,
+                what="table cache schema version",
+            )
+        except ValueError as exc:
+            raise RuntimeError(
+                "The table cache file "
+                + self.filename
+                + " has invalid schema_version metadata: "
+                + str(exc)
+            ) from exc
+
+        if (
+            schema_version_tuple < min_readable_version_tuple
+            or schema_version_tuple[0] > current_version_tuple[0]
+        ):
+            raise RuntimeError(
+                "The table cache file "
+                + self.filename
+                + " uses incompatible schema version "
+                + schema_version
+                + ". This build supports "
+                + TABLE_CACHE_MIN_READABLE_SCHEMA_VERSION
+                + " through "
+                + TABLE_CACHE_SCHEMA_VERSION
+                + "."
+            )
+
+        if schema_version_tuple < current_version_tuple:
+            if self._read_only:
+                logger.warning(
+                    "Using legacy table cache schema %s in read-only mode; "
+                    "schema migration is disabled.",
+                    schema_version,
+                )
+                self.cache_schema_version = schema_version
+                return
+
+            if schema_version_tuple[0] < 2 and "payload" not in cache_columns:
+                self.datafile.execute(
+                    "ALTER TABLE nearfield_cache ADD COLUMN payload BLOB"
+                )
+
+            schema_version = TABLE_CACHE_SCHEMA_VERSION
+            self._store_meta_value("schema_version", schema_version)
+            self.cache_schema_version = schema_version
+            return
+
+        if not has_stored_schema_version and not self._read_only:
+            self._store_meta_value("schema_version", schema_version)
+
+        self.cache_schema_version = schema_version
+
+    def _initialize_root_extent(self):
+        stored_root_extent = self._get_meta_value("root_extent")
+
+        if stored_root_extent is None:
             if self._read_only:
                 return
 
             self._store_root_extent(self.root_extent)
             return
 
-        stored_root_extent = _deserialize_scalar(row["value_type"], row["value_text"])
-        if abs(stored_root_extent - self.root_extent) >= 1e-15:
+        stored_root_extent = float(stored_root_extent)
+        if abs(stored_root_extent - float(self.root_extent)) >= 1e-15:
             raise RuntimeError(
                 "The table cache file "
                 + self.filename
@@ -325,12 +513,7 @@ class NearFieldInteractionTableManager:
             )
 
     def _store_root_extent(self, root_extent):
-        value_type, value_text = _serialize_scalar(root_extent)
-        self.datafile.execute(
-            "INSERT OR REPLACE INTO nearfield_cache_meta (key, value_type, value_text) "
-            "VALUES ('root_extent', ?, ?)",
-            (value_type, str(value_text)),
-        )
+        self._store_meta_value("root_extent", root_extent)
         self.datafile.commit()
 
     def _record_exists(self, dim, kernel_type, q_order, source_box_level):
@@ -426,6 +609,8 @@ class NearFieldInteractionTableManager:
         In the case of a cache miss or a forced re-computation, the method
         specified in the compute_method will be used.
         """
+
+        t_get_start = time.perf_counter()
 
         dim = int(dim)
         assert dim >= 1
@@ -565,6 +750,14 @@ class NearFieldInteractionTableManager:
                             )
                             print(e)
 
+        t_get_end = time.perf_counter()
+        self.last_get_table_timings = {
+            "total_s": t_get_end - t_get_start,
+            "is_recomputed": bool(is_recomputed),
+            "compute": self.last_compute_timings if is_recomputed else None,
+            "load": self.last_load_timings if not is_recomputed else None,
+        }
+
         return table, is_recomputed
 
     def load_saved_table(
@@ -578,6 +771,8 @@ class NearFieldInteractionTableManager:
     ):
         """Load a table saved in the SQLite cache."""
 
+        t_load_start = time.perf_counter()
+
         q_order = int(q_order)
         assert q_order >= 1
 
@@ -585,6 +780,7 @@ class NearFieldInteractionTableManager:
         assert source_box_level >= 0
 
         record = self._load_record(dim, kernel_type, q_order, source_box_level)
+        t_record_fetch_end = time.perf_counter()
         if record is None:
             raise KeyError("missing table record")
 
@@ -604,24 +800,30 @@ class NearFieldInteractionTableManager:
                 knl_func = self.get_kernel_function(dim, kernel_type, **kwargs)
             else:
                 knl_func = kwargs["knl_func"]
-            sumpy_knl = None
-        elif compute_method == "DrosteSum":
-            if "sumpy_knl" not in kwargs:
-                sumpy_knl = self.get_sumpy_kernel(dim, kernel_type)
-            else:
+            if "sumpy_knl" in kwargs:
                 sumpy_knl = kwargs["sumpy_knl"]
-            if dim in (2, 3):
-                knl_func = vm.nearfield_potential_table.sumpy_kernel_to_lambda(
-                    sumpy_knl
-                )
             else:
-                knl_func = None
+                try:
+                    sumpy_knl = self.get_sumpy_kernel(dim, kernel_type)
+                except NotImplementedError:
+                    sumpy_knl = None
         else:
-            from warnings import warn
+            raise ValueError(
+                f"unsupported compute_method={compute_method!r}; "
+                "supported methods are 'Transform' and 'DuffyRadial'"
+            )
 
-            warn("Unsupported compute_method: ", compute_method)
-            knl_func = None
-            sumpy_knl = None
+        payload_blob = record["payload"] if "payload" in record.keys() else None
+        used_payload = bool(payload_blob)
+        payload = None
+        t_payload_deser_start = time.perf_counter()
+        if used_payload:
+            payload = _deserialize_table_payload(payload_blob)
+        t_payload_deser_end = time.perf_counter()
+
+        precomputed_q_points = None
+        if payload is not None and "q_points" in payload:
+            precomputed_q_points = payload["q_points"]
 
         table = NearFieldInteractionTable(
             quad_order=q_order,
@@ -632,6 +834,7 @@ class NearFieldInteractionTableManager:
             kernel_type=self.get_kernel_function_type(dim, kernel_type),
             sumpy_kernel=sumpy_knl,
             source_box_extent=self.root_extent * (2 ** (-source_box_level)),
+            precomputed_q_points=precomputed_q_points,
             **self.table_extra_kwargs,
         )
 
@@ -639,22 +842,48 @@ class NearFieldInteractionTableManager:
         assert source_box_level == record["source_box_level_stored"]
 
         # Load data
-        table.q_points[:] = _deserialize_array(record["q_points"])
-        table.data[:] = _deserialize_array(record["data"])
+        if payload is not None:
+            table.q_points[:] = payload["q_points"]
+            if "data" in payload:
+                table.data[:] = payload["data"]
+            elif "reduced_entry_ids" in payload and "reduced_data" in payload:
+                table.data[:] = np.nan
+                table.data[payload["reduced_entry_ids"]] = payload["reduced_data"]
+            else:
+                raise KeyError("payload is missing table data arrays")
+            table.mode_normalizers[:] = payload["mode_normalizers"]
+            table.kernel_exterior_normalizers[:] = payload[
+                "kernel_exterior_normalizers"
+            ]
 
-        if record["mode_normalizers"] is not None:
-            table.mode_normalizers[:] = _deserialize_array(record["mode_normalizers"])
+            tmp_case_vecs = np.array(table.interaction_case_vecs)
+            tmp_case_vecs[...] = payload["interaction_case_vecs"]
+            table.interaction_case_vecs = [list(vec) for vec in tmp_case_vecs]
 
-        if record["kernel_exterior_normalizers"] is not None:
-            table.kernel_exterior_normalizers[:] = _deserialize_array(
-                record["kernel_exterior_normalizers"]
-            )
+            table.case_indices[:] = payload["case_indices"]
+            if "table_data_is_symmetry_reduced" in payload:
+                table.table_data_is_symmetry_reduced = bool(
+                    payload["table_data_is_symmetry_reduced"][0]
+                )
+        else:
+            table.q_points[:] = _deserialize_array(record["q_points"])
+            table.data[:] = _deserialize_array(record["data"])
 
-        tmp_case_vecs = np.array(table.interaction_case_vecs)
-        tmp_case_vecs[...] = _deserialize_array(record["interaction_case_vecs"])
-        table.interaction_case_vecs = [list(vec) for vec in tmp_case_vecs]
+            if record["mode_normalizers"] is not None:
+                table.mode_normalizers[:] = _deserialize_array(
+                    record["mode_normalizers"]
+                )
 
-        table.case_indices[:] = _deserialize_array(record["case_indices"])
+            if record["kernel_exterior_normalizers"] is not None:
+                table.kernel_exterior_normalizers[:] = _deserialize_array(
+                    record["kernel_exterior_normalizers"]
+                )
+
+            tmp_case_vecs = np.array(table.interaction_case_vecs)
+            tmp_case_vecs[...] = _deserialize_array(record["interaction_case_vecs"])
+            table.interaction_case_vecs = [list(vec) for vec in tmp_case_vecs]
+
+            table.case_indices[:] = _deserialize_array(record["case_indices"])
 
         assert table.n_q_points == record["n_q_points"]
         assert table.n_pairs == record["n_pairs"]
@@ -677,17 +906,38 @@ class NearFieldInteractionTableManager:
         table.n_pairs = record["n_pairs"]
         table.case_encoding_base = base
         table.case_encoding_shift = shift
-        table.build_method = record["build_method"]
+        stored_build_method = record["build_method"]
+        if stored_build_method in {"Transform", "DuffyRadial"}:
+            table.build_method = stored_build_method
+        else:
+            logger.warning(
+                "Unknown cached build_method=%r, assuming DuffyRadial",
+                stored_build_method,
+            )
+            table.build_method = "DuffyRadial"
         table.kernel_type_cached = record["kernel_type_cached"]
         table.source_box_extent = record["source_box_extent"]
 
         # load extra kwargs
+        t_kwargs_load_start = time.perf_counter()
         for atkey, atval in self._load_record_kwargs(
             dim, kernel_type, q_order, source_box_level
         ).items():
             setattr(table, atkey, atval)
+        t_kwargs_load_end = time.perf_counter()
 
         table.is_built = True
+
+        t_load_end = time.perf_counter()
+        self.last_load_timings = {
+            "record_fetch_s": t_record_fetch_end - t_load_start,
+            "payload_deserialize_s": t_payload_deser_end - t_payload_deser_start,
+            "kwargs_load_s": t_kwargs_load_end - t_kwargs_load_start,
+            "postprocess_s": t_load_end - t_kwargs_load_end,
+            "total_s": t_load_end - t_load_start,
+            "used_payload": used_payload,
+            "payload_bytes": len(payload_blob) if payload_blob else 0,
+        }
 
         return table
 
@@ -858,18 +1108,13 @@ class NearFieldInteractionTableManager:
                 knl_func = self.get_kernel_function(dim, kernel_type, **kwargs)
             else:
                 knl_func = kwargs["knl_func"]
-            sumpy_knl = None
-        elif compute_method == "DrosteSum":
-            if "sumpy_knl" not in kwargs:
-                sumpy_knl = self.get_sumpy_kernel(dim, kernel_type)
-            else:
+            if "sumpy_knl" in kwargs:
                 sumpy_knl = kwargs["sumpy_knl"]
-            if dim in (2, 3):
-                knl_func = vm.nearfield_potential_table.sumpy_kernel_to_lambda(
-                    sumpy_knl
-                )
             else:
-                knl_func = None
+                try:
+                    sumpy_knl = self.get_sumpy_kernel(dim, kernel_type)
+                except NotImplementedError:
+                    sumpy_knl = None
         else:
             raise NotImplementedError("Unsupported compute_method.")
 
@@ -895,13 +1140,19 @@ class NearFieldInteractionTableManager:
                 delta = kwargs.pop("delta") * (2 ** (-source_box_level))
                 kwargs["delta"] = delta
 
+        t_compute_start = time.perf_counter()
         table.build_table(cl_ctx, queue, **kwargs)
+        t_compute_end = time.perf_counter()
         assert table.is_built
 
         # update database
         logger.debug("Start updating database.")
 
         source_box_extent = self.root_extent * (2 ** (-source_box_level))
+        t_payload_serialize_start = time.perf_counter()
+        payload_blob = _serialize_table_payload(table)
+        empty_float_blob = _serialize_array(np.array([], dtype=self.dtype))
+        t_payload_serialize_end = time.perf_counter()
 
         distinct_numbers = set()
         for vec in table.interaction_case_vecs:
@@ -924,14 +1175,16 @@ class NearFieldInteractionTableManager:
             shift,
             compute_method,
             self.get_kernel_function_type(dim, kernel_type),
-            _serialize_array(table.q_points),
-            _serialize_array(table.data),
-            _serialize_array(table.mode_normalizers),
-            _serialize_array(table.kernel_exterior_normalizers),
-            _serialize_array(table.interaction_case_vecs),
-            _serialize_array(table.case_indices),
+            empty_float_blob,
+            empty_float_blob,
+            None,
+            None,
+            None,
+            None,
+            payload_blob,
         )
 
+        t_db_write_start = time.perf_counter()
         self.datafile.execute(
             """
             INSERT INTO nearfield_cache (
@@ -942,9 +1195,9 @@ class NearFieldInteractionTableManager:
                 build_method, kernel_type_cached,
                 q_points, data, mode_normalizers,
                 kernel_exterior_normalizers, interaction_case_vecs,
-                case_indices
+                case_indices, payload
             ) VALUES (
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
             )
             ON CONFLICT(dim, kernel_type, q_order, source_box_level) DO UPDATE SET
                 n_q_points=excluded.n_q_points,
@@ -961,7 +1214,8 @@ class NearFieldInteractionTableManager:
                 mode_normalizers=excluded.mode_normalizers,
                 kernel_exterior_normalizers=excluded.kernel_exterior_normalizers,
                 interaction_case_vecs=excluded.interaction_case_vecs,
-                case_indices=excluded.case_indices
+                case_indices=excluded.case_indices,
+                payload=excluded.payload
             """,
             record_values,
         )
@@ -969,6 +1223,15 @@ class NearFieldInteractionTableManager:
         self._store_record_kwargs(dim, kernel_type, q_order, source_box_level, kwargs)
 
         self.datafile.commit()
+        t_db_write_end = time.perf_counter()
+
+        self.last_compute_timings = {
+            "table_build_s": t_compute_end - t_compute_start,
+            "payload_serialize_s": t_payload_serialize_end - t_payload_serialize_start,
+            "db_write_commit_s": t_db_write_end - t_db_write_start,
+            "total_s": t_db_write_end - t_compute_start,
+            "payload_bytes": len(payload_blob),
+        }
 
         return table
 

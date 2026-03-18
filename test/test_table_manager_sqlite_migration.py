@@ -1,9 +1,13 @@
 import numpy as np
 import pytest
+import sqlite3
 
 from volumential.table_manager import (
     NearFieldInteractionTableManager as NFTable,
+    TABLE_CACHE_SCHEMA_VERSION,
+    _deserialize_table_payload,
     _deserialize_scalar,
+    _serialize_table_payload,
     _serialize_scalar,
 )
 
@@ -74,3 +78,61 @@ def test_read_only_force_recompute_fails_fast(tmp_path, monkeypatch):
 
         with pytest.raises(RuntimeError, match="force_recompute"):
             table_manager.get_table(2, "Laplace", q_order=1, force_recompute=True)
+
+
+def test_schema_version_written_for_new_cache(tmp_path):
+    filename = tmp_path / "cache.sqlite"
+
+    with NFTable(str(filename), progress_bar=False):
+        pass
+
+    with sqlite3.connect(str(filename)) as db:
+        row = db.execute(
+            "SELECT value_type, value_text FROM nearfield_cache_meta "
+            "WHERE key='schema_version'"
+        ).fetchone()
+
+    assert row is not None
+    assert row[0] == "str"
+    assert row[1] == TABLE_CACHE_SCHEMA_VERSION
+
+
+def test_incompatible_future_schema_version_rejected(tmp_path):
+    filename = tmp_path / "cache.sqlite"
+
+    with NFTable(str(filename), progress_bar=False):
+        pass
+
+    with sqlite3.connect(str(filename)) as db:
+        db.execute(
+            "UPDATE nearfield_cache_meta SET value_type='str', value_text='999.0.0' "
+            "WHERE key='schema_version'"
+        )
+        db.commit()
+
+    with pytest.raises(RuntimeError, match="incompatible schema version"):
+        with NFTable(str(filename), read_only=True, progress_bar=False):
+            pass
+
+
+def test_symmetry_reduced_payload_roundtrip_uses_sparse_arrays():
+    class DummyTable:
+        pass
+
+    table = DummyTable()
+    table.q_points = np.array([[0.5, 0.5], [0.25, 0.75]])
+    table.data = np.array([np.nan, 1.5, np.nan, 2.5])
+    table.mode_normalizers = np.array([1.0, 2.0])
+    table.kernel_exterior_normalizers = np.array([0.0, 0.0])
+    table.interaction_case_vecs = [[0, 0], [1, 0]]
+    table.case_indices = np.array([0, 1, 2, 3])
+    table.table_data_is_symmetry_reduced = True
+
+    blob = _serialize_table_payload(table)
+    payload = _deserialize_table_payload(blob)
+
+    assert "reduced_entry_ids" in payload
+    assert "reduced_data" in payload
+    assert "data" not in payload
+    assert np.array_equal(payload["reduced_entry_ids"], np.array([1, 3]))
+    assert np.array_equal(payload["reduced_data"], np.array([1.5, 2.5]))

@@ -23,13 +23,13 @@ useful core ideas, uneven modernization, and a few stale interfaces.
 - `volumential/expansion_wrangler_fpnd.py`: concrete wrangler implementations.
 - `volumential/nearfield_potential_table.py`: near-field interaction table
   construction and lookup.
-- `volumential/table_manager.py`: HDF5-backed table caching and retrieval.
+- `volumential/table_manager.py`: SQLite-backed table caching and retrieval.
 - `volumential/geometry.py`: bounding boxes, tree setup, FMM geometry helpers.
 - `volumential/interpolation.py`: meshmode <-> box-grid interpolation helpers.
 - `volumential/function_extension.py`: pytential-facing extension logic; likely a
   key integration point for future PDE workflows.
-- `volumential/droste.py`: alternative table-building path, especially relevant
-  in higher dimensions.
+- `volumential/singular_integral_2d.py`: Duffy/radial singular quadrature
+  kernels used by the active near-field table builder.
 - `test/`: best source of expected behavior for maintenance.
 - `examples/`: end-to-end usage patterns for Laplace volume potentials.
 
@@ -87,7 +87,7 @@ For pytential integration work, also read:
 
 - Preserve numerical behavior unless the task is explicitly to change it.
 - Be careful with cached-table semantics in `table_manager.py`; changes to table
-  format, kernel definitions, or scaling rules may invalidate old HDF5 caches.
+  format, kernel definitions, or scaling rules may invalidate old SQLite caches.
 - When editing public behavior, update or add focused tests in `test/`.
 - Prefer extending current examples or adding small new ones over writing prose
   docs first.
@@ -101,8 +101,9 @@ For pytential integration work, also read:
   - `test/test_volume_fmm.py`
   - `test/test_table_manager.py`
   - `test/test_nearfield_potential_table.py`
+  - `test/test_duffy_tanh_sinh.py`
+  - `test/test_nearfield_interaction_completeness.py`
   - `test/test_interpolation.py`
-  - `test/test_droste.py`
 - Expect GPU/OpenCL-dependent tests. If a test requires unavailable hardware or
   drivers, say so clearly instead of papering over it.
 - If touching pytential integration, check for API drift first before assuming a
