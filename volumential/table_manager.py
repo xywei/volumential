@@ -201,6 +201,9 @@ def _to_stable_jsonable(value):
     if isinstance(value, np.generic):
         return _to_stable_jsonable(value.item())
 
+    if isinstance(value, np.ndarray):
+        return _to_stable_jsonable(value.tolist())
+
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
 
@@ -781,6 +784,26 @@ class NearFieldInteractionTableManager:
             separators=(",", ":"),
         )
 
+    def _reject_removed_top_level_duffy_knobs(self, kwargs, where):
+        removed_knobs = (
+            "radial_rule",
+            "regular_quad_order",
+            "radial_quad_order",
+            "deg_theta",
+            "mp_dps",
+            "auto_tune_orders",
+            "auto_tune_samples",
+            "auto_tune_floor_factor",
+            "auto_tune_candidates",
+        )
+        specified = [key for key in removed_knobs if key in kwargs]
+        if specified:
+            raise TypeError(
+                "top-level Duffy knobs have been removed; pass a "
+                "nearfield_potential_table.DuffyBuildConfig as build_config "
+                f"({where}; got {', '.join(specified)})"
+            )
+
     def _kwargs_for_cache_storage(self, kwargs):
         cache_kwargs = dict(kwargs)
         build_config_fingerprint = self._build_config_fingerprint(kwargs)
@@ -928,6 +951,10 @@ class NearFieldInteractionTableManager:
             request_kwargs,
             "get_table_from_request",
         )
+        self._reject_removed_top_level_duffy_knobs(
+            request_kwargs,
+            "get_table_from_request",
+        )
 
         table_request = self._coerce_table_request(table_request)
 
@@ -1023,6 +1050,10 @@ class NearFieldInteractionTableManager:
 
         request_kwargs = dict(kwargs)
         self._reject_removed_compute_method_kwarg(
+            request_kwargs,
+            "load_saved_table_from_request",
+        )
+        self._reject_removed_top_level_duffy_knobs(
             request_kwargs,
             "load_saved_table_from_request",
         )
@@ -1349,6 +1380,10 @@ class NearFieldInteractionTableManager:
 
         request_kwargs = dict(kwargs)
         self._reject_removed_compute_method_kwarg(
+            request_kwargs,
+            "compute_and_update_table_for_request",
+        )
+        self._reject_removed_top_level_duffy_knobs(
             request_kwargs,
             "compute_and_update_table_for_request",
         )

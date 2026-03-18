@@ -269,6 +269,57 @@ def test_duffy_radial_routes_queue_to_batched_builder(monkeypatch):
     assert seen["queue"] is q
 
 
+def test_build_table_uses_supplied_cl_ctx_when_queue_missing(monkeypatch):
+    table = npt.NearFieldInteractionTable(
+        quad_order=2,
+        build_method="DuffyRadial",
+        dim=2,
+        sumpy_kernel=object(),
+        progress_bar=False,
+    )
+
+    seen = {"create_some_context_called": False}
+    sentinel_ctx = object()
+    sentinel_queue = object()
+
+    def fake_build_normalizer_table(self, pool=None, pb=None):
+        pass
+
+    def fake_batched(self, queue, radial_rule, deg_theta, radial_quad_order, mp_dps):
+        seen["queue"] = queue
+        self.is_built = True
+
+    def fake_create_some_context(interactive=False):
+        seen["create_some_context_called"] = True
+        raise AssertionError("unexpected auto context creation")
+
+    def fake_command_queue(ctx):
+        assert ctx is sentinel_ctx
+        return sentinel_queue
+
+    monkeypatch.setattr(
+        npt.NearFieldInteractionTable,
+        "build_normalizer_table",
+        fake_build_normalizer_table,
+    )
+    monkeypatch.setattr(
+        npt.NearFieldInteractionTable,
+        "build_table_via_duffy_radial_batched",
+        fake_batched,
+    )
+    monkeypatch.setattr(npt.cl, "create_some_context", fake_create_some_context)
+    monkeypatch.setattr(npt.cl, "CommandQueue", fake_command_queue)
+
+    table.build_table(
+        cl_ctx=sentinel_ctx,
+        queue=None,
+        build_config=npt.DuffyBuildConfig(),
+    )
+
+    assert seen["queue"] is sentinel_queue
+    assert not seen["create_some_context_called"]
+
+
 def test_duffy_radial_keeps_legacy_deg_theta_alias(monkeypatch):
     table = npt.NearFieldInteractionTable(
         quad_order=2,

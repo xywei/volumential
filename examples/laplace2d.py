@@ -208,6 +208,7 @@ def main():
 
     import os
 
+    from volumential.nearfield_potential_table import DuffyBuildConfig
     from volumential.table_manager import NearFieldInteractionTableManager
 
     if download_table and (not os.path.isfile(table_filename)):
@@ -218,6 +219,11 @@ def main():
 
     tm = NearFieldInteractionTableManager(
         table_filename, root_extent=root_table_source_extent, queue=queue
+    )
+    build_config = DuffyBuildConfig(
+        radial_rule="tanh-sinh-fast",
+        regular_quad_order=50,
+        radial_quad_order=100,
     )
 
     if use_multilevel_table:
@@ -237,9 +243,7 @@ def main():
                 q_order,
                 source_box_level=lev,
                 queue=queue,
-                radial_rule="tanh-sinh-fast",
-                regular_quad_order=50,
-                radial_quad_order=100,
+                build_config=build_config,
             )
             nftable.append(tb)
 
@@ -252,9 +256,7 @@ def main():
             q_order,
             force_recompute=False,
             queue=queue,
-            radial_rule="tanh-sinh-fast",
-            regular_quad_order=50,
-            radial_quad_order=100,
+            build_config=build_config,
         )
 
     # }}} End build near field potential table

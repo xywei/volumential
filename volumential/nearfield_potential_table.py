@@ -1644,6 +1644,7 @@ class NearFieldInteractionTable:
         radial_quad_order=61,
         mp_dps=50,
         queue=None,
+        cl_ctx=None,
         build_config=None,
         auto_tune_orders=False,
         auto_tune_samples=5,
@@ -1693,10 +1694,13 @@ class NearFieldInteractionTable:
             self.has_normalizers = False
 
         if queue is None:
-            if self._auto_build_queue is None:
-                auto_ctx = cl.create_some_context(interactive=False)
-                self._auto_build_queue = cl.CommandQueue(auto_ctx)
-            queue = self._auto_build_queue
+            if cl_ctx is not None:
+                queue = cl.CommandQueue(cl_ctx)
+            else:
+                if self._auto_build_queue is None:
+                    auto_ctx = cl.create_some_context(interactive=False)
+                    self._auto_build_queue = cl.CommandQueue(auto_ctx)
+                queue = self._auto_build_queue
 
         if self.integral_knl is None:
             raise ValueError(
@@ -1736,6 +1740,7 @@ class NearFieldInteractionTable:
         logger.info("Building table with Duffy+radial method")
         self.build_table_via_duffy_radial(
             queue=queue,
+            cl_ctx=cl_ctx,
             build_config=build_config,
             **kwargs,
         )

@@ -243,11 +243,17 @@ trav, _ = tg(queue, tree)
 
 # {{{ build near field potential table
 
+from volumential.nearfield_potential_table import DuffyBuildConfig
 from volumential.table_manager import NearFieldInteractionTableManager
 from volumential.list1_symmetry import Flip
 
 tm = NearFieldInteractionTableManager(
     table_filename, root_extent=root_table_source_extent
+)
+build_config = DuffyBuildConfig(
+    radial_rule="tanh-sinh-fast",
+    regular_quad_order=50,
+    radial_quad_order=100,
 )
 
 if q_order < 5:
@@ -274,9 +280,7 @@ if use_multilevel_table:
                 q_order,
                 source_box_level=l,
                 queue=queue,
-                radial_rule="tanh-sinh-fast",
-                regular_quad_order=50,
-                radial_quad_order=100,
+                build_config=build_config,
             )
             nftable_list.append(tb)
 
@@ -288,9 +292,7 @@ if use_multilevel_table:
                 q_order,
                 source_box_level=l,
                 queue=queue,
-                radial_rule="tanh-sinh-fast",
-                regular_quad_order=50,
-                radial_quad_order=100,
+                build_config=build_config,
             )
             nftable_dx_list.append(tb)
 
@@ -302,9 +304,7 @@ if use_multilevel_table:
                 q_order,
                 source_box_level=l,
                 queue=queue,
-                radial_rule="tanh-sinh-fast",
-                regular_quad_order=50,
-                radial_quad_order=100,
+                build_config=build_config,
             )
             nftable_dy_list.append(tb)
 
@@ -323,9 +323,7 @@ else:
             "Laplace",
             q_order,
             queue=queue,
-            radial_rule="tanh-sinh-fast",
-            regular_quad_order=50,
-            radial_quad_order=100,
+            build_config=build_config,
         )
 
     if 1:
@@ -335,9 +333,7 @@ else:
             "Laplace-Dx",
             q_order,
             queue=queue,
-            radial_rule="tanh-sinh-fast",
-            regular_quad_order=50,
-            radial_quad_order=100,
+            build_config=build_config,
         )
 
     if 1:
@@ -347,9 +343,7 @@ else:
             "Laplace-Dy",
             q_order,
             queue=queue,
-            radial_rule="tanh-sinh-fast",
-            regular_quad_order=50,
-            radial_quad_order=100,
+            build_config=build_config,
         )
 
     nftable = {

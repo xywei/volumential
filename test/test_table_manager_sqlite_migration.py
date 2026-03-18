@@ -401,6 +401,32 @@ def test_removed_compute_method_keyword_is_rejected(tmp_path):
             )
 
 
+def test_removed_top_level_duffy_knobs_are_rejected(tmp_path):
+    filename = tmp_path / "cache.sqlite"
+    table_request = TableRequest.from_args(2, "Laplace", 1)
+
+    with NFTable(str(filename), progress_bar=False) as table_manager:
+        with pytest.raises(TypeError, match="top-level Duffy knobs have been removed"):
+            table_manager.get_table(
+                2,
+                "Laplace",
+                q_order=1,
+                regular_quad_order=12,
+            )
+
+        with pytest.raises(TypeError, match="top-level Duffy knobs have been removed"):
+            table_manager.load_saved_table_from_request(
+                table_request,
+                radial_quad_order=61,
+            )
+
+        with pytest.raises(TypeError, match="top-level Duffy knobs have been removed"):
+            table_manager.compute_and_update_table_for_request(
+                table_request,
+                radial_rule="tanh-sinh-fast",
+            )
+
+
 def test_load_saved_table_payload_decode_failure_is_corruption(tmp_path, monkeypatch):
     filename = tmp_path / "cache.sqlite"
 

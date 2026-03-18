@@ -98,20 +98,24 @@ def drive_test_completeness(ctx, queue, dim, q_order):
 
     # }}} End build tree and traversals
 
+    from volumential.nearfield_potential_table import DuffyBuildConfig
     from volumential.table_manager import NearFieldInteractionTableManager
 
     subprocess.check_call(["rm", "-f", "nft-test-completeness.hdf5"])
     with NearFieldInteractionTableManager(
         "nft-test-completeness.hdf5", progress_bar=False
     ) as tm:
+        build_config = DuffyBuildConfig(
+            radial_rule="tanh-sinh-fast",
+            regular_quad_order=20 if dim == 2 else 6,
+            radial_quad_order=61 if dim == 2 else 21,
+        )
         nft, _ = tm.get_table(
             dim,
             "Constant",
             q_order,
             queue=queue,
-            radial_rule="tanh-sinh-fast",
-            regular_quad_order=20 if dim == 2 else 6,
-            radial_quad_order=61 if dim == 2 else 21,
+            build_config=build_config,
         )
 
     # {{{ expansion wrangler
