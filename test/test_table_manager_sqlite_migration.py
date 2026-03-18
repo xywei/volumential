@@ -234,6 +234,48 @@ def test_get_table_recomputes_on_payload_corruption(tmp_path, monkeypatch):
         assert recomputed["called"]
 
 
+@pytest.mark.parametrize(
+    ("dim", "expected_method"),
+    [
+        (1, "DuffyRadial"),
+        (2, "Transform"),
+        (3, "DuffyRadial"),
+    ],
+)
+def test_cache_miss_uses_dimension_default_compute_method(
+    tmp_path, monkeypatch, dim, expected_method
+):
+    filename = tmp_path / "cache.sqlite"
+
+    with NFTable(str(filename), progress_bar=False) as table_manager:
+        monkeypatch.setattr(table_manager, "_record_exists", lambda *args: False)
+
+        seen = {"compute_method": None}
+
+        def fake_compute_and_update(
+            dim,
+            kernel_type,
+            q_order,
+            source_box_level,
+            compute_method,
+            queue=None,
+            **kwargs,
+        ):
+            seen["compute_method"] = compute_method
+            return object()
+
+        monkeypatch.setattr(
+            table_manager,
+            "compute_and_update_table",
+            fake_compute_and_update,
+        )
+
+        _, is_recomputed = table_manager.get_table(dim, "Laplace", q_order=1)
+
+        assert is_recomputed
+        assert seen["compute_method"] == expected_method
+
+
 def test_get_table_recomputes_with_cached_build_method(tmp_path, monkeypatch):
     filename = tmp_path / "cache.sqlite"
 
@@ -389,6 +431,72 @@ def test_get_table_recomputes_on_explicit_method_mismatch(tmp_path, monkeypatch)
 
         assert is_recomputed
         assert seen["compute_method"] == "Transform"
+
+
+def test_load_saved_table_payload_decode_failure_is_corruption(tmp_path, monkeypatch):
+    filename = tmp_path / "cache.sqlite"
+
+    with NFTable(str(filename), progress_bar=False) as table_manager:
+        monkeypatch.setattr(
+            table_manager,
+            "_load_record",
+            lambda *args, **kwargs: {
+                "dim": 2,
+                "quad_order": 1,
+                "build_method": "DuffyRadial",
+                "payload": b"not-a-valid-npz",
+            },
+        )
+
+        with pytest.raises(KeyError, match="payload is corrupted"):
+            table_manager.load_saved_table(
+                2,
+                "Laplace",
+                q_order=1,
+                compute_method="DuffyRadial",
+            )
+
+
+def test_get_table_recomputes_on_payload_decode_failure(tmp_path, monkeypatch):
+    filename = tmp_path / "cache.sqlite"
+
+    with NFTable(str(filename), progress_bar=False) as table_manager:
+        monkeypatch.setattr(table_manager, "_record_exists", lambda *args: True)
+        monkeypatch.setattr(
+            table_manager,
+            "_load_record",
+            lambda *args, **kwargs: {
+                "dim": 2,
+                "quad_order": 1,
+                "build_method": "DuffyRadial",
+                "payload": b"not-a-valid-npz",
+            },
+        )
+
+        seen = {"compute_method": None}
+
+        def fake_compute_and_update(
+            dim,
+            kernel_type,
+            q_order,
+            source_box_level,
+            compute_method,
+            queue=None,
+            **kwargs,
+        ):
+            seen["compute_method"] = compute_method
+            return object()
+
+        monkeypatch.setattr(
+            table_manager,
+            "compute_and_update_table",
+            fake_compute_and_update,
+        )
+
+        _, is_recomputed = table_manager.get_table(2, "Laplace", q_order=1)
+
+        assert is_recomputed
+        assert seen["compute_method"] == "DuffyRadial"
 
 
 def test_unversioned_cache_rows_reset_in_write_mode(tmp_path):

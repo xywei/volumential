@@ -29,6 +29,7 @@ import logging
 import re
 import sqlite3
 import time
+import zipfile
 from io import BytesIO
 from urllib.parse import quote
 
@@ -163,6 +164,13 @@ def _looks_like_hdf5_file(path):
             return f.read(len(_HDF5_SIGNATURE)) == _HDF5_SIGNATURE
     except OSError:
         return False
+
+
+def _default_compute_method_for_dim(dim):
+    if int(dim) in (1, 3):
+        return "DuffyRadial"
+
+    return "Transform"
 
 
 # {{{ constant sumpy kernel
@@ -651,7 +659,7 @@ class NearFieldInteractionTableManager:
         requested_compute_method = compute_method
         compute_method_for_compute = compute_method
         if compute_method_for_compute is None:
-            compute_method_for_compute = "Transform"
+            compute_method_for_compute = _default_compute_method_for_dim(dim)
 
         is_recomputed = False
 
@@ -906,56 +914,65 @@ class NearFieldInteractionTableManager:
 
         payload_blob = record["payload"] if "payload" in record.keys() else None
         used_payload = bool(payload_blob)
-        payload = None
         t_payload_deser_start = time.perf_counter()
-        if used_payload:
-            payload = _deserialize_table_payload(payload_blob)
-        else:
-            raise KeyError("table cache payload is missing")
-        t_payload_deser_end = time.perf_counter()
+        try:
+            payload = None
+            if used_payload:
+                payload = _deserialize_table_payload(payload_blob)
+            else:
+                raise KeyError("table cache payload is missing")
 
-        precomputed_q_points = None
-        if payload is not None and "q_points" in payload:
-            precomputed_q_points = payload["q_points"]
+            t_payload_deser_end = time.perf_counter()
 
-        table = NearFieldInteractionTable(
-            quad_order=q_order,
-            dim=dim,
-            dtype=self.dtype,
-            build_method=effective_compute_method,
-            kernel_func=knl_func,
-            kernel_type=self.get_kernel_function_type(dim, kernel_type),
-            sumpy_kernel=sumpy_knl,
-            source_box_extent=self.root_extent * (2 ** (-source_box_level)),
-            precomputed_q_points=precomputed_q_points,
-            **self.table_extra_kwargs,
-        )
+            precomputed_q_points = None
+            if payload is not None and "q_points" in payload:
+                precomputed_q_points = payload["q_points"]
 
-        assert abs(table.source_box_extent - record["source_box_extent"]) < 1e-15
-        assert source_box_level == record["source_box_level_stored"]
-
-        # Load data
-        table.q_points[:] = payload["q_points"]
-        if "data" in payload:
-            table.data[:] = payload["data"]
-        elif "reduced_entry_ids" in payload and "reduced_data" in payload:
-            table.data[:] = np.nan
-            table.data[payload["reduced_entry_ids"]] = payload["reduced_data"]
-        else:
-            raise KeyError("payload is missing table data arrays")
-
-        table.mode_normalizers[:] = payload["mode_normalizers"]
-        table.kernel_exterior_normalizers[:] = payload["kernel_exterior_normalizers"]
-
-        tmp_case_vecs = np.array(table.interaction_case_vecs)
-        tmp_case_vecs[...] = payload["interaction_case_vecs"]
-        table.interaction_case_vecs = [list(vec) for vec in tmp_case_vecs]
-
-        table.case_indices[:] = payload["case_indices"]
-        if "table_data_is_symmetry_reduced" in payload:
-            table.table_data_is_symmetry_reduced = bool(
-                payload["table_data_is_symmetry_reduced"][0]
+            table = NearFieldInteractionTable(
+                quad_order=q_order,
+                dim=dim,
+                dtype=self.dtype,
+                build_method=effective_compute_method,
+                kernel_func=knl_func,
+                kernel_type=self.get_kernel_function_type(dim, kernel_type),
+                sumpy_kernel=sumpy_knl,
+                source_box_extent=self.root_extent * (2 ** (-source_box_level)),
+                precomputed_q_points=precomputed_q_points,
+                **self.table_extra_kwargs,
             )
+
+            assert abs(table.source_box_extent - record["source_box_extent"]) < 1e-15
+            assert source_box_level == record["source_box_level_stored"]
+
+            # Load data
+            table.q_points[:] = payload["q_points"]
+            if "data" in payload:
+                table.data[:] = payload["data"]
+            elif "reduced_entry_ids" in payload and "reduced_data" in payload:
+                table.data[:] = np.nan
+                table.data[payload["reduced_entry_ids"]] = payload["reduced_data"]
+            else:
+                raise KeyError("payload is missing table data arrays")
+
+            table.mode_normalizers[:] = payload["mode_normalizers"]
+            table.kernel_exterior_normalizers[:] = payload[
+                "kernel_exterior_normalizers"
+            ]
+
+            tmp_case_vecs = np.array(table.interaction_case_vecs)
+            tmp_case_vecs[...] = payload["interaction_case_vecs"]
+            table.interaction_case_vecs = [list(vec) for vec in tmp_case_vecs]
+
+            table.case_indices[:] = payload["case_indices"]
+            if "table_data_is_symmetry_reduced" in payload:
+                table.table_data_is_symmetry_reduced = bool(
+                    payload["table_data_is_symmetry_reduced"][0]
+                )
+
+        except KeyError:
+            raise
+        except (OSError, EOFError, TypeError, ValueError, zipfile.BadZipFile) as exc:
+            raise KeyError("table cache payload is corrupted") from exc
 
         assert table.n_q_points == record["n_q_points"]
         assert table.n_pairs == record["n_pairs"]
