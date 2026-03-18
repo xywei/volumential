@@ -50,6 +50,7 @@ _HDF5_SIGNATURE = b"\x89HDF\r\n\x1a\n"
 TABLE_CACHE_SCHEMA_VERSION = "2.0.0"
 TABLE_CACHE_MIN_READABLE_SCHEMA_VERSION = "2.0.0"
 _LEGACY_UNVERSIONED_SCHEMA_VERSION = "1.0.0"
+_TABLE_BUILD_METHOD = "DuffyRadial"
 
 
 def _parse_semver(version_text, what="version"):
@@ -164,13 +165,6 @@ def _looks_like_hdf5_file(path):
             return f.read(len(_HDF5_SIGNATURE)) == _HDF5_SIGNATURE
     except OSError:
         return False
-
-
-def _default_compute_method_for_dim(dim):
-    if int(dim) in (1, 3):
-        return "DuffyRadial"
-
-    return "Transform"
 
 
 # {{{ constant sumpy kernel
@@ -617,17 +611,6 @@ class NearFieldInteractionTableManager:
                 rows,
             )
 
-    def _get_cached_build_method(self, dim, kernel_type, q_order, source_box_level):
-        cached_record = self._load_record(dim, kernel_type, q_order, source_box_level)
-        if cached_record is None or "build_method" not in cached_record.keys():
-            return None
-
-        cached_build_method = cached_record["build_method"]
-        if cached_build_method in {"Transform", "DuffyRadial"}:
-            return cached_build_method
-
-        return None
-
     def __enter__(self):
         return self
 
@@ -642,24 +625,20 @@ class NearFieldInteractionTableManager:
         q_order,
         source_box_level=0,
         force_recompute=False,
-        compute_method=None,
         queue=None,
         **kwargs,
     ):
-        """Primary user interface. Get the specified table regardless of how.
-        In the case of a cache miss or a forced re-computation, the method
-        specified in the compute_method will be used.
-        """
+        """Primary user interface. Get or build a cached table."""
 
         t_get_start = time.perf_counter()
 
+        if "compute_method" in kwargs:
+            raise TypeError(
+                "compute_method has been removed; DuffyRadial is used for all table builds"
+            )
+
         dim = int(dim)
         assert dim >= 1
-
-        requested_compute_method = compute_method
-        compute_method_for_compute = compute_method
-        if compute_method_for_compute is None:
-            compute_method_for_compute = _default_compute_method_for_dim(dim)
 
         is_recomputed = False
 
@@ -683,7 +662,6 @@ class NearFieldInteractionTableManager:
                 kernel_type,
                 q_order,
                 source_box_level,
-                compute_method_for_compute,
                 queue=queue,
                 **kwargs,
             )
@@ -692,17 +670,6 @@ class NearFieldInteractionTableManager:
             if self._read_only:
                 raise RuntimeError("force_recompute is not supported in read-only mode")
 
-            recompute_method = compute_method_for_compute
-            if requested_compute_method is None:
-                cached_build_method = self._get_cached_build_method(
-                    dim,
-                    kernel_type,
-                    q_order,
-                    source_box_level,
-                )
-                if cached_build_method is not None:
-                    recompute_method = cached_build_method
-
             logger.info("Invoking fresh computation since force_recompute is set")
             is_recomputed = True
             table = self.compute_and_update_table(
@@ -710,7 +677,6 @@ class NearFieldInteractionTableManager:
                 kernel_type,
                 q_order,
                 source_box_level,
-                recompute_method,
                 queue=queue,
                 **kwargs,
             )
@@ -722,56 +688,27 @@ class NearFieldInteractionTableManager:
                     kernel_type,
                     q_order,
                     source_box_level,
-                    requested_compute_method,
                     **kwargs,
                 )
 
-            except KeyError as exc:
+            except KeyError:
                 import traceback
 
                 logger.debug(traceback.format_exc())
 
-                is_method_mismatch = (
-                    len(exc.args) == 1 and exc.args[0] == "cached build_method mismatch"
-                )
-
                 if self._read_only:
-                    if is_method_mismatch:
-                        raise RuntimeError(
-                            "Requested compute_method does not match cached build_method "
-                            "in read-only mode."
-                        )
-
                     raise RuntimeError(
                         "Cached table data is unavailable in read-only mode and "
                         "cannot be recomputed."
                     )
 
-                recompute_method = compute_method_for_compute
-                if requested_compute_method is None:
-                    cached_build_method = self._get_cached_build_method(
-                        dim,
-                        kernel_type,
-                        q_order,
-                        source_box_level,
-                    )
-                    if cached_build_method is not None:
-                        recompute_method = cached_build_method
-
-                if is_method_mismatch:
-                    logger.info(
-                        "Recomputing because requested compute_method differs "
-                        "from cached build_method."
-                    )
-                else:
-                    logger.info("Recomputing due to table data corruption.")
+                logger.info("Recomputing due to cache miss/corruption.")
                 is_recomputed = True
                 table = self.compute_and_update_table(
                     dim,
                     kernel_type,
                     q_order,
                     source_box_level,
-                    recompute_method,
                     queue=queue,
                     **kwargs,
                 )
@@ -848,10 +785,14 @@ class NearFieldInteractionTableManager:
         kernel_type,
         q_order,
         source_box_level=0,
-        compute_method=None,
         **kwargs,
     ):
         """Load a table saved in the SQLite cache."""
+
+        if "compute_method" in kwargs:
+            raise TypeError(
+                "compute_method has been removed; cached tables always use DuffyRadial"
+            )
 
         t_load_start = time.perf_counter()
 
@@ -872,45 +813,26 @@ class NearFieldInteractionTableManager:
             raise AssertionError("cache record quad order mismatch")
 
         stored_build_method = record["build_method"]
-        if stored_build_method in {"Transform", "DuffyRadial"}:
-            effective_compute_method = stored_build_method
-        else:
-            logger.warning(
-                "Unknown cached build_method=%r, assuming DuffyRadial",
-                stored_build_method,
-            )
-            effective_compute_method = "DuffyRadial"
-
         if (
-            compute_method is not None
-            and compute_method in {"Transform", "DuffyRadial"}
-            and compute_method != effective_compute_method
+            stored_build_method is not None
+            and stored_build_method != _TABLE_BUILD_METHOD
         ):
-            raise KeyError("cached build_method mismatch")
-
-        if effective_compute_method == "Transform":
-            if "knl_func" not in kwargs:
-                knl_func = self.get_kernel_function(dim, kernel_type, **kwargs)
-            else:
-                knl_func = kwargs["knl_func"]
-            sumpy_knl = None
-        elif effective_compute_method == "DuffyRadial":
-            if "knl_func" not in kwargs:
-                knl_func = self.get_kernel_function(dim, kernel_type, **kwargs)
-            else:
-                knl_func = kwargs["knl_func"]
-            if "sumpy_knl" in kwargs:
-                sumpy_knl = kwargs["sumpy_knl"]
-            else:
-                try:
-                    sumpy_knl = self.get_sumpy_kernel(dim, kernel_type)
-                except NotImplementedError:
-                    sumpy_knl = None
-        else:
-            raise ValueError(
-                f"unsupported compute_method={compute_method!r}; "
-                "supported methods are 'Transform' and 'DuffyRadial'"
+            raise KeyError(
+                "cached build_method is unsupported; expected " + _TABLE_BUILD_METHOD
             )
+
+        if "knl_func" not in kwargs:
+            knl_func = self.get_kernel_function(dim, kernel_type, **kwargs)
+        else:
+            knl_func = kwargs["knl_func"]
+
+        if "sumpy_knl" in kwargs:
+            sumpy_knl = kwargs["sumpy_knl"]
+        else:
+            try:
+                sumpy_knl = self.get_sumpy_kernel(dim, kernel_type)
+            except NotImplementedError:
+                sumpy_knl = None
 
         payload_blob = record["payload"] if "payload" in record.keys() else None
         used_payload = bool(payload_blob)
@@ -932,7 +854,7 @@ class NearFieldInteractionTableManager:
                 quad_order=q_order,
                 dim=dim,
                 dtype=self.dtype,
-                build_method=effective_compute_method,
+                build_method=_TABLE_BUILD_METHOD,
                 kernel_func=knl_func,
                 kernel_type=self.get_kernel_function_type(dim, kernel_type),
                 sumpy_kernel=sumpy_knl,
@@ -995,7 +917,7 @@ class NearFieldInteractionTableManager:
         table.n_pairs = record["n_pairs"]
         table.case_encoding_base = base
         table.case_encoding_shift = shift
-        table.build_method = effective_compute_method
+        table.build_method = _TABLE_BUILD_METHOD
         table.kernel_type_cached = record["kernel_type_cached"]
         table.source_box_extent = record["source_box_extent"]
 
@@ -1164,40 +1086,38 @@ class NearFieldInteractionTableManager:
         kernel_type,
         q_order,
         source_box_level=0,
-        compute_method=None,
         cl_ctx=None,
         queue=None,
         **kwargs,
     ):
         """Performs the precomputation and stores the results."""
 
-        if compute_method is None:
-            logger.debug("Using default compute_method (Transform)")
-            compute_method = "Transform"
+        if "compute_method" in kwargs:
+            raise TypeError(
+                "compute_method has been removed; DuffyRadial is used for all table builds"
+            )
 
         q_order = int(q_order)
         assert q_order >= 1
 
-        if compute_method == "Transform":
-            if "knl_func" not in kwargs:
-                knl_func = self.get_kernel_function(dim, kernel_type, **kwargs)
-            else:
-                knl_func = kwargs["knl_func"]
-            sumpy_knl = None
-        elif compute_method == "DuffyRadial":
-            if "knl_func" not in kwargs:
-                knl_func = self.get_kernel_function(dim, kernel_type, **kwargs)
-            else:
-                knl_func = kwargs["knl_func"]
-            if "sumpy_knl" in kwargs:
-                sumpy_knl = kwargs["sumpy_knl"]
-            else:
-                try:
-                    sumpy_knl = self.get_sumpy_kernel(dim, kernel_type)
-                except NotImplementedError:
-                    sumpy_knl = None
+        if "knl_func" not in kwargs:
+            knl_func = self.get_kernel_function(dim, kernel_type, **kwargs)
         else:
-            raise NotImplementedError("Unsupported compute_method.")
+            knl_func = kwargs["knl_func"]
+
+        if "sumpy_knl" in kwargs:
+            sumpy_knl = kwargs["sumpy_knl"]
+        else:
+            try:
+                sumpy_knl = self.get_sumpy_kernel(dim, kernel_type)
+            except NotImplementedError:
+                sumpy_knl = None
+
+        if sumpy_knl is None:
+            raise RuntimeError(
+                "DuffyRadial table builder requires a sumpy kernel; "
+                f"kernel_type={kernel_type!r} is unsupported for loopy table build."
+            )
 
         knl_type = self.get_kernel_function_type(dim, kernel_type)
 
@@ -1210,7 +1130,7 @@ class NearFieldInteractionTableManager:
             kernel_func=knl_func,
             kernel_type=knl_type,
             sumpy_kernel=sumpy_knl,
-            build_method=compute_method,
+            build_method=_TABLE_BUILD_METHOD,
             source_box_extent=self.root_extent * (2 ** (-source_box_level)),
             **self.table_extra_kwargs,
         )
@@ -1222,7 +1142,7 @@ class NearFieldInteractionTableManager:
                 kwargs["delta"] = delta
 
         t_compute_start = time.perf_counter()
-        table.build_table(cl_ctx, queue, **kwargs)
+        table.build_table(cl_ctx=cl_ctx, queue=queue, **kwargs)
         t_compute_end = time.perf_counter()
         assert table.is_built
 
@@ -1254,7 +1174,7 @@ class NearFieldInteractionTableManager:
             source_box_level,
             base,
             shift,
-            compute_method,
+            _TABLE_BUILD_METHOD,
             self.get_kernel_function_type(dim, kernel_type),
             empty_float_blob,
             empty_float_blob,

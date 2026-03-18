@@ -51,7 +51,6 @@ def bench_table_build(queue):
         "Laplace",
         q_order,
         force_recompute=force_recompute,
-        compute_method="DuffyRadial",
         queue=queue,
         radial_rule="tanh-sinh-fast",
         regular_quad_order=15,

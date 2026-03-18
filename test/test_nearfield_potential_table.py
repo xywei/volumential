@@ -25,11 +25,16 @@ import pytest
 from numpy.polynomial.chebyshev import chebval, chebval2d, chebval3d
 
 import volumential.nearfield_potential_table as npt
+from volumential.table_manager import ConstantKernel
 
 
 def test_const_order_1():
     table = npt.NearFieldInteractionTable(
-        quad_order=1, build_method="Transform", progress_bar=False
+        quad_order=1,
+        kernel_func=npt.constant_one,
+        kernel_type="const",
+        sumpy_kernel=ConstantKernel(2),
+        progress_bar=False,
     )
     table.build_table()
     for ary in table.data:
@@ -38,7 +43,11 @@ def test_const_order_1():
 
 def test_const_order_2(longrun):
     table = npt.NearFieldInteractionTable(
-        quad_order=2, build_method="Transform", progress_bar=False
+        quad_order=2,
+        kernel_func=npt.constant_one,
+        kernel_type="const",
+        sumpy_kernel=ConstantKernel(2),
+        progress_bar=False,
     )
     table.build_table()
     for ary in table.data:
@@ -46,9 +55,7 @@ def test_const_order_2(longrun):
 
 
 def interp_modes(q_order):
-    table = npt.NearFieldInteractionTable(
-        quad_order=q_order, build_method="Transform", progress_bar=False
-    )
+    table = npt.NearFieldInteractionTable(quad_order=q_order, progress_bar=False)
 
     modes = [table.get_mode(i) for i in range(table.n_q_points)]
 
@@ -561,11 +568,7 @@ def test_duffy_autotune_two_candidates_prefers_fine_rule(monkeypatch):
 
 
 def test_mode_remap_is_elementwise_for_vectorized_inputs():
-    table = npt.NearFieldInteractionTable(
-        quad_order=3,
-        build_method="Transform",
-        progress_bar=False,
-    )
+    table = npt.NearFieldInteractionTable(quad_order=3, progress_bar=False)
 
     mode = table.get_mode(0)
 

@@ -109,7 +109,6 @@ def drive_test_completeness(ctx, queue, dim, q_order):
             "Constant",
             q_order,
             queue=queue,
-            compute_method="DuffyRadial",
             radial_rule="tanh-sinh-fast",
             regular_quad_order=20 if dim == 2 else 6,
             radial_quad_order=61 if dim == 2 else 21,

@@ -38,6 +38,9 @@ import volumential.singular_integral_2d as squad
 logger = logging.getLogger("NearFieldInteractionTable")
 
 
+_TABLE_BUILD_METHOD = "DuffyRadial"
+
+
 def _self_tp(vec, tpd=2):
     """
     Self tensor product
@@ -162,9 +165,7 @@ def get_cahn_hilliard(dim, b=0, c=0, approx_at_origin=False):
 
 
 def get_cahn_hilliard_laplacian(dim, b=0, c=0):
-    raise NotImplementedError(
-        "Transform method under construction, use DuffyRadial instead"
-    )
+    raise NotImplementedError("Cahn-Hilliard-Laplacian kernel function not implemented")
 
 
 # }}} End kernel function getters
@@ -214,7 +215,7 @@ class NearFieldInteractionTable:
         kernel_func=None,
         kernel_type=None,
         sumpy_kernel=None,
-        build_method=None,
+        build_method=_TABLE_BUILD_METHOD,
         source_box_extent=1,
         dtype=np.float64,
         progress_bar=True,
@@ -222,7 +223,7 @@ class NearFieldInteractionTable:
     ):
         """
         kernel_type determines how the kernel is scaled w.r.t. box size.
-        build_method can be "Transform" or "DuffyRadial".
+        The table build method is DuffyRadial.
 
         The source box is [0, source_box_extent]^dim
         """
@@ -235,12 +236,17 @@ class NearFieldInteractionTable:
 
         self.center = np.ones(self.dim) * 0.5 * self.source_box_extent
 
-        self.build_method = build_method
+        if build_method is None:
+            build_method = _TABLE_BUILD_METHOD
+        if build_method != _TABLE_BUILD_METHOD:
+            raise NotImplementedError(
+                f"Unsupported build_method={build_method!r}; use {_TABLE_BUILD_METHOD}."
+            )
+
+        self.build_method = _TABLE_BUILD_METHOD
+        self._auto_build_queue = None
 
         if dim == 1:
-            if build_method == "Transform":
-                raise NotImplementedError("Use build_method=DuffyRadial for 1d")
-
             self.kernel_func = kernel_func
             self.kernel_type = kernel_type
             self.integral_knl = sumpy_kernel
@@ -250,9 +256,6 @@ class NearFieldInteractionTable:
             if kernel_func is None:
                 kernel_func = constant_one
                 kernel_type = "const"
-                # for DuffyRadial kernel_func is unused
-                if build_method == "Transform":
-                    logger.warning("setting kernel_func to be constant.")
 
             # Kernel function differs from OpenCL's kernels
             self.kernel_func = kernel_func
@@ -260,9 +263,6 @@ class NearFieldInteractionTable:
             self.integral_knl = sumpy_kernel
 
         elif dim == 3:
-            if build_method == "Transform":
-                raise NotImplementedError("Use build_method=DuffyRadial for 3d")
-
             self.kernel_func = kernel_func
             self.kernel_type = kernel_type
             self.integral_knl = sumpy_kernel
@@ -661,48 +661,6 @@ class NearFieldInteractionTable:
         centry_id = self.get_entry_index(cs_id, ct_id, cc_id)
 
         return entry_id, centry_id
-
-    def compute_table_entry(self, entry_id):
-        """Compute one entry in the table indexed by self.data[entry_id]
-
-        Input kernel function should be centered at origin.
-        """
-        entry_info = self.decode_index(entry_id)
-        source_mode = self.get_mode(entry_info["source_mode_index"])
-        target_point = self.find_target_point(
-            target_point_index=entry_info["target_point_index"],
-            case_index=entry_info["case_index"],
-        )
-
-        # print(entry_info, target_point)
-        # source_point = (
-        #     self.q_points[entry_info[
-        #         "source_mode_index"]])
-        # print(source_mode(source_point[0], source_point[1]))
-
-        if self.dim == 2:
-
-            def integrand(x, y):
-                return source_mode(x, y) * self.kernel_func(
-                    x - target_point[0], y - target_point[1]
-                )
-
-            integral, error = squad.box_quad(
-                func=integrand,
-                a=0,
-                b=self.source_box_extent,
-                c=0,
-                d=self.source_box_extent,
-                singular_point=target_point,
-                # tol=1e-10,
-                # rtol=1e-10,
-                # miniter=300,
-                maxiter=301,
-            )
-        else:
-            raise NotImplementedError
-
-        return (entry_id, integral)
 
     def compute_table_entry_duffy_radial(
         self,
@@ -1458,7 +1416,18 @@ class NearFieldInteractionTable:
         for ientry, entry_id in enumerate(invariant_entry_ids):
             self.data[entry_id] = table_host[ientry]
         t_scatter_end = time.perf_counter()
-        self.table_data_is_symmetry_reduced = True
+
+        t_symmetry_fill_start = time.perf_counter()
+        for entry_id in range(len(self.data)):
+            _, centry_id = self.lookup_by_symmetry(entry_id)
+            if np.isnan(self.data[centry_id]):
+                continue
+            if centry_id == entry_id:
+                continue
+            self.data[entry_id] = self.data[centry_id]
+        t_symmetry_fill_end = time.perf_counter()
+
+        self.table_data_is_symmetry_reduced = bool(np.any(np.isnan(self.data)))
         self.is_built = True
 
         t_total_end = time.perf_counter()
@@ -1466,6 +1435,7 @@ class NearFieldInteractionTable:
             "invariant_info_s": t_invariant_end - t_invariant_start,
             "quadrature_s": t_quadrature_end - t_quadrature_start,
             "scatter_s": t_scatter_end - t_scatter_start,
+            "symmetry_fill_s": t_symmetry_fill_end - t_symmetry_fill_start,
             "total_s": t_total_end - t_total_start,
             "n_entries": int(n_entries),
         }
@@ -1566,78 +1536,6 @@ class NearFieldInteractionTable:
                 if pb is not None:
                     pb.progress(1)
 
-    def build_table_via_transform(self):
-        """
-        Build the full data table using transforms to
-        remove the singularity.
-        """
-        assert self.dim == 2
-
-        if 0:
-            # FIXME: make everything needed for compute_nmlz picklable
-            # multiprocessing cannot handle member functions
-            from multiprocessing import Pool
-
-            pool = Pool(processes=None)
-        else:
-            pool = None
-
-        if self.pb is not None:
-            self.pb.draw()
-
-        self.build_normalizer_table(pool, pb=self.pb)
-        self.has_normalizers = True
-
-        # First compute entries that are invariant under
-        # symmetry lookup
-        invariant_entry_ids = [
-            i for i in range(len(self.data)) if self.lookup_by_symmetry(i) == (i, i)
-        ]
-
-        if 0:
-            # multiprocess disabled to remove dependency on dill/multiprocess
-            for entry_id, entry_val in pool.imap_unordered(
-                self.compute_table_entry, invariant_entry_ids
-            ):
-                self.data[entry_id] = entry_val
-                if self.pb is not None:
-                    self.pb.progress(1)
-        else:
-            for entry_id in invariant_entry_ids:
-                _, entry_val = self.compute_table_entry(entry_id)
-                self.data[entry_id] = entry_val
-                if self.pb is not None:
-                    self.pb.progress(1)
-
-        if 0:
-            # Then complete the table via symmetry lookup
-            for entry_id, centry_id in pool.imap_unordered(
-                self.lookup_by_symmetry, range(len(self.data))
-            ):
-                assert not np.isnan(self.data[centry_id])
-                if centry_id == entry_id:
-                    continue
-                self.data[entry_id] = self.data[centry_id]
-                if self.pb is not None:
-                    self.pb.progress(1)
-        else:
-            for entry_id in range(len(self.data)):
-                _, centry_id = self.lookup_by_symmetry(entry_id)
-                assert not np.isnan(self.data[centry_id])
-                if centry_id == entry_id:
-                    continue
-                self.data[entry_id] = self.data[centry_id]
-                if self.pb is not None:
-                    self.pb.progress(1)
-
-        if self.pb is not None:
-            self.pb.finished()
-
-        for entry in self.data:
-            assert not np.isnan(entry)
-
-        self.is_built = True
-
     def build_table_via_duffy_radial(
         self,
         radial_rule="tanh-sinh-fast",
@@ -1700,83 +1598,49 @@ class NearFieldInteractionTable:
         else:
             self.has_normalizers = False
 
-        if (
-            self.dim in (1, 2, 3)
-            and queue is not None
-            and self.integral_knl is not None
-            and radial_rule in {"tanh-sinh-fast", "tanh-sinh"}
-        ):
-            logger.warning(
-                "Using batched GPU-backed %dD DuffyRadial table builder", self.dim
+        if queue is None:
+            if self._auto_build_queue is None:
+                auto_ctx = cl.create_some_context(interactive=False)
+                self._auto_build_queue = cl.CommandQueue(auto_ctx)
+            queue = self._auto_build_queue
+
+        if self.integral_knl is None:
+            raise ValueError(
+                "DuffyRadial loopy builder requires sumpy_kernel (integral_knl)"
             )
-            return_value = self.build_table_via_duffy_radial_batched(
-                queue,
-                radial_rule=radial_rule,
-                deg_theta=regular_quad_order,
-                radial_quad_order=radial_quad_order,
-                mp_dps=mp_dps,
+
+        if radial_rule not in {"tanh-sinh-fast", "tanh-sinh"}:
+            raise ValueError(
+                "DuffyRadial loopy builder supports only tanh-sinh and "
+                "tanh-sinh-fast radial rules"
             )
-            if self.last_duffy_build_timings is not None:
-                self.last_duffy_build_timings["normalizer_s"] = normalizer_s
-                self.last_duffy_build_timings["total_with_normalizer_s"] = (
-                    self.last_duffy_build_timings["total_s"] + normalizer_s
-                )
-            if self.pb is not None:
-                self.pb.finished()
-            return return_value
 
-        invariant_entry_ids = [
-            i for i in range(len(self.data)) if self.lookup_by_symmetry(i) == (i, i)
-        ]
-
-        for entry_id in invariant_entry_ids:
-            _, entry_val = self.compute_table_entry_duffy_radial(
-                entry_id,
-                radial_rule=radial_rule,
-                deg_theta=regular_quad_order,
-                radial_quad_order=radial_quad_order,
-                mp_dps=mp_dps,
+        logger.warning(
+            "Using batched GPU-backed %dD DuffyRadial table builder", self.dim
+        )
+        return_value = self.build_table_via_duffy_radial_batched(
+            queue,
+            radial_rule=radial_rule,
+            deg_theta=regular_quad_order,
+            radial_quad_order=radial_quad_order,
+            mp_dps=mp_dps,
+        )
+        if self.last_duffy_build_timings is not None:
+            self.last_duffy_build_timings["normalizer_s"] = normalizer_s
+            self.last_duffy_build_timings["total_with_normalizer_s"] = (
+                self.last_duffy_build_timings["total_s"] + normalizer_s
             )
-            self.data[entry_id] = entry_val
-            if self.pb is not None:
-                self.pb.progress(1)
-
-        self.table_data_is_symmetry_reduced = True
-        self.last_duffy_build_timings = {
-            "invariant_info_s": np.nan,
-            "quadrature_s": np.nan,
-            "scatter_s": np.nan,
-            "total_s": np.nan,
-            "n_entries": int(len(invariant_entry_ids)),
-            "normalizer_s": normalizer_s,
-            "total_with_normalizer_s": np.nan,
-        }
-
         if self.pb is not None:
             self.pb.finished()
+        return return_value
 
-        for entry_id in invariant_entry_ids:
-            assert not np.isnan(self.data[entry_id])
-
-        self.is_built = True
-
-    # }}} End build table via transform
+    # }}} End build table via DuffyRadial
 
     # {{{ build table (driver)
 
     def build_table(self, cl_ctx=None, queue=None, **kwargs):
-        method = self.build_method
-        if method == "Transform":
-            logger.info("Building table with transform method")
-            self.build_table_via_transform()
-        elif method == "DuffyRadial":
-            logger.info("Building table with Duffy+radial method")
-            self.build_table_via_duffy_radial(queue=queue, **kwargs)
-        else:
-            raise ValueError(
-                f"unsupported build_method={method!r}; "
-                "supported methods are 'Transform' and 'DuffyRadial'"
-            )
+        logger.info("Building table with Duffy+radial method")
+        self.build_table_via_duffy_radial(queue=queue, **kwargs)
 
     # }}} End build table (driver)
 
