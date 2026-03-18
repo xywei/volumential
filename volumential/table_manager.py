@@ -819,6 +819,8 @@ class NearFieldInteractionTableManager:
         t_payload_deser_start = time.perf_counter()
         if used_payload:
             payload = _deserialize_table_payload(payload_blob)
+        else:
+            raise KeyError("table cache payload is missing")
         t_payload_deser_end = time.perf_counter()
 
         precomputed_q_points = None
@@ -842,48 +844,27 @@ class NearFieldInteractionTableManager:
         assert source_box_level == record["source_box_level_stored"]
 
         # Load data
-        if payload is not None:
-            table.q_points[:] = payload["q_points"]
-            if "data" in payload:
-                table.data[:] = payload["data"]
-            elif "reduced_entry_ids" in payload and "reduced_data" in payload:
-                table.data[:] = np.nan
-                table.data[payload["reduced_entry_ids"]] = payload["reduced_data"]
-            else:
-                raise KeyError("payload is missing table data arrays")
-            table.mode_normalizers[:] = payload["mode_normalizers"]
-            table.kernel_exterior_normalizers[:] = payload[
-                "kernel_exterior_normalizers"
-            ]
-
-            tmp_case_vecs = np.array(table.interaction_case_vecs)
-            tmp_case_vecs[...] = payload["interaction_case_vecs"]
-            table.interaction_case_vecs = [list(vec) for vec in tmp_case_vecs]
-
-            table.case_indices[:] = payload["case_indices"]
-            if "table_data_is_symmetry_reduced" in payload:
-                table.table_data_is_symmetry_reduced = bool(
-                    payload["table_data_is_symmetry_reduced"][0]
-                )
+        table.q_points[:] = payload["q_points"]
+        if "data" in payload:
+            table.data[:] = payload["data"]
+        elif "reduced_entry_ids" in payload and "reduced_data" in payload:
+            table.data[:] = np.nan
+            table.data[payload["reduced_entry_ids"]] = payload["reduced_data"]
         else:
-            table.q_points[:] = _deserialize_array(record["q_points"])
-            table.data[:] = _deserialize_array(record["data"])
+            raise KeyError("payload is missing table data arrays")
 
-            if record["mode_normalizers"] is not None:
-                table.mode_normalizers[:] = _deserialize_array(
-                    record["mode_normalizers"]
-                )
+        table.mode_normalizers[:] = payload["mode_normalizers"]
+        table.kernel_exterior_normalizers[:] = payload["kernel_exterior_normalizers"]
 
-            if record["kernel_exterior_normalizers"] is not None:
-                table.kernel_exterior_normalizers[:] = _deserialize_array(
-                    record["kernel_exterior_normalizers"]
-                )
+        tmp_case_vecs = np.array(table.interaction_case_vecs)
+        tmp_case_vecs[...] = payload["interaction_case_vecs"]
+        table.interaction_case_vecs = [list(vec) for vec in tmp_case_vecs]
 
-            tmp_case_vecs = np.array(table.interaction_case_vecs)
-            tmp_case_vecs[...] = _deserialize_array(record["interaction_case_vecs"])
-            table.interaction_case_vecs = [list(vec) for vec in tmp_case_vecs]
-
-            table.case_indices[:] = _deserialize_array(record["case_indices"])
+        table.case_indices[:] = payload["case_indices"]
+        if "table_data_is_symmetry_reduced" in payload:
+            table.table_data_is_symmetry_reduced = bool(
+                payload["table_data_is_symmetry_reduced"][0]
+            )
 
         assert table.n_q_points == record["n_q_points"]
         assert table.n_pairs == record["n_pairs"]

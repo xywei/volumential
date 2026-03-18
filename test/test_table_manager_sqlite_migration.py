@@ -136,3 +136,56 @@ def test_symmetry_reduced_payload_roundtrip_uses_sparse_arrays():
     assert "data" not in payload
     assert np.array_equal(payload["reduced_entry_ids"], np.array([1, 3]))
     assert np.array_equal(payload["reduced_data"], np.array([1.5, 2.5]))
+
+
+def test_load_saved_table_missing_payload_is_corruption(tmp_path, monkeypatch):
+    filename = tmp_path / "cache.sqlite"
+
+    with NFTable(str(filename), progress_bar=False) as table_manager:
+        monkeypatch.setattr(
+            table_manager,
+            "_load_record",
+            lambda *args, **kwargs: {
+                "dim": 2,
+                "quad_order": 1,
+                "payload": None,
+            },
+        )
+
+        with pytest.raises(KeyError, match="payload"):
+            table_manager.load_saved_table(
+                2,
+                "Laplace",
+                q_order=1,
+                compute_method="DuffyRadial",
+            )
+
+
+def test_get_table_recomputes_on_payload_corruption(tmp_path, monkeypatch):
+    filename = tmp_path / "cache.sqlite"
+
+    with NFTable(str(filename), progress_bar=False) as table_manager:
+        monkeypatch.setattr(table_manager, "_record_exists", lambda *args: True)
+        monkeypatch.setattr(
+            table_manager,
+            "load_saved_table",
+            lambda *args, **kwargs: (_ for _ in ()).throw(KeyError("missing payload")),
+        )
+
+        sentinel = object()
+        recomputed = {"called": False}
+
+        def fake_compute_and_update(*args, **kwargs):
+            recomputed["called"] = True
+            return sentinel
+
+        monkeypatch.setattr(
+            table_manager,
+            "compute_and_update_table",
+            fake_compute_and_update,
+        )
+
+        table, is_recomputed = table_manager.get_table(2, "Laplace", q_order=1)
+        assert table is sentinel
+        assert is_recomputed
+        assert recomputed["called"]
