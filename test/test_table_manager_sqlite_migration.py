@@ -278,6 +278,119 @@ def test_get_table_recomputes_with_cached_build_method(tmp_path, monkeypatch):
         assert seen["compute_method"] == "DuffyRadial"
 
 
+def test_force_recompute_uses_cached_build_method_when_unspecified(
+    tmp_path, monkeypatch
+):
+    filename = tmp_path / "cache.sqlite"
+
+    with NFTable(str(filename), progress_bar=False) as table_manager:
+        monkeypatch.setattr(table_manager, "_record_exists", lambda *args: True)
+        monkeypatch.setattr(
+            table_manager,
+            "_load_record",
+            lambda *args, **kwargs: {
+                "build_method": "DuffyRadial",
+            },
+        )
+
+        seen = {"compute_method": None}
+
+        def fake_compute_and_update(
+            dim,
+            kernel_type,
+            q_order,
+            source_box_level,
+            compute_method,
+            queue=None,
+            **kwargs,
+        ):
+            seen["compute_method"] = compute_method
+            return object()
+
+        monkeypatch.setattr(
+            table_manager,
+            "compute_and_update_table",
+            fake_compute_and_update,
+        )
+
+        _, is_recomputed = table_manager.get_table(
+            1,
+            "Constant",
+            q_order=1,
+            force_recompute=True,
+        )
+
+        assert is_recomputed
+        assert seen["compute_method"] == "DuffyRadial"
+
+
+def test_load_saved_table_rejects_explicit_method_mismatch(tmp_path, monkeypatch):
+    filename = tmp_path / "cache.sqlite"
+
+    with NFTable(str(filename), progress_bar=False) as table_manager:
+        monkeypatch.setattr(
+            table_manager,
+            "_load_record",
+            lambda *args, **kwargs: {
+                "dim": 2,
+                "quad_order": 1,
+                "build_method": "DuffyRadial",
+            },
+        )
+
+        with pytest.raises(KeyError, match="build_method mismatch"):
+            table_manager.load_saved_table(
+                2,
+                "Laplace",
+                q_order=1,
+                compute_method="Transform",
+            )
+
+
+def test_get_table_recomputes_on_explicit_method_mismatch(tmp_path, monkeypatch):
+    filename = tmp_path / "cache.sqlite"
+
+    with NFTable(str(filename), progress_bar=False) as table_manager:
+        monkeypatch.setattr(table_manager, "_record_exists", lambda *args: True)
+        monkeypatch.setattr(
+            table_manager,
+            "load_saved_table",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                KeyError("cached build_method mismatch")
+            ),
+        )
+
+        seen = {"compute_method": None}
+
+        def fake_compute_and_update(
+            dim,
+            kernel_type,
+            q_order,
+            source_box_level,
+            compute_method,
+            queue=None,
+            **kwargs,
+        ):
+            seen["compute_method"] = compute_method
+            return object()
+
+        monkeypatch.setattr(
+            table_manager,
+            "compute_and_update_table",
+            fake_compute_and_update,
+        )
+
+        _, is_recomputed = table_manager.get_table(
+            2,
+            "Laplace",
+            q_order=1,
+            compute_method="Transform",
+        )
+
+        assert is_recomputed
+        assert seen["compute_method"] == "Transform"
+
+
 def test_unversioned_cache_rows_reset_in_write_mode(tmp_path):
     filename = tmp_path / "cache.sqlite"
 

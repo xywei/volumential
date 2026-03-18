@@ -609,6 +609,17 @@ class NearFieldInteractionTableManager:
                 rows,
             )
 
+    def _get_cached_build_method(self, dim, kernel_type, q_order, source_box_level):
+        cached_record = self._load_record(dim, kernel_type, q_order, source_box_level)
+        if cached_record is None or "build_method" not in cached_record.keys():
+            return None
+
+        cached_build_method = cached_record["build_method"]
+        if cached_build_method in {"Transform", "DuffyRadial"}:
+            return cached_build_method
+
+        return None
+
     def __enter__(self):
         return self
 
@@ -672,6 +683,18 @@ class NearFieldInteractionTableManager:
         elif force_recompute:
             if self._read_only:
                 raise RuntimeError("force_recompute is not supported in read-only mode")
+
+            recompute_method = compute_method_for_compute
+            if requested_compute_method is None:
+                cached_build_method = self._get_cached_build_method(
+                    dim,
+                    kernel_type,
+                    q_order,
+                    source_box_level,
+                )
+                if cached_build_method is not None:
+                    recompute_method = cached_build_method
+
             logger.info("Invoking fresh computation since force_recompute is set")
             is_recomputed = True
             table = self.compute_and_update_table(
@@ -679,7 +702,7 @@ class NearFieldInteractionTableManager:
                 kernel_type,
                 q_order,
                 source_box_level,
-                compute_method_for_compute,
+                recompute_method,
                 queue=queue,
                 **kwargs,
             )
@@ -695,12 +718,22 @@ class NearFieldInteractionTableManager:
                     **kwargs,
                 )
 
-            except KeyError:
+            except KeyError as exc:
                 import traceback
 
                 logger.debug(traceback.format_exc())
 
+                is_method_mismatch = (
+                    len(exc.args) == 1 and exc.args[0] == "cached build_method mismatch"
+                )
+
                 if self._read_only:
+                    if is_method_mismatch:
+                        raise RuntimeError(
+                            "Requested compute_method does not match cached build_method "
+                            "in read-only mode."
+                        )
+
                     raise RuntimeError(
                         "Cached table data is unavailable in read-only mode and "
                         "cannot be recomputed."
@@ -708,21 +741,22 @@ class NearFieldInteractionTableManager:
 
                 recompute_method = compute_method_for_compute
                 if requested_compute_method is None:
-                    cached_record = self._load_record(
+                    cached_build_method = self._get_cached_build_method(
                         dim,
                         kernel_type,
                         q_order,
                         source_box_level,
                     )
-                    if (
-                        cached_record is not None
-                        and "build_method" in cached_record.keys()
-                    ):
-                        cached_build_method = cached_record["build_method"]
-                        if cached_build_method in {"Transform", "DuffyRadial"}:
-                            recompute_method = cached_build_method
+                    if cached_build_method is not None:
+                        recompute_method = cached_build_method
 
-                logger.info("Recomputing due to table data corruption.")
+                if is_method_mismatch:
+                    logger.info(
+                        "Recomputing because requested compute_method differs "
+                        "from cached build_method."
+                    )
+                else:
+                    logger.info("Recomputing due to table data corruption.")
                 is_recomputed = True
                 table = self.compute_and_update_table(
                     dim,
@@ -844,12 +878,7 @@ class NearFieldInteractionTableManager:
             and compute_method in {"Transform", "DuffyRadial"}
             and compute_method != effective_compute_method
         ):
-            logger.warning(
-                "Requested compute_method=%r differs from cached build_method=%r; "
-                "loading cached table using the stored build method.",
-                compute_method,
-                effective_compute_method,
-            )
+            raise KeyError("cached build_method mismatch")
 
         if effective_compute_method == "Transform":
             if "knl_func" not in kwargs:
