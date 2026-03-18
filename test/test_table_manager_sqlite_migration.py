@@ -536,3 +536,116 @@ def test_get_table_loads_using_stored_build_method_when_unspecified(tmp_path):
     assert not is_recomputed
     assert loaded_table.build_method == "DuffyRadial"
     assert np.allclose(loaded_table.data, template_table.data)
+
+
+def test_load_saved_table_ignores_manager_precomputed_q_points(tmp_path):
+    from volumential.nearfield_potential_table import (
+        NearFieldInteractionTable,
+        constant_one,
+    )
+
+    filename = tmp_path / "cache.sqlite"
+
+    template_table = NearFieldInteractionTable(
+        quad_order=1,
+        dim=1,
+        build_method="DuffyRadial",
+        kernel_func=constant_one,
+        kernel_type="const",
+        sumpy_kernel=ConstantKernel(1),
+        progress_bar=False,
+    )
+    template_table.data[:] = 3.5
+    payload_blob = _serialize_table_payload(template_table)
+
+    with NFTable(str(filename), progress_bar=False) as table_manager:
+        _insert_dummy_cache_row(
+            table_manager.datafile,
+            payload_blob=payload_blob,
+            build_method="DuffyRadial",
+        )
+        table_manager.datafile.commit()
+
+    with NFTable(
+        str(filename),
+        progress_bar=False,
+        precomputed_q_points=np.array([999.0, -1.0]),
+    ) as table_manager:
+        loaded_table = table_manager.load_saved_table(1, "Constant", q_order=1)
+
+    assert np.allclose(loaded_table.q_points, template_table.q_points)
+    assert np.allclose(loaded_table.data, template_table.data)
+
+
+def test_get_table_recomputes_on_build_config_mismatch(tmp_path, monkeypatch):
+    from volumential.nearfield_potential_table import (
+        DuffyBuildConfig,
+        NearFieldInteractionTable,
+        constant_one,
+    )
+
+    filename = tmp_path / "cache.sqlite"
+
+    template_table = NearFieldInteractionTable(
+        quad_order=1,
+        dim=1,
+        build_method="DuffyRadial",
+        kernel_func=constant_one,
+        kernel_type="const",
+        sumpy_kernel=ConstantKernel(1),
+        progress_bar=False,
+    )
+    template_table.data[:] = 3.5
+    payload_blob = _serialize_table_payload(template_table)
+
+    coarse = DuffyBuildConfig(regular_quad_order=4, radial_quad_order=11)
+    fine = DuffyBuildConfig(regular_quad_order=12, radial_quad_order=61)
+
+    with NFTable(str(filename), progress_bar=False) as table_manager:
+        _insert_dummy_cache_row(
+            table_manager.datafile,
+            payload_blob=payload_blob,
+            build_method="DuffyRadial",
+        )
+        coarse_fingerprint = table_manager._build_config_fingerprint(
+            {"build_config": coarse}
+        )
+        table_manager.datafile.execute(
+            "INSERT INTO nearfield_cache_kwargs "
+            "(dim, kernel_type, q_order, source_box_level, key, value_type, value_text) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                1,
+                "Constant",
+                1,
+                0,
+                "build_config_fingerprint",
+                "str",
+                coarse_fingerprint,
+            ),
+        )
+        table_manager.datafile.commit()
+
+        sentinel = object()
+        seen = {"called": False}
+
+        def fake_compute_and_update(*args, **kwargs):
+            seen["called"] = True
+            return sentinel
+
+        monkeypatch.setattr(
+            table_manager,
+            "_compute_and_update_table_for_request",
+            fake_compute_and_update,
+        )
+
+        loaded_table, is_recomputed = table_manager.get_table(
+            1,
+            "Constant",
+            q_order=1,
+            build_config=fine,
+        )
+
+    assert is_recomputed
+    assert seen["called"]
+    assert loaded_table is sentinel

@@ -26,11 +26,12 @@ THE SOFTWARE.
 """
 
 import logging
+import json
 import re
 import sqlite3
 import time
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, is_dataclass
 from io import BytesIO
 from urllib.parse import quote
 
@@ -194,6 +195,30 @@ def _deserialize_table_payload(blob):
     with BytesIO(blob) as f:
         with np.load(f, allow_pickle=False) as payload:
             return {name: payload[name] for name in payload.files}
+
+
+def _to_stable_jsonable(value):
+    if isinstance(value, np.generic):
+        return _to_stable_jsonable(value.item())
+
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+
+    if is_dataclass(value) and not isinstance(value, type):
+        return _to_stable_jsonable(
+            {name: getattr(value, name) for name in value.__dataclass_fields__}
+        )
+
+    if isinstance(value, (list, tuple)):
+        return [_to_stable_jsonable(item) for item in value]
+
+    if isinstance(value, dict):
+        return {
+            str(key): _to_stable_jsonable(val)
+            for key, val in sorted(value.items(), key=lambda item: str(item[0]))
+        }
+
+    raise TypeError(f"unsupported value type for stable serialization: {type(value)!r}")
 
 
 def _serialize_scalar(value):
@@ -742,6 +767,28 @@ class NearFieldInteractionTableManager:
                 f"table builds ({where})"
             )
 
+    def _build_config_fingerprint(self, kwargs):
+        build_config = kwargs.get("build_config")
+        if build_config is None:
+            return None
+
+        if not (is_dataclass(build_config) and not isinstance(build_config, type)):
+            raise TypeError("build_config must be a dataclass instance")
+
+        return json.dumps(
+            _to_stable_jsonable(build_config),
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+    def _kwargs_for_cache_storage(self, kwargs):
+        cache_kwargs = dict(kwargs)
+        build_config_fingerprint = self._build_config_fingerprint(kwargs)
+        if build_config_fingerprint is not None:
+            cache_kwargs["build_config_fingerprint"] = build_config_fingerprint
+
+        return cache_kwargs
+
     def _resolve_kernel_bundle(self, table_request, kwargs, require_sumpy_kernel):
         if "knl_func" in kwargs:
             knl_func = kwargs["knl_func"]
@@ -784,9 +831,12 @@ class NearFieldInteractionTableManager:
     def _warn_on_loaded_kwarg_mismatch(self, table, kwargs):
         for kkey, kval in kwargs.items():
             if kval is not None:
+                if kkey == "build_config":
+                    continue
+
                 try:
                     tbval = getattr(table, kkey)
-                    if isinstance(kval, (int, str)):
+                    if isinstance(kval, (bool, int, str)):
                         if not kval == tbval:
                             from warnings import warn
 
@@ -799,8 +849,7 @@ class NearFieldInteractionTableManager:
                                 + str(kval)
                                 + ")"
                             )
-                    else:
-                        assert isinstance(kval, (float, complex))
+                    elif isinstance(kval, (float, complex)):
                         tbval = kval.__class__(tbval)
                         if not abs(kval - tbval) < 1e-12:
                             from warnings import warn
@@ -814,6 +863,8 @@ class NearFieldInteractionTableManager:
                                 + str(kval)
                                 + ")"
                             )
+                    else:
+                        continue
 
                 except AttributeError as e:
                     strict_loading = False
@@ -1022,6 +1073,9 @@ class NearFieldInteractionTableManager:
             if "q_points" in payload:
                 precomputed_q_points = payload["q_points"]
 
+            table_extra_kwargs = dict(self.table_extra_kwargs)
+            table_extra_kwargs.pop("precomputed_q_points", None)
+
             table = NearFieldInteractionTable(
                 quad_order=table_request.q_order,
                 dim=table_request.dim,
@@ -1034,7 +1088,7 @@ class NearFieldInteractionTableManager:
                     table_request.source_box_level
                 ),
                 precomputed_q_points=precomputed_q_points,
-                **self.table_extra_kwargs,
+                **table_extra_kwargs,
             )
 
             assert abs(table.source_box_extent - record["source_box_extent"]) < 1e-15
@@ -1095,7 +1149,16 @@ class NearFieldInteractionTableManager:
         table.source_box_extent = record["source_box_extent"]
 
         t_kwargs_load_start = time.perf_counter()
-        for atkey, atval in self._load_record_kwargs(table_request).items():
+        loaded_kwargs = self._load_record_kwargs(table_request)
+        requested_build_config_fingerprint = self._build_config_fingerprint(kwargs)
+        if requested_build_config_fingerprint is not None:
+            loaded_build_config_fingerprint = loaded_kwargs.get(
+                "build_config_fingerprint"
+            )
+            if loaded_build_config_fingerprint != requested_build_config_fingerprint:
+                raise KeyError("cached build_config mismatch")
+
+        for atkey, atval in loaded_kwargs.items():
             setattr(table, atkey, atval)
         t_kwargs_load_end = time.perf_counter()
 
@@ -1414,7 +1477,10 @@ class NearFieldInteractionTableManager:
             record_values,
         )
 
-        self._store_record_kwargs(table_request, kwargs)
+        self._store_record_kwargs(
+            table_request,
+            self._kwargs_for_cache_storage(kwargs),
+        )
 
         self.datafile.commit()
         t_db_write_end = time.perf_counter()
