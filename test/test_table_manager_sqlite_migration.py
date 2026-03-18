@@ -4,7 +4,10 @@ import sqlite3
 
 from volumential.table_manager import (
     ConstantKernel,
+    KernelSpec,
     NearFieldInteractionTableManager as NFTable,
+    TableDiscretization,
+    TableRequest,
     TABLE_CACHE_SCHEMA_VERSION,
     _deserialize_table_payload,
     _deserialize_scalar,
@@ -54,6 +57,17 @@ def _insert_dummy_cache_row(db, payload_blob=None, build_method="DuffyRadial"):
     )
 
 
+def test_table_request_is_composed_from_stable_specs():
+    request = TableRequest.from_args(3, "Laplace", 4, source_box_level=2)
+
+    assert request.kernel == KernelSpec(dim=3, kernel_type="Laplace")
+    assert request.discretization == TableDiscretization(q_order=4, source_box_level=2)
+    assert request.dim == 3
+    assert request.kernel_type == "Laplace"
+    assert request.q_order == 4
+    assert request.source_box_level == 2
+
+
 def test_legacy_hdf5_cache_error(tmp_path):
     filename = tmp_path / "legacy-cache.hdf5"
     filename.write_bytes(b"\x89HDF\r\n\x1a\nlegacy")
@@ -92,7 +106,7 @@ def test_read_only_cache_miss_fails_fast(tmp_path, monkeypatch):
     with NFTable(str(filename), read_only=True, progress_bar=False) as table_manager:
         monkeypatch.setattr(
             table_manager,
-            "compute_and_update_table",
+            "_compute_and_update_table_for_request",
             lambda *args, **kwargs: pytest.fail(
                 "unexpected recompute in read-only mode"
             ),
@@ -112,7 +126,7 @@ def test_read_only_force_recompute_fails_fast(tmp_path, monkeypatch):
         monkeypatch.setattr(table_manager, "_record_exists", lambda *args: True)
         monkeypatch.setattr(
             table_manager,
-            "compute_and_update_table",
+            "_compute_and_update_table_for_request",
             lambda *args, **kwargs: pytest.fail(
                 "unexpected recompute in read-only mode"
             ),
@@ -210,7 +224,7 @@ def test_get_table_recomputes_on_payload_corruption(tmp_path, monkeypatch):
         monkeypatch.setattr(table_manager, "_record_exists", lambda *args: True)
         monkeypatch.setattr(
             table_manager,
-            "load_saved_table",
+            "_load_saved_table_for_request",
             lambda *args, **kwargs: (_ for _ in ()).throw(KeyError("missing payload")),
         )
 
@@ -223,7 +237,7 @@ def test_get_table_recomputes_on_payload_corruption(tmp_path, monkeypatch):
 
         monkeypatch.setattr(
             table_manager,
-            "compute_and_update_table",
+            "_compute_and_update_table_for_request",
             fake_compute_and_update,
         )
 
@@ -248,7 +262,7 @@ def test_cache_miss_recomputes_with_single_builder_path(tmp_path, monkeypatch, d
 
         monkeypatch.setattr(
             table_manager,
-            "compute_and_update_table",
+            "_compute_and_update_table_for_request",
             fake_compute_and_update,
         )
 
@@ -256,6 +270,45 @@ def test_cache_miss_recomputes_with_single_builder_path(tmp_path, monkeypatch, d
 
         assert is_recomputed
         assert seen["called"]
+
+
+def test_get_table_from_request_recomputes_on_cache_miss(tmp_path, monkeypatch):
+    filename = tmp_path / "cache.sqlite"
+    table_request = TableRequest.from_args(2, "Laplace", 1)
+
+    with NFTable(str(filename), progress_bar=False) as table_manager:
+        monkeypatch.setattr(table_manager, "_record_exists", lambda *args: False)
+
+        seen = {"called": False}
+
+        def fake_compute_and_update(*args, **kwargs):
+            seen["called"] = True
+            return object()
+
+        monkeypatch.setattr(
+            table_manager,
+            "_compute_and_update_table_for_request",
+            fake_compute_and_update,
+        )
+
+        _, is_recomputed = table_manager.get_table_from_request(table_request)
+
+        assert is_recomputed
+        assert seen["called"]
+
+
+def test_request_methods_reject_non_request_objects(tmp_path):
+    filename = tmp_path / "cache.sqlite"
+
+    with NFTable(str(filename), progress_bar=False) as table_manager:
+        with pytest.raises(TypeError, match="table_request must be"):
+            table_manager.get_table_from_request((2, "Laplace", 1))
+
+        with pytest.raises(TypeError, match="table_request must be"):
+            table_manager.load_saved_table_from_request((2, "Laplace", 1))
+
+        with pytest.raises(TypeError, match="table_request must be"):
+            table_manager.compute_and_update_table_for_request((2, "Laplace", 1))
 
 
 def test_force_recompute_recomputes_with_single_builder_path(tmp_path, monkeypatch):
@@ -272,7 +325,7 @@ def test_force_recompute_recomputes_with_single_builder_path(tmp_path, monkeypat
 
         monkeypatch.setattr(
             table_manager,
-            "compute_and_update_table",
+            "_compute_and_update_table_for_request",
             fake_compute_and_update,
         )
 
@@ -311,6 +364,7 @@ def test_load_saved_table_rejects_legacy_transform_build_method(tmp_path, monkey
 
 def test_removed_compute_method_keyword_is_rejected(tmp_path):
     filename = tmp_path / "cache.sqlite"
+    table_request = TableRequest.from_args(2, "Laplace", 1)
 
     with NFTable(str(filename), progress_bar=False) as table_manager:
         with pytest.raises(TypeError, match="compute_method has been removed"):
@@ -331,6 +385,18 @@ def test_removed_compute_method_keyword_is_rejected(tmp_path):
                 2,
                 "Laplace",
                 q_order=1,
+                compute_method="DuffyRadial",
+            )
+
+        with pytest.raises(TypeError, match="compute_method has been removed"):
+            table_manager.load_saved_table_from_request(
+                table_request,
+                compute_method="DuffyRadial",
+            )
+
+        with pytest.raises(TypeError, match="compute_method has been removed"):
+            table_manager.compute_and_update_table_for_request(
+                table_request,
                 compute_method="DuffyRadial",
             )
 
@@ -382,7 +448,7 @@ def test_get_table_recomputes_on_payload_decode_failure(tmp_path, monkeypatch):
 
         monkeypatch.setattr(
             table_manager,
-            "compute_and_update_table",
+            "_compute_and_update_table_for_request",
             fake_compute_and_update,
         )
 

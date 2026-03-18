@@ -307,6 +307,56 @@ def test_duffy_radial_keeps_legacy_deg_theta_alias(monkeypatch):
     assert seen["regular_quad_order"] == 17
 
 
+def test_duffy_radial_accepts_build_config_dataclass(monkeypatch):
+    table = npt.NearFieldInteractionTable(
+        quad_order=2,
+        build_method="DuffyRadial",
+        dim=2,
+        sumpy_kernel=object(),
+        progress_bar=False,
+    )
+
+    seen = {}
+
+    def fake_build_normalizer_table(self, pool=None, pb=None):
+        pass
+
+    def fake_batched(self, queue, radial_rule, deg_theta, radial_quad_order, mp_dps):
+        seen["called"] = True
+        seen["radial_rule"] = radial_rule
+        seen["regular_quad_order"] = deg_theta
+        seen["radial_quad_order"] = radial_quad_order
+        seen["mp_dps"] = mp_dps
+        self.is_built = True
+
+    monkeypatch.setattr(
+        npt.NearFieldInteractionTable,
+        "build_normalizer_table",
+        fake_build_normalizer_table,
+    )
+    monkeypatch.setattr(
+        npt.NearFieldInteractionTable,
+        "build_table_via_duffy_radial_batched",
+        fake_batched,
+    )
+
+    table.build_table_via_duffy_radial(
+        queue=object(),
+        build_config=npt.DuffyBuildConfig(
+            radial_rule="tanh-sinh-fast",
+            regular_quad_order=9,
+            radial_quad_order=41,
+            mp_dps=70,
+        ),
+    )
+
+    assert seen["called"]
+    assert seen["radial_rule"] == "tanh-sinh-fast"
+    assert seen["regular_quad_order"] == 9
+    assert seen["radial_quad_order"] == 41
+    assert seen["mp_dps"] == 70
+
+
 def test_duffy_radial_auto_tune_orders_routes_to_batched_builder(monkeypatch):
     table = npt.NearFieldInteractionTable(
         quad_order=2,

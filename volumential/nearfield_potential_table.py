@@ -22,6 +22,7 @@ THE SOFTWARE.
 
 import logging
 import time
+from dataclasses import dataclass
 from functools import partial
 
 import numpy as np
@@ -39,6 +40,19 @@ logger = logging.getLogger("NearFieldInteractionTable")
 
 
 _TABLE_BUILD_METHOD = "DuffyRadial"
+_DUFFY_PROGRESS_STAGES = 3
+
+
+@dataclass(frozen=True)
+class DuffyBuildConfig:
+    radial_rule: str = "tanh-sinh-fast"
+    regular_quad_order: object = 20
+    radial_quad_order: object = 61
+    mp_dps: int = 50
+    auto_tune_orders: bool = False
+    auto_tune_samples: int = 5
+    auto_tune_floor_factor: float = 8.0
+    auto_tune_candidates: object = None
 
 
 def _self_tp(vec, tpd=2):
@@ -337,7 +351,10 @@ class NearFieldInteractionTable:
         self.data = np.empty(self.n_pairs * self.n_cases, dtype=self.dtype)
         self.data.fill(np.nan)
 
-        total_evals = len(self.data) + self.n_q_points
+        if self.dim == 2:
+            total_evals = self.n_q_points + _DUFFY_PROGRESS_STAGES
+        else:
+            total_evals = _DUFFY_PROGRESS_STAGES
 
         if progress_bar:
             from pytools import ProgressBar
@@ -1389,6 +1406,7 @@ class NearFieldInteractionTable:
 
         if n_entries == 0:
             self.is_built = True
+            self._progress_step(_DUFFY_PROGRESS_STAGES)
             t_total_end = time.perf_counter()
             self.last_duffy_build_timings = {
                 "invariant_info_s": t_invariant_end - t_invariant_start,
@@ -1411,11 +1429,13 @@ class NearFieldInteractionTable:
             mp_dps,
         )
         t_quadrature_end = time.perf_counter()
+        self._progress_step()
 
         t_scatter_start = time.perf_counter()
         for ientry, entry_id in enumerate(invariant_entry_ids):
             self.data[entry_id] = table_host[ientry]
         t_scatter_end = time.perf_counter()
+        self._progress_step()
 
         t_symmetry_fill_start = time.perf_counter()
         for entry_id in range(len(self.data)):
@@ -1426,6 +1446,7 @@ class NearFieldInteractionTable:
                 continue
             self.data[entry_id] = self.data[centry_id]
         t_symmetry_fill_end = time.perf_counter()
+        self._progress_step()
 
         self.table_data_is_symmetry_reduced = bool(np.any(np.isnan(self.data)))
         self.is_built = True
@@ -1536,44 +1557,63 @@ class NearFieldInteractionTable:
                 if pb is not None:
                     pb.progress(1)
 
-    def build_table_via_duffy_radial(
+    def _progress_step(self, nsteps=1):
+        if self.pb is not None and nsteps > 0:
+            self.pb.progress(nsteps)
+
+    def _make_duffy_build_config(
         self,
-        radial_rule="tanh-sinh-fast",
-        regular_quad_order=20,
-        radial_quad_order=61,
-        mp_dps=50,
-        queue=None,
-        auto_tune_orders=False,
-        auto_tune_samples=5,
-        auto_tune_floor_factor=8.0,
-        auto_tune_candidates=None,
-        **kwargs,
+        radial_rule,
+        regular_quad_order,
+        radial_quad_order,
+        mp_dps,
+        auto_tune_orders,
+        auto_tune_samples,
+        auto_tune_floor_factor,
+        auto_tune_candidates,
+        kwargs,
     ):
-        if "deg_theta" in kwargs:
-            legacy_deg_theta = kwargs.pop("deg_theta")
+        legacy_kwargs = dict(kwargs)
+        if "deg_theta" in legacy_kwargs:
+            legacy_deg_theta = legacy_kwargs.pop("deg_theta")
             if legacy_deg_theta is not None:
                 regular_quad_order = legacy_deg_theta
 
+        return DuffyBuildConfig(
+            radial_rule=radial_rule,
+            regular_quad_order=regular_quad_order,
+            radial_quad_order=radial_quad_order,
+            mp_dps=mp_dps,
+            auto_tune_orders=auto_tune_orders,
+            auto_tune_samples=auto_tune_samples,
+            auto_tune_floor_factor=auto_tune_floor_factor,
+            auto_tune_candidates=auto_tune_candidates,
+        )
+
+    def _resolve_duffy_build_config(self, build_config, queue):
+        regular_quad_order = build_config.regular_quad_order
+        radial_quad_order = build_config.radial_quad_order
+
         auto_requested = (
-            auto_tune_orders
+            build_config.auto_tune_orders
             or _is_auto_quad_order(regular_quad_order)
             or _is_auto_quad_order(radial_quad_order)
         )
         if auto_requested:
             tuned_regular, tuned_radial, _ = self._auto_tune_duffy_radial_orders(
-                radial_rule=radial_rule,
-                mp_dps=mp_dps,
+                radial_rule=build_config.radial_rule,
+                mp_dps=build_config.mp_dps,
                 queue=queue,
-                sample_count=auto_tune_samples,
-                candidates=auto_tune_candidates,
-                floor_factor=auto_tune_floor_factor,
+                sample_count=build_config.auto_tune_samples,
+                candidates=build_config.auto_tune_candidates,
+                floor_factor=build_config.auto_tune_floor_factor,
             )
-            if auto_tune_orders or _is_auto_quad_order(regular_quad_order):
+            if build_config.auto_tune_orders or _is_auto_quad_order(regular_quad_order):
                 regular_quad_order = tuned_regular
             else:
                 regular_quad_order = int(regular_quad_order)
 
-            if auto_tune_orders or _is_auto_quad_order(radial_quad_order):
+            if build_config.auto_tune_orders or _is_auto_quad_order(radial_quad_order):
                 radial_quad_order = tuned_radial
             else:
                 radial_quad_order = int(radial_quad_order)
@@ -1585,6 +1625,60 @@ class NearFieldInteractionTable:
                 "selected_regular_quad_order": regular_quad_order,
                 "selected_radial_quad_order": radial_quad_order,
             }
+
+        return DuffyBuildConfig(
+            radial_rule=build_config.radial_rule,
+            regular_quad_order=regular_quad_order,
+            radial_quad_order=radial_quad_order,
+            mp_dps=build_config.mp_dps,
+            auto_tune_orders=build_config.auto_tune_orders,
+            auto_tune_samples=build_config.auto_tune_samples,
+            auto_tune_floor_factor=build_config.auto_tune_floor_factor,
+            auto_tune_candidates=build_config.auto_tune_candidates,
+        )
+
+    def build_table_via_duffy_radial(
+        self,
+        radial_rule="tanh-sinh-fast",
+        regular_quad_order=20,
+        radial_quad_order=61,
+        mp_dps=50,
+        queue=None,
+        build_config=None,
+        auto_tune_orders=False,
+        auto_tune_samples=5,
+        auto_tune_floor_factor=8.0,
+        auto_tune_candidates=None,
+        **kwargs,
+    ):
+        if build_config is None:
+            build_config = self._make_duffy_build_config(
+                radial_rule=radial_rule,
+                regular_quad_order=regular_quad_order,
+                radial_quad_order=radial_quad_order,
+                mp_dps=mp_dps,
+                auto_tune_orders=auto_tune_orders,
+                auto_tune_samples=auto_tune_samples,
+                auto_tune_floor_factor=auto_tune_floor_factor,
+                auto_tune_candidates=auto_tune_candidates,
+                kwargs=kwargs,
+            )
+        else:
+            if not isinstance(build_config, DuffyBuildConfig):
+                raise TypeError("build_config must be a DuffyBuildConfig")
+            if kwargs:
+                build_config = self._make_duffy_build_config(
+                    radial_rule=build_config.radial_rule,
+                    regular_quad_order=build_config.regular_quad_order,
+                    radial_quad_order=build_config.radial_quad_order,
+                    mp_dps=build_config.mp_dps,
+                    auto_tune_orders=build_config.auto_tune_orders,
+                    auto_tune_samples=build_config.auto_tune_samples,
+                    auto_tune_floor_factor=build_config.auto_tune_floor_factor,
+                    auto_tune_candidates=build_config.auto_tune_candidates,
+                    kwargs=kwargs,
+                )
+        build_config = self._resolve_duffy_build_config(build_config, queue=queue)
 
         if self.pb is not None:
             self.pb.draw()
@@ -1609,7 +1703,7 @@ class NearFieldInteractionTable:
                 "DuffyRadial loopy builder requires sumpy_kernel (integral_knl)"
             )
 
-        if radial_rule not in {"tanh-sinh-fast", "tanh-sinh"}:
+        if build_config.radial_rule not in {"tanh-sinh-fast", "tanh-sinh"}:
             raise ValueError(
                 "DuffyRadial loopy builder supports only tanh-sinh and "
                 "tanh-sinh-fast radial rules"
@@ -1620,10 +1714,10 @@ class NearFieldInteractionTable:
         )
         return_value = self.build_table_via_duffy_radial_batched(
             queue,
-            radial_rule=radial_rule,
-            deg_theta=regular_quad_order,
-            radial_quad_order=radial_quad_order,
-            mp_dps=mp_dps,
+            radial_rule=build_config.radial_rule,
+            deg_theta=int(build_config.regular_quad_order),
+            radial_quad_order=int(build_config.radial_quad_order),
+            mp_dps=build_config.mp_dps,
         )
         if self.last_duffy_build_timings is not None:
             self.last_duffy_build_timings["normalizer_s"] = normalizer_s
@@ -1638,9 +1732,13 @@ class NearFieldInteractionTable:
 
     # {{{ build table (driver)
 
-    def build_table(self, cl_ctx=None, queue=None, **kwargs):
+    def build_table(self, cl_ctx=None, queue=None, build_config=None, **kwargs):
         logger.info("Building table with Duffy+radial method")
-        self.build_table_via_duffy_radial(queue=queue, **kwargs)
+        self.build_table_via_duffy_radial(
+            queue=queue,
+            build_config=build_config,
+            **kwargs,
+        )
 
     # }}} End build table (driver)
 
