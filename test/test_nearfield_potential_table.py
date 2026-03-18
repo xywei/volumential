@@ -408,6 +408,76 @@ def test_duffy_radial_accepts_build_config_dataclass(monkeypatch):
     assert seen["mp_dps"] == 70
 
 
+def test_duffy_radial_adaptive_rule_uses_scalar_fallback(monkeypatch):
+    table = npt.NearFieldInteractionTable(
+        quad_order=1,
+        build_method="DuffyRadial",
+        dim=2,
+        kernel_func=npt.constant_one,
+        kernel_type="const",
+        sumpy_kernel=None,
+        progress_bar=False,
+    )
+
+    seen = {"batched_called": False, "scalar_calls": 0}
+
+    def fake_build_normalizer_table(self, pool=None, pb=None):
+        self.mode_normalizers[:] = 1
+
+    def fake_batched(self, queue, radial_rule, deg_theta, radial_quad_order, mp_dps):
+        seen["batched_called"] = True
+        raise AssertionError("adaptive rule should not use batched builder")
+
+    def fake_compute_entry(
+        self,
+        entry_id,
+        radial_rule="adaptive",
+        deg_theta=20,
+        radial_quad_order=61,
+        mp_dps=50,
+    ):
+        seen["scalar_calls"] += 1
+        assert radial_rule == "adaptive"
+        return entry_id, float(entry_id + 1)
+
+    def identity_lookup_by_symmetry(self, entry_id):
+        return entry_id, entry_id
+
+    monkeypatch.setattr(
+        npt.NearFieldInteractionTable,
+        "build_normalizer_table",
+        fake_build_normalizer_table,
+    )
+    monkeypatch.setattr(
+        npt.NearFieldInteractionTable,
+        "build_table_via_duffy_radial_batched",
+        fake_batched,
+    )
+    monkeypatch.setattr(
+        npt.NearFieldInteractionTable,
+        "compute_table_entry_duffy_radial",
+        fake_compute_entry,
+    )
+    monkeypatch.setattr(
+        npt.NearFieldInteractionTable,
+        "lookup_by_symmetry",
+        identity_lookup_by_symmetry,
+    )
+
+    table.build_table(
+        build_config=npt.DuffyBuildConfig(
+            radial_rule="adaptive",
+            regular_quad_order=6,
+            radial_quad_order=41,
+        ),
+    )
+
+    assert not seen["batched_called"]
+    assert seen["scalar_calls"] == len(table.data)
+    assert table.is_built
+    assert np.all(np.isfinite(table.data))
+
+
 def test_duffy_radial_auto_tune_orders_routes_to_batched_builder(monkeypatch):
     table = npt.NearFieldInteractionTable(
         quad_order=2,

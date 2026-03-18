@@ -675,3 +675,102 @@ def test_get_table_recomputes_on_build_config_mismatch(tmp_path, monkeypatch):
     assert is_recomputed
     assert seen["called"]
     assert loaded_table is sentinel
+
+
+def test_force_recompute_reuses_cached_build_config_when_unspecified(
+    tmp_path, monkeypatch
+):
+    from volumential.nearfield_potential_table import DuffyBuildConfig
+
+    filename = tmp_path / "cache.sqlite"
+    cached_build_config = DuffyBuildConfig(regular_quad_order=10, radial_quad_order=41)
+
+    with NFTable(str(filename), progress_bar=False) as table_manager:
+        _insert_dummy_cache_row(table_manager.datafile, payload_blob=b"x")
+
+        serialized = table_manager._build_config_fingerprint(
+            {"build_config": cached_build_config}
+        )
+        table_manager.datafile.executemany(
+            "INSERT INTO nearfield_cache_kwargs "
+            "(dim, kernel_type, q_order, source_box_level, key, value_type, value_text) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [
+                (1, "Constant", 1, 0, "build_config_fingerprint", "str", serialized),
+            ],
+        )
+        table_manager.datafile.commit()
+
+        sentinel = object()
+        seen = {}
+
+        def fake_compute_and_update(*args, **kwargs):
+            seen["build_config"] = kwargs.get("build_config")
+            return sentinel
+
+        monkeypatch.setattr(
+            table_manager,
+            "_compute_and_update_table_for_request",
+            fake_compute_and_update,
+        )
+
+        table, is_recomputed = table_manager.get_table(
+            1,
+            "Constant",
+            q_order=1,
+            force_recompute=True,
+        )
+
+    assert is_recomputed
+    assert table is sentinel
+    assert seen["build_config"] == cached_build_config
+
+
+def test_corruption_recompute_reuses_cached_build_config_when_unspecified(
+    tmp_path, monkeypatch
+):
+    from volumential.nearfield_potential_table import DuffyBuildConfig
+
+    filename = tmp_path / "cache.sqlite"
+    cached_build_config = DuffyBuildConfig(regular_quad_order=12, radial_quad_order=61)
+
+    with NFTable(str(filename), progress_bar=False) as table_manager:
+        _insert_dummy_cache_row(table_manager.datafile, payload_blob=b"x")
+
+        serialized = table_manager._build_config_fingerprint(
+            {"build_config": cached_build_config}
+        )
+        table_manager.datafile.executemany(
+            "INSERT INTO nearfield_cache_kwargs "
+            "(dim, kernel_type, q_order, source_box_level, key, value_type, value_text) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [
+                (1, "Constant", 1, 0, "build_config_fingerprint", "str", serialized),
+                (1, "Constant", 1, 0, "build_config_json", "str", serialized),
+            ],
+        )
+        table_manager.datafile.commit()
+
+        sentinel = object()
+        seen = {}
+
+        def fake_compute_and_update(*args, **kwargs):
+            seen["build_config"] = kwargs.get("build_config")
+            return sentinel
+
+        monkeypatch.setattr(
+            table_manager,
+            "_load_saved_table_for_request",
+            lambda *args, **kwargs: (_ for _ in ()).throw(KeyError("corrupt")),
+        )
+        monkeypatch.setattr(
+            table_manager,
+            "_compute_and_update_table_for_request",
+            fake_compute_and_update,
+        )
+
+        table, is_recomputed = table_manager.get_table(1, "Constant", q_order=1)
+
+    assert is_recomputed
+    assert table is sentinel
+    assert seen["build_config"] == cached_build_config

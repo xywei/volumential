@@ -1637,6 +1637,59 @@ class NearFieldInteractionTable:
             auto_tune_candidates=build_config.auto_tune_candidates,
         )
 
+    def _build_table_via_duffy_radial_scalar(
+        self,
+        radial_rule,
+        deg_theta,
+        radial_quad_order,
+        mp_dps,
+    ):
+        t_total_start = time.perf_counter()
+
+        t_invariant_start = time.perf_counter()
+        invariant_entry_ids = [
+            i for i in range(len(self.data)) if self.lookup_by_symmetry(i) == (i, i)
+        ]
+        t_invariant_end = time.perf_counter()
+        self._progress_step()
+
+        t_quadrature_start = time.perf_counter()
+        for entry_id in invariant_entry_ids:
+            _, entry_val = self.compute_table_entry_duffy_radial(
+                entry_id,
+                radial_rule=radial_rule,
+                deg_theta=deg_theta,
+                radial_quad_order=radial_quad_order,
+                mp_dps=mp_dps,
+            )
+            self.data[entry_id] = entry_val
+        t_quadrature_end = time.perf_counter()
+        self._progress_step()
+
+        t_symmetry_fill_start = time.perf_counter()
+        for entry_id in range(len(self.data)):
+            _, centry_id = self.lookup_by_symmetry(entry_id)
+            if np.isnan(self.data[centry_id]):
+                raise RuntimeError(
+                    "scalar DuffyRadial build left unresolved symmetric entries"
+                )
+            self.data[entry_id] = self.data[centry_id]
+        t_symmetry_fill_end = time.perf_counter()
+        self._progress_step()
+
+        self.table_data_is_symmetry_reduced = bool(np.isnan(self.data).any())
+        self.is_built = True
+
+        t_total_end = time.perf_counter()
+        self.last_duffy_build_timings = {
+            "invariant_info_s": t_invariant_end - t_invariant_start,
+            "quadrature_s": t_quadrature_end - t_quadrature_start,
+            "scatter_s": 0.0,
+            "symmetry_fill_s": t_symmetry_fill_end - t_symmetry_fill_start,
+            "total_s": t_total_end - t_total_start,
+            "n_entries": int(len(invariant_entry_ids)),
+        }
+
     def build_table_via_duffy_radial(
         self,
         radial_rule="tanh-sinh-fast",
@@ -1692,6 +1745,27 @@ class NearFieldInteractionTable:
             self.has_normalizers = True
         else:
             self.has_normalizers = False
+
+        if build_config.radial_rule == "adaptive":
+            logger.warning(
+                "Using scalar CPU-backed %dD DuffyRadial table builder "
+                "with adaptive radial rule",
+                self.dim,
+            )
+            return_value = self._build_table_via_duffy_radial_scalar(
+                radial_rule=build_config.radial_rule,
+                deg_theta=int(build_config.regular_quad_order),
+                radial_quad_order=int(build_config.radial_quad_order),
+                mp_dps=build_config.mp_dps,
+            )
+            if self.last_duffy_build_timings is not None:
+                self.last_duffy_build_timings["normalizer_s"] = normalizer_s
+                self.last_duffy_build_timings["total_with_normalizer_s"] = (
+                    self.last_duffy_build_timings["total_s"] + normalizer_s
+                )
+            if self.pb is not None:
+                self.pb.finished()
+            return return_value
 
         if queue is None:
             if cl_ctx is not None:

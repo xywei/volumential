@@ -809,8 +809,40 @@ class NearFieldInteractionTableManager:
         build_config_fingerprint = self._build_config_fingerprint(kwargs)
         if build_config_fingerprint is not None:
             cache_kwargs["build_config_fingerprint"] = build_config_fingerprint
+            cache_kwargs["build_config_json"] = build_config_fingerprint
+            cache_kwargs.pop("build_config", None)
 
         return cache_kwargs
+
+    def _deserialize_build_config(self, build_config_json):
+        from volumential.nearfield_potential_table import DuffyBuildConfig
+
+        decoded = json.loads(build_config_json)
+        if not isinstance(decoded, dict):
+            raise ValueError("build_config_json must decode to an object")
+
+        return DuffyBuildConfig(**decoded)
+
+    def _kwargs_with_cached_build_config(self, table_request, kwargs):
+        if "build_config" in kwargs:
+            return kwargs
+
+        loaded_kwargs = self._load_record_kwargs(table_request)
+        build_config_json = loaded_kwargs.get("build_config_json")
+        if build_config_json is None:
+            build_config_json = loaded_kwargs.get("build_config_fingerprint")
+        if build_config_json is None:
+            return kwargs
+
+        try:
+            cached_build_config = self._deserialize_build_config(build_config_json)
+        except Exception:
+            logger.warning("Ignoring malformed cached build_config_json")
+            return kwargs
+
+        updated_kwargs = dict(kwargs)
+        updated_kwargs["build_config"] = cached_build_config
+        return updated_kwargs
 
     def _resolve_kernel_bundle(self, table_request, kwargs, require_sumpy_kernel):
         if "knl_func" in kwargs:
@@ -983,10 +1015,14 @@ class NearFieldInteractionTableManager:
 
             logger.info("Invoking fresh computation since force_recompute is set")
             is_recomputed = True
+            recompute_kwargs = self._kwargs_with_cached_build_config(
+                table_request,
+                request_kwargs,
+            )
             table = self._compute_and_update_table_for_request(
                 table_request,
                 queue=queue,
-                **request_kwargs,
+                **recompute_kwargs,
             )
 
         else:
@@ -1009,10 +1045,14 @@ class NearFieldInteractionTableManager:
 
                 logger.info("Recomputing due to cache miss/corruption.")
                 is_recomputed = True
+                recompute_kwargs = self._kwargs_with_cached_build_config(
+                    table_request,
+                    request_kwargs,
+                )
                 table = self._compute_and_update_table_for_request(
                     table_request,
                     queue=queue,
-                    **request_kwargs,
+                    **recompute_kwargs,
                 )
 
             self._warn_on_loaded_kwarg_mismatch(table, request_kwargs)
