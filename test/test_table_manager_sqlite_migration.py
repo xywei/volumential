@@ -234,6 +234,50 @@ def test_get_table_recomputes_on_payload_corruption(tmp_path, monkeypatch):
         assert recomputed["called"]
 
 
+def test_get_table_recomputes_with_cached_build_method(tmp_path, monkeypatch):
+    filename = tmp_path / "cache.sqlite"
+
+    with NFTable(str(filename), progress_bar=False) as table_manager:
+        monkeypatch.setattr(table_manager, "_record_exists", lambda *args: True)
+        monkeypatch.setattr(
+            table_manager,
+            "_load_record",
+            lambda *args, **kwargs: {
+                "build_method": "DuffyRadial",
+            },
+        )
+        monkeypatch.setattr(
+            table_manager,
+            "load_saved_table",
+            lambda *args, **kwargs: (_ for _ in ()).throw(KeyError("missing payload")),
+        )
+
+        seen = {"compute_method": None}
+
+        def fake_compute_and_update(
+            dim,
+            kernel_type,
+            q_order,
+            source_box_level,
+            compute_method,
+            queue=None,
+            **kwargs,
+        ):
+            seen["compute_method"] = compute_method
+            return object()
+
+        monkeypatch.setattr(
+            table_manager,
+            "compute_and_update_table",
+            fake_compute_and_update,
+        )
+
+        _, is_recomputed = table_manager.get_table(1, "Constant", q_order=1)
+
+        assert is_recomputed
+        assert seen["compute_method"] == "DuffyRadial"
+
+
 def test_unversioned_cache_rows_reset_in_write_mode(tmp_path):
     filename = tmp_path / "cache.sqlite"
 

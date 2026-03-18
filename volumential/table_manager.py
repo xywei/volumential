@@ -706,6 +706,22 @@ class NearFieldInteractionTableManager:
                         "cannot be recomputed."
                     )
 
+                recompute_method = compute_method_for_compute
+                if requested_compute_method is None:
+                    cached_record = self._load_record(
+                        dim,
+                        kernel_type,
+                        q_order,
+                        source_box_level,
+                    )
+                    if (
+                        cached_record is not None
+                        and "build_method" in cached_record.keys()
+                    ):
+                        cached_build_method = cached_record["build_method"]
+                        if cached_build_method in {"Transform", "DuffyRadial"}:
+                            recompute_method = cached_build_method
+
                 logger.info("Recomputing due to table data corruption.")
                 is_recomputed = True
                 table = self.compute_and_update_table(
@@ -713,7 +729,7 @@ class NearFieldInteractionTableManager:
                     kernel_type,
                     q_order,
                     source_box_level,
-                    compute_method_for_compute,
+                    recompute_method,
                     queue=queue,
                     **kwargs,
                 )
