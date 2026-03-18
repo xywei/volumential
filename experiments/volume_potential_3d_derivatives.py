@@ -53,7 +53,7 @@ print("* Setting up...")
 print("*************************")
 
 dim = 3
-table_filename = "nft_laplace3d.hdf5"
+table_filename = "nft_laplace3d.sqlite"
 
 logger.info("Using table cache: " + table_filename)
 

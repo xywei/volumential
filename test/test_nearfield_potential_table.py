@@ -509,6 +509,57 @@ def test_duffy_radial_partial_auto_order_keeps_explicit_value(monkeypatch):
     assert seen["radial_quad_order"] == 21
 
 
+def test_duffy_autotune_two_candidates_prefers_fine_rule(monkeypatch):
+    table = npt.NearFieldInteractionTable(
+        quad_order=2,
+        build_method="DuffyRadial",
+        dim=2,
+        sumpy_kernel=object(),
+        progress_bar=False,
+    )
+
+    monkeypatch.setattr(
+        table,
+        "_duffy_autotune_sample_entry_ids",
+        lambda sample_count: [0, 1],
+    )
+
+    def fake_compute_table_entry_duffy_radial(
+        self,
+        entry_id,
+        radial_rule,
+        deg_theta,
+        radial_quad_order,
+        mp_dps,
+    ):
+        if (deg_theta, radial_quad_order) == (4, 11):
+            values = np.array([1.0, -1.0], dtype=np.float64)
+        elif (deg_theta, radial_quad_order) == (12, 61):
+            values = np.array([1.1, -0.9], dtype=np.float64)
+        else:
+            raise AssertionError("unexpected candidate pair")
+
+        return entry_id, values[entry_id]
+
+    monkeypatch.setattr(
+        npt.NearFieldInteractionTable,
+        "compute_table_entry_duffy_radial",
+        fake_compute_table_entry_duffy_radial,
+    )
+
+    selected_regular, selected_radial, info = table._auto_tune_duffy_radial_orders(
+        radial_rule="tanh-sinh-fast",
+        mp_dps=50,
+        queue=None,
+        sample_count=2,
+        candidates=[(4, 11), (12, 61)],
+        floor_factor=8.0,
+    )
+
+    assert (selected_regular, selected_radial) == (12, 61)
+    assert info["relative_errors_vs_best"][0] > info["acceptance_threshold"]
+
+
 def test_mode_remap_is_elementwise_for_vectorized_inputs():
     table = npt.NearFieldInteractionTable(
         quad_order=3,

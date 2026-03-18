@@ -51,7 +51,7 @@ print("*************************")
 
 dim = 2
 
-table_filename = "nft_laplace2d.hdf5"
+table_filename = "nft_laplace2d.sqlite"
 root_table_source_extent = 2
 
 print("Using table cache:", table_filename)

@@ -54,9 +54,9 @@ def main():
 
     dim = 2
 
-    # download precomputation results for the 2D Laplace kernel
-    download_table = True
-    table_filename = "nft_laplace2d.hdf5"
+    # use local SQLite cache; nearfield tables are recomputed on cache miss
+    download_table = False
+    table_filename = "nft_laplace2d.sqlite"
     root_table_source_extent = 2
 
     print("Using table cache:", table_filename)
@@ -211,15 +211,10 @@ def main():
     from volumential.table_manager import NearFieldInteractionTableManager
 
     if download_table and (not os.path.isfile(table_filename)):
-        import json
-
-        with open("table_urls.json") as fp:
-            urls = json.load(fp)
-
-        print("Downloading table from %s" % urls["Laplace2D"])
-        import subprocess
-
-        subprocess.call(["wget", "-q", urls["Laplace2D"], table_filename])
+        raise RuntimeError(
+            "Legacy table download is no longer supported; "
+            "set download_table=False to rebuild a local SQLite cache."
+        )
 
     tm = NearFieldInteractionTableManager(
         table_filename, root_extent=root_table_source_extent, queue=queue

@@ -1361,15 +1361,15 @@ class NearFieldInteractionTable:
             denom = np.maximum(1.0, np.abs(reference_values))
             rel_errors.append(float(np.max(np.abs(values - reference_values) / denom)))
 
-        if len(rel_errors) > 1:
-            tail_errors = np.asarray(rel_errors[max(0, len(rel_errors) - 4) : -1])
+        floor_estimate = 0.0
+        if len(rel_errors) > 2:
+            tail_errors = np.asarray(
+                rel_errors[max(0, len(rel_errors) - 4) : -1],
+                dtype=np.float64,
+            )
             positive_tail_errors = tail_errors[tail_errors > 0]
-            if positive_tail_errors.size:
+            if positive_tail_errors.size >= 2:
                 floor_estimate = float(np.min(positive_tail_errors))
-            else:
-                floor_estimate = 0.0
-        else:
-            floor_estimate = 0.0
 
         min_floor = 128.0 * np.finfo(np.float64).eps
         floor_estimate = max(floor_estimate, min_floor)
