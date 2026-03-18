@@ -47,7 +47,7 @@ _HDF5_SIGNATURE = b"\x89HDF\r\n\x1a\n"
 
 
 TABLE_CACHE_SCHEMA_VERSION = "2.0.0"
-TABLE_CACHE_MIN_READABLE_SCHEMA_VERSION = "1.0.0"
+TABLE_CACHE_MIN_READABLE_SCHEMA_VERSION = "2.0.0"
 _LEGACY_UNVERSIONED_SCHEMA_VERSION = "1.0.0"
 
 
@@ -425,17 +425,42 @@ class NearFieldInteractionTableManager:
         stored_schema_version = self._get_meta_value("schema_version")
         has_stored_schema_version = stored_schema_version is not None
 
-        if has_stored_schema_version:
-            if not isinstance(stored_schema_version, str):
+        has_cache_rows = (
+            self.datafile.execute("SELECT 1 FROM nearfield_cache LIMIT 1").fetchone()
+            is not None
+        )
+
+        if not has_stored_schema_version:
+            if self._read_only and has_cache_rows:
                 raise RuntimeError(
                     "The table cache file "
                     + self.filename
-                    + " has invalid schema_version metadata type "
-                    + str(type(stored_schema_version))
+                    + " is missing schema_version metadata and is treated as "
+                    + "incompatible legacy cache."
                 )
-            schema_version = stored_schema_version
-        else:
-            schema_version = self._infer_schema_version_from_columns(cache_columns)
+
+            if not self._read_only and has_cache_rows:
+                logger.warning(
+                    "Resetting legacy unversioned table cache data in %s.",
+                    self.filename,
+                )
+                self.datafile.execute("DELETE FROM nearfield_cache_kwargs")
+                self.datafile.execute("DELETE FROM nearfield_cache")
+
+            if not self._read_only:
+                self._store_meta_value("schema_version", TABLE_CACHE_SCHEMA_VERSION)
+
+            self.cache_schema_version = TABLE_CACHE_SCHEMA_VERSION
+            return
+
+        if not isinstance(stored_schema_version, str):
+            raise RuntimeError(
+                "The table cache file "
+                + self.filename
+                + " has invalid schema_version metadata type "
+                + str(type(stored_schema_version))
+            )
+        schema_version = stored_schema_version
 
         try:
             schema_version_tuple = _parse_semver(
@@ -450,10 +475,7 @@ class NearFieldInteractionTableManager:
                 + str(exc)
             ) from exc
 
-        if (
-            schema_version_tuple < min_readable_version_tuple
-            or schema_version_tuple[0] > current_version_tuple[0]
-        ):
+        if schema_version_tuple[0] > current_version_tuple[0]:
             raise RuntimeError(
                 "The table cache file "
                 + self.filename
@@ -466,28 +488,28 @@ class NearFieldInteractionTableManager:
                 + "."
             )
 
-        if schema_version_tuple < current_version_tuple:
+        if schema_version_tuple < min_readable_version_tuple:
             if self._read_only:
-                logger.warning(
-                    "Using legacy table cache schema %s in read-only mode; "
-                    "schema migration is disabled.",
-                    schema_version,
+                raise RuntimeError(
+                    "The table cache file "
+                    + self.filename
+                    + " uses unsupported legacy schema version "
+                    + schema_version
+                    + "."
                 )
-                self.cache_schema_version = schema_version
-                return
 
-            if schema_version_tuple[0] < 2 and "payload" not in cache_columns:
-                self.datafile.execute(
-                    "ALTER TABLE nearfield_cache ADD COLUMN payload BLOB"
-                )
+            logger.warning(
+                "Resetting legacy table cache schema %s in %s.",
+                schema_version,
+                self.filename,
+            )
+            self.datafile.execute("DELETE FROM nearfield_cache_kwargs")
+            self.datafile.execute("DELETE FROM nearfield_cache")
 
             schema_version = TABLE_CACHE_SCHEMA_VERSION
             self._store_meta_value("schema_version", schema_version)
             self.cache_schema_version = schema_version
             return
-
-        if not has_stored_schema_version and not self._read_only:
-            self._store_meta_value("schema_version", schema_version)
 
         self.cache_schema_version = schema_version
 
@@ -615,8 +637,10 @@ class NearFieldInteractionTableManager:
         dim = int(dim)
         assert dim >= 1
 
-        if compute_method is None:
-            compute_method = "Transform"
+        requested_compute_method = compute_method
+        compute_method_for_compute = compute_method
+        if compute_method_for_compute is None:
+            compute_method_for_compute = "Transform"
 
         is_recomputed = False
 
@@ -640,7 +664,7 @@ class NearFieldInteractionTableManager:
                 kernel_type,
                 q_order,
                 source_box_level,
-                compute_method,
+                compute_method_for_compute,
                 queue=queue,
                 **kwargs,
             )
@@ -655,7 +679,7 @@ class NearFieldInteractionTableManager:
                 kernel_type,
                 q_order,
                 source_box_level,
-                compute_method,
+                compute_method_for_compute,
                 queue=queue,
                 **kwargs,
             )
@@ -667,7 +691,7 @@ class NearFieldInteractionTableManager:
                     kernel_type,
                     q_order,
                     source_box_level,
-                    compute_method,
+                    requested_compute_method,
                     **kwargs,
                 )
 
@@ -689,7 +713,7 @@ class NearFieldInteractionTableManager:
                     kernel_type,
                     q_order,
                     source_box_level,
-                    compute_method,
+                    compute_method_for_compute,
                     queue=queue,
                     **kwargs,
                 )
@@ -789,13 +813,35 @@ class NearFieldInteractionTableManager:
         if q_order != record["quad_order"]:
             raise AssertionError("cache record quad order mismatch")
 
-        if compute_method == "Transform":
+        stored_build_method = record["build_method"]
+        if stored_build_method in {"Transform", "DuffyRadial"}:
+            effective_compute_method = stored_build_method
+        else:
+            logger.warning(
+                "Unknown cached build_method=%r, assuming DuffyRadial",
+                stored_build_method,
+            )
+            effective_compute_method = "DuffyRadial"
+
+        if (
+            compute_method is not None
+            and compute_method in {"Transform", "DuffyRadial"}
+            and compute_method != effective_compute_method
+        ):
+            logger.warning(
+                "Requested compute_method=%r differs from cached build_method=%r; "
+                "loading cached table using the stored build method.",
+                compute_method,
+                effective_compute_method,
+            )
+
+        if effective_compute_method == "Transform":
             if "knl_func" not in kwargs:
                 knl_func = self.get_kernel_function(dim, kernel_type, **kwargs)
             else:
                 knl_func = kwargs["knl_func"]
             sumpy_knl = None
-        elif compute_method == "DuffyRadial":
+        elif effective_compute_method == "DuffyRadial":
             if "knl_func" not in kwargs:
                 knl_func = self.get_kernel_function(dim, kernel_type, **kwargs)
             else:
@@ -831,7 +877,7 @@ class NearFieldInteractionTableManager:
             quad_order=q_order,
             dim=dim,
             dtype=self.dtype,
-            build_method=compute_method,
+            build_method=effective_compute_method,
             kernel_func=knl_func,
             kernel_type=self.get_kernel_function_type(dim, kernel_type),
             sumpy_kernel=sumpy_knl,
@@ -887,15 +933,7 @@ class NearFieldInteractionTableManager:
         table.n_pairs = record["n_pairs"]
         table.case_encoding_base = base
         table.case_encoding_shift = shift
-        stored_build_method = record["build_method"]
-        if stored_build_method in {"Transform", "DuffyRadial"}:
-            table.build_method = stored_build_method
-        else:
-            logger.warning(
-                "Unknown cached build_method=%r, assuming DuffyRadial",
-                stored_build_method,
-            )
-            table.build_method = "DuffyRadial"
+        table.build_method = effective_compute_method
         table.kernel_type_cached = record["kernel_type_cached"]
         table.source_box_extent = record["source_box_extent"]
 

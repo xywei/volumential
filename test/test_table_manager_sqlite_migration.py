@@ -3,6 +3,7 @@ import pytest
 import sqlite3
 
 from volumential.table_manager import (
+    ConstantKernel,
     NearFieldInteractionTableManager as NFTable,
     TABLE_CACHE_SCHEMA_VERSION,
     _deserialize_table_payload,
@@ -10,6 +11,47 @@ from volumential.table_manager import (
     _serialize_table_payload,
     _serialize_scalar,
 )
+
+
+def _insert_dummy_cache_row(db, payload_blob=None, build_method="DuffyRadial"):
+    db.execute(
+        """
+        INSERT INTO nearfield_cache (
+            dim, kernel_type, q_order, source_box_level,
+            n_q_points, quad_order, n_pairs,
+            source_box_extent, source_box_level_stored,
+            case_encoding_base, case_encoding_shift,
+            build_method, kernel_type_cached,
+            q_points, data, mode_normalizers,
+            kernel_exterior_normalizers, interaction_case_vecs,
+            case_indices, payload
+        ) VALUES (
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        )
+        """,
+        (
+            1,
+            "Constant",
+            1,
+            0,
+            1,
+            1,
+            1,
+            1.0,
+            0,
+            1,
+            0,
+            build_method,
+            "const",
+            b"",
+            b"",
+            None,
+            None,
+            None,
+            None,
+            payload_blob,
+        ),
+    )
 
 
 def test_legacy_hdf5_cache_error(tmp_path):
@@ -148,6 +190,7 @@ def test_load_saved_table_missing_payload_is_corruption(tmp_path, monkeypatch):
             lambda *args, **kwargs: {
                 "dim": 2,
                 "quad_order": 1,
+                "build_method": "DuffyRadial",
                 "payload": None,
             },
         )
@@ -189,3 +232,83 @@ def test_get_table_recomputes_on_payload_corruption(tmp_path, monkeypatch):
         assert table is sentinel
         assert is_recomputed
         assert recomputed["called"]
+
+
+def test_unversioned_cache_rows_reset_in_write_mode(tmp_path):
+    filename = tmp_path / "cache.sqlite"
+
+    with NFTable(str(filename), progress_bar=False):
+        pass
+
+    with sqlite3.connect(str(filename)) as db:
+        _insert_dummy_cache_row(db, payload_blob=None)
+        db.execute("DELETE FROM nearfield_cache_meta WHERE key='schema_version'")
+        db.commit()
+
+    with NFTable(str(filename), progress_bar=False):
+        pass
+
+    with sqlite3.connect(str(filename)) as db:
+        row = db.execute("SELECT COUNT(*) FROM nearfield_cache").fetchone()
+        assert row[0] == 0
+        schema_row = db.execute(
+            "SELECT value_type, value_text FROM nearfield_cache_meta "
+            "WHERE key='schema_version'"
+        ).fetchone()
+        assert schema_row == ("str", TABLE_CACHE_SCHEMA_VERSION)
+
+
+def test_unversioned_cache_rows_rejected_in_read_only_mode(tmp_path):
+    filename = tmp_path / "cache.sqlite"
+
+    with NFTable(str(filename), progress_bar=False):
+        pass
+
+    with sqlite3.connect(str(filename)) as db:
+        _insert_dummy_cache_row(db, payload_blob=None)
+        db.execute("DELETE FROM nearfield_cache_meta WHERE key='schema_version'")
+        db.commit()
+
+    with pytest.raises(RuntimeError, match="missing schema_version"):
+        with NFTable(str(filename), read_only=True, progress_bar=False):
+            pass
+
+
+def test_get_table_loads_using_stored_build_method_when_unspecified(tmp_path):
+    from volumential.nearfield_potential_table import (
+        NearFieldInteractionTable,
+        constant_one,
+    )
+
+    filename = tmp_path / "cache.sqlite"
+
+    template_table = NearFieldInteractionTable(
+        quad_order=1,
+        dim=1,
+        build_method="DuffyRadial",
+        kernel_func=constant_one,
+        kernel_type="const",
+        sumpy_kernel=ConstantKernel(1),
+        progress_bar=False,
+    )
+    template_table.data[:] = 3.5
+    payload_blob = _serialize_table_payload(template_table)
+
+    with NFTable(str(filename), progress_bar=False) as table_manager:
+        _insert_dummy_cache_row(
+            table_manager.datafile,
+            payload_blob=payload_blob,
+            build_method="DuffyRadial",
+        )
+        table_manager.datafile.commit()
+
+        loaded_table, is_recomputed = table_manager.get_table(
+            1,
+            "Constant",
+            q_order=1,
+            force_recompute=False,
+        )
+
+    assert not is_recomputed
+    assert loaded_table.build_method == "DuffyRadial"
+    assert np.allclose(loaded_table.data, template_table.data)
