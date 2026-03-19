@@ -253,7 +253,7 @@ def laplace_problem(ctx_factory):
 
 
 @pytest.mark.skipif(
-    mg.provider not in {"meshgen_dealii", "meshgen_boxtree"},
+    mg.provider != "meshgen_boxtree",
     reason="Adaptive mesh module is not available",
 )
 def test_volume_fmm_laplace(laplace_problem):

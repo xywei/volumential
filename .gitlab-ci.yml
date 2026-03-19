@@ -1,7 +1,7 @@
 Flake8:
     script:
     - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/master/prepare-and-run-flake8.sh
-    - ". ./prepare-and-run-flake8.sh volumential test examples benchmarks"
+    - ". ./prepare-and-run-flake8.sh volumential test examples"
     tags:
     - python3
     except:
@@ -9,13 +9,10 @@ Flake8:
 
 Python 3 POCL:
   script:
-  - if [[ $(dpkg-query -l | grep libdeal.ii-dev | wc -l) = 0 ]]; then echo "Deal.ii not found"; exit 0; fi
   - export PY_EXE=python3
   - export PYOPENCL_TEST=portable:pthread
   - export EXTRA_INSTALL="pybind11 cython numpy pytest pytest-cov scipy mako wheel"
   - export PYTEST_FLAGS="--cov=volumential"
-  - git submodule sync && git submodule update --init --recursive --remote
-  - ((cd contrib/meshgen11_dealii/; ./build.sh) && echo "Using meshgen11_dealii.") || (echo "Using boxtree for meshgen.")
   - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/master/build-and-test-py-project.sh
   - sed -i -e '/^TESTABLES=.*/i PIP="${PY_EXE} $(which pip)" \n$PIP uninstall -y pytest-warnings' build-and-test-py-project.sh
   - ". ./build-and-test-py-project.sh"
@@ -31,14 +28,11 @@ Python 3 POCL:
 
 Python 3 Intel:
   script:
-  - if [[ $(dpkg-query -l | grep libdeal.ii-dev | wc -l) = 0 ]]; then echo "Deal.ii not found"; exit 0; fi
   - export PY_EXE=python3
   - source /opt/enable-intel-cl.sh
   - export PYOPENCL_TEST="intel(r):pu"
   - export PYTEST_FLAGS="--cov=volumential"
   - export EXTRA_INSTALL="pybind11 cython numpy pytest pytest-cov scipy mako wheel"
-  - git submodule sync && git submodule update --init --recursive --remote
-  - ((cd contrib/meshgen11_dealii/; ./build.sh) && echo "Using meshgen11_dealii.") || (echo "Using boxtree for meshgen.")
   - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/master/build-and-test-py-project.sh
   - sed -i -e '/^TESTABLES=.*/i PIP="${PY_EXE} $(which pip)" \n$PIP uninstall -y pytest-warnings' build-and-test-py-project.sh
   - ". ./build-and-test-py-project.sh"
@@ -60,7 +54,6 @@ Python 3 Conda:
   - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/main/ci-support.sh
   - source ci-support.sh
   - build_py_project_in_conda_env
-  - ((cd contrib/meshgen11_dealii/; ./build.sh) && echo "Using meshgen11_dealii.") || (echo "Using boxtree for meshgen.")
   - test_py_project
   tags:
   - linux
@@ -81,7 +74,6 @@ Python 3 Conda Apple:
   - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/main/ci-support.sh
   - source ci-support.sh
   - build_py_project_in_conda_env
-  - ((cd contrib/meshgen11_dealii/; ./build.sh) && echo "Using meshgen11_dealii.") || (echo "Using boxtree for meshgen.")
   - test_py_project
   tags:
   - apple
@@ -99,7 +91,6 @@ Python 3 Conda Examples:
   - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/main/ci-support.sh
   - source ci-support.sh
   - build_py_project_in_conda_env
-  - ((cd contrib/meshgen11_dealii/; ./build.sh) && echo "Using meshgen11_dealii.") || (echo "Using boxtree for meshgen.")
   - run_examples
   tags:
   - python3
@@ -115,8 +106,6 @@ Documentation Sphinx:
   - export PY_EXE=python3
   - export PYOPENCL_TEST=portable:pthread
   - export EXTRA_INSTALL="pybind11 cython numpy pytest scipy mako wheel"
-  - git submodule sync && git submodule update --init --recursive --remote
-  - ((cd contrib/meshgen11_dealii/; ./build.sh) && echo "Using meshgen11_dealii.") || (echo "Using boxtree for meshgen.")
   - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/master/build-py-project.sh
   - ". ./build-py-project.sh"
   - cd doc && make html
@@ -133,24 +122,6 @@ Documentation Sphinx:
   - git push
   tags:
   - python3
-  except:
-  - tags
-  allow_failure: true
-
-Docker Image w/t Firedrake:
-  script:
-  - docker info
-  - docker pull firedrakeproject/firedrake:latest
-  - docker build --no-cache -t xywei/volumential-firedrake:latest -f docker/Dockerfile.firedrake .
-  - docker build --no-cache -t xywei/volumential-firedrake-jupyterlab:latest -f docker/Dockerfile.firedrake_jupyterlab .
-  - docker build --no-cache -t xywei/volumential-firedrake-jupyterlab-vim:latest -f docker/Dockerfile.firedrake_jupyterlab_vim .
-  - bash -c 'if [ "$BRANCH_PROTECTED" = 1 ]; then exit 0; else exit 1; fi'
-  - docker login --username "${DOCKERHUB_USERNAME}" --password "${DOCKERHUB_ACCESS_TOKEN}"
-  - docker push xywei/volumential-firedrake:latest
-  - docker push xywei/volumential-firedrake-jupyterlab:latest
-  - docker push xywei/volumential-firedrake-jupyterlab-vim:latest
-  tags:
-  - docker
   except:
   - tags
   allow_failure: true

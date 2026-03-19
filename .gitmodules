@@ -1,3 +1,0 @@
-[submodule "contrib/meshgen11_dealii/pybind11"]
-	path = contrib/meshgen11_dealii/pybind11
-	url = https://github.com/pybind/pybind11.git

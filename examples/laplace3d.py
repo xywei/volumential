@@ -30,18 +30,13 @@ from functools import partial
 import numpy as np
 
 import pymbolic as pmbl
-import pymbolic.functions
 import pyopencl as cl
 
 from volumential.tools import ScalarFieldExpressionEvaluation as Eval
 
 
-verbose = True
 logger = logging.getLogger(__name__)
-if verbose:
-    logging.basicConfig(level=logging.INFO)
-else:
-    logging.basicConfig(level=logging.CRITICAL)
+logging.basicConfig(level=logging.INFO)
 
 
 def main():
@@ -52,7 +47,6 @@ def main():
 
     dim = 3
     # use local SQLite cache; nearfield tables are recomputed on cache miss
-    download_table = False
     table_filename = "nft_laplace3d.sqlite"
 
     logger.info("Using table cache: " + table_filename)
@@ -60,12 +54,6 @@ def main():
     q_order = 7  # quadrature order
     n_levels = 5
     use_multilevel_table = False
-
-    adaptive_mesh = False
-    n_refinement_loops = 100
-    refined_n_cells = 5e5
-    rratio_top = 0.2
-    rratio_bot = 0.5
 
     dtype = np.float64
 
@@ -110,42 +98,9 @@ def main():
     mg.greet()
 
     mesh = mg.MeshGen3D(q_order, n_levels, a, b, queue=queue)
-    if not adaptive_mesh:
-        mesh.print_info()
-        q_points = mesh.get_q_points()
-        q_weights = mesh.get_q_weights()
-    else:
-        iloop = -1
-        while mesh.n_active_cells() < refined_n_cells:
-            iloop += 1
-            cell_centers = mesh.get_cell_centers()
-            cell_measures = mesh.get_cell_measures()
-            density_vals = source_eval(
-                queue,
-                np.array([[center[d] for center in cell_centers] for d in range(dim)]),
-            )
-            crtr = np.abs(cell_measures * density_vals)
-            mesh.update_mesh(crtr, rratio_top, rratio_bot)
-            if iloop > n_refinement_loops:
-                print("Max number of refinement loops reached.")
-                break
-
-        mesh.print_info()
-        q_points = mesh.get_q_points()
-        q_weights = mesh.get_q_weights()
-
-    if 1:
-        try:
-            mesh.generate_gmsh("box_grid.msh")
-        except Exception as e:
-            print(e)
-            pass
-
-        legacy_msh_file = True
-        if legacy_msh_file:
-            import os
-
-            os.system("gmsh box_grid.msh convert_grid -")
+    mesh.print_info()
+    q_points = mesh.get_q_points()
+    q_weights = mesh.get_q_weights()
 
     assert len(q_points) == len(q_weights)
     assert q_points.shape[1] == dim
@@ -216,16 +171,8 @@ def main():
 
     # {{{ build near field potential table
 
-    import os
-
     from volumential.nearfield_potential_table import DuffyBuildConfig
     from volumential.table_manager import NearFieldInteractionTableManager
-
-    if download_table and (not os.path.isfile(table_filename)):
-        raise RuntimeError(
-            "Legacy table download is no longer supported; "
-            "set download_table=False to rebuild a local SQLite cache."
-        )
 
     tm = NearFieldInteractionTableManager(
         table_filename, root_extent=root_table_source_extent, queue=queue
