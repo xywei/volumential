@@ -1446,15 +1446,11 @@ class NearFieldInteractionTable:
         t_scatter_end = time.perf_counter()
         self._progress_step()
 
+        # Keep table data symmetry-reduced to minimize cache/storage size.
+        # Call progress step for the legacy "symmetry fill" stage even though
+        # propagation is intentionally disabled.
         t_symmetry_fill_start = time.perf_counter()
-        for entry_id in range(len(self.data)):
-            _, centry_id = self.lookup_by_symmetry(entry_id)
-            if np.isnan(self.data[centry_id]):
-                continue
-            if centry_id == entry_id:
-                continue
-            self.data[entry_id] = self.data[centry_id]
-        t_symmetry_fill_end = time.perf_counter()
+        t_symmetry_fill_end = t_symmetry_fill_start
         self._progress_step()
 
         self.table_data_is_symmetry_reduced = bool(np.any(np.isnan(self.data)))
@@ -1675,15 +1671,11 @@ class NearFieldInteractionTable:
         t_quadrature_end = time.perf_counter()
         self._progress_step()
 
+        # Keep table data symmetry-reduced to minimize cache/storage size.
+        # Call progress step for the legacy "symmetry fill" stage even though
+        # propagation is intentionally disabled.
         t_symmetry_fill_start = time.perf_counter()
-        for entry_id in range(len(self.data)):
-            _, centry_id = self.lookup_by_symmetry(entry_id)
-            if np.isnan(self.data[centry_id]):
-                raise RuntimeError(
-                    "scalar DuffyRadial build left unresolved symmetric entries"
-                )
-            self.data[entry_id] = self.data[centry_id]
-        t_symmetry_fill_end = time.perf_counter()
+        t_symmetry_fill_end = t_symmetry_fill_start
         self._progress_step()
 
         self.table_data_is_symmetry_reduced = bool(np.isnan(self.data).any())

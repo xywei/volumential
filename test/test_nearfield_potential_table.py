@@ -1102,6 +1102,39 @@ def test_duffy_radial_batched_laplace_center_case_is_finite(ctx_factory):
     assert np.all(np.isfinite(values))
 
 
+def test_duffy_radial_batched_keeps_symmetry_reduced_storage(ctx_factory):
+    queue = _get_cpu_queue_or_skip(ctx_factory)
+
+    table = npt.NearFieldInteractionTable(
+        quad_order=4,
+        dim=2,
+        build_method="DuffyRadial",
+        kernel_func=npt.constant_one,
+        kernel_type="const",
+        sumpy_kernel=ConstantKernel(2),
+        progress_bar=False,
+    )
+    table.build_table_via_duffy_radial(
+        queue=queue,
+        radial_rule="tanh-sinh-fast",
+        regular_quad_order=8,
+        radial_quad_order=31,
+    )
+
+    invariant_entry_ids = np.asarray(
+        table._get_invariant_entry_info()["entry_ids"], dtype=np.int64
+    )
+    non_invariant_ids = np.setdiff1d(
+        np.arange(len(table.data), dtype=np.int64),
+        invariant_entry_ids,
+    )
+
+    assert non_invariant_ids.size > 0
+    assert table.table_data_is_symmetry_reduced
+    assert np.all(np.isfinite(table.data[invariant_entry_ids]))
+    assert np.all(np.isnan(table.data[non_invariant_ids]))
+
+
 if __name__ == "__main__":
     import sys
 
