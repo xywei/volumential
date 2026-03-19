@@ -6,6 +6,26 @@
 Volumential (VOLUME poteNTIAL) provides toolset to solve volume potential integral equations
 efficiently via Fast Multipole Method.
 
+## Repository Layout
+
+- `volumential/`: library source
+- `test/`: pytest suite
+- `examples/`: maintained end-to-end examples (`laplace2d.py`, `laplace3d.py`)
+- `doc/`: Sphinx documentation
+
+Legacy `contrib/`, `benchmarks/`, `experiments/`, and `docker/` trees were
+removed as part of repository cleanup.
+
+## Quick Start
+
+Install an OpenCL runtime first (for example, in conda:
+`conda install pyopencl pocl`), then:
+
+```bash
+pip install -r requirements.txt
+python examples/laplace2d.py
+```
+
 ## Documentation
 
 [Browse the documentation online.](http://xiaoyu-wei.com/docs/volumential/)
