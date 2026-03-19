@@ -9,7 +9,6 @@ dependencies:
   - cmake
   - colorama
   - cython
-  - dealii
   - genpy
   - git
   - iniconfig

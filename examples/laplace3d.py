@@ -151,10 +151,13 @@ def main():
     # visuals
     print("building tree")
     from boxtree import TreeBuilder
+    from boxtree.array_context import PyOpenCLArrayContext
 
-    tb = TreeBuilder(ctx)
+    actx = PyOpenCLArrayContext(queue)
+
+    tb = TreeBuilder(actx)
     tree, _ = tb(
-        queue,
+        actx,
         particles=q_points,
         targets=q_points,
         bbox=bbox,
@@ -164,8 +167,8 @@ def main():
 
     from boxtree.traversal import FMMTraversalBuilder
 
-    tg = FMMTraversalBuilder(ctx)
-    trav, _ = tg(queue, tree)
+    tg = FMMTraversalBuilder(actx)
+    trav, _ = tg(actx, tree)
 
     # }}} End build tree and traversals
 
