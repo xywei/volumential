@@ -86,6 +86,12 @@ jobs:
 
           export CONDA_ENVIRONMENT=.test-conda-env-py3-macos.yml
           export PYTEST_FLAGS="--cov=volumential"
+          export CI_TEST_CONDA_PREFIX="$PWD/.conda-root/envs/testing"
+          export CPATH="${CI_TEST_CONDA_PREFIX}/include${CPATH:+:${CPATH}}"
+          export LIBRARY_PATH="${CI_TEST_CONDA_PREFIX}/lib${LIBRARY_PATH:+:${LIBRARY_PATH}}"
+          export CPPFLAGS="${CPPFLAGS:-} -I${CI_TEST_CONDA_PREFIX}/include"
+          export CFLAGS="${CFLAGS:-} -I${CI_TEST_CONDA_PREFIX}/include"
+          export LDFLAGS="${LDFLAGS:-} -L${CI_TEST_CONDA_PREFIX}/lib"
 
           curl -L -O https://tiker.net/ci-support-v0
           . ci-support-v0

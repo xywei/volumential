@@ -1206,7 +1206,13 @@ def interpolate_from_meshmode(actx, dof_vec, elements_to_sources_lookup, order="
         if len(sym_shape) == 0:
             source_vec = source_vec[tree.sorted_target_ids]
         else:
-            source_vec = source_vec[..., tree.sorted_target_ids]
+            source_vec_flat = source_vec.reshape((nvecs, nsources))
+            source_vec_user = cl.array.empty(
+                actx.queue, (nvecs, nsources), dtype=dof_vec.dtype
+            )
+            for ivec in range(nvecs):
+                source_vec_user[ivec] = source_vec_flat[ivec][tree.sorted_target_ids]
+            source_vec = source_vec_user.reshape(sym_shape + (nsources,))
     else:
         raise ValueError(f"order must be 'tree' or 'user' (got {order}).")
 
