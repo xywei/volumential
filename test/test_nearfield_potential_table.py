@@ -1068,6 +1068,40 @@ def test_duffy_radial_batched_matches_scalar_reference_entries(
         assert rel_err < rtol
 
 
+def test_duffy_radial_batched_laplace_center_case_is_finite(ctx_factory):
+    from sumpy.kernel import LaplaceKernel
+
+    queue = _get_cpu_queue_or_skip(ctx_factory)
+
+    table = npt.NearFieldInteractionTable(
+        quad_order=4,
+        dim=2,
+        build_method="DuffyRadial",
+        kernel_func=npt.get_laplace(2),
+        kernel_type="log",
+        sumpy_kernel=LaplaceKernel(2),
+        progress_bar=False,
+    )
+
+    invariant_info = table._get_invariant_entry_info()
+    center_case_id = table.case_indices[table.case_encode([0, 0])]
+    center_local_indices = np.flatnonzero(
+        invariant_info["case_indices"] == center_case_id
+    ).astype(np.int64)
+
+    values = table._batched_duffy_values_for_local_indices(
+        queue,
+        invariant_info,
+        center_local_indices,
+        radial_rule="tanh-sinh-fast",
+        regular_quad_order=50,
+        radial_quad_order=100,
+        mp_dps=50,
+    )
+
+    assert np.all(np.isfinite(values))
+
+
 if __name__ == "__main__":
     import sys
 

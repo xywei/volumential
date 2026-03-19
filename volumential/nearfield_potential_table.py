@@ -940,6 +940,7 @@ class NearFieldInteractionTable:
 
         setup_lines = ["<> active = 1"]
         len_terms = []
+        dist_terms = []
         basis_terms = []
         interp_eps = 8 * np.finfo(self.dtype).eps
         for iaxis in range(self.dim):
@@ -976,7 +977,15 @@ class NearFieldInteractionTable:
                     ]
                 )
             len_terms.append(len_name)
+            dist_terms.append(d_name)
             basis_terms.append(basis_name)
+
+        # Guard against quadrature nodes that hit the singular point exactly.
+        # For such nodes, the transformed Jacobian factor drives the contribution
+        # to zero, but finite-precision evaluation of the kernel may produce
+        # non-finite values (e.g. log(0)) and then 0*inf -> nan.
+        dist2_expr = " + ".join(f"{d_name} * {d_name}" for d_name in dist_terms)
+        setup_lines.append(f"active = active and ({dist2_expr} > 0)")
 
         quad_w_expr = "node_jac_base[inode]" + "".join(
             f" * {len_name}" for len_name in len_terms
