@@ -27,7 +27,6 @@ __doc__ = """
 
 import logging
 import os
-import weakref
 from functools import lru_cache
 
 import numpy as np
@@ -69,13 +68,8 @@ from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
 logger = logging.getLogger(__name__)
 
 
-_INTERPOLATION_EXECUTOR_CACHE = weakref.WeakKeyDictionary()
-
-
 def _clear_interpolation_kernel_cache():
-    global _INTERPOLATION_EXECUTOR_CACHE
     _build_interpolation_loopy_kernel.cache_clear()
-    _INTERPOLATION_EXECUTOR_CACHE = weakref.WeakKeyDictionary()
 
 
 @lru_cache(maxsize=12)
@@ -218,31 +212,6 @@ def _build_interpolation_loopy_kernel(dim, q_order):
     lpknl = loopy.fix_parameters(lpknl, dim=int(dim), q_order=int(q_order))
     lpknl = loopy.split_iname(lpknl, "tbox", 128, outer_tag="g.0", inner_tag="l.0")
     return lpknl
-
-
-def _get_interpolation_executor(queue, dim, q_order, dtype, coord_dtype):
-    global _INTERPOLATION_EXECUTOR_CACHE
-
-    context = queue.context
-    key = (int(dim), int(q_order), np.dtype(dtype).str, np.dtype(coord_dtype).str)
-
-    try:
-        per_context_cache = _INTERPOLATION_EXECUTOR_CACHE.get(context)
-        if per_context_cache is None:
-            per_context_cache = {}
-            _INTERPOLATION_EXECUTOR_CACHE[context] = per_context_cache
-    except TypeError:
-        return _build_interpolation_loopy_kernel(int(dim), int(q_order)).executor(
-            context
-        )
-
-    cached = per_context_cache.get(key)
-    if cached is None:
-        cached = _build_interpolation_loopy_kernel(int(dim), int(q_order)).executor(
-            context
-        )
-        per_context_cache[key] = cached
-    return cached
 
 
 def _debug_nan_status(label, ary):
@@ -751,7 +720,9 @@ def interpolate_volume_potential(
         # fetching from user_source_ids converts potential to tree order
         user_mode_ids = tree.user_source_ids
 
-    executor = _get_interpolation_executor(queue, dim, q_order, dtype, coord_dtype)
+    executor = _build_interpolation_loopy_kernel(int(dim), int(q_order)).executor(
+        queue.context
+    )
     evt, res_dict = executor(
         queue,
         p_out=pout,

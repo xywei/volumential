@@ -22,7 +22,6 @@ THE SOFTWARE.
 
 import logging
 import time
-import weakref
 from dataclasses import dataclass
 from functools import partial
 
@@ -368,7 +367,6 @@ class NearFieldInteractionTable:
         self.last_duffy_order_selection = None
         self.last_duffy_build_timings = None
         self.table_data_is_symmetry_reduced = False
-        self._fused_duffy_executor_cache = weakref.WeakKeyDictionary()
 
     # }}} End constructor
 
@@ -1043,40 +1041,6 @@ class NearFieldInteractionTable:
         )
         return knl
 
-    def _get_fused_invariant_duffy_table_executor(self, queue, n_entries, n_nodes):
-        context = getattr(queue, "context", None)
-        if context is None:
-            return self._get_fused_invariant_duffy_table_program(
-                queue, n_entries, n_nodes
-            )
-
-        try:
-            per_context_cache = self._fused_duffy_executor_cache.get(context)
-            if per_context_cache is None:
-                per_context_cache = {}
-                self._fused_duffy_executor_cache[context] = per_context_cache
-        except TypeError:
-            return self._get_fused_invariant_duffy_table_program(
-                queue, n_entries, n_nodes
-            ).executor(context)
-
-        key = (
-            int(n_entries),
-            int(n_nodes),
-            int(self.quad_order),
-            int(self.dim),
-            np.dtype(self.dtype).str,
-        )
-        cached = per_context_cache.get(key)
-        if cached is None:
-            prg = self._get_fused_invariant_duffy_table_program(
-                queue, n_entries, n_nodes
-            )
-            cached = prg.executor(context)
-            per_context_cache[key] = cached
-
-        return cached
-
     @memoize_method
     def _get_duffy_radial_node_data(
         self,
@@ -1220,9 +1184,12 @@ class NearFieldInteractionTable:
         )
 
         xi, bw = self._get_barycentric_data()
-        executor = self._get_fused_invariant_duffy_table_executor(
-            queue, n_entries, n_nodes
-        )
+        prg = self._get_fused_invariant_duffy_table_program(queue, n_entries, n_nodes)
+        context = getattr(queue, "context", None)
+        if context is None:
+            executor = prg
+        else:
+            executor = prg.executor(context)
 
         queue_is_cl = isinstance(queue, cl.CommandQueue)
         if queue_is_cl:
