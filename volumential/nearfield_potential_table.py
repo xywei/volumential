@@ -260,6 +260,9 @@ class NearFieldInteractionTable:
         self.build_method = _TABLE_BUILD_METHOD
         self._auto_build_queue = None
 
+        if kernel_func is None and sumpy_kernel is not None:
+            kernel_func = sumpy_kernel_to_lambda(sumpy_kernel)
+
         if dim == 1:
             self.kernel_func = kernel_func
             self.kernel_type = kernel_type

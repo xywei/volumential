@@ -499,7 +499,6 @@ def interpolate_volume_potential(
         q_order = kwargs["q_order"]
         dtype = kwargs["dtype"]
 
-    ctx = queue.context
     coord_dtype = tree.coord_dtype
     n_points = len(target_points[0])
 
@@ -520,8 +519,12 @@ def interpolate_volume_potential(
         # Building the lookup takes O(n*log(n))
         if lbl_lookup is None:
             from boxtree.area_query import LeavesToBallsLookupBuilder
+            from boxtree.array_context import (
+                PyOpenCLArrayContext as BoxtreePyOpenCLArrayContext,
+            )
 
-            lookup_builder = LeavesToBallsLookupBuilder(ctx)
+            boxtree_actx = BoxtreePyOpenCLArrayContext(queue)
+            lookup_builder = LeavesToBallsLookupBuilder(boxtree_actx)
 
             if target_radii is None:
                 # Set this number small enough so that all points found
@@ -530,7 +533,12 @@ def interpolate_volume_potential(
                     queue, np.ones(n_points, dtype=coord_dtype) * 1e-12
                 )
 
-            lbl_lookup, evt = lookup_builder(queue, tree, target_points, target_radii)
+            lbl_lookup, evt = lookup_builder(
+                boxtree_actx,
+                tree,
+                target_points,
+                target_radii,
+            )
 
         balls_near_box_starts = lbl_lookup.balls_near_box_starts
         balls_near_box_lists = lbl_lookup.balls_near_box_lists

@@ -68,6 +68,29 @@ def test_table_request_is_composed_from_stable_specs():
     assert request.source_box_level == 2
 
 
+def test_get_kernel_function_uses_sumpy_route_for_laplace3d(tmp_path):
+    filename = tmp_path / "cache.sqlite"
+
+    with NFTable(str(filename), progress_bar=False) as table_manager:
+        knl_func = table_manager.get_kernel_function(3, "Laplace")
+
+    value = float(knl_func(1.0, 0.0, 0.0))
+    assert np.isclose(value, 1.0 / (4.0 * np.pi))
+
+
+def test_get_table_rejects_legacy_knl_func_kwarg(tmp_path):
+    filename = tmp_path / "cache.sqlite"
+
+    with NFTable(str(filename), progress_bar=False) as table_manager:
+        with pytest.raises(TypeError, match="knl_func has been removed"):
+            table_manager.get_table(
+                2,
+                "Laplace",
+                q_order=1,
+                knl_func=lambda x, y: x + y,
+            )
+
+
 def test_legacy_hdf5_cache_error(tmp_path):
     filename = tmp_path / "legacy-cache.hdf5"
     filename.write_bytes(b"\x89HDF\r\n\x1a\nlegacy")

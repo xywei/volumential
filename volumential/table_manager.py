@@ -824,6 +824,12 @@ class NearFieldInteractionTableManager:
                 f"({where}; got {', '.join(specified)})"
             )
 
+    def _reject_removed_knl_func_kwarg(self, kwargs, where):
+        if "knl_func" in kwargs:
+            raise TypeError(
+                f"knl_func has been removed; pass sumpy_knl instead ({where})"
+            )
+
     def _kwargs_for_cache_storage(self, kwargs):
         cache_kwargs = dict(kwargs)
         build_config_fingerprint = self._build_config_fingerprint(kwargs)
@@ -865,14 +871,7 @@ class NearFieldInteractionTableManager:
         return updated_kwargs
 
     def _resolve_kernel_bundle(self, table_request, kwargs, require_sumpy_kernel):
-        if "knl_func" in kwargs:
-            knl_func = kwargs["knl_func"]
-        else:
-            knl_func = self.get_kernel_function(
-                table_request.dim,
-                table_request.kernel_type,
-                **kwargs,
-            )
+        self._reject_removed_knl_func_kwarg(kwargs, "_resolve_kernel_bundle")
 
         if "sumpy_knl" in kwargs:
             sumpy_knl = kwargs["sumpy_knl"]
@@ -895,6 +894,14 @@ class NearFieldInteractionTableManager:
                 "DuffyRadial table builder requires a sumpy kernel; "
                 f"kernel_type={table_request.kernel_type!r} is unsupported "
                 "for loopy table build."
+            )
+
+        knl_func = None
+        if sumpy_knl is not None:
+            knl_func = self.get_kernel_function(
+                table_request.dim,
+                table_request.kernel_type,
+                sumpy_knl=sumpy_knl,
             )
 
         return TableKernelBundle(
@@ -1007,6 +1014,10 @@ class NearFieldInteractionTableManager:
             request_kwargs,
             "get_table_from_request",
         )
+        self._reject_removed_knl_func_kwarg(
+            request_kwargs,
+            "get_table_from_request",
+        )
 
         table_request = self._coerce_table_request(table_request)
 
@@ -1114,6 +1125,10 @@ class NearFieldInteractionTableManager:
             "load_saved_table_from_request",
         )
         self._reject_removed_top_level_duffy_knobs(
+            request_kwargs,
+            "load_saved_table_from_request",
+        )
+        self._reject_removed_knl_func_kwarg(
             request_kwargs,
             "load_saved_table_from_request",
         )
@@ -1275,25 +1290,26 @@ class NearFieldInteractionTableManager:
         return table
 
     def get_kernel_function(self, dim, kernel_type, **kwargs):
-        """Kernel function is needed for building the table. This function
-        provides support for some kernels such that the user can build and
-        use the table without explicitly providing such information.
-        """
-        if kernel_type == "Laplace":
-            knl_func = vm.nearfield_potential_table.get_laplace(dim)
-        elif kernel_type == "Constant":
-            knl_func = vm.nearfield_potential_table.constant_one
-        elif kernel_type == "Cahn-Hilliard":
-            knl_func = vm.nearfield_potential_table.get_cahn_hilliard(
-                dim, kwargs["b"], kwargs["c"]
-            )
-        elif kernel_type in self.supported_kernels:
-            knl = self.get_sumpy_kernel(dim, kernel_type)
-            knl_func = vm.nearfield_potential_table.sumpy_kernel_to_lambda(knl)
-        else:
-            raise NotImplementedError("Kernel type not supported.")
+        """Return a numerical kernel callable derived from a sumpy kernel."""
+        if kwargs:
+            unknown = sorted(kwargs)
+            if unknown != ["sumpy_knl"]:
+                raise TypeError(
+                    "get_kernel_function only accepts keyword sumpy_knl; "
+                    f"got {', '.join(unknown)}"
+                )
 
-        return knl_func
+        sumpy_knl = kwargs.get("sumpy_knl")
+        if sumpy_knl is None:
+            sumpy_knl = self.get_sumpy_kernel(dim, kernel_type)
+
+        if sumpy_knl is None:
+            raise RuntimeError(
+                "Kernel function derivation requires a sumpy kernel; "
+                f"kernel_type={kernel_type!r} is unsupported."
+            )
+
+        return vm.nearfield_potential_table.sumpy_kernel_to_lambda(sumpy_knl)
 
     def get_sumpy_kernel(self, dim, kernel_type):
         """Sumpy (symbolic) version of the kernel."""
