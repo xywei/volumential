@@ -395,12 +395,16 @@ class NearFieldFromCSR(NearFieldEvalBase):
                         <> target_point_id_sym = mode_qpoint_map[source_mode_id, target_point_id]
                         <> case_id_sym = mode_case_map[source_mode_id, case_id]
                         <> pair_id = source_mode_id_sym * n_q_points + target_point_id_sym
-                        <> entry_id = case_id_sym * (n_q_points * n_q_points) + pair_id
+                        <> entry_id_full = case_id_sym * (n_q_points * n_q_points) + pair_id
+                        <> entry_id = table_entry_ids[entry_id_full]
+                        <> has_entry = entry_id >= 0
 
                         <> displacement = COMPUTE_DISPLACEMENT
 
-                        <> integ = table_data[table_lev, entry_id] * scaling \
-                                   + displacement {id=integ,dep=tab_lev}
+                        <> integ = if(has_entry,
+                                table_data[table_lev, entry_id] * scaling
+                                + displacement,
+                                0) {id=integ,dep=tab_lev}
                         # <> source_id_tree = user_source_ids[source_id]
                         <> coef = source_coefs[source_id] {id=coef}
 
@@ -453,6 +457,9 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 loopy.GlobalArg(
                     "table_data", potential_dtype, "n_tables, n_table_entries"
                 ),
+                loopy.GlobalArg(
+                    "table_entry_ids", np.int32, "n_cases*n_q_points*n_q_points"
+                ),
                 loopy.GlobalArg("mode_qpoint_map", np.int32, "n_q_points, n_q_points"),
                 loopy.GlobalArg("mode_case_map", np.int32, "n_q_points, n_cases"),
                 loopy.GlobalArg("source_boxes", np.int32, "n_source_boxes"),
@@ -485,7 +492,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
     def get_cache_key(self):
         return (
             type(self).__name__,
-            "kernel-v7",
+            "kernel-v8",
             self.name,
             self.kname,
             "complex_kernel=" + str(self.integral_kernel.is_complex_valued),
@@ -517,6 +524,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
         exterior_mode_nmlz_combined = kwargs.pop("exterior_mode_nmlz_combined")
         mode_qpoint_map = kwargs.pop("mode_qpoint_map")
         mode_case_map = kwargs.pop("mode_case_map")
+        table_entry_ids = kwargs.pop("table_entry_ids")
         root_extent = kwargs.pop("root_extent")
         table_root_extent = kwargs.pop("table_root_extent")
         neighbor_source_boxes_starts = kwargs.pop("neighbor_source_boxes_starts")
@@ -568,6 +576,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
             encoding_shift=encoding_shift,
             mode_nmlz=mode_nmlz_combined,
             exterior_mode_nmlz=exterior_mode_nmlz_combined,
+            table_entry_ids=table_entry_ids,
             mode_qpoint_map=mode_qpoint_map,
             mode_case_map=mode_case_map,
             n_tgt_boxes=len(target_boxes),
