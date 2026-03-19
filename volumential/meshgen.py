@@ -388,20 +388,12 @@ def build_geometry_info(ctx, queue, dim, q_order, mesh, bbox=None, a=None, b=Non
         assert np.isscalar(a) and np.isscalar(b)
         bbox = np.array([[a, b]] * dim)
 
-    from boxtree import TreeBuilder
     from boxtree.array_context import PyOpenCLArrayContext
+    from volumential.tree_interactive_build import build_particle_tree_from_box_tree
 
     actx = PyOpenCLArrayContext(queue)
 
-    tb = TreeBuilder(actx)
-
-    tree, _ = tb(
-        actx,
-        particles=q_points,
-        targets=q_points,
-        max_particles_in_box=q_order**dim * (2**dim) - 1,
-        kind="adaptive-level-restricted",
-    )
+    tree = build_particle_tree_from_box_tree(actx, mesh.boxtree, q_points_org)
 
     from boxtree.traversal import FMMTraversalBuilder
 

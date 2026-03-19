@@ -189,9 +189,8 @@ class BoxFMMGeometryFactory:
         self.order = order
         self.nlevels = nlevels
 
-        # the engine generates meshes centered at the origin
-        a = -1 * self.bbox_getter.box_radius
-        b = self.bbox_getter.box_radius
+        a = np.asarray(self.bbox_getter.lbounds, dtype=self.bbox_getter.dtype)
+        b = np.asarray(self.bbox_getter.ubounds, dtype=self.bbox_getter.dtype)
         self.engine = self._engine_class(self.order, self.nlevels, a, b)
 
     def reinit(
@@ -216,17 +215,13 @@ class BoxFMMGeometryFactory:
                 self.cl_context, expand_to_hold_mesh, mesh_padding_factor
             )
 
-        # the engine generates meshes centered at the origin
-        a = -1 * self.bbox_getter.radius
-        b = self.bbox_getter.radius
-        self.engine = self._engine_class(order, nlevels, a, b)
+        a = np.asarray(self.bbox_getter.lbounds, dtype=self.bbox_getter.dtype)
+        b = np.asarray(self.bbox_getter.ubounds, dtype=self.bbox_getter.dtype)
+        self.engine = self._engine_class(self.order, self.nlevels, a, b)
 
     def _get_q_points(self, queue=None):
         q_points_pre = self.engine.get_q_points()
         q_points = np.ascontiguousarray(np.transpose(q_points_pre))
-
-        # re-center the box
-        q_points = q_points + self.bbox_getter.box_center[:, None]
 
         if queue is None:
             return q_points
@@ -245,9 +240,6 @@ class BoxFMMGeometryFactory:
     def _get_active_cell_centers(self, queue=None):
         cell_centers_pre = self.engine.get_cell_centers()
         cell_centers = np.ascontiguousarray(np.transpose(cell_centers_pre))
-
-        # re-center the box
-        cell_centers = cell_centers + self.bbox_getter.box_center[:, None]
 
         if queue is None:
             return cell_centers
@@ -286,20 +278,13 @@ class BoxFMMGeometryFactory:
 
         actx = PyOpenCLArrayContext(queue)
 
-        from boxtree import TreeBuilder
-
-        tb = TreeBuilder(actx)
-
         q_points = self._get_q_points(queue)
 
-        tree, _ = tb(
-            actx,
-            particles=q_points,
-            targets=q_points,
-            max_particles_in_box=(
-                (self.n_q_points_per_cell**self.dim) * (2**self.dim) - 1
-            ),
-            kind="adaptive-level-restricted",
+        from volumential.tree_interactive_build import build_particle_tree_from_box_tree
+
+        q_points_host = np.ascontiguousarray(self.engine.get_q_points())
+        tree = build_particle_tree_from_box_tree(
+            actx, self.engine.boxtree, q_points_host
         )
 
         from boxtree.traversal import FMMTraversalBuilder

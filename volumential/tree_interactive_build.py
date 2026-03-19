@@ -545,14 +545,10 @@ def build_particle_tree_from_box_tree(actx, box_tree, q_points_host):
         targets=sources,
         target_radii=None,
         bounding_box=(
-            actx.from_numpy(
-                np.asarray(box_tree.root_vertex, dtype=box_tree.coord_dtype)
-            ),
-            actx.from_numpy(
-                np.asarray(
-                    box_tree.root_vertex + box_tree.root_extent,
-                    dtype=box_tree.coord_dtype,
-                )
+            np.asarray(box_tree.root_vertex, dtype=box_tree.coord_dtype),
+            np.asarray(
+                box_tree.root_vertex + box_tree.root_extent,
+                dtype=box_tree.coord_dtype,
             ),
         ),
         user_source_ids=actx.from_numpy(particle_perm.astype(particle_id_dtype)),
