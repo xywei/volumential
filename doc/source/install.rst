@@ -79,11 +79,11 @@ Mesh Generation Backend
 ``volumential`` now uses the built-in boxtree-based mesh generator.
 No external ``contrib`` meshgen module build is required.
 
-After installation, run one of the maintained examples under ``examples/``.
+After installation, run a focused end-to-end test to verify the stack.
 
 .. code-block:: bash
 
-   python examples/laplace2d.py
+   pytest -q test/test_volume_fmm.py::test_volume_fmm_laplace
 
 Run Tests
 ---------

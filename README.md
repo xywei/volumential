@@ -18,6 +18,9 @@ removed as part of repository cleanup.
 
 ## Quick Start
 
+Install an OpenCL runtime first (for example, in conda:
+`conda install pyopencl pocl`), then:
+
 ```bash
 pip install -r requirements.txt
 python examples/laplace2d.py
