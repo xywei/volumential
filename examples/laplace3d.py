@@ -186,42 +186,46 @@ def main():
         radial_quad_order=60,
     )
 
-    if use_multilevel_table:
-        logger.info("Using multilevel tables")
-        assert (
-            abs(
-                int((b - a) / root_table_source_extent) * root_table_source_extent
-                - (b - a)
+    try:
+        if use_multilevel_table:
+            logger.info("Using multilevel tables")
+            assert (
+                abs(
+                    int((b - a) / root_table_source_extent) * root_table_source_extent
+                    - (b - a)
+                )
+                < 1e-15
             )
-            < 1e-15
-        )
-        nftable = []
-        for lev in range(0, tree.nlevels + 1):
-            print("Getting table at level", lev)
-            tb, _ = tm.get_table(
+            nftable = []
+            for lev in range(0, tree.nlevels + 1):
+                print("Getting table at level", lev)
+                tb, _ = tm.get_table(
+                    dim,
+                    "Laplace",
+                    q_order,
+                    source_box_level=lev,
+                    queue=queue,
+                    build_config=build_config,
+                )
+                nftable.append(tb)
+
+            print("Using table list of length", len(nftable))
+
+        else:
+            logger.info("Using single level table")
+            force_recompute = False
+            # 15 levels are sufficient (the inner most brick is 1e-15**3 in volume)
+            nftable, _ = tm.get_table(
                 dim,
                 "Laplace",
                 q_order,
-                source_box_level=lev,
+                force_recompute=force_recompute,
                 queue=queue,
                 build_config=build_config,
             )
-            nftable.append(tb)
-
-        print("Using table list of length", len(nftable))
-
-    else:
-        logger.info("Using single level table")
-        force_recompute = False
-        # 15 levels are sufficient (the inner most brick is 1e-15**3 in volume)
-        nftable, _ = tm.get_table(
-            dim,
-            "Laplace",
-            q_order,
-            force_recompute=force_recompute,
-            queue=queue,
-            build_config=build_config,
-        )
+    except NotImplementedError as exc:
+        logger.warning("Skipping laplace3d example: %s", exc)
+        return
 
     # }}} End build near field potential table
 

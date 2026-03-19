@@ -222,6 +222,62 @@ def drive_test_to_meshmode_interpolation(
     return resid
 
 
+def test_from_meshmode_interpolation_user_order_keeps_source_axis(ctx_factory):
+    cl_ctx = ctx_factory()
+    queue = cl.CommandQueue(cl_ctx)
+
+    dim = 2
+    degree = 2
+    nel_1d = 8
+    n_levels = 4
+    q_order = 3
+    a = -0.5
+    b = 0.5
+
+    mesh = generate_regular_rect_mesh(
+        a=(a,) * dim, b=(b,) * dim, nelements_per_axis=(nel_1d,) * dim
+    )
+
+    arr_ctx = PyOpenCLArrayContext(queue)
+    group_factory = PolynomialWarpAndBlendGroupFactory(order=degree)
+    discr = Discretization(arr_ctx, mesh, group_factory)
+
+    bbox_fac = BoundingBoxFactory(dim=dim)
+    boxfmm_fac = BoxFMMGeometryFactory(
+        cl_ctx,
+        dim=dim,
+        order=q_order,
+        nlevels=n_levels,
+        bbox_getter=bbox_fac,
+        expand_to_hold_mesh=mesh,
+        mesh_padding_factor=0.0,
+    )
+    boxgeo = boxfmm_fac(queue)
+    lookup_fac = ElementsToSourcesLookupBuilder(cl_ctx, tree=boxgeo.tree, discr=discr)
+    lookup, _ = lookup_fac(queue)
+
+    func = random_polynomial_func(dim, degree, seed=17)
+    scalar_dof = eval_func_on_discr_nodes(queue, discr, func).get(queue)
+
+    dof_host = np.empty((2, 3, scalar_dof.size), dtype=scalar_dof.dtype)
+    for i in range(2):
+        for j in range(3):
+            dof_host[i, j] = (1 + i + 2 * j) * scalar_dof + (i - j)
+
+    dof_vec = cl.array.to_device(queue, dof_host)
+
+    tree_order = interpolate_from_meshmode(queue, dof_vec, lookup, order="tree")
+    user_order = interpolate_from_meshmode(queue, dof_vec, lookup, order="user")
+
+    tree_order = tree_order.get(queue)
+    user_order = user_order.get(queue)
+
+    tree = BoxtreePyOpenCLArrayContext(queue).to_numpy(boxgeo.tree)
+    expected_user_order = tree_order[..., tree.sorted_target_ids]
+
+    assert np.allclose(user_order, expected_user_order)
+
+
 # {{{ 2d tests
 
 
