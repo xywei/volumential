@@ -58,18 +58,18 @@ def _get_list1_executor(queue, knl, cache_token):
         return knl
 
     try:
-        per_queue_cache = _LIST1_EXECUTOR_CACHE.get(queue)
-        if per_queue_cache is None:
-            per_queue_cache = {}
-            _LIST1_EXECUTOR_CACHE[queue] = per_queue_cache
+        per_context_cache = _LIST1_EXECUTOR_CACHE.get(context)
+        if per_context_cache is None:
+            per_context_cache = {}
+            _LIST1_EXECUTOR_CACHE[context] = per_context_cache
     except TypeError:
         return knl.executor(context)
 
     key = cache_token
-    cached = per_queue_cache.get(key)
+    cached = per_context_cache.get(key)
     if cached is None:
         cached = knl.executor(context)
-        per_queue_cache[key] = cached
+        per_context_cache[key] = cached
 
     return cached
 

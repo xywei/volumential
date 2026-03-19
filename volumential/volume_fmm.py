@@ -223,24 +223,25 @@ def _build_interpolation_loopy_kernel(dim, q_order):
 def _get_interpolation_executor(queue, dim, q_order, dtype, coord_dtype):
     global _INTERPOLATION_EXECUTOR_CACHE
 
+    context = queue.context
     key = (int(dim), int(q_order), np.dtype(dtype).str, np.dtype(coord_dtype).str)
 
     try:
-        per_queue_cache = _INTERPOLATION_EXECUTOR_CACHE.get(queue)
-        if per_queue_cache is None:
-            per_queue_cache = {}
-            _INTERPOLATION_EXECUTOR_CACHE[queue] = per_queue_cache
+        per_context_cache = _INTERPOLATION_EXECUTOR_CACHE.get(context)
+        if per_context_cache is None:
+            per_context_cache = {}
+            _INTERPOLATION_EXECUTOR_CACHE[context] = per_context_cache
     except TypeError:
         return _build_interpolation_loopy_kernel(int(dim), int(q_order)).executor(
-            queue.context
+            context
         )
 
-    cached = per_queue_cache.get(key)
+    cached = per_context_cache.get(key)
     if cached is None:
         cached = _build_interpolation_loopy_kernel(int(dim), int(q_order)).executor(
-            queue.context
+            context
         )
-        per_queue_cache[key] = cached
+        per_context_cache[key] = cached
     return cached
 
 

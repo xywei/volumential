@@ -1051,10 +1051,10 @@ class NearFieldInteractionTable:
             )
 
         try:
-            per_queue_cache = self._fused_duffy_executor_cache.get(queue)
-            if per_queue_cache is None:
-                per_queue_cache = {}
-                self._fused_duffy_executor_cache[queue] = per_queue_cache
+            per_context_cache = self._fused_duffy_executor_cache.get(context)
+            if per_context_cache is None:
+                per_context_cache = {}
+                self._fused_duffy_executor_cache[context] = per_context_cache
         except TypeError:
             return self._get_fused_invariant_duffy_table_program(
                 queue, n_entries, n_nodes
@@ -1067,13 +1067,13 @@ class NearFieldInteractionTable:
             int(self.dim),
             np.dtype(self.dtype).str,
         )
-        cached = per_queue_cache.get(key)
+        cached = per_context_cache.get(key)
         if cached is None:
             prg = self._get_fused_invariant_duffy_table_program(
                 queue, n_entries, n_nodes
             )
             cached = prg.executor(context)
-            per_queue_cache[key] = cached
+            per_context_cache[key] = cached
 
         return cached
 
