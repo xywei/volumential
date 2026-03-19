@@ -28,6 +28,7 @@ __doc__ = """
 """
 
 import logging
+import weakref
 from dataclasses import fields
 
 import numpy as np
@@ -39,6 +40,38 @@ from volumential.tools import KernelCacheWrapper
 
 
 logger = logging.getLogger(__name__)
+
+
+_LIST1_EXECUTOR_CACHE = weakref.WeakKeyDictionary()
+
+
+def _clear_list1_executor_cache():
+    global _LIST1_EXECUTOR_CACHE
+    _LIST1_EXECUTOR_CACHE = weakref.WeakKeyDictionary()
+
+
+def _get_list1_executor(queue, knl, cache_token):
+    global _LIST1_EXECUTOR_CACHE
+
+    context = getattr(queue, "context", None)
+    if context is None:
+        return knl
+
+    try:
+        per_queue_cache = _LIST1_EXECUTOR_CACHE.get(queue)
+        if per_queue_cache is None:
+            per_queue_cache = {}
+            _LIST1_EXECUTOR_CACHE[queue] = per_queue_cache
+    except TypeError:
+        return knl.executor(context)
+
+    key = cache_token
+    cached = per_queue_cache.get(key)
+    if cached is None:
+        cached = knl.executor(context)
+        per_queue_cache[key] = cached
+
+    return cached
 
 
 # {{{ near field eval base class
@@ -501,6 +534,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
 
     def __call__(self, queue, **kwargs):
         knl = self.get_cached_optimized_kernel()
+        executor = _get_list1_executor(queue, knl, self.get_cache_key())
         entry_knl = knl.default_entrypoint
 
         result = kwargs.pop("result")
@@ -544,7 +578,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
             if key in entry_knl.arg_dict:
                 extra_knl_args_from_init[key] = val
 
-        evt, res = knl(
+        evt, res = executor(
             queue,
             result=result,
             # db_table_lev=np.zeros(out_pot.shape),

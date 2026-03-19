@@ -22,6 +22,7 @@ THE SOFTWARE.
 
 import logging
 import time
+import weakref
 from dataclasses import dataclass
 from functools import partial
 
@@ -367,6 +368,7 @@ class NearFieldInteractionTable:
         self.last_duffy_order_selection = None
         self.last_duffy_build_timings = None
         self.table_data_is_symmetry_reduced = False
+        self._fused_duffy_executor_cache = weakref.WeakKeyDictionary()
 
     # }}} End constructor
 
@@ -1041,6 +1043,40 @@ class NearFieldInteractionTable:
         )
         return knl
 
+    def _get_fused_invariant_duffy_table_executor(self, queue, n_entries, n_nodes):
+        context = getattr(queue, "context", None)
+        if context is None:
+            return self._get_fused_invariant_duffy_table_program(
+                queue, n_entries, n_nodes
+            )
+
+        try:
+            per_queue_cache = self._fused_duffy_executor_cache.get(queue)
+            if per_queue_cache is None:
+                per_queue_cache = {}
+                self._fused_duffy_executor_cache[queue] = per_queue_cache
+        except TypeError:
+            return self._get_fused_invariant_duffy_table_program(
+                queue, n_entries, n_nodes
+            ).executor(context)
+
+        key = (
+            int(n_entries),
+            int(n_nodes),
+            int(self.quad_order),
+            int(self.dim),
+            np.dtype(self.dtype).str,
+        )
+        cached = per_queue_cache.get(key)
+        if cached is None:
+            prg = self._get_fused_invariant_duffy_table_program(
+                queue, n_entries, n_nodes
+            )
+            cached = prg.executor(context)
+            per_queue_cache[key] = cached
+
+        return cached
+
     @memoize_method
     def _get_duffy_radial_node_data(
         self,
@@ -1184,7 +1220,9 @@ class NearFieldInteractionTable:
         )
 
         xi, bw = self._get_barycentric_data()
-        prg = self._get_fused_invariant_duffy_table_program(queue, n_entries, n_nodes)
+        executor = self._get_fused_invariant_duffy_table_executor(
+            queue, n_entries, n_nodes
+        )
 
         queue_is_cl = isinstance(queue, cl.CommandQueue)
         if queue_is_cl:
@@ -1225,7 +1263,7 @@ class NearFieldInteractionTable:
             bw_arg = np.ascontiguousarray(bw, dtype=self.dtype)
             mode_i_arg = mode_i
 
-        _, res = prg(
+        _, res = executor(
             queue,
             source_box_extent=self.dtype(self.source_box_extent),
             target_points=target_points_arg,
@@ -2085,8 +2123,14 @@ class NearFieldInteractionTable:
 
         int_vals = []
 
+        context = getattr(queue, "context", None)
+        if context is None:
+            executor = lpknl
+        else:
+            executor = lpknl.executor(context)
+
         for target in self.q_points:
-            evt, res = lpknl(queue, quad_points=nodes, target_point=target)
+            evt, res = executor(queue, quad_points=nodes, target_point=target)
             knl_vals = res["result"]
 
             integ = bind(discr, sym.integral(self.dim, self.dim, sym.var("integrand")))(

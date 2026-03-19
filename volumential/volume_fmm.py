@@ -27,6 +27,7 @@ __doc__ = """
 
 import logging
 import os
+import weakref
 from functools import lru_cache
 
 import numpy as np
@@ -68,12 +69,13 @@ from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
 logger = logging.getLogger(__name__)
 
 
-_INTERPOLATION_EXECUTOR_CACHE = {}
+_INTERPOLATION_EXECUTOR_CACHE = weakref.WeakKeyDictionary()
 
 
 def _clear_interpolation_kernel_cache():
+    global _INTERPOLATION_EXECUTOR_CACHE
     _build_interpolation_loopy_kernel.cache_clear()
-    _INTERPOLATION_EXECUTOR_CACHE.clear()
+    _INTERPOLATION_EXECUTOR_CACHE = weakref.WeakKeyDictionary()
 
 
 @lru_cache(maxsize=12)
@@ -219,19 +221,26 @@ def _build_interpolation_loopy_kernel(dim, q_order):
 
 
 def _get_interpolation_executor(queue, dim, q_order, dtype, coord_dtype):
-    key = (
-        int(queue.context.int_ptr),
-        int(dim),
-        int(q_order),
-        np.dtype(dtype).str,
-        np.dtype(coord_dtype).str,
-    )
-    cached = _INTERPOLATION_EXECUTOR_CACHE.get(key)
+    global _INTERPOLATION_EXECUTOR_CACHE
+
+    key = (int(dim), int(q_order), np.dtype(dtype).str, np.dtype(coord_dtype).str)
+
+    try:
+        per_queue_cache = _INTERPOLATION_EXECUTOR_CACHE.get(queue)
+        if per_queue_cache is None:
+            per_queue_cache = {}
+            _INTERPOLATION_EXECUTOR_CACHE[queue] = per_queue_cache
+    except TypeError:
+        return _build_interpolation_loopy_kernel(int(dim), int(q_order)).executor(
+            queue.context
+        )
+
+    cached = per_queue_cache.get(key)
     if cached is None:
         cached = _build_interpolation_loopy_kernel(int(dim), int(q_order)).executor(
             queue.context
         )
-        _INTERPOLATION_EXECUTOR_CACHE[key] = cached
+        per_queue_cache[key] = cached
     return cached
 
 
