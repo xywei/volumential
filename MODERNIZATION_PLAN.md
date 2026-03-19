@@ -50,13 +50,11 @@ infrastructure.
 
 ### 5. Mesh Generation / Boxtree Drift
 
-- `volumential/meshgen.py` tries `volumential.meshgen_dealii` first, then falls
-  back to `boxtree.tree_interactive_build`.
-- The dealii path is not available in the current environment.
-- The boxtree fallback is also broken because `tree_interactive_build` no longer
-  exists in current upstream `inducer/boxtree`.
-- There is an old fork at `xywei/boxtree`, but it appears stale and should be
-  treated as historical reference only, not as the modernization target.
+- `volumential/meshgen.py` now uses the boxtree-based provider as the supported
+  path.
+- Keep this aligned with upstream `inducer/boxtree` tree-of-boxes semantics.
+- Treat the old `xywei/boxtree` fork as historical reference only, not as the
+  modernization target.
 
 ### 6. Pytential Integration Drift
 
@@ -104,16 +102,12 @@ Success criteria:
 - `test/test_singular_integral_2d.py` passes.
 - table-building tests no longer fail for quadrature reasons.
 
-## Phase 2: Replace Dead Meshgen Assumptions
+## Phase 2: Stabilize Boxtree Meshgen Path
 
-- Audit what `volumential/meshgen.py` actually needs from the old
-  `tree_interactive_build` path.
-- Re-implement that behavior against current upstream `boxtree`, or replace it
-  with a simpler supported geometry-builder path.
+- Keep `volumential/meshgen.py` focused on upstream boxtree support.
+- Remove assumptions that require private forks.
 - Treat `xywei/boxtree` as reference material only if needed to understand the
   old intent.
-- Decide whether the dealii path should be removed, demoted to optional legacy
-  support, or replaced.
 
 Success criteria:
 
@@ -172,5 +166,5 @@ Success criteria:
 - Do not resurrect the old `xywei/boxtree` fork as a required dependency.
 - Do not start with broad performance tuning before basic correctness and test
   coverage are back.
-- Do not revive old contrib/native code unless the modern pure-Python path is
-  clearly insufficient.
+- Do not reintroduce removed contrib/native code unless the modern pure-Python
+  path is clearly insufficient.

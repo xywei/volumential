@@ -28,13 +28,7 @@ import logging
 
 
 logger = logging.getLogger(__name__)
-
-if 1:
-    # verbose
-    logging.basicConfig(level=logging.INFO)
-else:
-    # clean
-    logging.basicConfig(level=logging.CRITICAL)
+logging.basicConfig(level=logging.INFO)
 
 from functools import partial
 
@@ -55,7 +49,6 @@ def main():
     dim = 2
 
     # use local SQLite cache; nearfield tables are recomputed on cache miss
-    download_table = False
     table_filename = "nft_laplace2d.sqlite"
     root_table_source_extent = 2
 
@@ -65,12 +58,6 @@ def main():
     n_levels = 6  # 2^(n_levels-1) subintervals in 1D
 
     use_multilevel_table = False
-
-    adaptive_mesh = False
-    n_refinement_loops = 100
-    refined_n_cells = 2000
-    rratio_top = 0.2
-    rratio_bot = 0.5
 
     dtype = np.float64
 
@@ -95,7 +82,6 @@ def main():
     # bounding box
     a = -0.5
     b = 0.5
-    root_table_source_extent = 2
 
     ctx = cl.create_some_context()
     queue = cl.CommandQueue(ctx)
@@ -110,24 +96,9 @@ def main():
     mg.greet()
 
     mesh = mg.MeshGen2D(q_order, n_levels, a, b, queue=queue)
-    if not adaptive_mesh:
-        mesh.print_info()
-        q_points = mesh.get_q_points()
-        q_weights = mesh.get_q_weights()
-
-    else:
-        iloop = -1
-        while mesh.n_active_cells() < refined_n_cells:
-            iloop += 1
-            crtr = np.abs(source_eval(mesh.get_cell_centers) * mesh.get_cell_measures)
-            mesh.update_mesh(crtr, rratio_top, rratio_bot)
-            if iloop > n_refinement_loops:
-                print("Max number of refinement loops reached.")
-                break
-
-        mesh.print_info()
-        q_points = mesh.get_q_points()
-        q_weights = mesh.get_q_weights()
+    mesh.print_info()
+    q_points = mesh.get_q_points()
+    q_weights = mesh.get_q_weights()
 
     assert len(q_points) == len(q_weights)
     assert q_points.shape[1] == dim
@@ -187,16 +158,6 @@ def main():
         kind="adaptive-level-restricted",
     )
 
-    bbox2 = np.array([[a, b], [a, b]])
-    tree2, _ = tb(
-        queue,
-        particles=q_points,
-        targets=q_points,
-        bbox=bbox2,
-        max_particles_in_box=q_order**2 * 4 - 1,
-        kind="adaptive-level-restricted",
-    )
-
     from boxtree.traversal import FMMTraversalBuilder
 
     tg = FMMTraversalBuilder(ctx)
@@ -206,16 +167,8 @@ def main():
 
     # {{{ build near field potential table
 
-    import os
-
     from volumential.nearfield_potential_table import DuffyBuildConfig
     from volumential.table_manager import NearFieldInteractionTableManager
-
-    if download_table and (not os.path.isfile(table_filename)):
-        raise RuntimeError(
-            "Legacy table download is no longer supported; "
-            "set download_table=False to rebuild a local SQLite cache."
-        )
 
     tm = NearFieldInteractionTableManager(
         table_filename, root_extent=root_table_source_extent, queue=queue

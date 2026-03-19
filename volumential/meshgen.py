@@ -44,22 +44,27 @@ logger = logging.getLogger(__name__)
 
 provider = None
 
+from boxtree import (  # noqa: E402
+    make_tree_of_boxes_root,
+    refine_and_coarsen_tree_of_boxes,
+    uniformly_refine_tree_of_boxes,
+)
+from modepy import LegendreGaussQuadrature  # noqa: E402
+
 # {{{ meshgen Python provider
 
 
 class MeshGenBase:
     """Base class for Meshgen via BoxTree.
-    The interface is similar to the Meshgen via Deal.II, except that
-    the arguments a and b can also be of higher dimensions to allow
-    added flexibility on choosing the bounding box.
+    The arguments a and b can be scalars or vectors to define
+    dim-dependent bounding boxes.
 
     This base class cannot be used directly since the boxtree is not
     built in the constructor until dimension_specific_setup() is
     provided.
 
-    In addition to the common capabilities of the deal.II implementation,
-    this class also implements native CL getters like get_q_points_dev()
-    that play well with the other libraries like boxtree.
+    This class also implements native CL getters like get_q_points_dev()
+    that play well with boxtree-based workflows.
     """
 
     def __init__(self, degree, nlevels, a=-1, b=1, queue=None):
@@ -197,109 +202,149 @@ class MeshGenBase:
         logging_func("Number of quad points per cell: " + str(self.n_q_points))
 
     def generate_gmsh(self, filename):
-        """
-        # TODO
-        Write the active boxes as a gmsh file.
-        The file format specifications can be found at:
-        http://gmsh.info/doc/texinfo/gmsh.html#MSH-ASCII-file-format
-        """
-        raise NotImplementedError
+        """Write active boxes to a Gmsh v2 ASCII mesh file."""
+
+        leaf_centers = self._leaf_centers()
+        leaf_sizes = self._leaf_side_lengths()
+        leaf_levels = self._leaf_levels()
+
+        if len(leaf_levels) == 0:
+            raise ValueError("cannot export an empty mesh")
+
+        if np.any(leaf_levels != leaf_levels[0]):
+            raise NotImplementedError(
+                "generate_gmsh currently supports uniform-level box meshes only"
+            )
+
+        level = int(leaf_levels[0])
+        nsubdiv = 2**level
+        h = self.root_extent / nsubdiv
+        root_vertex = np.asarray(self.root_vertex, dtype=float)
+
+        node_ids = {}
+        nodes = []
+
+        def get_node_id(lattice_idx):
+            key = tuple(int(i) for i in lattice_idx)
+            if key not in node_ids:
+                node_ids[key] = len(nodes) + 1
+                coords = [root_vertex[axis] + h * key[axis] for axis in range(self.dim)]
+                while len(coords) < 3:
+                    coords.append(0.0)
+                nodes.append(tuple(coords))
+            return node_ids[key]
+
+        elements = []
+        for center, size in zip(leaf_centers, leaf_sizes):
+            half = 0.5 * float(size)
+            if abs(size - h) > 1e-12 * max(1.0, abs(h)):
+                raise NotImplementedError(
+                    "generate_gmsh currently supports uniform-level box meshes only"
+                )
+
+            lower = np.rint((center - half - root_vertex) / h).astype(np.int64)
+
+            if self.dim == 1:
+                n1 = get_node_id((lower[0],))
+                n2 = get_node_id((lower[0] + 1,))
+                elements.append((1, [n1, n2]))
+
+            elif self.dim == 2:
+                ix, iy = int(lower[0]), int(lower[1])
+                n1 = get_node_id((ix, iy))
+                n2 = get_node_id((ix + 1, iy))
+                n3 = get_node_id((ix + 1, iy + 1))
+                n4 = get_node_id((ix, iy + 1))
+                elements.append((3, [n1, n2, n3, n4]))
+
+            elif self.dim == 3:
+                ix, iy, iz = int(lower[0]), int(lower[1]), int(lower[2])
+                n1 = get_node_id((ix, iy, iz))
+                n2 = get_node_id((ix + 1, iy, iz))
+                n3 = get_node_id((ix + 1, iy + 1, iz))
+                n4 = get_node_id((ix, iy + 1, iz))
+                n5 = get_node_id((ix, iy, iz + 1))
+                n6 = get_node_id((ix + 1, iy, iz + 1))
+                n7 = get_node_id((ix + 1, iy + 1, iz + 1))
+                n8 = get_node_id((ix, iy + 1, iz + 1))
+                elements.append((5, [n1, n2, n3, n4, n5, n6, n7, n8]))
+
+            else:
+                raise ValueError("only supports 1 <= dim <= 3")
+
+        with open(filename, "w", encoding="ascii") as outf:
+            outf.write("$MeshFormat\n")
+            outf.write("2.2 0 8\n")
+            outf.write("$EndMeshFormat\n")
+
+            outf.write("$Nodes\n")
+            outf.write(f"{len(nodes)}\n")
+            for i, (x, y, z) in enumerate(nodes, start=1):
+                outf.write(f"{i} {x:.17g} {y:.17g} {z:.17g}\n")
+            outf.write("$EndNodes\n")
+
+            outf.write("$Elements\n")
+            outf.write(f"{len(elements)}\n")
+            for i, (element_type, element_nodes) in enumerate(elements, start=1):
+                node_str = " ".join(str(nid) for nid in element_nodes)
+                outf.write(f"{i} {element_type} 2 0 0 {node_str}\n")
+            outf.write("$EndElements\n")
 
 
 # }}} End meshgen Python provider
 
-try:
-    logger.info("Trying to find a mesh generator..")
-    import volumential.meshgen_dealii  # noqa: F401
+provider = "meshgen_boxtree"
+logger.info("Using meshgen via current boxtree tree-of-boxes interface.")
 
-    provider = "meshgen_dealii"
 
-except ImportError as e:
-    logger.debug(repr(e))
-    logger.warning("Meshgen via Deal.II is not present or unusable.")
+def greet():
+    return "Hello from Meshgen via BoxTree!"
 
-    try:
-        logger.info("Trying out current boxtree tree-of-boxes interface.")
-        from boxtree import (
-            make_tree_of_boxes_root,
-            refine_and_coarsen_tree_of_boxes,
-            uniformly_refine_tree_of_boxes,
-        )
-        from modepy import LegendreGaussQuadrature
 
-        provider = "meshgen_boxtree"
+def make_uniform_cubic_grid(degree, nlevels=1, dim=2, queue=None, **kwargs):
+    """Uniform cubic grid in [-1,1]^dim."""
+    if queue is None:
+        ctx = cl.create_some_context()
+        queue = cl.CommandQueue(ctx)
 
-    except ImportError as ee:
-        logger.debug(repr(ee))
-        logger.warning("Meshgen via BoxTree is not present or unusable.")
-        raise RuntimeError("Cannot find a usable Meshgen implementation.")
+    if "level" in kwargs:
+        nlevels = kwargs["level"]
 
-    else:
-        # {{{ Meshgen via BoxTree
-        logger.info("Using meshgen via current boxtree tree-of-boxes interface.")
+    mesh_cls = {1: MeshGen1D, 2: MeshGen2D, 3: MeshGen3D}[dim]
+    mesh = mesh_cls(degree, nlevels, a=-1, b=1, queue=queue)
+    q_points = mesh.get_q_points()
+    q_weights = mesh.get_q_weights()
 
-        def greet():
-            return "Hello from Meshgen via BoxTree!"
+    return (q_points, q_weights, None)
 
-        def make_uniform_cubic_grid(degree, nlevels=1, dim=2, queue=None, **kwargs):
-            """Uniform cubic grid in [-1,1]^dim.
-            This function provides backward compatibility with meshgen_dealii.
-            """
-            if queue is None:
-                ctx = cl.create_some_context()
-                queue = cl.CommandQueue(ctx)
 
-            # For meshgen_dealii compatibility
-            if "level" in kwargs:
-                nlevels = kwargs["level"]
+class MeshGen1D(MeshGenBase):
+    """Meshgen in 1D"""
 
-            mesh_cls = {1: MeshGen1D, 2: MeshGen2D, 3: MeshGen3D}[dim]
-            mesh = mesh_cls(degree, nlevels, a=-1, b=1, queue=queue)
-            q_points = mesh.get_q_points()
-            q_weights = mesh.get_q_weights()
+    def dimension_specific_setup(self):
+        assert self.dim == 1
 
-            # Adding a placeholder for deprecated point radii
-            return (q_points, q_weights, None)
 
-        class MeshGen1D(MeshGenBase):
-            """Meshgen in 1D"""
+class MeshGen2D(MeshGenBase):
+    """Meshgen in 2D"""
 
-            def dimension_specific_setup(self):
-                assert self.dim == 1
+    def dimension_specific_setup(self):
+        if self.dim == 1:
+            self.dim = 2
+            self.root_vertex = np.zeros(self.dim) + self.bound_a
+        else:
+            assert self.dim == 2
 
-        class MeshGen2D(MeshGenBase):
-            """Meshgen in 2D"""
 
-            def dimension_specific_setup(self):
-                if self.dim == 1:
-                    # allow passing scalar values of a and b to the constructor
-                    self.dim = 2
-                    self.root_vertex = np.zeros(self.dim) + self.bound_a
-                else:
-                    assert self.dim == 2
+class MeshGen3D(MeshGenBase):
+    """Meshgen in 3D"""
 
-        class MeshGen3D(MeshGenBase):
-            """Meshgen in 3D"""
-
-            def dimension_specific_setup(self):
-                if self.dim == 1:
-                    # allow passing scalar values of a and b to the constructor
-                    self.dim = 3
-                    self.root_vertex = np.zeros(self.dim) + self.bound_a
-                else:
-                    assert self.dim == 3
-
-        # }}} End Meshgen via BoxTree
-
-else:
-    # noexcept on importing meshgen_dealii
-    logger.info("Using Meshgen via Deal.II interface.")
-    from volumential.meshgen_dealii import MeshGen2D, MeshGen3D, greet  # noqa: F401
-
-    def make_uniform_cubic_grid(degree, level, dim, queue=None):
-        from volumential.meshgen_dealii import make_uniform_cubic_grid as _mucg
-
-        return _mucg(degree, level, dim)
+    def dimension_specific_setup(self):
+        if self.dim == 1:
+            self.dim = 3
+            self.root_vertex = np.zeros(self.dim) + self.bound_a
+        else:
+            assert self.dim == 3
 
 
 # {{{ mesh utils

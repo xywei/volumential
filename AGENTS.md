@@ -63,8 +63,8 @@ For pytential integration work, also read:
   multiple source fields, 3D paths, and optional build methods.
 - Interactive OpenCL context creation appears in a few places; avoid adding more
   of that during modernization.
-- This repo contains older contrib/native code under `contrib/`; do not assume
-  it should be preserved unless the task explicitly depends on it.
+- Historical contrib/native code has been removed; use the in-tree Python/OpenCL
+  implementations as the supported path.
 - `volumential/meshgen.py` depends on legacy boxtree behavior that has drifted
   out of current upstream. In particular, the old
   `boxtree.tree_interactive_build` fallback no longer exists in current

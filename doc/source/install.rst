@@ -33,22 +33,6 @@ Install dependencies using ``conda`` (after activating the newly created environ
    conda install pyopencl pocl sympy scipy 
    conda install matplotlib mayavi pyvtk
 
-Install ``dealii`` as well for additional features.
-
-.. note::
-
-   Deal.II is used only for adaptive mesh refinement (AMR).
-
-.. code-block:: bash
-
-   conda install cmake tbb-devel dealii
-
-Also, to use ``gmsh`` via its Python API,
-
-.. code-block:: bash
-
-   conda install gmsh python-gmsh
-
 And here are some optional dependencies. Install these if you intend to develop the library or build this documentation.
 
 .. code-block:: bash
@@ -89,34 +73,17 @@ Then finish installation by running
    # dependencies not present in conda-forge
    pip install -r requirements.txt
 
-Compile the AMR Module
-----------------------
+Mesh Generation Backend
+-----------------------
 
-The AMR module is implemented based on ``dealii``.
-To use it, compile the ``meshgen`` module under ``contrib/meshgen11_dealii``. 
+``volumential`` now uses the built-in boxtree-based mesh generator.
+No external ``contrib`` meshgen module build is required.
+
+After installation, run a focused end-to-end test to verify the stack.
 
 .. code-block:: bash
 
-   cd contrib/meshgen11_dealii
-   git submodule update --init --recursive
-   make
-
-If the build process fails with the error message
-``The keyword signature for target_link_libraries has already been used with
-the target ...``, try editing ``CMakeLists.txt`` and change line 52
-from ``if(TRUE)`` to ``if(FALSE)``. Then remove the ``build`` directory
-and re-run ``make``.
-
-If you are using manually compiled ``dealii`` instead of the one from
-``conda-forge``, set the ``DEAL_II_DIR`` environment variable to
-its installation path before calling ``make``.
-
-Alternatively, there is another implementation of the AMR module
-using ``boost::python`` under ``contrib/meshgen_dealii``. The compilation
-process is similar. It is in deprecated status. But if you have troubles
-compiling the ``pybind11`` one, it may worth a try.
-
-After installation, checkout ``examples/`` for example usage.
+   pytest -q test/test_volume_fmm.py::test_volume_fmm_laplace
 
 Run Tests
 ---------
@@ -143,5 +110,4 @@ The update process is simple using the ``requirements.txt``.
 .. code-block:: bash
 
    git pull
-   git submodule update --init --recursive
    pip install -U -r requirements.txt

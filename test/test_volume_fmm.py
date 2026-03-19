@@ -74,6 +74,73 @@ def test_cl_ctx_getter(ctx_factory):
     assert np.linalg.norm(res_np - (a_np + b_np)) < 1e-12
 
 
+@pytest.mark.skipif(
+    mg.provider != "meshgen_boxtree",
+    reason="Meshgen boxtree backend is unavailable",
+)
+def test_meshgen_boxtree_gmsh_export(ctx_factory, tmp_path):
+    ctx = ctx_factory()
+    queue = cl.CommandQueue(ctx)
+
+    mesh = mg.MeshGen3D(degree=2, nlevels=1, a=-1.0, b=1.0, queue=queue)
+    mesh_file = tmp_path / "box_grid.msh"
+    mesh.generate_gmsh(str(mesh_file))
+
+    assert mesh_file.exists()
+    mesh_text = mesh_file.read_text(encoding="ascii")
+    assert "$MeshFormat" in mesh_text
+    assert "$Nodes" in mesh_text
+    assert "$Elements" in mesh_text
+
+
+@pytest.mark.skipif(
+    mg.provider != "meshgen_boxtree",
+    reason="Meshgen boxtree backend is unavailable",
+)
+def test_meshgen_boxtree_gmsh_export_non_dyadic_bounds(ctx_factory, tmp_path):
+    ctx = ctx_factory()
+    queue = cl.CommandQueue(ctx)
+
+    mesh = mg.MeshGen2D(degree=2, nlevels=2, a=0.1, b=0.9, queue=queue)
+    mesh_file = tmp_path / "box_grid_non_dyadic.msh"
+    mesh.generate_gmsh(str(mesh_file))
+
+    lines = mesh_file.read_text(encoding="ascii").splitlines()
+    node_count = int(lines[lines.index("$Nodes") + 1])
+    element_count = int(lines[lines.index("$Elements") + 1])
+    level = int(mesh._leaf_levels()[0])
+    expected_nodes = (2**level + 1) ** mesh.dim
+    expected_elements = (2**level) ** mesh.dim
+
+    assert node_count == expected_nodes
+    assert element_count == expected_elements
+
+
+@pytest.mark.skipif(
+    mg.provider != "meshgen_boxtree",
+    reason="Meshgen boxtree backend is unavailable",
+)
+def test_meshgen_boxtree_gmsh_export_rejects_mixed_levels(ctx_factory, tmp_path):
+    ctx = ctx_factory()
+    queue = cl.CommandQueue(ctx)
+
+    mesh = mg.MeshGen2D(degree=2, nlevels=2, a=-1.0, b=1.0, queue=queue)
+    for _ in range(3):
+        criteria = np.arange(mesh.n_active_cells(), dtype=float)
+        mesh.update_mesh(
+            criteria,
+            top_fraction_of_cells=0.25,
+            bottom_fraction_of_cells=0.0,
+        )
+
+    if len(np.unique(mesh._leaf_levels())) == 1:
+        pytest.skip("could not create mixed-level mesh on this backend")
+
+    mesh_file = tmp_path / "box_grid_adaptive.msh"
+    with pytest.raises(NotImplementedError, match="uniform-level box meshes"):
+        mesh.generate_gmsh(str(mesh_file))
+
+
 # }}}
 
 # {{{ laplace volume potential
@@ -253,7 +320,7 @@ def laplace_problem(ctx_factory):
 
 
 @pytest.mark.skipif(
-    mg.provider not in {"meshgen_dealii", "meshgen_boxtree"},
+    mg.provider != "meshgen_boxtree",
     reason="Adaptive mesh module is not available",
 )
 def test_volume_fmm_laplace(laplace_problem):
