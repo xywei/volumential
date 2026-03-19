@@ -260,7 +260,7 @@ def main():
     wrangler = FPNDExpansionWrangler(
         code_container=wcc,
         queue=queue,
-        tree=tree,
+        traversal=trav,
         near_field_table=nftable,
         dtype=dtype,
         fmm_level_to_order=lambda kernel, kernel_args, tree, lev: m_order,

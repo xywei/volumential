@@ -14,7 +14,7 @@ dependencies:
   - iniconfig
   - islpy
   - numpy
-  - openmp
+  - llvm-openmp
   - packaging
   - pluggy
   - pocl
