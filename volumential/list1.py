@@ -501,6 +501,11 @@ class NearFieldFromCSR(NearFieldEvalBase):
 
     def __call__(self, queue, **kwargs):
         knl = self.get_cached_optimized_kernel()
+        context = getattr(queue, "context", None)
+        if context is None:
+            executor = knl
+        else:
+            executor = knl.executor(context)
         entry_knl = knl.default_entrypoint
 
         result = kwargs.pop("result")
@@ -544,7 +549,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
             if key in entry_knl.arg_dict:
                 extra_knl_args_from_init[key] = val
 
-        evt, res = knl(
+        evt, res = executor(
             queue,
             result=result,
             # db_table_lev=np.zeros(out_pot.shape),

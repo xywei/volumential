@@ -346,6 +346,29 @@ def test_volume_fmm_laplace(laplace_problem):
     assert float(max_err) < 5e-2
 
 
+def test_interpolate_kernel_build_cache(monkeypatch):
+    import volumential.volume_fmm as vfmm
+
+    vfmm._clear_interpolation_kernel_cache()
+
+    call_count = {"make_kernel": 0}
+    orig_make_kernel = vfmm.loopy.make_kernel
+
+    def wrapped_make_kernel(*args, **kwargs):
+        call_count["make_kernel"] += 1
+        return orig_make_kernel(*args, **kwargs)
+
+    monkeypatch.setattr(vfmm.loopy, "make_kernel", wrapped_make_kernel)
+
+    knl0 = vfmm._build_interpolation_loopy_kernel(2, 4)
+    knl1 = vfmm._build_interpolation_loopy_kernel(2, 4)
+    knl2 = vfmm._build_interpolation_loopy_kernel(3, 4)
+
+    assert knl0 is knl1
+    assert knl0 is not knl2
+    assert call_count["make_kernel"] == 2
+
+
 if __name__ == "__main__":
     import sys
 

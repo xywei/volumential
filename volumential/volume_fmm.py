@@ -27,9 +27,11 @@ __doc__ = """
 
 import logging
 import os
+from functools import lru_cache
 
 import numpy as np
 
+import loopy
 import pyopencl as cl
 from pytools.obj_array import make_obj_array
 
@@ -64,6 +66,152 @@ from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
 
 
 logger = logging.getLogger(__name__)
+
+
+def _clear_interpolation_kernel_cache():
+    _build_interpolation_loopy_kernel.cache_clear()
+
+
+@lru_cache(maxsize=12)
+def _build_interpolation_loopy_kernel(dim, q_order):
+    if dim == 1:
+        code_target_coords_assignment = """target_coords_x[target_point_id]"""
+    elif dim == 2:
+        code_target_coords_assignment = """if(
+        iaxis == 0, target_coords_x[target_point_id],
+                    target_coords_y[target_point_id])"""
+    elif dim == 3:
+        code_target_coords_assignment = """if(
+        iaxis == 0, target_coords_x[target_point_id], if(
+        iaxis == 1, target_coords_y[target_point_id],
+                    target_coords_z[target_point_id]))"""
+    else:
+        raise NotImplementedError
+
+    if dim == 1:
+        code_mode_index_assignment = """mid"""
+    elif dim == 2:
+        code_mode_index_assignment = """if(
+        iaxis == 0, mid / Q_ORDER,
+                    mid % Q_ORDER)""".replace("Q_ORDER", "q_order")
+    elif dim == 3:
+        code_mode_index_assignment = """if(
+        iaxis == 0, mid / (Q_ORDER * Q_ORDER), if(
+        iaxis == 1, mid % (Q_ORDER * Q_ORDER) / Q_ORDER,
+                    mid % (Q_ORDER * Q_ORDER) % Q_ORDER))""".replace(
+            "Q_ORDER", "q_order"
+        )
+    else:
+        raise NotImplementedError
+
+    lpknl = loopy.make_kernel(
+        [
+            "{ [ tbox, iaxis ] : 0 <= tbox < n_tgt_boxes and 0 <= iaxis < dim }",
+            "{ [ tpt, mid, mjd, mkd ] : tpt_begin <= tpt < tpt_end "
+            "and 0 <= mid < n_box_modes and 0 <= mjd < q_order "
+            "and 0 <= mkd < q_order }",
+        ],
+        """
+            for tbox
+                <> target_box_id  = target_boxes[tbox]
+
+                <> tpt_begin = balls_near_box_starts[target_box_id]
+                <> tpt_end   = balls_near_box_starts[target_box_id+1]
+
+                <> box_level     = box_levels[target_box_id]
+                <> box_mode_beg  = box_target_starts[target_box_id]
+                <> n_box_modes   = box_target_counts_cumul[target_box_id]
+
+                <> box_extent   = root_extent * (1.0 / (2**box_level))
+
+                for iaxis
+                    <> box_center[iaxis] = box_centers[iaxis, target_box_id] {dup=iaxis}
+                end
+
+                for tpt
+                    <> target_point_id = balls_near_box_lists[tpt]
+
+                    for iaxis
+                        <> real_coord[iaxis] = TARGET_COORDS_ASSIGNMENT {dup=iaxis}
+                    end
+
+                    multiplicity[target_point_id] = multiplicity[target_point_id] + 1  {atomic}
+
+                    for iaxis
+                        <> tplt_coord[iaxis] = (real_coord[iaxis] - box_center[iaxis]
+                            ) / box_extent + 0.5 {dup=iaxis}
+                    end
+
+                    for iaxis
+                        <> denom[iaxis] = 0.0 {id=reinit_denom,dup=iaxis}
+                    end
+
+                    for iaxis, mjd
+                         <> diff[iaxis, mjd] = if( \
+                                          tplt_coord[iaxis] == barycentric_lagrange_points[mjd], \
+                                          1, \
+                                          tplt_coord[iaxis] - barycentric_lagrange_points[mjd]) \
+                                          {id=diff, dep=reinit_denom, dup=iaxis:mjd}
+                         denom[iaxis] = denom[iaxis] + \
+                                 barycentric_lagrange_weights[mjd] / diff[iaxis, mjd] \
+                                 {id=denom, dep=diff, dup=iaxis:mjd}
+                    end
+
+                    for mid
+                        <> mode_id      = box_mode_beg + mid
+                        <> mode_id_user = user_mode_ids[mode_id]
+                        <> mode_coeff   = potential[mode_id_user]
+
+                        for iaxis
+                            idx[iaxis] = MODE_INDEX_ASSIGNMENT {id=mode_indices,dup=iaxis}
+                        end
+
+                        for iaxis
+                            <> numerator[iaxis] = (barycentric_lagrange_weights[idx[iaxis]]
+                                                / diff[iaxis, idx[iaxis]]) {id=numer,dep=diff:mode_indices,dup=iaxis}
+                            <> mode_val[iaxis] = numerator[iaxis] / denom[iaxis] {id=mode_val,dep=numer:denom,dup=iaxis}
+                        end
+
+                        for mkd, iaxis
+                            mode_val[iaxis] = if(
+                                    tplt_coord[iaxis] == barycentric_lagrange_points[mkd],
+                                    if(mkd == idx[iaxis], 1, 0),
+                                    mode_val[iaxis]) {id=fix_mode_val, dep=mode_val:mode_indices, dup=iaxis}
+                        end
+
+                        <> prod_mode_val = product(iaxis,
+                            mode_val[iaxis]) {id=pmod,dep=fix_mode_val,dup=iaxis}
+
+                    end
+
+                    p_out[target_point_id] = p_out[target_point_id] + sum(mid,
+                        mode_coeff * prod_mode_val
+                        ) {id=p_out,dep=pmod,atomic}
+
+                end
+
+            end
+
+            """.replace("TARGET_COORDS_ASSIGNMENT", code_target_coords_assignment)
+        .replace("MODE_INDEX_ASSIGNMENT", code_mode_index_assignment)
+        .replace("Q_ORDER", "q_order"),
+        [
+            loopy.TemporaryVariable("idx", np.int32, "dim,"),
+            loopy.GlobalArg("box_centers", None, "dim, aligned_nboxes"),
+            loopy.GlobalArg("balls_near_box_lists", None, None),
+            loopy.GlobalArg("multiplicity", None, None, for_atomic=True),
+            loopy.GlobalArg("p_out", None, None, for_atomic=True),
+            loopy.ValueArg("aligned_nboxes", np.int32),
+            loopy.ValueArg("dim", np.int32),
+            loopy.ValueArg("q_order", np.int32),
+            "...",
+        ],
+        lang_version=(2018, 2),
+    )
+    lpknl = loopy.set_options(lpknl, return_dict=True)
+    lpknl = loopy.fix_parameters(lpknl, dim=int(dim), q_order=int(q_order))
+    lpknl = loopy.split_iname(lpknl, "tbox", 128, outer_tag="g.0", inner_tag="l.0")
+    return lpknl
 
 
 def _debug_nan_status(label, ary):
@@ -547,157 +695,6 @@ def interpolate_volume_potential(
     blpoints = cl.array.to_device(queue, blpoints)
     blweights = cl.array.to_device(queue, blweights)
 
-    # {{{ loopy kernel for interpolation
-
-    if dim == 1:
-        code_target_coords_assignment = """target_coords_x[target_point_id]"""
-    if dim == 2:
-        code_target_coords_assignment = """if(
-        iaxis == 0, target_coords_x[target_point_id],
-                    target_coords_y[target_point_id])"""
-    elif dim == 3:
-        code_target_coords_assignment = """if(
-        iaxis == 0, target_coords_x[target_point_id], if(
-        iaxis == 1, target_coords_y[target_point_id],
-                    target_coords_z[target_point_id]))"""
-    else:
-        raise NotImplementedError
-
-    if dim == 1:
-        code_mode_index_assignment = """mid"""
-    elif dim == 2:
-        code_mode_index_assignment = """if(
-        iaxis == 0, mid / Q_ORDER,
-                    mid % Q_ORDER)""".replace("Q_ORDER", "q_order")
-    elif dim == 3:
-        code_mode_index_assignment = """if(
-        iaxis == 0, mid / (Q_ORDER * Q_ORDER), if(
-        iaxis == 1, mid % (Q_ORDER * Q_ORDER) / Q_ORDER,
-                    mid % (Q_ORDER * Q_ORDER) % Q_ORDER))""".replace(
-            "Q_ORDER", "q_order"
-        )
-    else:
-        raise NotImplementedError
-
-    import loopy
-
-    lpknl = loopy.make_kernel(
-        [
-            "{ [ tbox, iaxis ] : 0 <= tbox < n_tgt_boxes and 0 <= iaxis < dim }",
-            "{ [ tpt, mid, mjd, mkd ] : tpt_begin <= tpt < tpt_end "
-            "and 0 <= mid < n_box_modes and 0 <= mjd < q_order "
-            "and 0 <= mkd < q_order }",
-        ],
-        """
-            for tbox
-                <> target_box_id  = target_boxes[tbox]
-
-                <> tpt_begin = balls_near_box_starts[target_box_id]
-                <> tpt_end   = balls_near_box_starts[target_box_id+1]
-
-                <> box_level     = box_levels[target_box_id]
-                <> box_mode_beg  = box_target_starts[target_box_id]
-                <> n_box_modes   = box_target_counts_cumul[target_box_id]
-
-                <> box_extent   = root_extent * (1.0 / (2**box_level))
-
-                for iaxis
-                    <> box_center[iaxis] = box_centers[iaxis, target_box_id] {dup=iaxis}
-                end
-
-                for tpt
-                    <> target_point_id = balls_near_box_lists[tpt]
-
-                    for iaxis
-                        <> real_coord[iaxis] = TARGET_COORDS_ASSIGNMENT {dup=iaxis}
-                    end
-
-                    # Count how many times the potential is computed
-                    multiplicity[target_point_id] = multiplicity[target_point_id] + 1  {atomic}
-
-                    # Map target point to template box
-                    for iaxis
-                        <> tplt_coord[iaxis] = (real_coord[iaxis] - box_center[iaxis]
-                            ) / box_extent + 0.5 {dup=iaxis}
-                    end
-
-                    # Precompute denominators
-                    for iaxis
-                        <> denom[iaxis] = 0.0 {id=reinit_denom,dup=iaxis}
-                    end
-
-                    for iaxis, mjd
-                         <> diff[iaxis, mjd] = if( \
-                                          tplt_coord[iaxis] == barycentric_lagrange_points[mjd], \
-                                          1, \
-                                          tplt_coord[iaxis] - barycentric_lagrange_points[mjd]) \
-                                          {id=diff, dep=reinit_denom, dup=iaxis:mjd}
-                         denom[iaxis] = denom[iaxis] + \
-                                 barycentric_lagrange_weights[mjd] / diff[iaxis, mjd] \
-                                 {id=denom, dep=diff, dup=iaxis:mjd}
-                    end
-
-                    for mid
-                        # Find the coeff of each mode
-                        <> mode_id      = box_mode_beg + mid
-                        <> mode_id_user = user_mode_ids[mode_id]
-                        <> mode_coeff   = potential[mode_id_user]
-
-                        # Mode id in each direction
-                        for iaxis
-                            idx[iaxis] = MODE_INDEX_ASSIGNMENT {id=mode_indices,dup=iaxis}
-                        end
-
-                        # Interpolate mode value in each direction
-                        for iaxis
-                            <> numerator[iaxis] = (barycentric_lagrange_weights[idx[iaxis]]
-                                                / diff[iaxis, idx[iaxis]]) {id=numer,dep=diff:mode_indices,dup=iaxis}
-                            <> mode_val[iaxis] = numerator[iaxis] / denom[iaxis] {id=mode_val,dep=numer:denom,dup=iaxis}
-                        end
-
-                        # Fix when target point coincide with a quad point
-                        for mkd, iaxis
-                            mode_val[iaxis] = if(
-                                    tplt_coord[iaxis] == barycentric_lagrange_points[mkd],
-                                    if(mkd == idx[iaxis], 1, 0),
-                                    mode_val[iaxis]) {id=fix_mode_val, dep=mode_val:mode_indices, dup=iaxis}
-                        end
-
-                        <> prod_mode_val = product(iaxis,
-                            mode_val[iaxis]) {id=pmod,dep=fix_mode_val,dup=iaxis}
-
-                    end
-
-                    p_out[target_point_id] = p_out[target_point_id] + sum(mid,
-                        mode_coeff * prod_mode_val
-                        ) {id=p_out,dep=pmod,atomic}
-
-                end
-
-            end
-
-            """.replace(  # noqa: E501
-            "TARGET_COORDS_ASSIGNMENT", code_target_coords_assignment
-        )
-        .replace("MODE_INDEX_ASSIGNMENT", code_mode_index_assignment)
-        .replace("Q_ORDER", "q_order"),
-        [
-            loopy.TemporaryVariable("idx", np.int32, "dim,"),
-            # loopy.TemporaryVariable("denom", dtype, "dim,"),
-            # loopy.TemporaryVariable("diff", dtype, "dim, q_order"),
-            loopy.GlobalArg("box_centers", None, "dim, aligned_nboxes"),
-            loopy.GlobalArg("balls_near_box_lists", None, None),
-            loopy.GlobalArg("multiplicity", None, None, for_atomic=True),
-            loopy.GlobalArg("p_out", None, None, for_atomic=True),
-            loopy.ValueArg("aligned_nboxes", np.int32),
-            loopy.ValueArg("dim", np.int32),
-            loopy.ValueArg("q_order", np.int32),
-            "...",
-        ],
-        lang_version=(2018, 2),
-    )
-    # }}} End loopy kernel for interpolation
-
     # loopy does not directly support object arrays
     if dim == 1:
         target_coords_knl_kwargs = {"target_coords_x": target_points[0]}
@@ -723,10 +720,10 @@ def interpolate_volume_potential(
         # fetching from user_source_ids converts potential to tree order
         user_mode_ids = tree.user_source_ids
 
-    lpknl = loopy.set_options(lpknl, return_dict=True)
-    lpknl = loopy.fix_parameters(lpknl, dim=int(dim), q_order=int(q_order))
-    lpknl = loopy.split_iname(lpknl, "tbox", 128, outer_tag="g.0", inner_tag="l.0")
-    evt, res_dict = lpknl(
+    executor = _build_interpolation_loopy_kernel(int(dim), int(q_order)).executor(
+        queue.context
+    )
+    evt, res_dict = executor(
         queue,
         p_out=pout,
         multiplicity=multiplicity,

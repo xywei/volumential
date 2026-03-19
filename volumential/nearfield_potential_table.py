@@ -1185,6 +1185,11 @@ class NearFieldInteractionTable:
 
         xi, bw = self._get_barycentric_data()
         prg = self._get_fused_invariant_duffy_table_program(queue, n_entries, n_nodes)
+        context = getattr(queue, "context", None)
+        if context is None:
+            executor = prg
+        else:
+            executor = prg.executor(context)
 
         queue_is_cl = isinstance(queue, cl.CommandQueue)
         if queue_is_cl:
@@ -1225,7 +1230,7 @@ class NearFieldInteractionTable:
             bw_arg = np.ascontiguousarray(bw, dtype=self.dtype)
             mode_i_arg = mode_i
 
-        _, res = prg(
+        _, res = executor(
             queue,
             source_box_extent=self.dtype(self.source_box_extent),
             target_points=target_points_arg,
@@ -2085,8 +2090,14 @@ class NearFieldInteractionTable:
 
         int_vals = []
 
+        context = getattr(queue, "context", None)
+        if context is None:
+            executor = lpknl
+        else:
+            executor = lpknl.executor(context)
+
         for target in self.q_points:
-            evt, res = lpknl(queue, quad_points=nodes, target_point=target)
+            evt, res = executor(queue, quad_points=nodes, target_point=target)
             knl_vals = res["result"]
 
             integ = bind(discr, sym.integral(self.dim, self.dim, sym.var("integrand")))(
