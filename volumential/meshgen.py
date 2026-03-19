@@ -206,55 +206,67 @@ class MeshGenBase:
 
         leaf_centers = self._leaf_centers()
         leaf_sizes = self._leaf_side_lengths()
+        leaf_levels = self._leaf_levels()
+
+        if len(leaf_levels) == 0:
+            raise ValueError("cannot export an empty mesh")
+
+        if np.any(leaf_levels != leaf_levels[0]):
+            raise NotImplementedError(
+                "generate_gmsh currently supports uniform-level box meshes only"
+            )
+
+        level = int(leaf_levels[0])
+        nsubdiv = 2**level
+        h = self.root_extent / nsubdiv
+        root_vertex = np.asarray(self.root_vertex, dtype=float)
 
         node_ids = {}
         nodes = []
 
-        def get_node_id(coords):
-            key = tuple(float(c) for c in coords)
+        def get_node_id(lattice_idx):
+            key = tuple(int(i) for i in lattice_idx)
             if key not in node_ids:
                 node_ids[key] = len(nodes) + 1
-                nodes.append(key)
+                coords = [root_vertex[axis] + h * key[axis] for axis in range(self.dim)]
+                while len(coords) < 3:
+                    coords.append(0.0)
+                nodes.append(tuple(coords))
             return node_ids[key]
 
         elements = []
         for center, size in zip(leaf_centers, leaf_sizes):
             half = 0.5 * float(size)
+            if abs(size - h) > 1e-12 * max(1.0, abs(h)):
+                raise NotImplementedError(
+                    "generate_gmsh currently supports uniform-level box meshes only"
+                )
+
+            lower = np.rint((center - half - root_vertex) / h).astype(np.int64)
 
             if self.dim == 1:
-                x0 = float(center[0] - half)
-                x1 = float(center[0] + half)
-                n1 = get_node_id((x0, 0.0, 0.0))
-                n2 = get_node_id((x1, 0.0, 0.0))
+                n1 = get_node_id((lower[0],))
+                n2 = get_node_id((lower[0] + 1,))
                 elements.append((1, [n1, n2]))
 
             elif self.dim == 2:
-                x0 = float(center[0] - half)
-                x1 = float(center[0] + half)
-                y0 = float(center[1] - half)
-                y1 = float(center[1] + half)
-                n1 = get_node_id((x0, y0, 0.0))
-                n2 = get_node_id((x1, y0, 0.0))
-                n3 = get_node_id((x1, y1, 0.0))
-                n4 = get_node_id((x0, y1, 0.0))
+                ix, iy = int(lower[0]), int(lower[1])
+                n1 = get_node_id((ix, iy))
+                n2 = get_node_id((ix + 1, iy))
+                n3 = get_node_id((ix + 1, iy + 1))
+                n4 = get_node_id((ix, iy + 1))
                 elements.append((3, [n1, n2, n3, n4]))
 
             elif self.dim == 3:
-                x0 = float(center[0] - half)
-                x1 = float(center[0] + half)
-                y0 = float(center[1] - half)
-                y1 = float(center[1] + half)
-                z0 = float(center[2] - half)
-                z1 = float(center[2] + half)
-
-                n1 = get_node_id((x0, y0, z0))
-                n2 = get_node_id((x1, y0, z0))
-                n3 = get_node_id((x1, y1, z0))
-                n4 = get_node_id((x0, y1, z0))
-                n5 = get_node_id((x0, y0, z1))
-                n6 = get_node_id((x1, y0, z1))
-                n7 = get_node_id((x1, y1, z1))
-                n8 = get_node_id((x0, y1, z1))
+                ix, iy, iz = int(lower[0]), int(lower[1]), int(lower[2])
+                n1 = get_node_id((ix, iy, iz))
+                n2 = get_node_id((ix + 1, iy, iz))
+                n3 = get_node_id((ix + 1, iy + 1, iz))
+                n4 = get_node_id((ix, iy + 1, iz))
+                n5 = get_node_id((ix, iy, iz + 1))
+                n6 = get_node_id((ix + 1, iy, iz + 1))
+                n7 = get_node_id((ix + 1, iy + 1, iz + 1))
+                n8 = get_node_id((ix, iy + 1, iz + 1))
                 elements.append((5, [n1, n2, n3, n4, n5, n6, n7, n8]))
 
             else:
