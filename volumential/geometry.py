@@ -274,18 +274,31 @@ class BoxFMMGeometryFactory:
         if queue is None:
             queue = cl.CommandQueue(self.cl_context)
 
+        from boxtree import TreeBuilder
         from boxtree.array_context import PyOpenCLArrayContext
-
-        actx = PyOpenCLArrayContext(queue)
-
-        q_points = self._get_q_points(queue)
-
         from volumential.tree_interactive_build import build_particle_tree_from_box_tree
 
+        actx = PyOpenCLArrayContext(queue)
+        q_points = self._get_q_points(queue)
         q_points_host = np.ascontiguousarray(self.engine.get_q_points())
-        tree = build_particle_tree_from_box_tree(
-            actx, self.engine.boxtree, q_points_host
-        )
+
+        leaf_boxes = np.asarray(self.engine.boxtree._tree.leaf_boxes)
+        leaf_levels = np.asarray(self.engine.boxtree._tree.box_levels[leaf_boxes])
+        has_mixed_leaf_levels = np.unique(leaf_levels).size > 1
+
+        if has_mixed_leaf_levels:
+            tb = TreeBuilder(actx)
+            tree, _ = tb(
+                actx,
+                particles=q_points,
+                targets=q_points,
+                max_particles_in_box=(self.order**self.dim) * (2**self.dim) - 1,
+                kind="adaptive-level-restricted",
+            )
+        else:
+            tree = build_particle_tree_from_box_tree(
+                actx, self.engine.boxtree, q_points_host
+            )
 
         from boxtree.traversal import FMMTraversalBuilder
 
