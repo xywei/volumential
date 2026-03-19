@@ -77,11 +77,13 @@ class NearFieldEvalBase(KernelCacheWrapper):
         self.n_tables = table_data_shapes["n_tables"]
         self.n_q_points = table_data_shapes["n_q_points"]
         self.n_table_entries = table_data_shapes["n_table_entries"]
+        self.n_cases = table_data_shapes.get("n_cases", 0)
         self.potential_kind = potential_kind
 
         assert np.isreal(self.n_tables)
         assert np.isreal(self.n_q_points)
         assert np.isreal(self.n_table_entries)
+        assert np.isreal(self.n_cases)
 
         self.options = options
         self.name = name or self.default_name
@@ -389,8 +391,11 @@ class NearFieldFromCSR(NearFieldEvalBase):
 
                         <> source_id = box_source_beg + sid
                         <> source_mode_id = source_mode_ids[source_id]
-                        <> pair_id = source_mode_id * n_q_points + target_point_id
-                        <> entry_id = case_id * (n_q_points * n_q_points) + pair_id
+                        <> source_mode_id_sym = mode_qpoint_map[source_mode_id, source_mode_id]
+                        <> target_point_id_sym = mode_qpoint_map[source_mode_id, target_point_id]
+                        <> case_id_sym = mode_case_map[source_mode_id, case_id]
+                        <> pair_id = source_mode_id_sym * n_q_points + target_point_id_sym
+                        <> entry_id = case_id_sym * (n_q_points * n_q_points) + pair_id
 
                         <> displacement = COMPUTE_DISPLACEMENT
 
@@ -448,6 +453,8 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 loopy.GlobalArg(
                     "table_data", potential_dtype, "n_tables, n_table_entries"
                 ),
+                loopy.GlobalArg("mode_qpoint_map", np.int32, "n_q_points, n_q_points"),
+                loopy.GlobalArg("mode_case_map", np.int32, "n_q_points, n_cases"),
                 loopy.GlobalArg("source_boxes", np.int32, "n_source_boxes"),
                 loopy.GlobalArg("box_centers", None, "dim, aligned_nboxes"),
                 loopy.GlobalArg(
@@ -461,7 +468,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 loopy.ValueArg("aligned_nboxes", np.int32),
                 loopy.ValueArg("table_root_extent", np.float64),
                 loopy.ValueArg(
-                    "dim, n_source_boxes, n_tables, n_q_points, n_table_entries, n_source_particles, n_target_particles",
+                    "dim, n_source_boxes, n_tables, n_q_points, n_cases, n_table_entries, n_source_particles, n_target_particles",
                     np.int32,
                 ),
                 "...",
@@ -478,7 +485,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
     def get_cache_key(self):
         return (
             type(self).__name__,
-            "kernel-v6",
+            "kernel-v7",
             self.name,
             self.kname,
             "complex_kernel=" + str(self.integral_kernel.is_complex_valued),
@@ -508,6 +515,8 @@ class NearFieldFromCSR(NearFieldEvalBase):
         encoding_shift = kwargs.pop("encoding_shift")
         mode_nmlz_combined = kwargs.pop("mode_nmlz_combined")
         exterior_mode_nmlz_combined = kwargs.pop("exterior_mode_nmlz_combined")
+        mode_qpoint_map = kwargs.pop("mode_qpoint_map")
+        mode_case_map = kwargs.pop("mode_case_map")
         root_extent = kwargs.pop("root_extent")
         table_root_extent = kwargs.pop("table_root_extent")
         neighbor_source_boxes_starts = kwargs.pop("neighbor_source_boxes_starts")
@@ -554,10 +563,13 @@ class NearFieldFromCSR(NearFieldEvalBase):
             n_tables=self.n_tables,
             n_table_entries=self.n_table_entries,
             n_q_points=self.n_q_points,
+            n_cases=self.n_cases,
             encoding_base=encoding_base,
             encoding_shift=encoding_shift,
             mode_nmlz=mode_nmlz_combined,
             exterior_mode_nmlz=exterior_mode_nmlz_combined,
+            mode_qpoint_map=mode_qpoint_map,
+            mode_case_map=mode_case_map,
             n_tgt_boxes=len(target_boxes),
             neighbor_source_boxes_starts=neighbor_source_boxes_starts,
             root_extent=root_extent,

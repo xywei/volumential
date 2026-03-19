@@ -21,6 +21,8 @@ THE SOFTWARE.
 """
 
 import logging
+import time
+from dataclasses import dataclass
 from functools import partial
 
 import numpy as np
@@ -35,6 +37,22 @@ import volumential.singular_integral_2d as squad
 
 
 logger = logging.getLogger("NearFieldInteractionTable")
+
+
+_TABLE_BUILD_METHOD = "DuffyRadial"
+_DUFFY_PROGRESS_STAGES = 3
+
+
+@dataclass(frozen=True)
+class DuffyBuildConfig:
+    radial_rule: str = "tanh-sinh-fast"
+    regular_quad_order: object = 20
+    radial_quad_order: object = 61
+    mp_dps: int = 50
+    auto_tune_orders: bool = False
+    auto_tune_samples: int = 5
+    auto_tune_floor_factor: float = 8.0
+    auto_tune_candidates: object = None
 
 
 def _self_tp(vec, tpd=2):
@@ -64,6 +82,10 @@ def _orthonormal(n, i):
 
 def constant_one(x, y=None, z=None):
     return np.ones(np.array(x).shape)
+
+
+def _is_auto_quad_order(value):
+    return value is None or (isinstance(value, str) and value.strip().lower() == "auto")
 
 
 # {{{ kernel function getters
@@ -157,9 +179,7 @@ def get_cahn_hilliard(dim, b=0, c=0, approx_at_origin=False):
 
 
 def get_cahn_hilliard_laplacian(dim, b=0, c=0):
-    raise NotImplementedError(
-        "Transform method under construction, use DrosteSum instead"
-    )
+    raise NotImplementedError("Cahn-Hilliard-Laplacian kernel function not implemented")
 
 
 # }}} End kernel function getters
@@ -209,37 +229,38 @@ class NearFieldInteractionTable:
         kernel_func=None,
         kernel_type=None,
         sumpy_kernel=None,
-        build_method=None,
+        build_method=_TABLE_BUILD_METHOD,
         source_box_extent=1,
         dtype=np.float64,
-        inverse_droste=False,
         progress_bar=True,
         **kwargs,
     ):
         """
         kernel_type determines how the kernel is scaled w.r.t. box size.
-        build_method can be "Transform", "DuffyRadial", or legacy "DrosteSum".
+        The table build method is DuffyRadial.
 
         The source box is [0, source_box_extent]^dim
-
-        :arg inverse_droste True if computing with the fractional Laplacian kernel.
         """
         self.quad_order = quad_order
         self.dim = dim
         self.dtype = dtype
-        self.inverse_droste = inverse_droste
 
         assert source_box_extent > 0
         self.source_box_extent = source_box_extent
 
         self.center = np.ones(self.dim) * 0.5 * self.source_box_extent
 
-        self.build_method = build_method
+        if build_method is None:
+            build_method = _TABLE_BUILD_METHOD
+        if build_method != _TABLE_BUILD_METHOD:
+            raise NotImplementedError(
+                f"Unsupported build_method={build_method!r}; use {_TABLE_BUILD_METHOD}."
+            )
+
+        self.build_method = _TABLE_BUILD_METHOD
+        self._auto_build_queue = None
 
         if dim == 1:
-            if build_method == "Transform":
-                raise NotImplementedError("Use build_method=DuffyRadial for 1d")
-
             self.kernel_func = kernel_func
             self.kernel_type = kernel_type
             self.integral_knl = sumpy_kernel
@@ -249,22 +270,13 @@ class NearFieldInteractionTable:
             if kernel_func is None:
                 kernel_func = constant_one
                 kernel_type = "const"
-                # for legacy DrosteSum/DuffyRadial kernel_func is unused
-                if build_method == "Transform":
-                    logger.warning("setting kernel_func to be constant.")
 
             # Kernel function differs from OpenCL's kernels
             self.kernel_func = kernel_func
             self.kernel_type = kernel_type
             self.integral_knl = sumpy_kernel
 
-            if build_method == "DrosteSum":
-                assert sumpy_kernel is not None
-
         elif dim == 3:
-            if build_method == "Transform":
-                raise NotImplementedError("Use build_method=DuffyRadial for 3d")
-
             self.kernel_func = kernel_func
             self.kernel_type = kernel_type
             self.integral_knl = sumpy_kernel
@@ -292,7 +304,19 @@ class NearFieldInteractionTable:
         )
         self.n_cases = len(self.interaction_case_vecs)
 
-        if method == "gauss-legendre":
+        precomputed_q_points = kwargs.pop("precomputed_q_points", None)
+
+        if precomputed_q_points is not None:
+            q_points = np.asarray(precomputed_q_points, dtype=self.dtype)
+            expected_shape = (self.n_q_points, self.dim)
+            if q_points.shape != expected_shape:
+                raise ValueError(
+                    "precomputed_q_points has shape "
+                    f"{q_points.shape}, expected {expected_shape}"
+                )
+            self.q_points = q_points
+
+        elif method == "gauss-legendre":
             # quad points in [-1,1]
             import volumential.meshgen as mg
 
@@ -327,7 +351,10 @@ class NearFieldInteractionTable:
         self.data = np.empty(self.n_pairs * self.n_cases, dtype=self.dtype)
         self.data.fill(np.nan)
 
-        total_evals = len(self.data) + self.n_q_points
+        if self.dim == 2:
+            total_evals = self.n_q_points + _DUFFY_PROGRESS_STAGES
+        else:
+            total_evals = _DUFFY_PROGRESS_STAGES
 
         if progress_bar:
             from pytools import ProgressBar
@@ -337,6 +364,9 @@ class NearFieldInteractionTable:
             self.pb = None
 
         self.is_built = False
+        self.last_duffy_order_selection = None
+        self.last_duffy_build_timings = None
+        self.table_data_is_symmetry_reduced = False
 
     # }}} End constructor
 
@@ -541,6 +571,7 @@ class NearFieldInteractionTable:
 
     # {{{ build table via transform
 
+    @memoize_method
     def get_symmetry_transform(self, source_mode_index):
         """Apply proper transforms to map source mode to a reduced region
 
@@ -648,48 +679,6 @@ class NearFieldInteractionTable:
 
         return entry_id, centry_id
 
-    def compute_table_entry(self, entry_id):
-        """Compute one entry in the table indexed by self.data[entry_id]
-
-        Input kernel function should be centered at origin.
-        """
-        entry_info = self.decode_index(entry_id)
-        source_mode = self.get_mode(entry_info["source_mode_index"])
-        target_point = self.find_target_point(
-            target_point_index=entry_info["target_point_index"],
-            case_index=entry_info["case_index"],
-        )
-
-        # print(entry_info, target_point)
-        # source_point = (
-        #     self.q_points[entry_info[
-        #         "source_mode_index"]])
-        # print(source_mode(source_point[0], source_point[1]))
-
-        if self.dim == 2:
-
-            def integrand(x, y):
-                return source_mode(x, y) * self.kernel_func(
-                    x - target_point[0], y - target_point[1]
-                )
-
-            integral, error = squad.box_quad(
-                func=integrand,
-                a=0,
-                b=self.source_box_extent,
-                c=0,
-                d=self.source_box_extent,
-                singular_point=target_point,
-                # tol=1e-10,
-                # rtol=1e-10,
-                # miniter=300,
-                maxiter=301,
-            )
-        else:
-            raise NotImplementedError
-
-        return (entry_id, integral)
-
     def compute_table_entry_duffy_radial(
         self,
         entry_id,
@@ -756,25 +745,77 @@ class NearFieldInteractionTable:
 
     @memoize_method
     def _get_invariant_entry_info(self):
-        invariant_entry_ids = [
-            i for i in range(len(self.data)) if self.lookup_by_symmetry(i) == (i, i)
-        ]
-        entry_info = np.array(
-            [self.decode_index(i) for i in invariant_entry_ids], dtype=object
+        sym_maps = self._get_online_symmetry_maps()
+        mode_qpoint_map = sym_maps["mode_qpoint_map"]
+        mode_case_map = sym_maps["mode_case_map"]
+        all_mode_axes = self._get_all_mode_axes()
+
+        qpoint_indices = np.arange(self.n_q_points, dtype=np.int32)
+        case_indices_all = np.arange(self.n_cases, dtype=np.int32)
+
+        entry_chunks = []
+        case_chunks = []
+        target_chunks = []
+        source_chunks = []
+
+        n_q_points_i64 = np.int64(self.n_q_points)
+        n_pairs_i64 = np.int64(self.n_pairs)
+
+        for source_mode_index in range(self.n_q_points):
+            if (
+                mode_qpoint_map[source_mode_index, source_mode_index]
+                != source_mode_index
+            ):
+                continue
+
+            fixed_targets = qpoint_indices[
+                mode_qpoint_map[source_mode_index] == qpoint_indices
+            ]
+            if fixed_targets.size == 0:
+                continue
+
+            fixed_cases = case_indices_all[
+                mode_case_map[source_mode_index] == case_indices_all
+            ]
+            if fixed_cases.size == 0:
+                continue
+
+            pair_base = np.int64(
+                source_mode_index
+            ) * n_q_points_i64 + fixed_targets.astype(np.int64)
+            entry_block = (
+                fixed_cases.astype(np.int64)[:, np.newaxis] * n_pairs_i64
+                + pair_base[np.newaxis, :]
+            )
+
+            entry_chunks.append(entry_block.reshape(-1))
+            case_chunks.append(np.repeat(fixed_cases, fixed_targets.size))
+            target_chunks.append(np.tile(fixed_targets, fixed_cases.size))
+            source_chunks.append(
+                np.full(entry_block.size, source_mode_index, dtype=np.int32)
+            )
+
+        if entry_chunks:
+            invariant_entry_ids = np.concatenate(entry_chunks).astype(
+                np.int64, copy=False
+            )
+            case_indices = np.concatenate(case_chunks).astype(np.int32, copy=False)
+            target_point_indices = np.concatenate(target_chunks).astype(
+                np.int32, copy=False
+            )
+            source_mode_indices = np.concatenate(source_chunks).astype(
+                np.int32, copy=False
+            )
+        else:
+            invariant_entry_ids = np.empty(0, dtype=np.int64)
+            case_indices = np.empty(0, dtype=np.int32)
+            target_point_indices = np.empty(0, dtype=np.int32)
+            source_mode_indices = np.empty(0, dtype=np.int32)
+
+        mode_axes = np.ascontiguousarray(
+            all_mode_axes[source_mode_indices], dtype=np.int32
         )
-        case_indices = np.array(
-            [info["case_index"] for info in entry_info], dtype=np.int32
-        )
-        target_point_indices = np.array(
-            [info["target_point_index"] for info in entry_info], dtype=np.int32
-        )
-        source_mode_indices = np.array(
-            [info["source_mode_index"] for info in entry_info], dtype=np.int32
-        )
-        mode_axes = np.array(
-            [self.unwrap_mode_index(idx) for idx in source_mode_indices],
-            dtype=np.int32,
-        )
+
         return {
             "entry_ids": invariant_entry_ids,
             "case_indices": case_indices,
@@ -788,20 +829,83 @@ class NearFieldInteractionTable:
         target_points = np.empty(
             (self.dim, self.n_cases, self.n_q_points), dtype=self.dtype
         )
+
+        q_offsets = (self.q_points - self.center).T
         for case_index in range(self.n_cases):
-            for tid in range(self.n_q_points):
-                target_points[:, case_index, tid] = np.asarray(
-                    self.find_target_point(tid, case_index), dtype=self.dtype
-                )
+            case_vec = np.asarray(
+                self.interaction_case_vecs[case_index], dtype=self.dtype
+            )
+            vec = case_vec / 4.0 * self.source_box_extent
+            new_cntr = (
+                np.ones(self.dim, dtype=self.dtype) * (0.5 * self.source_box_extent)
+                + vec
+            )
+
+            if int(np.max(np.abs(case_vec))) == 0:
+                new_size = self.dtype(1)
+            else:
+                new_size = self.dtype(np.max(np.abs(case_vec) - 2.0) / 2.0)
+
+            target_points[:, case_index, :] = (
+                new_cntr.reshape(self.dim, 1) + new_size * q_offsets
+            )
+
         return target_points
 
     @memoize_method
-    def _get_fused_invariant_duffy_table_2d_tunit(self):
+    def _get_all_mode_axes(self):
+        axes = np.empty((self.n_q_points, self.dim), dtype=np.int32)
+        residual = np.arange(self.n_q_points, dtype=np.int64)
+        for axis in range(self.dim - 1, -1, -1):
+            axes[:, axis] = residual % self.quad_order
+            residual //= self.quad_order
+        return axes
+
+    @memoize_method
+    def _get_online_symmetry_maps(self):
+        mode_qpoint_map = np.empty((self.n_q_points, self.n_q_points), dtype=np.int32)
+        mode_case_map = np.empty((self.n_q_points, self.n_cases), dtype=np.int32)
+        all_mode_axes = self._get_all_mode_axes()
+        case_vecs = np.asarray(self.interaction_case_vecs, dtype=np.int32)
+        multi_shape = (self.quad_order,) * self.dim
+
+        for source_mode_index in range(self.n_q_points):
+            source_axes = all_mode_axes[source_mode_index].astype(np.int64)
+            s1 = np.sign((self.quad_order - 0.5) / 2.0 - source_axes)
+            reflected_source = source_axes.copy()
+            reflected_source[s1 < 0] = self.quad_order - 1 - reflected_source[s1 < 0]
+            s2 = np.argsort(np.abs(reflected_source), kind="stable")
+
+            mapped_axes = all_mode_axes
+            if np.any(s1 < 0):
+                mapped_axes = mapped_axes.copy()
+                mapped_axes[:, s1 < 0] = self.quad_order - 1 - mapped_axes[:, s1 < 0]
+            mapped_axes = mapped_axes[:, s2]
+            mode_qpoint_map[source_mode_index, :] = np.ravel_multi_index(
+                mapped_axes.T,
+                multi_shape,
+            ).astype(np.int32)
+
+            mapped_case_vecs = case_vecs * s1.astype(np.int32)
+            mapped_case_vecs = mapped_case_vecs[:, s2]
+            encoded = np.array(
+                [self.case_encode(case_vec.tolist()) for case_vec in mapped_case_vecs],
+                dtype=np.int64,
+            )
+            mode_case_map[source_mode_index, :] = self.case_indices[encoded]
+
+        return {
+            "mode_qpoint_map": mode_qpoint_map,
+            "mode_case_map": mode_case_map,
+        }
+
+    @memoize_method
+    def _get_fused_invariant_duffy_table_tunit(self):
         from sumpy.assignment_collection import SymbolicAssignmentCollection
         from sumpy.codegen import to_loopy_insns
         from sumpy.symbolic import SympyToPymbolicMapper, make_sym_vector
 
-        dvec = make_sym_vector("dist", self.dim)
+        dvec = make_sym_vector("d", self.dim)
         sac = SymbolicAssignmentCollection()
         result_name = sac.assign_unique(
             "knl_val",
@@ -815,12 +919,12 @@ class NearFieldInteractionTable:
         sac.run_global_cse()
         loopy_insns = to_loopy_insns(
             sac.assignments.items(),
-            vector_names={"dist"},
+            vector_names=set(),
             pymbolic_expr_maps=[self.integral_knl.get_code_transformer()],
             retain_names=[result_name],
             complex_dtype=np.complex128,
         )
-        quad_inames = frozenset(["ientry", "itri", "itheta", "irho"])
+        quad_inames = frozenset(["ientry", "inode"])
         quad_kernel_insns = [
             insn.copy(within_inames=insn.within_inames | quad_inames)
             for insn in loopy_insns
@@ -831,86 +935,531 @@ class NearFieldInteractionTable:
             assignee="knl_scaling",
             expression=sympy_conv(self.integral_knl.get_global_scaling_const()),
             temp_var_type=lp.Optional(),
+            within_inames=frozenset(["ientry", "inode"]),
         )
 
+        setup_lines = ["<> active = 1"]
+        len_terms = []
+        basis_terms = []
+        interp_eps = 8 * np.finfo(self.dtype).eps
+        for iaxis in range(self.dim):
+            len_name = f"len{iaxis}"
+            q_name = f"q{iaxis}"
+            den_name = f"den{iaxis}"
+            basis_name = f"basis{iaxis}"
+            d_name = f"d{iaxis}"
+            pos_name = f"len_pos{iaxis}"
+            tol_name = f"interp_tol{iaxis}"
+            hit_mode_name = f"hit_mode{iaxis}"
+            hit_any_name = f"hit_any{iaxis}"
+            num_name = f"num{iaxis}"
+            setup_lines.extend(
+                [
+                    f"<> {len_name} = if(node_sign[{iaxis}, inode] < 0, decomposition_targets[{iaxis}, ientry], source_box_extent - decomposition_targets[{iaxis}, ientry])",
+                    f"<> {pos_name} = ({len_name} > 0)",
+                    f"active = active and {pos_name}",
+                    f"<> {q_name} = decomposition_targets[{iaxis}, ientry] + node_sign[{iaxis}, inode] * {len_name} * node_u[{iaxis}, inode]",
+                    f"<> {d_name} = if({pos_name}, {q_name} - target_points[{iaxis}, ientry], 1)",
+                ]
+            )
+            if self.quad_order == 1:
+                setup_lines.append(f"<> {basis_name} = 1")
+            else:
+                setup_lines.extend(
+                    [
+                        f"<> {tol_name} = {interp_eps} * source_box_extent",
+                        f"<> {hit_mode_name} = if(abs({q_name} - interp_nodes[mode_i[{iaxis}, ientry]]) < {tol_name}, 1, 0)",
+                        f"<> {hit_any_name} = sum(jq, if(abs({q_name} - interp_nodes[jq]) < {tol_name}, 1, 0))",
+                        f"<> {den_name} = sum(jq, if(abs({q_name} - interp_nodes[jq]) < {tol_name}, 0, bary_w[jq] / ({q_name} - interp_nodes[jq])))",
+                        f"<> {num_name} = if({hit_mode_name}, 0, bary_w[mode_i[{iaxis}, ientry]] / ({q_name} - interp_nodes[mode_i[{iaxis}, ientry]]))",
+                        f"<> {basis_name} = if({hit_any_name} > 0, {hit_mode_name}, {num_name} / {den_name})",
+                    ]
+                )
+            len_terms.append(len_name)
+            basis_terms.append(basis_name)
+
+        quad_w_expr = "node_jac_base[inode]" + "".join(
+            f" * {len_name}" for len_name in len_terms
+        )
+        basis_expr = " * ".join(basis_terms) if basis_terms else "1"
+        setup_body = "\n".join(f"                {line}" for line in setup_lines)
+
         tunit = lp.make_kernel(
-            "{[ientry,itri,itheta,irho,iaxis,jq]: 0<=ientry<n_entries and 0<=itri<n_tri and 0<=itheta<n_theta and 0<=irho<n_rho and 0<=iaxis<dim and 0<=jq<q_order}",
+            "{[ientry,inode,jq]: 0<=ientry<n_entries and 0<=inode<n_nodes and 0<=jq<q_order}",
             [
-                r"""
-            for ientry, itri, itheta, irho
-                <> c2 = cos(theta_nodes[itheta])**2
-                <> s2 = sin(theta_nodes[itheta])**2
-                <> rho = rho_nodes[irho]
-                for iaxis
-                    <> edge1 = tri_v1[iaxis, ientry, itri] - tri_v0[iaxis, ientry, itri]
-                    <> edge2 = tri_v2[iaxis, ientry, itri] - tri_v0[iaxis, ientry, itri]
-                    <> quad_point = tri_v0[iaxis, ientry, itri] + rho*(c2*edge1 + s2*edge2)
-                    <> dist[iaxis] = quad_point - target_points[iaxis, ientry]
-                end
-                <> det = fabs((tri_v1[0, ientry, itri] - tri_v0[0, ientry, itri])*(tri_v2[1, ientry, itri] - tri_v0[1, ientry, itri]) - (tri_v1[1, ientry, itri] - tri_v0[1, ientry, itri])*(tri_v2[0, ientry, itri] - tri_v0[0, ientry, itri]))
-                <> qx = tri_v0[0, ientry, itri] + rho*(c2*(tri_v1[0, ientry, itri] - tri_v0[0, ientry, itri]) + s2*(tri_v2[0, ientry, itri] - tri_v0[0, ientry, itri]))
-                <> qy = tri_v0[1, ientry, itri] + rho*(c2*(tri_v1[1, ientry, itri] - tri_v0[1, ientry, itri]) + s2*(tri_v2[1, ientry, itri] - tri_v0[1, ientry, itri]))
-                <> denx = sum(jq, bary_w[jq] / (qx - interp_nodes[jq]))
-                <> deny = sum(jq, bary_w[jq] / (qy - interp_nodes[jq]))
-                <> basisx = (bary_w[mode_i0[ientry]] / (qx - interp_nodes[mode_i0[ientry]])) / denx
-                <> basisy = (bary_w[mode_i1[ientry]] / (qy - interp_nodes[mode_i1[ientry]])) / deny
-                <> quad_w = theta_weights[itheta] * rho_weights[irho] * det * rho * sin(2*theta_nodes[itheta])
+                f"""
+            for ientry, inode
+{setup_body}
+                <> quad_w = {quad_w_expr}
             end"""
             ]
             + quad_kernel_insns
             + [scaling_assignment]
             + [
-                r"""
-            result[ientry] = sum((itri, itheta, irho), knl_val * knl_scaling * quad_w * basisx * basisy)
+                """
+            result[ientry] = sum(inode, if(active, knl_val * knl_scaling * quad_w * """
+                + basis_expr
+                + """
+                , 0)
+            )
             """
             ],
             [
-                lp.ValueArg("dim,n_entries,n_tri,n_theta,n_rho,q_order", np.int32),
-                lp.GlobalArg("tri_v0", self.dtype, "dim,n_entries,n_tri"),
-                lp.GlobalArg("tri_v1", self.dtype, "dim,n_entries,n_tri"),
-                lp.GlobalArg("tri_v2", self.dtype, "dim,n_entries,n_tri"),
+                lp.ValueArg("dim,n_entries,n_nodes,q_order", np.int32),
+                lp.ValueArg("source_box_extent", self.dtype),
                 lp.GlobalArg("target_points", self.dtype, "dim,n_entries"),
-                lp.GlobalArg("theta_nodes", self.dtype, "n_theta"),
-                lp.GlobalArg("theta_weights", self.dtype, "n_theta"),
-                lp.GlobalArg("rho_nodes", self.dtype, "n_rho"),
-                lp.GlobalArg("rho_weights", self.dtype, "n_rho"),
+                lp.GlobalArg("decomposition_targets", self.dtype, "dim,n_entries"),
+                lp.GlobalArg("node_u", self.dtype, "dim,n_nodes"),
+                lp.GlobalArg("node_sign", self.dtype, "dim,n_nodes"),
+                lp.GlobalArg("node_jac_base", self.dtype, "n_nodes"),
                 lp.GlobalArg("interp_nodes", self.dtype, "q_order"),
                 lp.GlobalArg("bary_w", self.dtype, "q_order"),
-                lp.GlobalArg("mode_i0", np.int32, "n_entries"),
-                lp.GlobalArg("mode_i1", np.int32, "n_entries"),
+                lp.GlobalArg("mode_i", np.int32, "dim,n_entries"),
                 lp.GlobalArg("result", self.dtype, "n_entries", is_output=True),
                 lp.TemporaryVariable("knl_scaling", self.dtype),
             ],
-            name="duffy_invariant_2d_fused_table",
+            name="duffy_invariant_fused_table",
             lang_version=(2018, 2),
         )
         tunit = lp.fix_parameters(tunit, dim=self.dim)
         tunit = lp.set_options(tunit, return_dict=True, no_numpy=True)
-        tunit = lp.split_reduction_outward(tunit, "itheta,irho")
         tunit = lp.split_iname(tunit, "ientry", 64, outer_tag="g.0", inner_tag="l.0")
         tunit = lp.tag_inames(
             tunit,
             {
-                "itri": "unr",
-                "itri": "unr",
-                "iaxis": "unr",
                 "jq": "unr",
             },
         )
         return tunit
 
-    def _get_fused_invariant_duffy_table_2d_program(
-        self, queue, n_entries, n_tri, n_theta, n_rho
-    ):
+    def _get_fused_invariant_duffy_table_program(self, queue, n_entries, n_nodes):
         knl = lp.fix_parameters(
-            self._get_fused_invariant_duffy_table_2d_tunit(),
+            self._get_fused_invariant_duffy_table_tunit(),
             n_entries=n_entries,
-            n_tri=n_tri,
-            n_theta=n_theta,
-            n_rho=n_rho,
+            n_nodes=n_nodes,
             q_order=self.quad_order,
         )
-        return knl.bind_to_context(queue.context)
+        return knl
+
+    @memoize_method
+    def _get_duffy_radial_node_data(
+        self,
+        radial_rule,
+        regular_quad_order,
+        radial_quad_order,
+        mp_dps,
+    ):
+        from itertools import permutations, product
+
+        if self.dim == 1:
+            regular_nodes = np.zeros((1, 0), dtype=self.dtype)
+            regular_weights = np.ones(1, dtype=self.dtype)
+        else:
+            regular_nodes, regular_weights = squad._duffy_regular_nodes_weights(
+                self.dim - 1, regular_quad_order
+            )
+            regular_nodes = np.asarray(regular_nodes, dtype=self.dtype)
+            regular_weights = np.asarray(regular_weights, dtype=self.dtype)
+
+        rho_nodes, rho_weights = squad._duffy_radial_nodes_weights(
+            radial_rule, radial_quad_order, mp_dps
+        )
+        rho_nodes = np.asarray(rho_nodes, dtype=self.dtype)
+        rho_weights = np.asarray(rho_weights, dtype=self.dtype)
+
+        sign_vectors = list(product([-1.0, 1.0], repeat=self.dim))
+        axis_permutations = list(permutations(range(self.dim)))
+
+        n_nodes = (
+            len(sign_vectors)
+            * len(axis_permutations)
+            * len(regular_weights)
+            * len(rho_weights)
+        )
+
+        node_u = np.empty((self.dim, n_nodes), dtype=self.dtype)
+        node_sign = np.empty((self.dim, n_nodes), dtype=self.dtype)
+        node_jac_base = np.empty(n_nodes, dtype=self.dtype)
+
+        inode = 0
+        for signs in sign_vectors:
+            sign_arr = np.asarray(signs, dtype=self.dtype)
+            for perm in axis_permutations:
+                for ireg, w_tail in enumerate(regular_weights):
+                    tail_rs = regular_nodes[ireg] if self.dim > 1 else np.array([])
+                    for rho, w_rho in zip(rho_nodes, rho_weights):
+                        rs = np.empty(self.dim, dtype=self.dtype)
+                        rs[0] = rho
+                        if self.dim > 1:
+                            rs[1:] = tail_rs
+
+                        u = np.empty(self.dim, dtype=self.dtype)
+                        cumulative = 1.0
+                        for i, axis in enumerate(perm):
+                            cumulative *= rs[i]
+                            u[axis] = cumulative
+
+                        jac_base = 1.0
+                        for i in range(self.dim - 1):
+                            jac_base *= rs[i] ** (self.dim - 1 - i)
+                        jac_base = jac_base * w_tail * w_rho
+
+                        node_u[:, inode] = u
+                        node_sign[:, inode] = sign_arr
+                        node_jac_base[inode] = jac_base
+                        inode += 1
+
+        return {
+            "n_nodes": n_nodes,
+            "node_u": node_u,
+            "node_sign": node_sign,
+            "node_jac_base": node_jac_base,
+        }
+
+    def _default_duffy_order_candidates(self):
+        if self.dim == 1:
+            return [(2, 11), (2, 21), (2, 31), (2, 41)]
+        if self.dim in (2, 3):
+            return [(4, 11), (4, 21), (6, 21), (6, 31), (8, 31), (10, 41), (12, 61)]
+        raise NotImplementedError(
+            "Duffy order auto-tuning currently supports dimensions 1-3"
+        )
+
+    def _duffy_autotune_sample_entry_ids(self, sample_count):
+        invariant_entry_ids = np.asarray(
+            self._get_invariant_entry_info()["entry_ids"], dtype=np.int64
+        )
+        if invariant_entry_ids.size == 0:
+            return []
+
+        sample_count = max(1, int(sample_count))
+        if sample_count >= invariant_entry_ids.size:
+            idx = np.arange(invariant_entry_ids.size, dtype=np.int64)
+        else:
+            idx = np.linspace(
+                0, invariant_entry_ids.size - 1, num=sample_count, dtype=np.int64
+            )
+            idx = np.unique(idx)
+
+        return [int(invariant_entry_ids[i]) for i in idx]
+
+    def _batched_duffy_values_for_local_indices(
+        self,
+        queue,
+        invariant_info,
+        local_entry_indices,
+        radial_rule,
+        regular_quad_order,
+        radial_quad_order,
+        mp_dps,
+    ):
+        local_entry_indices = np.asarray(local_entry_indices, dtype=np.int64)
+        n_entries = int(local_entry_indices.size)
+        if n_entries == 0:
+            return np.empty(0, dtype=self.dtype)
+
+        node_data = self._get_duffy_radial_node_data(
+            radial_rule,
+            regular_quad_order,
+            radial_quad_order,
+            mp_dps,
+        )
+        n_nodes = node_data["n_nodes"]
+
+        all_target_points = self._get_case_target_points()
+
+        mode_axes = invariant_info["mode_axes"][local_entry_indices]
+        mode_i = np.ascontiguousarray(mode_axes.T, dtype=np.int32)
+
+        case_indices = invariant_info["case_indices"][local_entry_indices]
+        target_point_indices = invariant_info["target_point_indices"][
+            local_entry_indices
+        ]
+
+        target_points = np.ascontiguousarray(
+            all_target_points[:, case_indices, target_point_indices], dtype=self.dtype
+        )
+        decomposition_targets = np.ascontiguousarray(
+            np.clip(target_points, 0.0, self.source_box_extent), dtype=self.dtype
+        )
+
+        xi, bw = self._get_barycentric_data()
+        prg = self._get_fused_invariant_duffy_table_program(queue, n_entries, n_nodes)
+
+        queue_is_cl = isinstance(queue, cl.CommandQueue)
+        if queue_is_cl:
+            import pyopencl.array as cla
+
+            target_points_arg = cla.to_device(
+                queue, np.ascontiguousarray(target_points, dtype=self.dtype)
+            )
+            decomposition_targets_arg = cla.to_device(
+                queue, np.ascontiguousarray(decomposition_targets, dtype=self.dtype)
+            )
+            node_u_arg = cla.to_device(
+                queue, np.ascontiguousarray(node_data["node_u"], dtype=self.dtype)
+            )
+            node_sign_arg = cla.to_device(
+                queue, np.ascontiguousarray(node_data["node_sign"], dtype=self.dtype)
+            )
+            node_jac_base_arg = cla.to_device(
+                queue,
+                np.ascontiguousarray(node_data["node_jac_base"], dtype=self.dtype),
+            )
+            xi_arg = cla.to_device(queue, np.ascontiguousarray(xi, dtype=self.dtype))
+            bw_arg = cla.to_device(queue, np.ascontiguousarray(bw, dtype=self.dtype))
+            mode_i_arg = cla.to_device(queue, mode_i)
+        else:
+            target_points_arg = np.ascontiguousarray(target_points, dtype=self.dtype)
+            decomposition_targets_arg = np.ascontiguousarray(
+                decomposition_targets, dtype=self.dtype
+            )
+            node_u_arg = np.ascontiguousarray(node_data["node_u"], dtype=self.dtype)
+            node_sign_arg = np.ascontiguousarray(
+                node_data["node_sign"], dtype=self.dtype
+            )
+            node_jac_base_arg = np.ascontiguousarray(
+                node_data["node_jac_base"], dtype=self.dtype
+            )
+            xi_arg = np.ascontiguousarray(xi, dtype=self.dtype)
+            bw_arg = np.ascontiguousarray(bw, dtype=self.dtype)
+            mode_i_arg = mode_i
+
+        _, res = prg(
+            queue,
+            source_box_extent=self.dtype(self.source_box_extent),
+            target_points=target_points_arg,
+            decomposition_targets=decomposition_targets_arg,
+            node_u=node_u_arg,
+            node_sign=node_sign_arg,
+            node_jac_base=node_jac_base_arg,
+            interp_nodes=xi_arg,
+            bary_w=bw_arg,
+            mode_i=mode_i_arg,
+        )
+
+        result = res["result"]
+        if hasattr(result, "get"):
+            result = result.get()
+        return np.ascontiguousarray(result, dtype=self.dtype)
+
+    def _auto_tune_duffy_radial_orders(
+        self,
+        radial_rule,
+        mp_dps,
+        queue=None,
+        sample_count=5,
+        candidates=None,
+        floor_factor=8.0,
+    ):
+        if radial_rule == "adaptive":
+            raise ValueError(
+                "Duffy order auto-tuning is only available for fixed radial rules"
+            )
+
+        if candidates is None:
+            candidates = self._default_duffy_order_candidates()
+        candidates = [tuple(int(x) for x in pair) for pair in candidates]
+        if not candidates:
+            raise ValueError("Duffy order auto-tuning candidate list cannot be empty")
+
+        sample_entry_ids = self._duffy_autotune_sample_entry_ids(sample_count)
+        if not sample_entry_ids:
+            selected_regular, selected_radial = candidates[0]
+            info = {
+                "auto_tuned": True,
+                "selected_regular_quad_order": selected_regular,
+                "selected_radial_quad_order": selected_radial,
+                "sample_entry_ids": [],
+                "candidates": candidates,
+                "relative_errors_vs_best": [0.0 for _ in candidates],
+                "floor_estimate": 0.0,
+                "acceptance_threshold": 0.0,
+            }
+            self.last_duffy_order_selection = info
+            return selected_regular, selected_radial, info
+
+        use_batched_eval = (
+            isinstance(queue, cl.CommandQueue)
+            and self.dim in (1, 2, 3)
+            and self.integral_knl is not None
+            and radial_rule in {"tanh-sinh-fast", "tanh-sinh"}
+        )
+
+        invariant_info = None
+        sample_local_indices = None
+        if use_batched_eval:
+            invariant_info = self._get_invariant_entry_info()
+            entry_to_local_index = {
+                int(entry_id): i
+                for i, entry_id in enumerate(invariant_info["entry_ids"])
+            }
+            sample_local_indices = np.asarray(
+                [entry_to_local_index[entry_id] for entry_id in sample_entry_ids],
+                dtype=np.int64,
+            )
+
+        candidate_values = []
+        for regular_quad_order, radial_quad_order in candidates:
+            if use_batched_eval:
+                values = self._batched_duffy_values_for_local_indices(
+                    queue,
+                    invariant_info,
+                    sample_local_indices,
+                    radial_rule,
+                    regular_quad_order,
+                    radial_quad_order,
+                    mp_dps,
+                )
+            else:
+                values = []
+                for entry_id in sample_entry_ids:
+                    _, value = self.compute_table_entry_duffy_radial(
+                        entry_id,
+                        radial_rule=radial_rule,
+                        deg_theta=regular_quad_order,
+                        radial_quad_order=radial_quad_order,
+                        mp_dps=mp_dps,
+                    )
+                    values.append(value)
+                values = np.asarray(values)
+
+            if np.iscomplexobj(values):
+                values = values.astype(np.complex128)
+            else:
+                values = values.astype(np.float64)
+            candidate_values.append(values)
+
+        reference_values = candidate_values[-1]
+        rel_errors = []
+        for values in candidate_values:
+            denom = np.maximum(1.0, np.abs(reference_values))
+            rel_errors.append(float(np.max(np.abs(values - reference_values) / denom)))
+
+        floor_estimate = 0.0
+        if len(rel_errors) > 2:
+            tail_errors = np.asarray(
+                rel_errors[max(0, len(rel_errors) - 4) : -1],
+                dtype=np.float64,
+            )
+            positive_tail_errors = tail_errors[tail_errors > 0]
+            if positive_tail_errors.size >= 2:
+                floor_estimate = float(np.min(positive_tail_errors))
+
+        min_floor = 128.0 * np.finfo(np.float64).eps
+        floor_estimate = max(floor_estimate, min_floor)
+        acceptance_threshold = float(floor_factor) * floor_estimate
+
+        selected_index = len(candidates) - 1
+        for i, err in enumerate(rel_errors):
+            if err <= acceptance_threshold:
+                selected_index = i
+                break
+
+        selected_regular, selected_radial = candidates[selected_index]
+        info = {
+            "auto_tuned": True,
+            "selected_regular_quad_order": selected_regular,
+            "selected_radial_quad_order": selected_radial,
+            "sample_entry_ids": sample_entry_ids,
+            "candidates": candidates,
+            "relative_errors_vs_best": rel_errors,
+            "floor_estimate": floor_estimate,
+            "acceptance_threshold": acceptance_threshold,
+        }
+        self.last_duffy_order_selection = info
+        logger.info(
+            "Auto-tuned Duffy orders (dim=%d): regular=%d radial=%d "
+            "threshold=%.3e floor=%.3e",
+            self.dim,
+            selected_regular,
+            selected_radial,
+            acceptance_threshold,
+            floor_estimate,
+        )
+        return selected_regular, selected_radial, info
+
+    def build_table_via_duffy_radial_batched(
+        self,
+        queue,
+        radial_rule="tanh-sinh-fast",
+        deg_theta=20,
+        radial_quad_order=61,
+        mp_dps=50,
+    ):
+        t_total_start = time.perf_counter()
+
+        if self.dim not in (1, 2, 3):
+            raise NotImplementedError(
+                "batched DuffyRadial path currently supports dimensions 1-3"
+            )
+        if self.integral_knl is None:
+            raise ValueError("batched DuffyRadial path requires integral_knl")
+        if radial_rule == "adaptive":
+            raise ValueError("batched DuffyRadial path does not support adaptive rule")
+
+        t_invariant_start = time.perf_counter()
+        invariant_info = self._get_invariant_entry_info()
+        t_invariant_end = time.perf_counter()
+        invariant_entry_ids = invariant_info["entry_ids"]
+        n_entries = len(invariant_entry_ids)
+
+        if n_entries == 0:
+            self.is_built = True
+            self._progress_step(_DUFFY_PROGRESS_STAGES)
+            t_total_end = time.perf_counter()
+            self.last_duffy_build_timings = {
+                "invariant_info_s": t_invariant_end - t_invariant_start,
+                "quadrature_s": 0.0,
+                "scatter_s": 0.0,
+                "total_s": t_total_end - t_total_start,
+                "n_entries": 0,
+            }
+            return
+
+        local_entry_indices = np.arange(n_entries, dtype=np.int64)
+        t_quadrature_start = time.perf_counter()
+        table_host = self._batched_duffy_values_for_local_indices(
+            queue,
+            invariant_info,
+            local_entry_indices,
+            radial_rule,
+            deg_theta,
+            radial_quad_order,
+            mp_dps,
+        )
+        t_quadrature_end = time.perf_counter()
+        self._progress_step()
+
+        t_scatter_start = time.perf_counter()
+        for ientry, entry_id in enumerate(invariant_entry_ids):
+            self.data[entry_id] = table_host[ientry]
+        t_scatter_end = time.perf_counter()
+        self._progress_step()
+
+        t_symmetry_fill_start = time.perf_counter()
+        for entry_id in range(len(self.data)):
+            _, centry_id = self.lookup_by_symmetry(entry_id)
+            if np.isnan(self.data[centry_id]):
+                continue
+            if centry_id == entry_id:
+                continue
+            self.data[entry_id] = self.data[centry_id]
+        t_symmetry_fill_end = time.perf_counter()
+        self._progress_step()
+
+        self.table_data_is_symmetry_reduced = bool(np.any(np.isnan(self.data)))
+        self.is_built = True
+
+        t_total_end = time.perf_counter()
+        self.last_duffy_build_timings = {
+            "invariant_info_s": t_invariant_end - t_invariant_start,
+            "quadrature_s": t_quadrature_end - t_quadrature_start,
+            "scatter_s": t_scatter_end - t_scatter_start,
+            "symmetry_fill_s": t_symmetry_fill_end - t_symmetry_fill_start,
+            "total_s": t_total_end - t_total_start,
+            "n_entries": int(n_entries),
+        }
 
     def build_table_via_duffy_radial_batched_2d(
         self,
@@ -920,83 +1469,15 @@ class NearFieldInteractionTable:
         radial_quad_order=61,
         mp_dps=50,
     ):
-        assert self.dim == 2
-        if self.integral_knl is None:
-            raise ValueError("batched DuffyRadial path requires integral_knl")
-        import scipy.special as sp
-
-        th_nodes, th_weights = sp.p_roots(deg_theta)
-        th_nodes = 0.25 * np.pi * (th_nodes + 1.0)
-        th_weights = 0.25 * np.pi * th_weights
-        rho_nodes, rho_weights = squad._duffy_radial_nodes_weights(
-            radial_rule, radial_quad_order, mp_dps
-        )
-
-        invariant_info = self._get_invariant_entry_info()
-        invariant_entry_ids = invariant_info["entry_ids"]
-        n_entries = len(invariant_entry_ids)
-        n_tri = 4
-        n_theta = len(th_nodes)
-        n_rho = len(rho_nodes)
-
-        all_target_points = self._get_case_target_points()
-        target_points = np.empty((self.dim, n_entries), dtype=self.dtype)
-        tri_v0 = np.empty((self.dim, n_entries, n_tri), dtype=self.dtype)
-        tri_v1 = np.empty((self.dim, n_entries, n_tri), dtype=self.dtype)
-        tri_v2 = np.empty((self.dim, n_entries, n_tri), dtype=self.dtype)
-        mode_axes = invariant_info["mode_axes"]
-        box = np.array(
-            [
-                [0.0, 0.0],
-                [self.source_box_extent, 0.0],
-                [self.source_box_extent, self.source_box_extent],
-                [0.0, self.source_box_extent],
-            ],
-            dtype=self.dtype,
-        )
-        for ientry, (case_index, tid) in enumerate(
-            zip(invariant_info["case_indices"], invariant_info["target_point_indices"])
-        ):
-            target = all_target_points[:, case_index, tid]
-            decomposition_target = np.clip(target, 0.0, self.source_box_extent)
-            target_points[:, ientry] = target
-            tris = [
-                (decomposition_target, box[0], box[1]),
-                (decomposition_target, box[1], box[2]),
-                (decomposition_target, box[2], box[3]),
-                (decomposition_target, box[3], box[0]),
-            ]
-            for itri, (v0, v1, v2) in enumerate(tris):
-                tri_v0[:, ientry, itri] = v0
-                tri_v1[:, ientry, itri] = v1
-                tri_v2[:, ientry, itri] = v2
-
-        xi, bw = self._get_barycentric_data()
-        prg = self._get_fused_invariant_duffy_table_2d_program(
-            queue, n_entries, n_tri, n_theta, n_rho
-        )
-        evt, res = prg(
+        if self.dim != 2:
+            raise ValueError("build_table_via_duffy_radial_batched_2d requires dim=2")
+        return self.build_table_via_duffy_radial_batched(
             queue,
-            tri_v0=tri_v0,
-            tri_v1=tri_v1,
-            tri_v2=tri_v2,
-            target_points=target_points,
-            theta_nodes=th_nodes.astype(self.dtype),
-            theta_weights=th_weights.astype(self.dtype),
-            rho_nodes=rho_nodes.astype(self.dtype),
-            rho_weights=rho_weights.astype(self.dtype),
-            interp_nodes=xi,
-            bary_w=bw,
-            mode_i0=mode_axes[:, 0],
-            mode_i1=mode_axes[:, 1],
+            radial_rule=radial_rule,
+            deg_theta=deg_theta,
+            radial_quad_order=radial_quad_order,
+            mp_dps=mp_dps,
         )
-        table_host = res["result"].get()
-        for ientry, entry_id in enumerate(invariant_entry_ids):
-            self.data[entry_id] = table_host[ientry]
-        for entry_id in range(len(self.data)):
-            _, centry_id = self.lookup_by_symmetry(entry_id)
-            self.data[entry_id] = self.data[centry_id]
-        self.is_built = True
 
     def compute_nmlz(self, mode_id):
         mode_func = self.get_mode(mode_id)
@@ -1018,12 +1499,44 @@ class NearFieldInteractionTable:
             logger.debug("Normalizer %d quad error is %e" % (mode_id, err))
         return (mode_id, nmlz)
 
+    def _build_normalizer_table_fast_gauss_legendre(self, pb=None):
+        if self.dim != 2:
+            return False
+
+        ref_nodes, ref_weights = np.polynomial.legendre.leggauss(self.quad_order)
+        expected_nodes = 0.5 * self.source_box_extent * (ref_nodes + 1.0)
+
+        # Mode construction assumes these are the 1D interpolation nodes in
+        # ascending order. If this assumption is violated, use the generic
+        # integration fallback.
+        axis_nodes = np.array(
+            [p[self.dim - 1] for p in self.q_points[: self.quad_order]],
+            dtype=np.float64,
+        )
+        node_tol = 1024 * np.finfo(np.float64).eps * max(1.0, self.source_box_extent)
+        if not np.allclose(axis_nodes, expected_nodes, atol=node_tol, rtol=0.0):
+            return False
+
+        axis_weights = (0.5 * self.source_box_extent * ref_weights).astype(self.dtype)
+        self.mode_normalizers[:] = np.multiply.outer(
+            axis_weights, axis_weights
+        ).reshape(-1)
+
+        if pb is not None:
+            pb.progress(self.n_q_points)
+
+        return True
+
     def build_normalizer_table(self, pool=None, pb=None):
         """
         Build normalizers, used for log-scaled kernels,
         currently only supported in 2D.
         """
         assert self.dim == 2
+
+        if self._build_normalizer_table_fast_gauss_legendre(pb=pb):
+            return
+
         if 0:
             # FIXME: make everything needed for compute_nmlz picklable
             if pool is None:
@@ -1044,77 +1557,138 @@ class NearFieldInteractionTable:
                 if pb is not None:
                     pb.progress(1)
 
-    def build_table_via_transform(self):
-        """
-        Build the full data table using transforms to
-        remove the singularity.
-        """
-        assert self.dim == 2
+    def _progress_step(self, nsteps=1):
+        if self.pb is not None and nsteps > 0:
+            self.pb.progress(nsteps)
 
-        if 0:
-            # FIXME: make everything needed for compute_nmlz picklable
-            # multiprocessing cannot handle member functions
-            from multiprocessing import Pool
+    def _make_duffy_build_config(
+        self,
+        radial_rule,
+        regular_quad_order,
+        radial_quad_order,
+        mp_dps,
+        auto_tune_orders,
+        auto_tune_samples,
+        auto_tune_floor_factor,
+        auto_tune_candidates,
+        kwargs,
+    ):
+        legacy_kwargs = dict(kwargs)
+        if "deg_theta" in legacy_kwargs:
+            legacy_deg_theta = legacy_kwargs.pop("deg_theta")
+            if legacy_deg_theta is not None:
+                regular_quad_order = legacy_deg_theta
 
-            pool = Pool(processes=None)
+        return DuffyBuildConfig(
+            radial_rule=radial_rule,
+            regular_quad_order=regular_quad_order,
+            radial_quad_order=radial_quad_order,
+            mp_dps=mp_dps,
+            auto_tune_orders=auto_tune_orders,
+            auto_tune_samples=auto_tune_samples,
+            auto_tune_floor_factor=auto_tune_floor_factor,
+            auto_tune_candidates=auto_tune_candidates,
+        )
+
+    def _resolve_duffy_build_config(self, build_config, queue):
+        regular_quad_order = build_config.regular_quad_order
+        radial_quad_order = build_config.radial_quad_order
+
+        auto_requested = (
+            build_config.auto_tune_orders
+            or _is_auto_quad_order(regular_quad_order)
+            or _is_auto_quad_order(radial_quad_order)
+        )
+        if auto_requested:
+            tuned_regular, tuned_radial, _ = self._auto_tune_duffy_radial_orders(
+                radial_rule=build_config.radial_rule,
+                mp_dps=build_config.mp_dps,
+                queue=queue,
+                sample_count=build_config.auto_tune_samples,
+                candidates=build_config.auto_tune_candidates,
+                floor_factor=build_config.auto_tune_floor_factor,
+            )
+            if build_config.auto_tune_orders or _is_auto_quad_order(regular_quad_order):
+                regular_quad_order = tuned_regular
+            else:
+                regular_quad_order = int(regular_quad_order)
+
+            if build_config.auto_tune_orders or _is_auto_quad_order(radial_quad_order):
+                radial_quad_order = tuned_radial
+            else:
+                radial_quad_order = int(radial_quad_order)
         else:
-            pool = None
+            regular_quad_order = int(regular_quad_order)
+            radial_quad_order = int(radial_quad_order)
+            self.last_duffy_order_selection = {
+                "auto_tuned": False,
+                "selected_regular_quad_order": regular_quad_order,
+                "selected_radial_quad_order": radial_quad_order,
+            }
 
-        if self.pb is not None:
-            self.pb.draw()
+        return DuffyBuildConfig(
+            radial_rule=build_config.radial_rule,
+            regular_quad_order=regular_quad_order,
+            radial_quad_order=radial_quad_order,
+            mp_dps=build_config.mp_dps,
+            auto_tune_orders=build_config.auto_tune_orders,
+            auto_tune_samples=build_config.auto_tune_samples,
+            auto_tune_floor_factor=build_config.auto_tune_floor_factor,
+            auto_tune_candidates=build_config.auto_tune_candidates,
+        )
 
-        self.build_normalizer_table(pool, pb=self.pb)
-        self.has_normalizers = True
+    def _build_table_via_duffy_radial_scalar(
+        self,
+        radial_rule,
+        deg_theta,
+        radial_quad_order,
+        mp_dps,
+    ):
+        t_total_start = time.perf_counter()
 
-        # First compute entries that are invariant under
-        # symmetry lookup
+        t_invariant_start = time.perf_counter()
         invariant_entry_ids = [
             i for i in range(len(self.data)) if self.lookup_by_symmetry(i) == (i, i)
         ]
+        t_invariant_end = time.perf_counter()
+        self._progress_step()
 
-        if 0:
-            # multiprocess disabled to remove dependency on dill/multiprocess
-            for entry_id, entry_val in pool.imap_unordered(
-                self.compute_table_entry, invariant_entry_ids
-            ):
-                self.data[entry_id] = entry_val
-                if self.pb is not None:
-                    self.pb.progress(1)
-        else:
-            for entry_id in invariant_entry_ids:
-                _, entry_val = self.compute_table_entry(entry_id)
-                self.data[entry_id] = entry_val
-                if self.pb is not None:
-                    self.pb.progress(1)
+        t_quadrature_start = time.perf_counter()
+        for entry_id in invariant_entry_ids:
+            _, entry_val = self.compute_table_entry_duffy_radial(
+                entry_id,
+                radial_rule=radial_rule,
+                deg_theta=deg_theta,
+                radial_quad_order=radial_quad_order,
+                mp_dps=mp_dps,
+            )
+            self.data[entry_id] = entry_val
+        t_quadrature_end = time.perf_counter()
+        self._progress_step()
 
-        if 0:
-            # Then complete the table via symmetry lookup
-            for entry_id, centry_id in pool.imap_unordered(
-                self.lookup_by_symmetry, range(len(self.data))
-            ):
-                assert not np.isnan(self.data[centry_id])
-                if centry_id == entry_id:
-                    continue
-                self.data[entry_id] = self.data[centry_id]
-                if self.pb is not None:
-                    self.pb.progress(1)
-        else:
-            for entry_id in range(len(self.data)):
-                _, centry_id = self.lookup_by_symmetry(entry_id)
-                assert not np.isnan(self.data[centry_id])
-                if centry_id == entry_id:
-                    continue
-                self.data[entry_id] = self.data[centry_id]
-                if self.pb is not None:
-                    self.pb.progress(1)
+        t_symmetry_fill_start = time.perf_counter()
+        for entry_id in range(len(self.data)):
+            _, centry_id = self.lookup_by_symmetry(entry_id)
+            if np.isnan(self.data[centry_id]):
+                raise RuntimeError(
+                    "scalar DuffyRadial build left unresolved symmetric entries"
+                )
+            self.data[entry_id] = self.data[centry_id]
+        t_symmetry_fill_end = time.perf_counter()
+        self._progress_step()
 
-        if self.pb is not None:
-            self.pb.finished()
-
-        for entry in self.data:
-            assert not np.isnan(entry)
-
+        self.table_data_is_symmetry_reduced = bool(np.isnan(self.data).any())
         self.is_built = True
+
+        t_total_end = time.perf_counter()
+        self.last_duffy_build_timings = {
+            "invariant_info_s": t_invariant_end - t_invariant_start,
+            "quadrature_s": t_quadrature_end - t_quadrature_start,
+            "scatter_s": 0.0,
+            "symmetry_fill_s": t_symmetry_fill_end - t_symmetry_fill_start,
+            "total_s": t_total_end - t_total_start,
+            "n_entries": int(len(invariant_entry_ids)),
+        }
 
     def build_table_via_duffy_radial(
         self,
@@ -1123,411 +1697,127 @@ class NearFieldInteractionTable:
         radial_quad_order=61,
         mp_dps=50,
         queue=None,
-        **kwargs,
-    ):
-        if "deg_theta" in kwargs:
-            legacy_deg_theta = kwargs.pop("deg_theta")
-            if legacy_deg_theta is not None:
-                regular_quad_order = legacy_deg_theta
-
-        if self.pb is not None:
-            self.pb.draw()
-
-        if self.dim == 2:
-            self.build_normalizer_table(pb=self.pb)
-            self.has_normalizers = True
-        else:
-            self.has_normalizers = False
-
-        if (
-            self.dim == 2
-            and queue is not None
-            and self.integral_knl is not None
-            and radial_rule in {"tanh-sinh-fast", "tanh-sinh"}
-        ):
-            logger.warning("Using batched GPU-backed 2D DuffyRadial table builder")
-            return_value = self.build_table_via_duffy_radial_batched_2d(
-                queue,
-                radial_rule=radial_rule,
-                deg_theta=regular_quad_order,
-                radial_quad_order=radial_quad_order,
-                mp_dps=mp_dps,
-            )
-            if self.pb is not None:
-                self.pb.finished()
-            return return_value
-
-        invariant_entry_ids = [
-            i for i in range(len(self.data)) if self.lookup_by_symmetry(i) == (i, i)
-        ]
-
-        for entry_id in invariant_entry_ids:
-            _, entry_val = self.compute_table_entry_duffy_radial(
-                entry_id,
-                radial_rule=radial_rule,
-                deg_theta=regular_quad_order,
-                radial_quad_order=radial_quad_order,
-                mp_dps=mp_dps,
-            )
-            self.data[entry_id] = entry_val
-            if self.pb is not None:
-                self.pb.progress(1)
-
-        for entry_id in range(len(self.data)):
-            _, centry_id = self.lookup_by_symmetry(entry_id)
-            assert not np.isnan(self.data[centry_id])
-            if centry_id == entry_id:
-                continue
-            self.data[entry_id] = self.data[centry_id]
-            if self.pb is not None:
-                self.pb.progress(1)
-
-        if self.pb is not None:
-            self.pb.finished()
-
-        for entry in self.data:
-            assert not np.isnan(entry)
-
-        self.is_built = True
-
-    # }}} End build table via transform
-
-    # {{{ build table via adding up a Droste of bricks
-
-    def get_droste_table_builder(
-        self,
-        n_brick_quad_points,
-        special_radial_brick_quadrature,
-        nradial_brick_quad_points,
-        use_symmetry=False,
-        knl_symmetry_tags=None,
-    ):
-        if self.inverse_droste:
-            from volumential.droste import InverseDrosteReduced
-
-            drf = InverseDrosteReduced(
-                self.integral_knl,
-                self.quad_order,
-                self.interaction_case_vecs,
-                n_brick_quad_points,
-                knl_symmetry_tags,
-                auto_windowing=False,
-                special_radial_quadrature=special_radial_brick_quadrature,
-                nradial_quad_points=nradial_brick_quad_points,
-            )
-
-        else:
-            if not use_symmetry:
-                from volumential.droste import DrosteFull
-
-                drf = DrosteFull(
-                    self.integral_knl,
-                    self.quad_order,
-                    self.interaction_case_vecs,
-                    n_brick_quad_points,
-                    special_radial_quadrature=special_radial_brick_quadrature,
-                    nradial_quad_points=nradial_brick_quad_points,
-                )
-            else:
-                from volumential.droste import DrosteReduced
-
-                drf = DrosteReduced(
-                    self.integral_knl,
-                    self.quad_order,
-                    self.interaction_case_vecs,
-                    n_brick_quad_points,
-                    knl_symmetry_tags,
-                    special_radial_quadrature=special_radial_brick_quadrature,
-                    nradial_quad_points=nradial_brick_quad_points,
-                )
-        return drf
-
-    def build_table_via_droste_bricks(
-        self,
-        n_brick_quad_points=50,
-        alpha=0,
         cl_ctx=None,
-        queue=None,
-        adaptive_level=True,
-        adaptive_quadrature=True,
-        use_symmetry=False,
+        build_config=None,
+        auto_tune_orders=False,
+        auto_tune_samples=5,
+        auto_tune_floor_factor=8.0,
+        auto_tune_candidates=None,
         **kwargs,
     ):
-        if self.dim in (2, 3) and not self.inverse_droste:
-            radial_rule = kwargs.pop("radial_rule", "tanh-sinh-fast")
-            default_regular_quad_order = 20 if self.dim == 2 else 6
-            regular_quad_order = kwargs.pop(
-                "regular_quad_order",
-                max(
-                    default_regular_quad_order,
-                    n_brick_quad_points // (2 if self.dim == 2 else 8),
-                ),
-            )
-            if "deg_theta" in kwargs:
-                legacy_deg_theta = kwargs.pop("deg_theta")
-                if legacy_deg_theta is not None:
-                    regular_quad_order = legacy_deg_theta
-            radial_quad_order = kwargs.pop(
-                "radial_quad_order",
-                max(
-                    31 if self.dim == 2 else 21,
-                    n_brick_quad_points // (1 if self.dim == 2 else 2),
-                ),
-            )
-            mp_dps = kwargs.pop("mp_dps", 50)
-            logger.warning(
-                "Routing %dD DrosteSum build to DuffyRadial with radial_rule=%s",
-                self.dim,
-                radial_rule,
-            )
-            return self.build_table_via_duffy_radial(
-                queue=queue,
+        if build_config is None:
+            build_config = self._make_duffy_build_config(
                 radial_rule=radial_rule,
                 regular_quad_order=regular_quad_order,
                 radial_quad_order=radial_quad_order,
                 mp_dps=mp_dps,
-                **kwargs,
+                auto_tune_orders=auto_tune_orders,
+                auto_tune_samples=auto_tune_samples,
+                auto_tune_floor_factor=auto_tune_floor_factor,
+                auto_tune_candidates=auto_tune_candidates,
+                kwargs=kwargs,
             )
-
-        if queue is None:
-            import pyopencl as cl
-
-            cl_ctx = cl.create_some_context(interactive=True)
-            queue = cl.CommandQueue(cl_ctx)
-
-        assert alpha >= 0 and alpha < 1
-        if "nlevels" in kwargs:
-            nlev = kwargs.pop("nlevels")
         else:
-            nlev = 1
-
-        if "special_radial_brick_quadrature" in kwargs:
-            special_radial_brick_quadrature = kwargs.pop(
-                "special_radial_brick_quadrature"
-            )
-            nradial_brick_quad_points = kwargs.pop("nradial_brick_quad_points")
-        else:
-            special_radial_brick_quadrature = False
-            nradial_brick_quad_points = None
-
-        if use_symmetry:
-            if "knl_symmetry_tags" in kwargs:
-                knl_symmetry_tags = kwargs["knl_symmetry_tags"]
-            else:
-                # Maximum symmetry by default
-                logger.warn(
-                    "use_symmetry is set to True, but knl_symmetry_tags is not "
-                    "set. Using the default maximum symmetry. (Using maximum "
-                    "symmetry for some kernels (e.g. derivatives of "
-                    "LaplaceKernel will yield incorrect results)."
+            if not isinstance(build_config, DuffyBuildConfig):
+                raise TypeError("build_config must be a DuffyBuildConfig")
+            if kwargs:
+                build_config = self._make_duffy_build_config(
+                    radial_rule=build_config.radial_rule,
+                    regular_quad_order=build_config.regular_quad_order,
+                    radial_quad_order=build_config.radial_quad_order,
+                    mp_dps=build_config.mp_dps,
+                    auto_tune_orders=build_config.auto_tune_orders,
+                    auto_tune_samples=build_config.auto_tune_samples,
+                    auto_tune_floor_factor=build_config.auto_tune_floor_factor,
+                    auto_tune_candidates=build_config.auto_tune_candidates,
+                    kwargs=kwargs,
                 )
-                knl_symmetry_tags = None
+        build_config = self._resolve_duffy_build_config(build_config, queue=queue)
 
-        # extra_kernel_kwargs = {}
-        # if "extra_kernel_kwargs" in kwargs:
-        #     extra_kernel_kwargs = kwargs["extra_kernel_kwargs"]
+        if self.pb is not None:
+            self.pb.draw()
 
-        cheb_coefs = [
-            self.get_mode_cheb_coeffs(mid, self.quad_order)
-            for mid in range(self.n_q_points)
-        ]
-
-        # compute an initial table
-        drf = self.get_droste_table_builder(
-            n_brick_quad_points,
-            special_radial_brick_quadrature,
-            nradial_brick_quad_points,
-            use_symmetry,
-            knl_symmetry_tags,
-        )
-        data0 = drf(
-            queue,
-            source_box_extent=self.source_box_extent,
-            alpha=alpha,
-            nlevels=nlev,
-            # extra_kernel_kwargs=extra_kernel_kwargs,
-            cheb_coefs=cheb_coefs,
-            **kwargs,
-        )
-
-        # {{{ adaptively determine number of levels
-
-        resid = -1
-        missing_measure = 1
-        if adaptive_level:
-            table_tol = np.finfo(self.dtype).eps * 256  # 5e-14 for float64
-            logger.warn("Searching for nlevels since adaptive_level=True")
-
-            while True:
-                missing_measure = (alpha**nlev * self.source_box_extent) ** self.dim
-                if missing_measure < np.finfo(self.dtype).eps * 128:
-                    logger.warn(
-                        "Adaptive level refinement terminated "
-                        "at %d since missing measure is minuscule "
-                        "(%e)" % (nlev, missing_measure)
-                    )
-                    break
-
-                nlev = nlev + 1
-                data1 = drf(
-                    queue,
-                    source_box_extent=self.source_box_extent,
-                    alpha=alpha,
-                    nlevels=nlev,
-                    # extra_kernel_kwargs=extra_kernel_kwargs,
-                    cheb_coefs=cheb_coefs,
-                    **kwargs,
-                )
-
-                resid = np.max(np.abs(data1 - data0)) / np.max(np.abs(data1))
-                data0 = data1
-
-                if abs(resid) < table_tol:
-                    logger.warn(
-                        "Adaptive level refinement "
-                        "converged at level %d with residual %e" % (nlev - 1, resid)
-                    )
-                    break
-
-                if np.isnan(resid):
-                    logger.warn(
-                        "Adaptive level refinement terminated "
-                        "at %d before converging due to NaNs" % nlev
-                    )
-                    break
-
-            if resid >= table_tol:
-                logger.warn("Adaptive level refinement failed to converge.")
-                logger.warn(f"Residual at level {nlev} equals to {resid}")
-
-        # }}} End adaptively determine number of levels
-
-        # {{{ adaptively determine brick quad order
-
-        if adaptive_quadrature:
-            table_tol = np.finfo(self.dtype).eps * 256  # 5e-14 for float64
-            logger.warn(
-                "Searching for n_brick_quad_points since "
-                "adaptive_quadrature=True. Note that if you are using "
-                "special radial quadrature, the radial order will also be "
-                "adaptively refined."
-            )
-
-            max_n_quad_pts = 1000
-            resid = np.inf
-
-            while True:
-                n_brick_quad_points += max(int(n_brick_quad_points * 0.2), 3)
-                if special_radial_brick_quadrature:
-                    nradial_brick_quad_points += max(
-                        int(nradial_brick_quad_points * 0.2), 3
-                    )
-                    logger.warn(
-                        f"Trying n_brick_quad_points = {n_brick_quad_points}, "
-                        f"nradial_brick_quad_points = {nradial_brick_quad_points}, "
-                        f"resid = {resid}"
-                    )
-                else:
-                    logger.warn(
-                        f"Trying n_brick_quad_points = {n_brick_quad_points}, "
-                        f"resid = {resid}"
-                    )
-                if n_brick_quad_points > max_n_quad_pts:
-                    logger.warn(
-                        "Adaptive quadrature refinement terminated "
-                        "since order %d exceeds the max order "
-                        "allowed (%d)" % (n_brick_quad_points - 1, max_n_quad_pts - 1)
-                    )
-                    break
-
-                drf = self.get_droste_table_builder(
-                    n_brick_quad_points,
-                    special_radial_brick_quadrature,
-                    nradial_brick_quad_points,
-                    use_symmetry,
-                    knl_symmetry_tags,
-                )
-                data1 = drf(
-                    queue,
-                    source_box_extent=self.source_box_extent,
-                    alpha=alpha,
-                    nlevels=nlev,
-                    n_brick_quad_points=n_brick_quad_points,
-                    # extra_kernel_kwargs=extra_kernel_kwargs,
-                    cheb_coefs=cheb_coefs,
-                    **kwargs,
-                )
-
-                resid_prev = resid
-                resid = np.max(np.abs(data1 - data0)) / np.max(np.abs(data1))
-                data0 = data1
-
-                if resid < table_tol:
-                    logger.warn(
-                        "Adaptive quadrature "
-                        "converged at order %d with residual %e"
-                        % (n_brick_quad_points - 1, resid)
-                    )
-                    break
-
-                if resid > resid_prev:
-                    logger.warn("Non-monotonic residual, breaking..")
-                    break
-
-                if np.isnan(resid):
-                    logger.warn(
-                        "Adaptive quadrature terminated "
-                        "at %d before converging due to NaNs" % nlev
-                    )
-                    break
-
-            if resid >= table_tol:
-                logger.warn("Adaptive quadrature failed to converge.")
-                logger.warn(
-                    f"Residual at order {n_brick_quad_points} equals to {resid}"
-                )
-
-            if resid < 0:
-                logger.warn("Failed to perform quadrature order refinement.")
-
-        # }}} End adaptively determine brick quad order
-
-        self.data = data0
-
-        # {{{ (only for 2D) compute normalizers
-        # NOTE: normalizers are for log kernels and not needed in 3D
-
+        normalizer_s = 0.0
         if self.dim == 2:
-            self.build_normalizer_table()
+            t_normalizer_start = time.perf_counter()
+            self.build_normalizer_table(pb=self.pb)
+            normalizer_s = time.perf_counter() - t_normalizer_start
             self.has_normalizers = True
         else:
             self.has_normalizers = False
 
-        if self.inverse_droste:
-            assert cl_ctx
-            self.build_kernel_exterior_normalizer_table(cl_ctx, queue, **kwargs)
+        if build_config.radial_rule == "adaptive":
+            logger.warning(
+                "Using scalar CPU-backed %dD DuffyRadial table builder "
+                "with adaptive radial rule",
+                self.dim,
+            )
+            return_value = self._build_table_via_duffy_radial_scalar(
+                radial_rule=build_config.radial_rule,
+                deg_theta=int(build_config.regular_quad_order),
+                radial_quad_order=int(build_config.radial_quad_order),
+                mp_dps=build_config.mp_dps,
+            )
+            if self.last_duffy_build_timings is not None:
+                self.last_duffy_build_timings["normalizer_s"] = normalizer_s
+                self.last_duffy_build_timings["total_with_normalizer_s"] = (
+                    self.last_duffy_build_timings["total_s"] + normalizer_s
+                )
+            if self.pb is not None:
+                self.pb.finished()
+            return return_value
 
-        # }}} End Compute normalizers
+        if queue is None:
+            if cl_ctx is not None:
+                queue = cl.CommandQueue(cl_ctx)
+            else:
+                if self._auto_build_queue is None:
+                    auto_ctx = cl.create_some_context(interactive=False)
+                    self._auto_build_queue = cl.CommandQueue(auto_ctx)
+                queue = self._auto_build_queue
 
-        self.is_built = True
+        if self.integral_knl is None:
+            raise ValueError(
+                "DuffyRadial loopy builder requires sumpy_kernel (integral_knl)"
+            )
 
-    # }}} End build table via adding up a Droste of bricks
+        if build_config.radial_rule not in {"tanh-sinh-fast", "tanh-sinh"}:
+            raise ValueError(
+                "DuffyRadial loopy builder supports only tanh-sinh and "
+                "tanh-sinh-fast radial rules"
+            )
+
+        logger.warning(
+            "Using batched GPU-backed %dD DuffyRadial table builder", self.dim
+        )
+        return_value = self.build_table_via_duffy_radial_batched(
+            queue,
+            radial_rule=build_config.radial_rule,
+            deg_theta=int(build_config.regular_quad_order),
+            radial_quad_order=int(build_config.radial_quad_order),
+            mp_dps=build_config.mp_dps,
+        )
+        if self.last_duffy_build_timings is not None:
+            self.last_duffy_build_timings["normalizer_s"] = normalizer_s
+            self.last_duffy_build_timings["total_with_normalizer_s"] = (
+                self.last_duffy_build_timings["total_s"] + normalizer_s
+            )
+        if self.pb is not None:
+            self.pb.finished()
+        return return_value
+
+    # }}} End build table via DuffyRadial
 
     # {{{ build table (driver)
 
-    def build_table(self, cl_ctx=None, queue=None, **kwargs):
-        method = self.build_method
-        if method == "Transform":
-            logger.info("Building table with transform method")
-            self.build_table_via_transform()
-        elif method == "DuffyRadial":
-            logger.info("Building table with Duffy+radial method")
-            self.build_table_via_duffy_radial(queue=queue, **kwargs)
-        elif method == "DrosteSum":
-            logger.info("Building table with Droste method")
-            self.build_table_via_droste_bricks(cl_ctx=cl_ctx, queue=queue, **kwargs)
-        else:
-            raise NotImplementedError()
+    def build_table(self, cl_ctx=None, queue=None, build_config=None, **kwargs):
+        logger.info("Building table with Duffy+radial method")
+        self.build_table_via_duffy_radial(
+            queue=queue,
+            cl_ctx=cl_ctx,
+            build_config=build_config,
+            **kwargs,
+        )
 
     # }}} End build table (driver)
 
@@ -1557,9 +1847,6 @@ class NearFieldInteractionTable:
         where :math:`B` is the source box :math:`[0, source_box_extent]^dim`.
         """
         logger.warn("this method is currently under construction.")
-
-        if not self.inverse_droste:
-            raise ValueError()
 
         if ncpus is None:
             import multiprocessing
@@ -1711,27 +1998,34 @@ class NearFieldInteractionTable:
 
         # TODO: take advantage of symmetry if this is too slow
 
-        from volumential.droste import InverseDrosteReduced
+        from sumpy.assignment_collection import SymbolicAssignmentCollection
+        from sumpy.codegen import to_loopy_insns
+        from sumpy.symbolic import SympyToPymbolicMapper, make_sym_vector
 
-        # only for getting kernel evaluation related stuff
-        drf = InverseDrosteReduced(
-            self.integral_knl,
-            self.quad_order,
-            self.interaction_case_vecs,
-            n_brick_quad_points=0,
-            knl_symmetry_tags=[],
-            auto_windowing=False,
+        dvec = make_sym_vector("dist", self.dim)
+        sac = SymbolicAssignmentCollection()
+        result_name = sac.assign_unique(
+            "knl_val",
+            self.integral_knl.postprocess_at_target(
+                self.integral_knl.postprocess_at_source(
+                    self.integral_knl.get_expression(dvec), dvec
+                ),
+                dvec,
+            ),
         )
-
-        # uses "dist[dim]", assigned to "knl_val"
-        knl_insns = drf.get_sumpy_kernel_insns()
+        sac.run_global_cse()
+        knl_insns = to_loopy_insns(
+            sac.assignments.items(),
+            vector_names={"dist"},
+            pymbolic_expr_maps=[self.integral_knl.get_code_transformer()],
+            retain_names=[result_name],
+            complex_dtype=np.complex128,
+        )
 
         eval_kernel_insns = [
             insn.copy(within_inames=insn.within_inames | frozenset(["iqpt"]))
             for insn in knl_insns
         ]
-
-        from sumpy.symbolic import SympyToPymbolicMapper
 
         sympy_conv = SympyToPymbolicMapper()
 

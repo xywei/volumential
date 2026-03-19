@@ -24,6 +24,7 @@ import subprocess
 from functools import partial
 
 import numpy as np
+import pytest
 
 import pyopencl as cl
 import pyopencl.array  # noqa: F401
@@ -97,21 +98,24 @@ def drive_test_completeness(ctx, queue, dim, q_order):
 
     # }}} End build tree and traversals
 
+    from volumential.nearfield_potential_table import DuffyBuildConfig
     from volumential.table_manager import NearFieldInteractionTableManager
 
     subprocess.check_call(["rm", "-f", "nft-test-completeness.hdf5"])
     with NearFieldInteractionTableManager(
         "nft-test-completeness.hdf5", progress_bar=False
     ) as tm:
+        build_config = DuffyBuildConfig(
+            radial_rule="tanh-sinh-fast",
+            regular_quad_order=20 if dim == 2 else 6,
+            radial_quad_order=61 if dim == 2 else 21,
+        )
         nft, _ = tm.get_table(
             dim,
             "Constant",
             q_order,
             queue=queue,
-            compute_method="DuffyRadial",
-            radial_rule="tanh-sinh-fast",
-            regular_quad_order=20 if dim == 2 else 6,
-            radial_quad_order=61 if dim == 2 else 21,
+            build_config=build_config,
         )
 
     # {{{ expansion wrangler
@@ -167,6 +171,18 @@ def test_completeness_1(ctx_factory):
 
     drive_test_completeness(ctx, queue, 2, 1)
     drive_test_completeness(ctx, queue, 3, 1)
+
+
+def test_completeness_q2_cpu_smoke(ctx_factory):
+
+    ctx = ctx_factory()
+    if not any(dev.type & cl.device_type.CPU for dev in ctx.devices):
+        pytest.skip("q2 completeness smoke test runs on CPU contexts only")
+
+    queue = cl.CommandQueue(ctx)
+
+    drive_test_completeness(ctx, queue, 2, 2)
+    drive_test_completeness(ctx, queue, 3, 2)
 
 
 def test_completeness(longrun, ctx_factory):

@@ -1,5 +1,5 @@
-""" This example evaluates the volume potential over
-    [-1,1]^2 with the Laplace kernel.
+"""This example evaluates the volume potential over
+[-1,1]^2 with the Laplace kernel.
 """
 
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
@@ -54,14 +54,14 @@ def main():
 
     dim = 2
 
-    # download precomputation results for the 2D Laplace kernel
-    download_table = True
-    table_filename = "nft_laplace2d.hdf5"
+    # use local SQLite cache; nearfield tables are recomputed on cache miss
+    download_table = False
+    table_filename = "nft_laplace2d.sqlite"
     root_table_source_extent = 2
 
     print("Using table cache:", table_filename)
 
-    q_order = 9   # quadrature order
+    q_order = 9  # quadrature order
     n_levels = 6  # 2^(n_levels-1) subintervals in 1D
 
     use_multilevel_table = False
@@ -85,8 +85,8 @@ def main():
     y = pmbl.var("y")
     expp = pmbl.var("exp")
 
-    norm2 = x ** 2 + y ** 2
-    source_expr = -(4 * alpha ** 2 * norm2 - 4 * alpha) * expp(-alpha * norm2)
+    norm2 = x**2 + y**2
+    source_expr = -(4 * alpha**2 * norm2 - 4 * alpha) * expp(-alpha * norm2)
     solu_expr = expp(-alpha * norm2)
 
     logger.info("Source expr: " + str(source_expr))
@@ -119,9 +119,7 @@ def main():
         iloop = -1
         while mesh.n_active_cells() < refined_n_cells:
             iloop += 1
-            crtr = np.abs(
-                source_eval(mesh.get_cell_centers)
-                * mesh.get_cell_measures)
+            crtr = np.abs(source_eval(mesh.get_cell_centers) * mesh.get_cell_measures)
             mesh.update_mesh(crtr, rratio_top, rratio_bot)
             if iloop > n_refinement_loops:
                 print("Max number of refinement loops reached.")
@@ -139,7 +137,8 @@ def main():
     from pytools.obj_array import make_obj_array
 
     q_points = make_obj_array(
-        [cl.array.to_device(queue, q_points[i]) for i in range(dim)])
+        [cl.array.to_device(queue, q_points[i]) for i in range(dim)]
+    )
 
     q_weights = cl.array.to_device(queue, q_weights)
     # q_radii = cl.array.to_device(queue, q_radii)
@@ -184,7 +183,7 @@ def main():
         particles=q_points,
         targets=q_points,
         bbox=bbox,
-        max_particles_in_box=q_order ** 2 * 4 - 1,
+        max_particles_in_box=q_order**2 * 4 - 1,
         kind="adaptive-level-restricted",
     )
 
@@ -194,7 +193,7 @@ def main():
         particles=q_points,
         targets=q_points,
         bbox=bbox2,
-        max_particles_in_box=q_order ** 2 * 4 - 1,
+        max_particles_in_box=q_order**2 * 4 - 1,
         kind="adaptive-level-restricted",
     )
 
@@ -209,28 +208,32 @@ def main():
 
     import os
 
+    from volumential.nearfield_potential_table import DuffyBuildConfig
     from volumential.table_manager import NearFieldInteractionTableManager
 
     if download_table and (not os.path.isfile(table_filename)):
-        import json
-        with open("table_urls.json") as fp:
-            urls = json.load(fp)
-
-        print("Downloading table from %s" % urls["Laplace2D"])
-        import subprocess
-        subprocess.call(["wget", "-q", urls["Laplace2D"], table_filename])
+        raise RuntimeError(
+            "Legacy table download is no longer supported; "
+            "set download_table=False to rebuild a local SQLite cache."
+        )
 
     tm = NearFieldInteractionTableManager(
-        table_filename, root_extent=root_table_source_extent,
-        queue=queue)
+        table_filename, root_extent=root_table_source_extent, queue=queue
+    )
+    build_config = DuffyBuildConfig(
+        radial_rule="tanh-sinh-fast",
+        regular_quad_order=50,
+        radial_quad_order=100,
+    )
 
     if use_multilevel_table:
         assert (
             abs(
-                int((b - a)
-                  / root_table_source_extent) * root_table_source_extent
-                - (b - a))
-            < 1e-15)
+                int((b - a) / root_table_source_extent) * root_table_source_extent
+                - (b - a)
+            )
+            < 1e-15
+        )
         nftable = []
         for lev in range(0, tree.nlevels + 1):
             print("Getting table at level", lev)
@@ -239,13 +242,8 @@ def main():
                 "Laplace",
                 q_order,
                 source_box_level=lev,
-                compute_method="DrosteSum",
                 queue=queue,
-                n_brick_quad_points=100,
-                adaptive_level=False,
-                use_symmetry=True,
-                alpha=0.1,
-                nlevels=15,
+                build_config=build_config,
             )
             nftable.append(tb)
 
@@ -257,13 +255,8 @@ def main():
             "Laplace",
             q_order,
             force_recompute=False,
-            compute_method="DrosteSum",
             queue=queue,
-            n_brick_quad_points=100,
-            adaptive_level=False,
-            use_symmetry=True,
-            alpha=0.1,
-            nlevels=15,
+            build_config=build_config,
         )
 
     # }}} End build near field potential table
@@ -283,7 +276,9 @@ def main():
     exclude_self = True
 
     from volumential.expansion_wrangler_fpnd import (
-        FPNDExpansionWrangler, FPNDExpansionWranglerCodeContainer)
+        FPNDExpansionWrangler,
+        FPNDExpansionWranglerCodeContainer,
+    )
 
     wcc = FPNDExpansionWranglerCodeContainer(
         ctx,
@@ -321,11 +316,12 @@ def main():
     import time
 
     from volumential.volume_fmm import drive_volume_fmm
+
     queue.finish()
 
     t0 = time.time()
 
-    pot, = drive_volume_fmm(
+    (pot,) = drive_volume_fmm(
         trav,
         wrangler,
         source_vals * q_weights,
@@ -337,9 +333,7 @@ def main():
     t1 = time.time()
 
     print("Finished in %.2f seconds." % (t1 - t0))
-    print("(%e points per second)" % (
-        len(q_weights) / (t1 - t0)
-        ))
+    print("(%e points per second)" % (len(q_weights) / (t1 - t0)))
 
     # }}} End conduct fmm computation
 
@@ -418,9 +412,9 @@ def main():
     # Direct p2p
     if 0:
         print("Performing P2P")
-        pot_direct, = drive_volume_fmm(
-            trav, wrangler, source_vals * q_weights,
-            source_vals, direct_evaluation=True)
+        (pot_direct,) = drive_volume_fmm(
+            trav, wrangler, source_vals * q_weights, source_vals, direct_evaluation=True
+        )
         zds = pot_direct.get()
         zs = pot.get()
 

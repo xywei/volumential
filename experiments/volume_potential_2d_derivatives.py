@@ -1,6 +1,7 @@
-""" This example evaluates the volume potential and its derivatives
-    over [-1,1]^2 with the Laplace kernel.
+"""This example evaluates the volume potential and its derivatives
+over [-1,1]^2 with the Laplace kernel.
 """
+
 from __future__ import absolute_import, division, print_function
 
 __copyright__ = "Copyright (C) 2019 Xiaoyu Wei"
@@ -50,12 +51,12 @@ print("*************************")
 
 dim = 2
 
-table_filename = "nft_laplace2d.hdf5"
+table_filename = "nft_laplace2d.sqlite"
 root_table_source_extent = 2
 
 print("Using table cache:", table_filename)
 
-q_order = 6   # quadrature order
+q_order = 6  # quadrature order
 n_levels = 6  # 2^(n_levels-1) subintervals in 1D
 
 use_multilevel_table = False
@@ -78,6 +79,7 @@ if 0:
     n_subintervals = 2 ** (n_levels - 1)
     h = 2 / n_subintervals
     kk = 0
+
     # RHS
     def source_field(x):
         assert len(x) == dim
@@ -94,7 +96,7 @@ if 0:
 
     # analytical solution, up to a harmonic function
     def exact_solu(x, y):
-        return 0.25 * (x ** 2 + y ** 2)
+        return 0.25 * (x**2 + y**2)
 
 
 else:
@@ -107,20 +109,21 @@ else:
         assert len(x) == dim
         assert dim == 2
         norm2 = x[0] ** 2 + x[1] ** 2
-        lap_u = (4 * alpha ** 2 * norm2 - 4 * alpha) * np.exp(-alpha * norm2)
+        lap_u = (4 * alpha**2 * norm2 - 4 * alpha) * np.exp(-alpha * norm2)
         return -lap_u
 
     def exact_solu(x, y):
-        norm2 = x ** 2 + y ** 2
+        norm2 = x**2 + y**2
         return np.exp(-alpha * norm2)
 
     def exact_solu_dx(x, y):
-        norm2 = x ** 2 + y ** 2
-        return (-alpha) * np.exp(-alpha * norm2) * (2*x)
+        norm2 = x**2 + y**2
+        return (-alpha) * np.exp(-alpha * norm2) * (2 * x)
 
     def exact_solu_dy(x, y):
-        norm2 = x ** 2 + y ** 2
-        return (-alpha) * np.exp(-alpha * norm2) * (2*y)
+        norm2 = x**2 + y**2
+        return (-alpha) * np.exp(-alpha * norm2) * (2 * y)
+
 
 # bounding box
 a = -1
@@ -217,7 +220,7 @@ tree, _ = tb(
     particles=q_points,
     targets=q_points,
     bbox=bbox,
-    max_particles_in_box=q_order ** 2 * 4 - 1,
+    max_particles_in_box=q_order**2 * 4 - 1,
     kind="adaptive-level-restricted",
 )
 
@@ -227,7 +230,7 @@ tree2, _ = tb(
     particles=q_points,
     targets=q_points,
     bbox=bbox2,
-    max_particles_in_box=q_order ** 2 * 4 - 1,
+    max_particles_in_box=q_order**2 * 4 - 1,
     kind="adaptive-level-restricted",
 )
 
@@ -240,11 +243,17 @@ trav, _ = tg(queue, tree)
 
 # {{{ build near field potential table
 
+from volumential.nearfield_potential_table import DuffyBuildConfig
 from volumential.table_manager import NearFieldInteractionTableManager
 from volumential.list1_symmetry import Flip
 
 tm = NearFieldInteractionTableManager(
     table_filename, root_extent=root_table_source_extent
+)
+build_config = DuffyBuildConfig(
+    radial_rule="tanh-sinh-fast",
+    regular_quad_order=50,
+    radial_quad_order=100,
 )
 
 if q_order < 5:
@@ -265,68 +274,83 @@ if use_multilevel_table:
     for l in range(0, tree.nlevels + 1):
         if 1:
             print("Getting table at level", l)
-            tb, _ = tm.get_table(dim, "Laplace", q_order,
-                source_box_level=l, compute_method="DrosteSum",
-                queue=queue, n_brick_quad_points=100,
-                adaptive_level=False, use_symmetry=True,
-                alpha=0.1, nlevels=n_brick_levels)
+            tb, _ = tm.get_table(
+                dim,
+                "Laplace",
+                q_order,
+                source_box_level=l,
+                queue=queue,
+                build_config=build_config,
+            )
             nftable_list.append(tb)
 
         if 1:
             print("Getting table Dx at level", l)
-            tb, _ = tm.get_table(dim, "Laplace-Dx", q_order,
-                source_box_level=l, compute_method="DrosteSum",
-                queue=queue, n_brick_quad_points=100,
-                adaptive_level=False, use_symmetry=False,
-                alpha=0.1, nlevels=n_brick_levels)
+            tb, _ = tm.get_table(
+                dim,
+                "Laplace-Dx",
+                q_order,
+                source_box_level=l,
+                queue=queue,
+                build_config=build_config,
+            )
             nftable_dx_list.append(tb)
 
         if 1:
             print("Getting table Dy at level", l)
-            tb, _ = tm.get_table(dim, "Laplace-Dy", q_order,
-                source_box_level=l, compute_method="DrosteSum",
-                queue=queue, n_brick_quad_points=100,
-                adaptive_level=False, use_symmetry=False,
-                alpha=0.1, nlevels=n_brick_levels)
+            tb, _ = tm.get_table(
+                dim,
+                "Laplace-Dy",
+                q_order,
+                source_box_level=l,
+                queue=queue,
+                build_config=build_config,
+            )
             nftable_dy_list.append(tb)
 
     print("Using table list of length", len(nftable_list))
     nftable = {
-            nftable_list[0].integral_knl.__repr__(): nftable_list,
-            nftable_dx_list[0].integral_knl.__repr__(): nftable_dx_list,
-            nftable_dy_list[0].integral_knl.__repr__(): nftable_dy_list,
-            }
+        nftable_list[0].integral_knl.__repr__(): nftable_list,
+        nftable_dx_list[0].integral_knl.__repr__(): nftable_dx_list,
+        nftable_dy_list[0].integral_knl.__repr__(): nftable_dy_list,
+    }
 
 else:
-        if 1:
-            print("Getting table")
-            tb, _ = tm.get_table(dim, "Laplace", q_order,
-                compute_method="DrosteSum",
-                queue=queue, n_brick_quad_points=100,
-                adaptive_level=False, use_symmetry=True,
-                alpha=0.1, nlevels=n_brick_levels)
+    if 1:
+        print("Getting table")
+        tb, _ = tm.get_table(
+            dim,
+            "Laplace",
+            q_order,
+            queue=queue,
+            build_config=build_config,
+        )
 
-        if 1:
-            print("Getting table Dx")
-            tb_dx, _ = tm.get_table(dim, "Laplace-Dx", q_order,
-                compute_method="DrosteSum",
-                queue=queue, n_brick_quad_points=100,
-                adaptive_level=False, use_symmetry=False,
-                alpha=0.1, nlevels=n_brick_levels)
+    if 1:
+        print("Getting table Dx")
+        tb_dx, _ = tm.get_table(
+            dim,
+            "Laplace-Dx",
+            q_order,
+            queue=queue,
+            build_config=build_config,
+        )
 
-        if 1:
-            print("Getting table Dy")
-            tb_dy, _ = tm.get_table(dim, "Laplace-Dy", q_order,
-                compute_method="DrosteSum",
-                queue=queue, n_brick_quad_points=100,
-                adaptive_level=False, use_symmetry=False,
-                alpha=0.1, nlevels=n_brick_levels)
+    if 1:
+        print("Getting table Dy")
+        tb_dy, _ = tm.get_table(
+            dim,
+            "Laplace-Dy",
+            q_order,
+            queue=queue,
+            build_config=build_config,
+        )
 
-        nftable = {
-                tb.integral_knl.__repr__(): tb,
-                tb_dx.integral_knl.__repr__(): tb_dx,
-                tb_dy.integral_knl.__repr__(): tb_dy,
-                }
+    nftable = {
+        tb.integral_knl.__repr__(): tb,
+        tb_dx.integral_knl.__repr__(): tb_dx,
+        tb_dy.integral_knl.__repr__(): tb_dy,
+    }
 
 # }}} End build near field potential table
 
@@ -347,7 +371,8 @@ out_kernels = [knl, knl_dx, knl_dy]
 exclude_self = True
 from volumential.expansion_wrangler_fpnd import (
     FPNDExpansionWranglerCodeContainer,
-    FPNDExpansionWrangler)
+    FPNDExpansionWrangler,
+)
 
 wcc = FPNDExpansionWranglerCodeContainer(
     ctx,
@@ -385,6 +410,7 @@ print("*************************")
 from volumential.volume_fmm import drive_volume_fmm
 
 import time
+
 queue.finish()
 
 t0 = time.time()
@@ -401,9 +427,7 @@ queue.finish()
 t1 = time.time()
 
 print("Finished in %.2f seconds." % (t1 - t0))
-print("(%e points per second)" % (
-    len(q_weights) / (t1 - t0)
-    ))
+print("(%e points per second)" % (len(q_weights) / (t1 - t0)))
 
 # }}} End conduct fmm computation
 
@@ -492,7 +516,7 @@ if 0:
 # Direct p2p
 if 0:
     print("Performing P2P")
-    pot_direct, = drive_volume_fmm(
+    (pot_direct,) = drive_volume_fmm(
         trav, wrangler, source_vals * q_weights, source_vals, direct_evaluation=True
     )
     zds = pot_direct.get()

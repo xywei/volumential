@@ -485,6 +485,13 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         case_indices_dev = cl.array.to_device(
             self.queue, self.near_field_table[kname][0].case_indices
         )
+        symmetry_maps = self.near_field_table[kname][0]._get_online_symmetry_maps()
+        mode_qpoint_map_dev = cl.array.to_device(
+            self.queue, symmetry_maps["mode_qpoint_map"]
+        )
+        mode_case_map_dev = cl.array.to_device(
+            self.queue, symmetry_maps["mode_case_map"]
+        )
 
         # table.data
         table_data_combined = np.zeros(
@@ -524,6 +531,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         table_data_shapes = {
             "n_tables": len(self.near_field_table[kname]),
             "n_q_points": self.near_field_table[kname][0].n_q_points,
+            "n_cases": self.near_field_table[kname][0].n_cases,
             "n_table_entries": len(self.near_field_table[kname][0].data),
         }
         assert table_data_shapes["n_q_points"] == len(
@@ -576,6 +584,8 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             box_target_counts_nonchild=target_counts_nonchild,
             box_target_starts=self.tree.box_target_starts,
             case_indices=case_indices_dev,
+            mode_qpoint_map=mode_qpoint_map_dev,
+            mode_case_map=mode_case_map_dev,
             encoding_base=base,
             encoding_shift=shift,
             mode_nmlz_combined=mode_nmlz_combined,
@@ -1209,6 +1219,13 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
         case_indices_dev = cl.array.to_device(
             self.queue, self.near_field_table[kname][0].case_indices
         )
+        symmetry_maps = self.near_field_table[kname][0]._get_online_symmetry_maps()
+        mode_qpoint_map_dev = cl.array.to_device(
+            self.queue, symmetry_maps["mode_qpoint_map"]
+        )
+        mode_case_map_dev = cl.array.to_device(
+            self.queue, symmetry_maps["mode_case_map"]
+        )
 
         # table.data
         table_data_combined = np.zeros(
@@ -1252,6 +1269,7 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
         table_data_shapes = {
             "n_tables": len(self.near_field_table[kname]),
             "n_q_points": self.near_field_table[kname][0].n_q_points,
+            "n_cases": self.near_field_table[kname][0].n_cases,
             "n_table_entries": len(self.near_field_table[kname][0].data),
         }
         assert table_data_shapes["n_q_points"] == len(
@@ -1277,6 +1295,8 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
             box_target_counts_cumul=self.tree.box_target_counts_cumul,
             box_target_starts=self.tree.box_target_starts,
             case_indices=case_indices_dev,
+            mode_qpoint_map=mode_qpoint_map_dev,
+            mode_case_map=mode_case_map_dev,
             encoding_base=base,
             encoding_shift=shift,
             mode_nmlz_combined=mode_nmlz_combined,

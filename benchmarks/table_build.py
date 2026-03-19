@@ -25,6 +25,7 @@ import time
 
 import pyopencl as cl
 
+from volumential.nearfield_potential_table import DuffyBuildConfig
 from volumential.table_manager import NearFieldInteractionTableManager
 
 
@@ -46,18 +47,18 @@ def bench_table_build(queue):
 
     queue.finish()
     t0 = time.time()
+    build_config = DuffyBuildConfig(
+        radial_rule="tanh-sinh-fast",
+        regular_quad_order=15,
+        radial_quad_order=60,
+    )
     nftable, _ = tm.get_table(
         dim,
         "Laplace",
         q_order,
         force_recompute=force_recompute,
-        compute_method="DrosteSum",
         queue=queue,
-        n_brick_quad_points=120,
-        adaptive_level=True,
-        adaptive_quadrature=True,
-        use_symmetry=True,
-        alpha=0, n_levels=1,
+        build_config=build_config,
     )
     queue.finish()
     t1 = time.time()

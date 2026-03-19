@@ -34,15 +34,21 @@ from pyopencl.tools import (  # noqa: F401
 from volumential.table_manager import NearFieldInteractionTableManager as NFTManager
 
 
-UNSUPPORTED_OPENCL_PLATFORMS = {
-    "Intel(R) OpenCL",
+XFAIL_OPENCL_PLATFORMS = {
+    # Intel OpenCL CPU backend on ipa has been observed to core-dump on
+    # volumential nearfield/FMM test paths; keep this visible as an xfail
+    # until upstream/backend stability is confirmed.
+    "Intel(R) OpenCL": "known Intel OpenCL backend crash (core dump) on volumential nearfield path",
 }
 
 
-def _is_unsupported_ctx_factory(ctx_factory):
+def _get_xfail_reason_for_ctx_factory(ctx_factory):
     ctx = ctx_factory()
     platform_names = {dev.platform.name for dev in ctx.devices}
-    return any(name in UNSUPPORTED_OPENCL_PLATFORMS for name in platform_names)
+    for name in platform_names:
+        if name in XFAIL_OPENCL_PLATFORMS:
+            return XFAIL_OPENCL_PLATFORMS[name]
+    return None
 
 
 def pytest_addoption(parser):
@@ -66,9 +72,9 @@ def pytest_runtest_setup(item):
         return
 
     ctx_factory = callspec.params["ctx_factory"]
-    if _is_unsupported_ctx_factory(ctx_factory):
-        unsupported = ", ".join(sorted(UNSUPPORTED_OPENCL_PLATFORMS))
-        pytest.skip(f"unsupported OpenCL backend for this stack: {unsupported}")
+    xfail_reason = _get_xfail_reason_for_ctx_factory(ctx_factory)
+    if xfail_reason:
+        pytest.xfail(xfail_reason)
 
 
 @pytest.fixture(scope="session")

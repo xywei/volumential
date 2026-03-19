@@ -26,7 +26,12 @@ THE SOFTWARE.
 """
 
 import logging
+import json
+import re
 import sqlite3
+import time
+import zipfile
+from dataclasses import dataclass, is_dataclass
 from io import BytesIO
 from urllib.parse import quote
 
@@ -42,6 +47,99 @@ logger = logging.getLogger(__name__)
 
 
 _HDF5_SIGNATURE = b"\x89HDF\r\n\x1a\n"
+
+
+TABLE_CACHE_SCHEMA_VERSION = "2.0.0"
+TABLE_CACHE_MIN_READABLE_SCHEMA_VERSION = "2.0.0"
+_LEGACY_UNVERSIONED_SCHEMA_VERSION = "1.0.0"
+_TABLE_BUILD_METHOD = "DuffyRadial"
+
+
+@dataclass(frozen=True)
+class KernelSpec:
+    dim: int
+    kernel_type: str
+
+    @classmethod
+    def from_args(cls, dim, kernel_type):
+        dim = int(dim)
+        if dim < 1:
+            raise ValueError(f"dim must be >= 1, got {dim}")
+
+        return cls(dim=dim, kernel_type=kernel_type)
+
+
+@dataclass(frozen=True)
+class TableDiscretization:
+    q_order: int
+    source_box_level: int = 0
+
+    @classmethod
+    def from_args(cls, q_order, source_box_level=0):
+        q_order = int(q_order)
+        if q_order < 1:
+            raise ValueError(f"q_order must be >= 1, got {q_order}")
+
+        source_box_level = int(source_box_level)
+        if source_box_level < 0:
+            raise ValueError(f"source_box_level must be >= 0, got {source_box_level}")
+
+        return cls(
+            q_order=q_order,
+            source_box_level=source_box_level,
+        )
+
+
+@dataclass(frozen=True)
+class TableRequest:
+    kernel: KernelSpec
+    discretization: TableDiscretization
+
+    @classmethod
+    def from_args(cls, dim, kernel_type, q_order, source_box_level=0):
+        return cls(
+            kernel=KernelSpec.from_args(dim=dim, kernel_type=kernel_type),
+            discretization=TableDiscretization.from_args(
+                q_order=q_order,
+                source_box_level=source_box_level,
+            ),
+        )
+
+    @property
+    def dim(self):
+        return self.kernel.dim
+
+    @property
+    def kernel_type(self):
+        return self.kernel.kernel_type
+
+    @property
+    def q_order(self):
+        return self.discretization.q_order
+
+    @property
+    def source_box_level(self):
+        return self.discretization.source_box_level
+
+
+@dataclass(frozen=True)
+class TableKernelBundle:
+    kernel_func: object
+    kernel_scale_type: object
+    sumpy_kernel: object
+
+
+def _parse_semver(version_text, what="version"):
+    if not isinstance(version_text, str):
+        raise ValueError(f"Invalid {what}: expected string, got {type(version_text)!r}")
+
+    match = re.match(r"^(\d+)\.(\d+)\.(\d+)$", version_text)
+    if match is None:
+        raise ValueError(
+            f"Invalid {what} {version_text!r}: expected semantic version MAJOR.MINOR.PATCH"
+        )
+
+    return tuple(int(part) for part in match.groups())
 
 
 def _quote_sqlite_path(path):
@@ -61,6 +159,69 @@ def _serialize_array(array):
 def _deserialize_array(blob):
     with BytesIO(blob) as f:
         return np.load(f, allow_pickle=False)
+
+
+def _serialize_table_payload(table):
+    data = np.array(table.data)
+    table_data_is_symmetry_reduced = bool(
+        getattr(table, "table_data_is_symmetry_reduced", False)
+    )
+
+    payload = {
+        "q_points": np.array(table.q_points),
+        "mode_normalizers": np.array(table.mode_normalizers),
+        "kernel_exterior_normalizers": np.array(table.kernel_exterior_normalizers),
+        "interaction_case_vecs": np.array(table.interaction_case_vecs),
+        "case_indices": np.array(table.case_indices),
+        "table_data_is_symmetry_reduced": np.array(
+            [int(table_data_is_symmetry_reduced)],
+            dtype=np.int8,
+        ),
+    }
+
+    if table_data_is_symmetry_reduced:
+        reduced_entry_ids = np.flatnonzero(np.isfinite(data)).astype(np.int64)
+        payload["reduced_entry_ids"] = reduced_entry_ids
+        payload["reduced_data"] = data[reduced_entry_ids]
+    else:
+        payload["data"] = data
+
+    with BytesIO() as f:
+        np.savez(f, **payload)
+        return f.getvalue()
+
+
+def _deserialize_table_payload(blob):
+    with BytesIO(blob) as f:
+        with np.load(f, allow_pickle=False) as payload:
+            return {name: payload[name] for name in payload.files}
+
+
+def _to_stable_jsonable(value):
+    if isinstance(value, np.generic):
+        return _to_stable_jsonable(value.item())
+
+    if isinstance(value, np.ndarray):
+        return _to_stable_jsonable(value.tolist())
+
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+
+    if is_dataclass(value) and not isinstance(value, type):
+        return _to_stable_jsonable(
+            {name: getattr(value, name) for name in value.__dataclass_fields__}
+        )
+
+    if isinstance(value, (list, tuple)):
+        return [_to_stable_jsonable(item) for item in value]
+
+    if isinstance(value, dict):
+        return {
+            str(key): _to_stable_jsonable(val)
+            for key, val in sorted(value.items(), key=lambda item: str(item[0]))
+        }
+
+    raise TypeError(f"unsupported value type for stable serialization: {type(value)!r}")
 
 
 def _serialize_scalar(value):
@@ -173,6 +334,9 @@ class NearFieldInteractionTableManager:
 
         self.filename = dataset_filename
         self.root_extent = root_extent
+        self.last_compute_timings = None
+        self.last_load_timings = None
+        self.last_get_table_timings = None
 
         if read_only == "auto":
             try:
@@ -197,6 +361,14 @@ class NearFieldInteractionTableManager:
         self.datafile.row_factory = sqlite3.Row
 
         self.datafile.execute("PRAGMA foreign_keys = ON")
+        try:
+            self.datafile.execute("PRAGMA temp_store = MEMORY")
+            self.datafile.execute("PRAGMA cache_size = -200000")
+            if not self._read_only:
+                self.datafile.execute("PRAGMA journal_mode = WAL")
+                self.datafile.execute("PRAGMA synchronous = NORMAL")
+        except sqlite3.DatabaseError:
+            logger.warning("Failed to apply one or more SQLite tuning pragmas")
 
         try:
             self._init_schema()
@@ -260,6 +432,7 @@ class NearFieldInteractionTableManager:
                 kernel_exterior_normalizers BLOB,
                 interaction_case_vecs BLOB,
                 case_indices BLOB,
+                payload BLOB,
 
                 PRIMARY KEY (dim, kernel_type, q_order, source_box_level)
             )
@@ -299,22 +472,164 @@ class NearFieldInteractionTableManager:
             """
         )
 
+        columns = {
+            row["name"]
+            for row in self.datafile.execute("PRAGMA table_info(nearfield_cache)")
+        }
+        if "payload" not in columns:
+            if self._read_only:
+                logger.warning(
+                    "Table cache file %s uses legacy schema without payload column; "
+                    "read-only mode cannot apply migrations.",
+                    self.filename,
+                )
+            else:
+                self.datafile.execute(
+                    "ALTER TABLE nearfield_cache ADD COLUMN payload BLOB"
+                )
+                columns.add("payload")
+
+        self._initialize_schema_version(columns)
+
         self.datafile.commit()
 
-    def _initialize_root_extent(self):
+    def _get_meta_value(self, key):
         row = self.datafile.execute(
-            "SELECT value_type, value_text FROM nearfield_cache_meta WHERE key='root_extent'"
+            "SELECT value_type, value_text FROM nearfield_cache_meta WHERE key=?",
+            (key,),
         ).fetchone()
 
         if row is None:
+            return None
+
+        return _deserialize_scalar(row["value_type"], row["value_text"])
+
+    def _store_meta_value(self, key, value):
+        value_type, value_text = _serialize_scalar(value)
+        self.datafile.execute(
+            "INSERT OR REPLACE INTO nearfield_cache_meta (key, value_type, value_text) "
+            "VALUES (?, ?, ?)",
+            (key, value_type, str(value_text)),
+        )
+
+    def _infer_schema_version_from_columns(self, cache_columns):
+        if "payload" in cache_columns:
+            return TABLE_CACHE_SCHEMA_VERSION
+        return _LEGACY_UNVERSIONED_SCHEMA_VERSION
+
+    def _initialize_schema_version(self, cache_columns):
+        current_version_tuple = _parse_semver(
+            TABLE_CACHE_SCHEMA_VERSION,
+            what="current table cache schema version",
+        )
+        min_readable_version_tuple = _parse_semver(
+            TABLE_CACHE_MIN_READABLE_SCHEMA_VERSION,
+            what="minimum readable table cache schema version",
+        )
+
+        stored_schema_version = self._get_meta_value("schema_version")
+        has_stored_schema_version = stored_schema_version is not None
+
+        has_cache_rows = (
+            self.datafile.execute("SELECT 1 FROM nearfield_cache LIMIT 1").fetchone()
+            is not None
+        )
+
+        if not has_stored_schema_version:
+            if self._read_only and has_cache_rows:
+                raise RuntimeError(
+                    "The table cache file "
+                    + self.filename
+                    + " is missing schema_version metadata and is treated as "
+                    + "incompatible legacy cache."
+                )
+
+            if not self._read_only and has_cache_rows:
+                logger.warning(
+                    "Resetting legacy unversioned table cache data in %s.",
+                    self.filename,
+                )
+                self.datafile.execute("DELETE FROM nearfield_cache_kwargs")
+                self.datafile.execute("DELETE FROM nearfield_cache")
+
+            if not self._read_only:
+                self._store_meta_value("schema_version", TABLE_CACHE_SCHEMA_VERSION)
+
+            self.cache_schema_version = TABLE_CACHE_SCHEMA_VERSION
+            return
+
+        if not isinstance(stored_schema_version, str):
+            raise RuntimeError(
+                "The table cache file "
+                + self.filename
+                + " has invalid schema_version metadata type "
+                + str(type(stored_schema_version))
+            )
+        schema_version = stored_schema_version
+
+        try:
+            schema_version_tuple = _parse_semver(
+                schema_version,
+                what="table cache schema version",
+            )
+        except ValueError as exc:
+            raise RuntimeError(
+                "The table cache file "
+                + self.filename
+                + " has invalid schema_version metadata: "
+                + str(exc)
+            ) from exc
+
+        if schema_version_tuple[0] > current_version_tuple[0]:
+            raise RuntimeError(
+                "The table cache file "
+                + self.filename
+                + " uses incompatible schema version "
+                + schema_version
+                + ". This build supports "
+                + TABLE_CACHE_MIN_READABLE_SCHEMA_VERSION
+                + " through "
+                + TABLE_CACHE_SCHEMA_VERSION
+                + "."
+            )
+
+        if schema_version_tuple < min_readable_version_tuple:
+            if self._read_only:
+                raise RuntimeError(
+                    "The table cache file "
+                    + self.filename
+                    + " uses unsupported legacy schema version "
+                    + schema_version
+                    + "."
+                )
+
+            logger.warning(
+                "Resetting legacy table cache schema %s in %s.",
+                schema_version,
+                self.filename,
+            )
+            self.datafile.execute("DELETE FROM nearfield_cache_kwargs")
+            self.datafile.execute("DELETE FROM nearfield_cache")
+
+            schema_version = TABLE_CACHE_SCHEMA_VERSION
+            self._store_meta_value("schema_version", schema_version)
+            self.cache_schema_version = schema_version
+            return
+
+        self.cache_schema_version = schema_version
+
+    def _initialize_root_extent(self):
+        stored_root_extent = self._get_meta_value("root_extent")
+
+        if stored_root_extent is None:
             if self._read_only:
                 return
 
             self._store_root_extent(self.root_extent)
             return
 
-        stored_root_extent = _deserialize_scalar(row["value_type"], row["value_text"])
-        if abs(stored_root_extent - self.root_extent) >= 1e-15:
+        stored_root_extent = float(stored_root_extent)
+        if abs(stored_root_extent - float(self.root_extent)) >= 1e-15:
             raise RuntimeError(
                 "The table cache file "
                 + self.filename
@@ -325,35 +640,45 @@ class NearFieldInteractionTableManager:
             )
 
     def _store_root_extent(self, root_extent):
-        value_type, value_text = _serialize_scalar(root_extent)
-        self.datafile.execute(
-            "INSERT OR REPLACE INTO nearfield_cache_meta (key, value_type, value_text) "
-            "VALUES ('root_extent', ?, ?)",
-            (value_type, str(value_text)),
-        )
+        self._store_meta_value("root_extent", root_extent)
         self.datafile.commit()
 
-    def _record_exists(self, dim, kernel_type, q_order, source_box_level):
+    def _record_exists(self, table_request):
         row = self.datafile.execute(
             "SELECT 1 FROM nearfield_cache WHERE dim=? AND kernel_type=? "
             "AND q_order=? AND source_box_level=?",
-            (dim, kernel_type, q_order, source_box_level),
+            (
+                table_request.dim,
+                table_request.kernel_type,
+                table_request.q_order,
+                table_request.source_box_level,
+            ),
         ).fetchone()
 
         return row is not None
 
-    def _load_record(self, dim, kernel_type, q_order, source_box_level):
+    def _load_record(self, table_request):
         return self.datafile.execute(
             "SELECT * FROM nearfield_cache WHERE dim=? AND kernel_type=? "
             "AND q_order=? AND source_box_level=?",
-            (dim, kernel_type, q_order, source_box_level),
+            (
+                table_request.dim,
+                table_request.kernel_type,
+                table_request.q_order,
+                table_request.source_box_level,
+            ),
         ).fetchone()
 
-    def _load_record_kwargs(self, dim, kernel_type, q_order, source_box_level):
+    def _load_record_kwargs(self, table_request):
         rows = self.datafile.execute(
             "SELECT key, value_type, value_text FROM nearfield_cache_kwargs "
             "WHERE dim=? AND kernel_type=? AND q_order=? AND source_box_level=?",
-            (dim, kernel_type, q_order, source_box_level),
+            (
+                table_request.dim,
+                table_request.kernel_type,
+                table_request.q_order,
+                table_request.source_box_level,
+            ),
         ).fetchall()
 
         kwargs = {}
@@ -364,11 +689,16 @@ class NearFieldInteractionTableManager:
 
         return kwargs
 
-    def _store_record_kwargs(self, dim, kernel_type, q_order, source_box_level, kwargs):
+    def _store_record_kwargs(self, table_request, kwargs):
         self.datafile.execute(
             "DELETE FROM nearfield_cache_kwargs WHERE dim=? AND kernel_type=? "
             "AND q_order=? AND source_box_level=?",
-            (dim, kernel_type, q_order, source_box_level),
+            (
+                table_request.dim,
+                table_request.kernel_type,
+                table_request.q_order,
+                table_request.source_box_level,
+            ),
         )
 
         rows = []
@@ -386,10 +716,10 @@ class NearFieldInteractionTableManager:
 
             rows.append(
                 (
-                    dim,
-                    kernel_type,
-                    q_order,
-                    source_box_level,
+                    table_request.dim,
+                    table_request.kernel_type,
+                    table_request.q_order,
+                    table_request.source_box_level,
                     key,
                     value_type,
                     str(value_text),
@@ -411,6 +741,208 @@ class NearFieldInteractionTableManager:
         self.datafile.commit()
         self.datafile.close()
 
+    def _normalize_table_request(self, dim, kernel_type, q_order, source_box_level=0):
+        return TableRequest.from_args(
+            dim=dim,
+            kernel_type=kernel_type,
+            q_order=q_order,
+            source_box_level=source_box_level,
+        )
+
+    def _coerce_table_request(self, table_request):
+        if not isinstance(table_request, TableRequest):
+            raise TypeError("table_request must be a TableRequest")
+
+        return self._normalize_table_request(
+            dim=table_request.dim,
+            kernel_type=table_request.kernel_type,
+            q_order=table_request.q_order,
+            source_box_level=table_request.source_box_level,
+        )
+
+    def _source_box_extent_for_level(self, source_box_level):
+        return self.root_extent * (2 ** (-source_box_level))
+
+    def _reject_removed_compute_method_kwarg(self, kwargs, where):
+        if "compute_method" in kwargs:
+            raise TypeError(
+                "compute_method has been removed; DuffyRadial is used for all "
+                f"table builds ({where})"
+            )
+
+    def _build_config_fingerprint(self, kwargs):
+        build_config = kwargs.get("build_config")
+        if build_config is None:
+            return None
+
+        if not (is_dataclass(build_config) and not isinstance(build_config, type)):
+            raise TypeError("build_config must be a dataclass instance")
+
+        return json.dumps(
+            _to_stable_jsonable(build_config),
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+    def _reject_removed_top_level_duffy_knobs(self, kwargs, where):
+        removed_knobs = (
+            "radial_rule",
+            "regular_quad_order",
+            "radial_quad_order",
+            "deg_theta",
+            "mp_dps",
+            "auto_tune_orders",
+            "auto_tune_samples",
+            "auto_tune_floor_factor",
+            "auto_tune_candidates",
+        )
+        specified = [key for key in removed_knobs if key in kwargs]
+        if specified:
+            raise TypeError(
+                "top-level Duffy knobs have been removed; pass a "
+                "nearfield_potential_table.DuffyBuildConfig as build_config "
+                f"({where}; got {', '.join(specified)})"
+            )
+
+    def _kwargs_for_cache_storage(self, kwargs):
+        cache_kwargs = dict(kwargs)
+        build_config_fingerprint = self._build_config_fingerprint(kwargs)
+        if build_config_fingerprint is not None:
+            cache_kwargs["build_config_fingerprint"] = build_config_fingerprint
+            cache_kwargs["build_config_json"] = build_config_fingerprint
+            cache_kwargs.pop("build_config", None)
+
+        return cache_kwargs
+
+    def _deserialize_build_config(self, build_config_json):
+        from volumential.nearfield_potential_table import DuffyBuildConfig
+
+        decoded = json.loads(build_config_json)
+        if not isinstance(decoded, dict):
+            raise ValueError("build_config_json must decode to an object")
+
+        return DuffyBuildConfig(**decoded)
+
+    def _kwargs_with_cached_build_config(self, table_request, kwargs):
+        if "build_config" in kwargs:
+            return kwargs
+
+        loaded_kwargs = self._load_record_kwargs(table_request)
+        build_config_json = loaded_kwargs.get("build_config_json")
+        if build_config_json is None:
+            build_config_json = loaded_kwargs.get("build_config_fingerprint")
+        if build_config_json is None:
+            return kwargs
+
+        try:
+            cached_build_config = self._deserialize_build_config(build_config_json)
+        except Exception:
+            logger.warning("Ignoring malformed cached build_config_json")
+            return kwargs
+
+        updated_kwargs = dict(kwargs)
+        updated_kwargs["build_config"] = cached_build_config
+        return updated_kwargs
+
+    def _resolve_kernel_bundle(self, table_request, kwargs, require_sumpy_kernel):
+        if "knl_func" in kwargs:
+            knl_func = kwargs["knl_func"]
+        else:
+            knl_func = self.get_kernel_function(
+                table_request.dim,
+                table_request.kernel_type,
+                **kwargs,
+            )
+
+        if "sumpy_knl" in kwargs:
+            sumpy_knl = kwargs["sumpy_knl"]
+        else:
+            try:
+                sumpy_knl = self.get_sumpy_kernel(
+                    table_request.dim,
+                    table_request.kernel_type,
+                )
+            except NotImplementedError:
+                sumpy_knl = None
+
+        kernel_scale_type = self.get_kernel_function_type(
+            table_request.dim,
+            table_request.kernel_type,
+        )
+
+        if require_sumpy_kernel and sumpy_knl is None:
+            raise RuntimeError(
+                "DuffyRadial table builder requires a sumpy kernel; "
+                f"kernel_type={table_request.kernel_type!r} is unsupported "
+                "for loopy table build."
+            )
+
+        return TableKernelBundle(
+            kernel_func=knl_func,
+            kernel_scale_type=kernel_scale_type,
+            sumpy_kernel=sumpy_knl,
+        )
+
+    def _warn_on_loaded_kwarg_mismatch(self, table, kwargs):
+        for kkey, kval in kwargs.items():
+            if kval is not None:
+                if kkey == "build_config":
+                    continue
+
+                try:
+                    tbval = getattr(table, kkey)
+                    if isinstance(kval, (bool, int, str)):
+                        if not kval == tbval:
+                            from warnings import warn
+
+                            warn(
+                                "Table data loaded with a different value "
+                                + kkey
+                                + " = "
+                                + str(tbval)
+                                + " (expected "
+                                + str(kval)
+                                + ")"
+                            )
+                    elif isinstance(kval, (float, complex)):
+                        tbval = kval.__class__(tbval)
+                        if not abs(kval - tbval) < 1e-12:
+                            from warnings import warn
+
+                            warn(
+                                "Table data loaded with a different value "
+                                + kkey
+                                + " = "
+                                + str(tbval)
+                                + " (expected "
+                                + str(kval)
+                                + ")"
+                            )
+                    else:
+                        continue
+
+                except AttributeError as e:
+                    strict_loading = False
+                    if "debug" in kwargs:
+                        if "strict_loading" in kwargs["debug"]:
+                            strict_loading = kwargs["debug"]["strict_loading"]
+
+                    if strict_loading:
+                        from warnings import warn
+
+                        warn(
+                            "Consistency is not fully ensured "
+                            "(kwarg specified but cannot be loaded). "
+                            "NOTE: this is most likely due to non-standard "
+                            "arguements being passed, since only "
+                            "(int, float, complex, bool, str) "
+                            "are stored in the cache. "
+                            "Also, some parameters related to method for "
+                            "table building are not critical for "
+                            "consistency."
+                        )
+                        print(e)
+
     def get_table(
         self,
         dim,
@@ -418,72 +950,86 @@ class NearFieldInteractionTableManager:
         q_order,
         source_box_level=0,
         force_recompute=False,
-        compute_method=None,
         queue=None,
         **kwargs,
     ):
-        """Primary user interface. Get the specified table regardless of how.
-        In the case of a cache miss or a forced re-computation, the method
-        specified in the compute_method will be used.
-        """
+        """Primary user interface. Get or build a cached table."""
+        table_request = self._normalize_table_request(
+            dim=dim,
+            kernel_type=kernel_type,
+            q_order=q_order,
+            source_box_level=source_box_level,
+        )
 
-        dim = int(dim)
-        assert dim >= 1
+        return self.get_table_from_request(
+            table_request,
+            force_recompute=force_recompute,
+            queue=queue,
+            **kwargs,
+        )
 
-        if compute_method is None:
-            compute_method = "Transform"
+    def get_table_from_request(
+        self,
+        table_request,
+        force_recompute=False,
+        queue=None,
+        **kwargs,
+    ):
+        """Get or build a table using a :class:`TableRequest`."""
+
+        t_get_start = time.perf_counter()
+        request_kwargs = dict(kwargs)
+        self._reject_removed_compute_method_kwarg(
+            request_kwargs,
+            "get_table_from_request",
+        )
+        self._reject_removed_top_level_duffy_knobs(
+            request_kwargs,
+            "get_table_from_request",
+        )
+
+        table_request = self._coerce_table_request(table_request)
 
         is_recomputed = False
 
-        q_order = int(q_order)
-        assert q_order >= 1
-
-        source_box_level = int(source_box_level)
-        assert source_box_level >= 0
-
-        if not self._record_exists(dim, kernel_type, q_order, source_box_level):
+        if not self._record_exists(table_request):
             if self._read_only:
                 raise RuntimeError(
                     "Table cache miss in read-only mode for "
-                    f"(dim={dim}, kernel_type={kernel_type}, q_order={q_order}, "
-                    f"source_box_level={source_box_level})."
+                    f"(dim={table_request.dim}, "
+                    f"kernel_type={table_request.kernel_type}, "
+                    f"q_order={table_request.q_order}, "
+                    f"source_box_level={table_request.source_box_level})."
                 )
             logger.info("Table cache missing. Invoking fresh computation.")
             is_recomputed = True
-            table = self.compute_and_update_table(
-                dim,
-                kernel_type,
-                q_order,
-                source_box_level,
-                compute_method,
+            table = self._compute_and_update_table_for_request(
+                table_request,
                 queue=queue,
-                **kwargs,
+                **request_kwargs,
             )
 
         elif force_recompute:
             if self._read_only:
                 raise RuntimeError("force_recompute is not supported in read-only mode")
+
             logger.info("Invoking fresh computation since force_recompute is set")
             is_recomputed = True
-            table = self.compute_and_update_table(
-                dim,
-                kernel_type,
-                q_order,
-                source_box_level,
-                compute_method,
+            recompute_kwargs = self._kwargs_with_cached_build_config(
+                table_request,
+                request_kwargs,
+            )
+            table = self._compute_and_update_table_for_request(
+                table_request,
                 queue=queue,
-                **kwargs,
+                **recompute_kwargs,
             )
 
         else:
             try:
-                table = self.load_saved_table(
-                    dim,
-                    kernel_type,
-                    q_order,
-                    source_box_level,
-                    compute_method,
-                    **kwargs,
+                table = self._load_saved_table_for_request(
+                    table_request,
+                    **request_kwargs,
                 )
 
             except KeyError:
@@ -497,73 +1043,27 @@ class NearFieldInteractionTableManager:
                         "cannot be recomputed."
                     )
 
-                logger.info("Recomputing due to table data corruption.")
+                logger.info("Recomputing due to cache miss/corruption.")
                 is_recomputed = True
-                table = self.compute_and_update_table(
-                    dim,
-                    kernel_type,
-                    q_order,
-                    source_box_level,
-                    compute_method,
+                recompute_kwargs = self._kwargs_with_cached_build_config(
+                    table_request,
+                    request_kwargs,
+                )
+                table = self._compute_and_update_table_for_request(
+                    table_request,
                     queue=queue,
-                    **kwargs,
+                    **recompute_kwargs,
                 )
 
-            # Ensure loaded table matches requirements specified in kwargs
-            for kkey, kval in kwargs.items():
-                if kval is not None:
-                    try:
-                        tbval = getattr(table, kkey)
-                        if isinstance(kval, (int, str)):
-                            if not kval == tbval:
-                                from warnings import warn
+            self._warn_on_loaded_kwarg_mismatch(table, request_kwargs)
 
-                                warn(
-                                    "Table data loaded with a different value "
-                                    + kkey
-                                    + " = "
-                                    + str(tbval)
-                                    + " (expected "
-                                    + str(kval)
-                                    + ")"
-                                )
-                        else:
-                            assert isinstance(kval, (float, complex))
-                            tbval = kval.__class__(tbval)
-                            if not abs(kval - tbval) < 1e-12:
-                                from warnings import warn
-
-                                warn(
-                                    "Table data loaded with a different value "
-                                    + kkey
-                                    + " = "
-                                    + str(tbval)
-                                    + " (expected "
-                                    + str(kval)
-                                    + ")"
-                                )
-
-                    except AttributeError as e:
-                        strict_loading = False
-                        if "debug" in kwargs:
-                            if "strict_loading" in kwargs["debug"]:
-                                strict_loading = kwargs["debug"]["strict_loading"]
-
-                        if strict_loading:
-                            from warnings import warn
-
-                            warn(
-                                "Consistency is not fully ensured "
-                                "(kwarg specified but cannot be loaded). "
-                                "NOTE: this is most likely due to non-standard "
-                                "arguements being passed, since only "
-                                "(int, float, complex, bool, str) "
-                                "are stored in the cache. "
-                                "Also, some parameters related to method for "
-                                "table building are not critical for "
-                                "consistency."
-                            )
-                            print(e)
+        t_get_end = time.perf_counter()
+        self.last_get_table_timings = {
+            "total_s": t_get_end - t_get_start,
+            "is_recomputed": bool(is_recomputed),
+            "compute": self.last_compute_timings if is_recomputed else None,
+            "load": self.last_load_timings if not is_recomputed else None,
+        }
 
         return table, is_recomputed
 
@@ -573,88 +1073,126 @@ class NearFieldInteractionTableManager:
         kernel_type,
         q_order,
         source_box_level=0,
-        compute_method=None,
         **kwargs,
     ):
         """Load a table saved in the SQLite cache."""
+        table_request = self._normalize_table_request(
+            dim=dim,
+            kernel_type=kernel_type,
+            q_order=q_order,
+            source_box_level=source_box_level,
+        )
 
-        q_order = int(q_order)
-        assert q_order >= 1
+        return self.load_saved_table_from_request(table_request, **kwargs)
 
-        source_box_level = int(source_box_level)
-        assert source_box_level >= 0
+    def load_saved_table_from_request(self, table_request, **kwargs):
+        """Load a cached table using a :class:`TableRequest`."""
 
-        record = self._load_record(dim, kernel_type, q_order, source_box_level)
+        request_kwargs = dict(kwargs)
+        self._reject_removed_compute_method_kwarg(
+            request_kwargs,
+            "load_saved_table_from_request",
+        )
+        self._reject_removed_top_level_duffy_knobs(
+            request_kwargs,
+            "load_saved_table_from_request",
+        )
+        table_request = self._coerce_table_request(table_request)
+
+        return self._load_saved_table_for_request(table_request, **request_kwargs)
+
+    def _load_saved_table_for_request(self, table_request, **kwargs):
+        t_load_start = time.perf_counter()
+
+        record = self._load_record(table_request)
+        t_record_fetch_end = time.perf_counter()
         if record is None:
             raise KeyError("missing table record")
 
-        if dim != record["dim"]:
+        if table_request.dim != record["dim"]:
             raise AssertionError("cache record dimension mismatch")
-        if q_order != record["quad_order"]:
+        if table_request.q_order != record["quad_order"]:
             raise AssertionError("cache record quad order mismatch")
 
-        if compute_method == "Transform":
-            if "knl_func" not in kwargs:
-                knl_func = self.get_kernel_function(dim, kernel_type, **kwargs)
-            else:
-                knl_func = kwargs["knl_func"]
-            sumpy_knl = None
-        elif compute_method == "DuffyRadial":
-            if "knl_func" not in kwargs:
-                knl_func = self.get_kernel_function(dim, kernel_type, **kwargs)
-            else:
-                knl_func = kwargs["knl_func"]
-            sumpy_knl = None
-        elif compute_method == "DrosteSum":
-            if "sumpy_knl" not in kwargs:
-                sumpy_knl = self.get_sumpy_kernel(dim, kernel_type)
-            else:
-                sumpy_knl = kwargs["sumpy_knl"]
-            if dim in (2, 3):
-                knl_func = vm.nearfield_potential_table.sumpy_kernel_to_lambda(
-                    sumpy_knl
-                )
-            else:
-                knl_func = None
-        else:
-            from warnings import warn
-
-            warn("Unsupported compute_method: ", compute_method)
-            knl_func = None
-            sumpy_knl = None
-
-        table = NearFieldInteractionTable(
-            quad_order=q_order,
-            dim=dim,
-            dtype=self.dtype,
-            build_method=compute_method,
-            kernel_func=knl_func,
-            kernel_type=self.get_kernel_function_type(dim, kernel_type),
-            sumpy_kernel=sumpy_knl,
-            source_box_extent=self.root_extent * (2 ** (-source_box_level)),
-            **self.table_extra_kwargs,
-        )
-
-        assert abs(table.source_box_extent - record["source_box_extent"]) < 1e-15
-        assert source_box_level == record["source_box_level_stored"]
-
-        # Load data
-        table.q_points[:] = _deserialize_array(record["q_points"])
-        table.data[:] = _deserialize_array(record["data"])
-
-        if record["mode_normalizers"] is not None:
-            table.mode_normalizers[:] = _deserialize_array(record["mode_normalizers"])
-
-        if record["kernel_exterior_normalizers"] is not None:
-            table.kernel_exterior_normalizers[:] = _deserialize_array(
-                record["kernel_exterior_normalizers"]
+        stored_build_method = record["build_method"]
+        if (
+            stored_build_method is not None
+            and stored_build_method != _TABLE_BUILD_METHOD
+        ):
+            raise KeyError(
+                "cached build_method is unsupported; expected " + _TABLE_BUILD_METHOD
             )
 
-        tmp_case_vecs = np.array(table.interaction_case_vecs)
-        tmp_case_vecs[...] = _deserialize_array(record["interaction_case_vecs"])
-        table.interaction_case_vecs = [list(vec) for vec in tmp_case_vecs]
+        kernel_bundle = self._resolve_kernel_bundle(
+            table_request,
+            kwargs,
+            require_sumpy_kernel=False,
+        )
 
-        table.case_indices[:] = _deserialize_array(record["case_indices"])
+        payload_blob = record["payload"] if "payload" in record.keys() else None
+        used_payload = bool(payload_blob)
+        t_payload_deser_start = time.perf_counter()
+        try:
+            if used_payload:
+                payload = _deserialize_table_payload(payload_blob)
+            else:
+                raise KeyError("table cache payload is missing")
+
+            t_payload_deser_end = time.perf_counter()
+
+            precomputed_q_points = None
+            if "q_points" in payload:
+                precomputed_q_points = payload["q_points"]
+
+            table_extra_kwargs = dict(self.table_extra_kwargs)
+            table_extra_kwargs.pop("precomputed_q_points", None)
+
+            table = NearFieldInteractionTable(
+                quad_order=table_request.q_order,
+                dim=table_request.dim,
+                dtype=self.dtype,
+                build_method=_TABLE_BUILD_METHOD,
+                kernel_func=kernel_bundle.kernel_func,
+                kernel_type=kernel_bundle.kernel_scale_type,
+                sumpy_kernel=kernel_bundle.sumpy_kernel,
+                source_box_extent=self._source_box_extent_for_level(
+                    table_request.source_box_level
+                ),
+                precomputed_q_points=precomputed_q_points,
+                **table_extra_kwargs,
+            )
+
+            assert abs(table.source_box_extent - record["source_box_extent"]) < 1e-15
+            assert table_request.source_box_level == record["source_box_level_stored"]
+
+            table.q_points[:] = payload["q_points"]
+            if "data" in payload:
+                table.data[:] = payload["data"]
+            elif "reduced_entry_ids" in payload and "reduced_data" in payload:
+                table.data[:] = np.nan
+                table.data[payload["reduced_entry_ids"]] = payload["reduced_data"]
+            else:
+                raise KeyError("payload is missing table data arrays")
+
+            table.mode_normalizers[:] = payload["mode_normalizers"]
+            table.kernel_exterior_normalizers[:] = payload[
+                "kernel_exterior_normalizers"
+            ]
+
+            tmp_case_vecs = np.array(table.interaction_case_vecs)
+            tmp_case_vecs[...] = payload["interaction_case_vecs"]
+            table.interaction_case_vecs = [list(vec) for vec in tmp_case_vecs]
+
+            table.case_indices[:] = payload["case_indices"]
+            if "table_data_is_symmetry_reduced" in payload:
+                table.table_data_is_symmetry_reduced = bool(
+                    payload["table_data_is_symmetry_reduced"][0]
+                )
+
+        except KeyError:
+            raise
+        except (OSError, EOFError, TypeError, ValueError, zipfile.BadZipFile) as exc:
+            raise KeyError("table cache payload is corrupted") from exc
 
         assert table.n_q_points == record["n_q_points"]
         assert table.n_pairs == record["n_pairs"]
@@ -671,23 +1209,42 @@ class NearFieldInteractionTableManager:
 
         table.case_encode = case_encode
 
-        table.source_box_level = source_box_level
+        table.source_box_level = table_request.source_box_level
         table.dim = record["dim"]
         table.n_q_points = record["n_q_points"]
         table.n_pairs = record["n_pairs"]
         table.case_encoding_base = base
         table.case_encoding_shift = shift
-        table.build_method = record["build_method"]
+        table.build_method = _TABLE_BUILD_METHOD
         table.kernel_type_cached = record["kernel_type_cached"]
         table.source_box_extent = record["source_box_extent"]
 
-        # load extra kwargs
-        for atkey, atval in self._load_record_kwargs(
-            dim, kernel_type, q_order, source_box_level
-        ).items():
+        t_kwargs_load_start = time.perf_counter()
+        loaded_kwargs = self._load_record_kwargs(table_request)
+        requested_build_config_fingerprint = self._build_config_fingerprint(kwargs)
+        if requested_build_config_fingerprint is not None:
+            loaded_build_config_fingerprint = loaded_kwargs.get(
+                "build_config_fingerprint"
+            )
+            if loaded_build_config_fingerprint != requested_build_config_fingerprint:
+                raise KeyError("cached build_config mismatch")
+
+        for atkey, atval in loaded_kwargs.items():
             setattr(table, atkey, atval)
+        t_kwargs_load_end = time.perf_counter()
 
         table.is_built = True
+
+        t_load_end = time.perf_counter()
+        self.last_load_timings = {
+            "record_fetch_s": t_record_fetch_end - t_load_start,
+            "payload_deserialize_s": t_payload_deser_end - t_payload_deser_start,
+            "kwargs_load_s": t_kwargs_load_end - t_kwargs_load_start,
+            "postprocess_s": t_load_end - t_kwargs_load_end,
+            "total_s": t_load_end - t_load_start,
+            "used_payload": used_payload,
+            "payload_bytes": len(payload_blob) if payload_blob else 0,
+        }
 
         return table
 
@@ -833,75 +1390,101 @@ class NearFieldInteractionTableManager:
         kernel_type,
         q_order,
         source_box_level=0,
-        compute_method=None,
+        cl_ctx=None,
+        queue=None,
+        **kwargs,
+    ):
+        """Performs the precomputation and stores the results."""
+        table_request = self._normalize_table_request(
+            dim=dim,
+            kernel_type=kernel_type,
+            q_order=q_order,
+            source_box_level=source_box_level,
+        )
+
+        return self.compute_and_update_table_for_request(
+            table_request,
+            cl_ctx=cl_ctx,
+            queue=queue,
+            **kwargs,
+        )
+
+    def compute_and_update_table_for_request(
+        self,
+        table_request,
+        cl_ctx=None,
+        queue=None,
+        **kwargs,
+    ):
+        """Build/update a cached table using a :class:`TableRequest`."""
+
+        request_kwargs = dict(kwargs)
+        self._reject_removed_compute_method_kwarg(
+            request_kwargs,
+            "compute_and_update_table_for_request",
+        )
+        self._reject_removed_top_level_duffy_knobs(
+            request_kwargs,
+            "compute_and_update_table_for_request",
+        )
+        table_request = self._coerce_table_request(table_request)
+
+        return self._compute_and_update_table_for_request(
+            table_request,
+            cl_ctx=cl_ctx,
+            queue=queue,
+            **request_kwargs,
+        )
+
+    def _compute_and_update_table_for_request(
+        self,
+        table_request,
         cl_ctx=None,
         queue=None,
         **kwargs,
     ):
         """Performs the precomputation and stores the results."""
 
-        if compute_method is None:
-            logger.debug("Using default compute_method (Transform)")
-            compute_method = "Transform"
+        kernel_bundle = self._resolve_kernel_bundle(
+            table_request,
+            kwargs,
+            require_sumpy_kernel=True,
+        )
 
-        q_order = int(q_order)
-        assert q_order >= 1
-
-        if compute_method == "Transform":
-            if "knl_func" not in kwargs:
-                knl_func = self.get_kernel_function(dim, kernel_type, **kwargs)
-            else:
-                knl_func = kwargs["knl_func"]
-            sumpy_knl = None
-        elif compute_method == "DuffyRadial":
-            if "knl_func" not in kwargs:
-                knl_func = self.get_kernel_function(dim, kernel_type, **kwargs)
-            else:
-                knl_func = kwargs["knl_func"]
-            sumpy_knl = None
-        elif compute_method == "DrosteSum":
-            if "sumpy_knl" not in kwargs:
-                sumpy_knl = self.get_sumpy_kernel(dim, kernel_type)
-            else:
-                sumpy_knl = kwargs["sumpy_knl"]
-            if dim in (2, 3):
-                knl_func = vm.nearfield_potential_table.sumpy_kernel_to_lambda(
-                    sumpy_knl
-                )
-            else:
-                knl_func = None
-        else:
-            raise NotImplementedError("Unsupported compute_method.")
-
-        knl_type = self.get_kernel_function_type(dim, kernel_type)
-
-        # compute table
         logger.debug("Start computing interaction table.")
         table = NearFieldInteractionTable(
-            dim=dim,
-            quad_order=q_order,
+            dim=table_request.dim,
+            quad_order=table_request.q_order,
             dtype=self.dtype,
-            kernel_func=knl_func,
-            kernel_type=knl_type,
-            sumpy_kernel=sumpy_knl,
-            build_method=compute_method,
-            source_box_extent=self.root_extent * (2 ** (-source_box_level)),
+            kernel_func=kernel_bundle.kernel_func,
+            kernel_type=kernel_bundle.kernel_scale_type,
+            sumpy_kernel=kernel_bundle.sumpy_kernel,
+            build_method=_TABLE_BUILD_METHOD,
+            source_box_extent=self._source_box_extent_for_level(
+                table_request.source_box_level
+            ),
             **self.table_extra_kwargs,
         )
 
         if 0:
-            # self-similarly shrink delta
             if "delta" in kwargs:
-                delta = kwargs.pop("delta") * (2 ** (-source_box_level))
+                delta = kwargs.pop("delta") * (2 ** (-table_request.source_box_level))
                 kwargs["delta"] = delta
 
-        table.build_table(cl_ctx, queue, **kwargs)
+        t_compute_start = time.perf_counter()
+        table.build_table(cl_ctx=cl_ctx, queue=queue, **kwargs)
+        t_compute_end = time.perf_counter()
         assert table.is_built
 
-        # update database
         logger.debug("Start updating database.")
 
-        source_box_extent = self.root_extent * (2 ** (-source_box_level))
+        source_box_extent = self._source_box_extent_for_level(
+            table_request.source_box_level
+        )
+        t_payload_serialize_start = time.perf_counter()
+        payload_blob = _serialize_table_payload(table)
+        empty_float_blob = _serialize_array(np.array([], dtype=self.dtype))
+        t_payload_serialize_end = time.perf_counter()
 
         distinct_numbers = set()
         for vec in table.interaction_case_vecs:
@@ -911,27 +1494,29 @@ class NearFieldInteractionTableManager:
         shift = -min(distinct_numbers)
 
         record_values = (
-            dim,
-            kernel_type,
-            q_order,
-            source_box_level,
+            table_request.dim,
+            table_request.kernel_type,
+            table_request.q_order,
+            table_request.source_box_level,
             table.n_q_points,
             table.quad_order,
             table.n_pairs,
             source_box_extent,
-            source_box_level,
+            table_request.source_box_level,
             base,
             shift,
-            compute_method,
-            self.get_kernel_function_type(dim, kernel_type),
-            _serialize_array(table.q_points),
-            _serialize_array(table.data),
-            _serialize_array(table.mode_normalizers),
-            _serialize_array(table.kernel_exterior_normalizers),
-            _serialize_array(table.interaction_case_vecs),
-            _serialize_array(table.case_indices),
+            _TABLE_BUILD_METHOD,
+            kernel_bundle.kernel_scale_type,
+            empty_float_blob,
+            empty_float_blob,
+            None,
+            None,
+            None,
+            None,
+            payload_blob,
         )
 
+        t_db_write_start = time.perf_counter()
         self.datafile.execute(
             """
             INSERT INTO nearfield_cache (
@@ -942,9 +1527,9 @@ class NearFieldInteractionTableManager:
                 build_method, kernel_type_cached,
                 q_points, data, mode_normalizers,
                 kernel_exterior_normalizers, interaction_case_vecs,
-                case_indices
+                case_indices, payload
             ) VALUES (
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
             )
             ON CONFLICT(dim, kernel_type, q_order, source_box_level) DO UPDATE SET
                 n_q_points=excluded.n_q_points,
@@ -961,14 +1546,27 @@ class NearFieldInteractionTableManager:
                 mode_normalizers=excluded.mode_normalizers,
                 kernel_exterior_normalizers=excluded.kernel_exterior_normalizers,
                 interaction_case_vecs=excluded.interaction_case_vecs,
-                case_indices=excluded.case_indices
+                case_indices=excluded.case_indices,
+                payload=excluded.payload
             """,
             record_values,
         )
 
-        self._store_record_kwargs(dim, kernel_type, q_order, source_box_level, kwargs)
+        self._store_record_kwargs(
+            table_request,
+            self._kwargs_for_cache_storage(kwargs),
+        )
 
         self.datafile.commit()
+        t_db_write_end = time.perf_counter()
+
+        self.last_compute_timings = {
+            "table_build_s": t_compute_end - t_compute_start,
+            "payload_serialize_s": t_payload_serialize_end - t_payload_serialize_start,
+            "db_write_commit_s": t_db_write_end - t_db_write_start,
+            "total_s": t_db_write_end - t_compute_start,
+            "payload_bytes": len(payload_blob),
+        }
 
         return table
 
