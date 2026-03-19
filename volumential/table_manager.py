@@ -262,6 +262,26 @@ def _deserialize_scalar(ty, value):
     raise ValueError("Unsupported serialized value type: %s" % ty)
 
 
+def _coerce_sqlite_int(value, field_name):
+    if isinstance(value, (int, np.integer)):
+        return int(value)
+
+    if isinstance(value, str):
+        return int(value)
+
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        raw = bytes(value)
+
+        # Legacy rows could contain numpy scalar bytes if sqlite adapters
+        # treated numpy integers as blobs.
+        if len(raw) == 8:
+            return int(np.frombuffer(raw, dtype=np.int64)[0])
+
+        return int(raw.decode("ascii"))
+
+    raise TypeError(f"unsupported integer value for {field_name}: {type(value)!r}")
+
+
 def _looks_like_hdf5_file(path):
     try:
         with open(path, "rb") as f:
@@ -1198,8 +1218,14 @@ class NearFieldInteractionTableManager:
         assert table.n_pairs == record["n_pairs"]
         assert table.quad_order == record["quad_order"]
 
-        base = record["case_encoding_base"]
-        shift = record["case_encoding_shift"]
+        base = _coerce_sqlite_int(
+            record["case_encoding_base"],
+            field_name="case_encoding_base",
+        )
+        shift = _coerce_sqlite_int(
+            record["case_encoding_shift"],
+            field_name="case_encoding_shift",
+        )
 
         def case_encode(case_vec):
             table_id = 0
@@ -1490,8 +1516,8 @@ class NearFieldInteractionTableManager:
         for vec in table.interaction_case_vecs:
             for case_vec_comp in vec:
                 distinct_numbers.add(case_vec_comp)
-        base = len(range(min(distinct_numbers), max(distinct_numbers) + 1))
-        shift = -min(distinct_numbers)
+        base = int(len(range(min(distinct_numbers), max(distinct_numbers) + 1)))
+        shift = int(-min(distinct_numbers))
 
         record_values = (
             table_request.dim,
