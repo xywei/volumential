@@ -74,6 +74,25 @@ def test_cl_ctx_getter(ctx_factory):
     assert np.linalg.norm(res_np - (a_np + b_np)) < 1e-12
 
 
+@pytest.mark.skipif(
+    mg.provider != "meshgen_boxtree",
+    reason="Meshgen boxtree backend is unavailable",
+)
+def test_meshgen_boxtree_gmsh_export(ctx_factory, tmp_path):
+    ctx = ctx_factory()
+    queue = cl.CommandQueue(ctx)
+
+    mesh = mg.MeshGen3D(degree=2, nlevels=1, a=-1.0, b=1.0, queue=queue)
+    mesh_file = tmp_path / "box_grid.msh"
+    mesh.generate_gmsh(str(mesh_file))
+
+    assert mesh_file.exists()
+    mesh_text = mesh_file.read_text(encoding="ascii")
+    assert "$MeshFormat" in mesh_text
+    assert "$Nodes" in mesh_text
+    assert "$Elements" in mesh_text
+
+
 # }}}
 
 # {{{ laplace volume potential

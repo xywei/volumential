@@ -368,6 +368,7 @@ def main():
     if 0:
         from meshmode.mesh.io import read_gmsh
 
+        mesh.generate_gmsh("box_grid.msh")
         modemesh = read_gmsh("box_grid.msh", force_ambient_dim=None)
         from meshmode.array_context import PyOpenCLArrayContext
         from meshmode.discretization import Discretization

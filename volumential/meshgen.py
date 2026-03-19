@@ -202,13 +202,81 @@ class MeshGenBase:
         logging_func("Number of quad points per cell: " + str(self.n_q_points))
 
     def generate_gmsh(self, filename):
-        """
-        # TODO
-        Write the active boxes as a gmsh file.
-        The file format specifications can be found at:
-        http://gmsh.info/doc/texinfo/gmsh.html#MSH-ASCII-file-format
-        """
-        raise NotImplementedError
+        """Write active boxes to a Gmsh v2 ASCII mesh file."""
+
+        leaf_centers = self._leaf_centers()
+        leaf_sizes = self._leaf_side_lengths()
+
+        node_ids = {}
+        nodes = []
+
+        def get_node_id(coords):
+            key = tuple(float(c) for c in coords)
+            if key not in node_ids:
+                node_ids[key] = len(nodes) + 1
+                nodes.append(key)
+            return node_ids[key]
+
+        elements = []
+        for center, size in zip(leaf_centers, leaf_sizes):
+            half = 0.5 * float(size)
+
+            if self.dim == 1:
+                x0 = float(center[0] - half)
+                x1 = float(center[0] + half)
+                n1 = get_node_id((x0, 0.0, 0.0))
+                n2 = get_node_id((x1, 0.0, 0.0))
+                elements.append((1, [n1, n2]))
+
+            elif self.dim == 2:
+                x0 = float(center[0] - half)
+                x1 = float(center[0] + half)
+                y0 = float(center[1] - half)
+                y1 = float(center[1] + half)
+                n1 = get_node_id((x0, y0, 0.0))
+                n2 = get_node_id((x1, y0, 0.0))
+                n3 = get_node_id((x1, y1, 0.0))
+                n4 = get_node_id((x0, y1, 0.0))
+                elements.append((3, [n1, n2, n3, n4]))
+
+            elif self.dim == 3:
+                x0 = float(center[0] - half)
+                x1 = float(center[0] + half)
+                y0 = float(center[1] - half)
+                y1 = float(center[1] + half)
+                z0 = float(center[2] - half)
+                z1 = float(center[2] + half)
+
+                n1 = get_node_id((x0, y0, z0))
+                n2 = get_node_id((x1, y0, z0))
+                n3 = get_node_id((x1, y1, z0))
+                n4 = get_node_id((x0, y1, z0))
+                n5 = get_node_id((x0, y0, z1))
+                n6 = get_node_id((x1, y0, z1))
+                n7 = get_node_id((x1, y1, z1))
+                n8 = get_node_id((x0, y1, z1))
+                elements.append((5, [n1, n2, n3, n4, n5, n6, n7, n8]))
+
+            else:
+                raise ValueError("only supports 1 <= dim <= 3")
+
+        with open(filename, "w", encoding="ascii") as outf:
+            outf.write("$MeshFormat\n")
+            outf.write("2.2 0 8\n")
+            outf.write("$EndMeshFormat\n")
+
+            outf.write("$Nodes\n")
+            outf.write(f"{len(nodes)}\n")
+            for i, (x, y, z) in enumerate(nodes, start=1):
+                outf.write(f"{i} {x:.17g} {y:.17g} {z:.17g}\n")
+            outf.write("$EndNodes\n")
+
+            outf.write("$Elements\n")
+            outf.write(f"{len(elements)}\n")
+            for i, (element_type, element_nodes) in enumerate(elements, start=1):
+                node_str = " ".join(str(nid) for nid in element_nodes)
+                outf.write(f"{i} {element_type} 2 0 0 {node_str}\n")
+            outf.write("$EndElements\n")
 
 
 # }}} End meshgen Python provider
