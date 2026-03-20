@@ -31,29 +31,33 @@ import os
 import numpy as np
 
 import pyopencl as cl
+import pyopencl.array  # noqa: F401
 from pytools.obj_array import make_obj_array
 
 try:
-    from boxtree.fmm import TimingRecorder
+    from boxtree.timing import TimingRecorder
 except ImportError:
+    try:
+        from boxtree.fmm import TimingRecorder
+    except ImportError:
 
-    class TimingRecorder:
-        def __init__(self):
-            self._futures = []
+        class TimingRecorder:
+            def __init__(self):
+                self._futures = []
 
-        def add(self, stage, future):
-            self._futures.append((stage, future))
+            def add(self, stage, future):
+                self._futures.append((stage, future))
 
-        def summarize(self):
-            summary = {}
-            for stage, future in self._futures:
-                if future is None:
-                    continue
-                try:
-                    summary[stage] = future()
-                except TypeError:
-                    summary[stage] = future
-            return summary
+            def summarize(self):
+                summary = {}
+                for stage, future in self._futures:
+                    if future is None:
+                        continue
+                    try:
+                        summary[stage] = future()
+                    except TypeError:
+                        summary[stage] = future
+                return summary
 
 
 from volumential.expansion_wrangler_fpnd import (
@@ -155,17 +159,28 @@ def drive_volume_fmm(
     if ns > 1:
         raise NotImplementedError("Multiple outputs are not yet supported")
 
+    queue = None
+    if isinstance(src_func[0], cl.array.Array):
+        queue = src_func[0].queue
+    elif isinstance(src_weights[0], cl.array.Array):
+        queue = src_weights[0].queue
+    elif hasattr(wrangler, "queue"):
+        queue = wrangler.queue
+
     if isinstance(expansion_wrangler, FPNDSumpyExpansionWrangler):
         assert all(isinstance(sw, cl.array.Array) for sw in src_weights)
         assert all(isinstance(sf, cl.array.Array) for sf in src_func)
 
     elif isinstance(expansion_wrangler, FPNDFMMLibExpansionWrangler):
-        traversal = traversal.get(wrangler.queue)
+        if queue is None:
+            raise TypeError("unable to infer command queue for FMMLib wrangler")
 
-        if isinstance(src_weights, cl.array.Array):
-            src_weights = src_weights.get(wrangler.queue)
-        if isinstance(src_func, cl.array.Array):
-            src_func = src_func.get(wrangler.queue)
+        traversal = traversal.get(queue)
+
+        if isinstance(src_weights[0], cl.array.Array):
+            src_weights = make_obj_array([sw.get(queue) for sw in src_weights])
+        if isinstance(src_func[0], cl.array.Array):
+            src_func = make_obj_array([sf.get(queue) for sf in src_func])
 
     if reorder_sources:
         logger.debug("reorder source weights")
@@ -254,8 +269,8 @@ def drive_volume_fmm(
         from sumpy import P2P
 
         p2p = P2P(
-            wrangler.code.target_kernels,
-            wrangler.code.exclude_self,
+            wrangler.tree_indep.target_kernels,
+            wrangler.tree_indep.exclude_self,
             value_dtypes=[wrangler.dtype],
         )
 
@@ -263,13 +278,16 @@ def drive_volume_fmm(
         if hasattr(wrangler, "kernel_extra_kwargs"):
             p2p_extra_kwargs.update(wrangler.kernel_extra_kwargs)
 
+        if queue is None:
+            raise TypeError("unable to infer command queue for direct evaluation")
+
         for iw, sw in enumerate(src_weights):
             target_to_source = cl.array.to_device(
-                wrangler.queue,
+                queue,
                 np.arange(traversal.tree.ntargets, dtype=np.int32),
             )
             p2p_kwargs = dict(p2p_extra_kwargs)
-            if wrangler.code.exclude_self:
+            if wrangler.tree_indep.exclude_self:
                 p2p_kwargs["target_to_source"] = target_to_source
 
             (ref_pot,) = p2p(
@@ -489,7 +507,9 @@ def interpolate_volume_potential(
     if wrangler is not None:
         dim = next(iter(wrangler.near_field_table.values()))[0].dim
         tree = wrangler.tree
-        queue = wrangler.queue
+        queue = getattr(potential, "queue", None)
+        if queue is None:
+            queue = wrangler.queue
         q_order = wrangler.quad_order
         dtype = wrangler.dtype
     else:

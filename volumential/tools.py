@@ -27,8 +27,8 @@ import numpy as np
 import loopy as lp
 import pymbolic as pmbl
 import pyopencl as cl
-from pymbolic.primitives import (
-    Expression as ExpressionType, Variable as VariableType)
+import pyopencl.array  # noqa: F401
+from pymbolic.primitives import Expression as ExpressionType, Variable as VariableType
 from pytools import memoize_method
 
 
@@ -56,6 +56,7 @@ def clean_file(filename, new_name=None):
         except OSError:
             pass
 
+
 # }}} End clean files
 
 # {{{ loopy kernel cache wrapper
@@ -66,8 +67,7 @@ class KernelCacheWrapper:
 
     def __init__(self):
         self.name = "KernelCacheWrapper"
-        raise RuntimeError(
-                "KernelCacheWrapper objects should not be constructed")
+        raise RuntimeError("KernelCacheWrapper objects should not be constructed")
 
     def get_cache_key(self):
         raise NotImplementedError("Unimplemented cache key")
@@ -87,13 +87,15 @@ class KernelCacheWrapper:
             from sumpy.version import KERNEL_VERSION as SUMPY_KERNEL_VERSION
 
             from volumential.version import KERNEL_VERSION
+
             cache_key = (
-                    self.get_cache_key()
-                    + tuple(sorted(kwargs.items()))
-                    + (loopy.version.DATA_MODEL_VERSION,)
-                    + (SUMPY_KERNEL_VERSION,)
-                    + (KERNEL_VERSION,)
-                    + (OPT_ENABLED,))
+                self.get_cache_key()
+                + tuple(sorted(kwargs.items()))
+                + (loopy.version.DATA_MODEL_VERSION,)
+                + (SUMPY_KERNEL_VERSION,)
+                + (KERNEL_VERSION,)
+                + (OPT_ENABLED,)
+            )
 
             try:
                 result = code_cache[cache_key]
@@ -107,6 +109,7 @@ class KernelCacheWrapper:
             logger.info(f"{self.name}: kernel cache miss [key={cache_key}]")
 
         from pytools import MinRecursionLimit
+
         with MinRecursionLimit(3000):
             if OPT_ENABLED:
                 knl = self.get_optimized_kernel(**kwargs)
@@ -130,8 +133,15 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
     Useful for imposing analytic conditions efficiently.
     """
 
-    def __init__(self, dim, expression, variables=None, dtype=np.float64,
-                 function_manglers=None, preamble_generators=None):
+    def __init__(
+        self,
+        dim,
+        expression,
+        variables=None,
+        dtype=np.float64,
+        function_manglers=None,
+        preamble_generators=None,
+    ):
         """
         :arg dim
         :arg expression A pymbolic expression for the function
@@ -140,19 +150,37 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
         assert dim > 0
         self.dim = dim
 
-        assert isinstance(expression, (ExpressionType, int, float, complex))
-        self.expr = expression
+        sympy_to_pymbolic = None
+
+        def _to_pymbolic(expr):
+            nonlocal sympy_to_pymbolic
+            if isinstance(expr, (ExpressionType, int, float, complex)):
+                return expr
+
+            if sympy_to_pymbolic is None:
+                from pymbolic.interop.sympy import SympyToPymbolicMapper
+
+                sympy_to_pymbolic = SympyToPymbolicMapper()
+
+            return sympy_to_pymbolic(expr)
+
+        self.expr = _to_pymbolic(expression)
 
         if variables is None:
             self.vars = [pmbl.var("x%d" % d) for d in range(self.dim)]
         else:
             assert isinstance(variables, list)
-            for var in variables:
-                assert isinstance(var, VariableType)
-            self.vars = variables
+            self.vars = [
+                var if isinstance(var, VariableType) else _to_pymbolic(var)
+                for var in variables
+            ]
 
         self.dtype = dtype
         self.function_manglers = function_manglers
+        if function_manglers is not None:
+            logger.warning(
+                "function_manglers is deprecated with current loopy and is ignored"
+            )
         self.preamble_generators = preamble_generators
 
         self.name = "ScalarFieldExpressionEvaluation"
@@ -196,7 +224,7 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
             id=None,
             assignee="expr_val",
             expression=self.get_normalised_expr(),
-            temp_var_type=None,
+            temp_var_type=lp.Optional(None),
         )
         eval_insns = [
             insn.copy(within_inames=insn.within_inames | eval_inames)
@@ -210,9 +238,7 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
                 for itgt
                     VAR_ASSIGNMENT
                 end
-                """.replace(
-                    "VAR_ASSIGNMENT", self.get_variable_assignment_code()
-                )
+                """.replace("VAR_ASSIGNMENT", self.get_variable_assignment_code())
             ]
             + eval_insns
             + [
@@ -228,7 +254,9 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
                 lp.TemporaryVariable("expr_val", None, ()),
             ]
             + list(extra_kernel_kwarg_types)
-            + ["...", ],
+            + [
+                "...",
+            ],
             name="eval_expr",
             lang_version=(2018, 2),
         )
@@ -237,15 +265,10 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
         loopy_knl = lp.set_options(loopy_knl, write_cl=False)
         loopy_knl = lp.set_options(loopy_knl, return_dict=True)
 
-        if self.function_manglers is not None:
-            loopy_knl = lp.register_function_manglers(
-                loopy_knl,
-                self.function_manglers)
-
         if self.preamble_generators is not None:
             loopy_knl = lp.register_preamble_generators(
-                loopy_knl,
-                self.preamble_generators)
+                loopy_knl, self.preamble_generators
+            )
 
         return loopy_knl
 
@@ -258,10 +281,8 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
             # may result in suboptimal performance.
             ncpus = multiprocessing.cpu_count()
         knl = lp.split_iname(
-            knl,
-            split_iname="itgt",
-            inner_length=ncpus,
-            inner_tag="g.0")
+            knl, split_iname="itgt", inner_length=ncpus, inner_tag="g.0"
+        )
         return knl
 
     def __call__(self, queue, target_points, **kwargs):
@@ -270,11 +291,12 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
         :arg extra_kernel_kwargs
         """
         # handle target_points given as an obj_array of coords
-        if (isinstance(target_points, np.ndarray)
-                and target_points.dtype == object
-                and isinstance(target_points[0], cl.array.Array)):
-            target_points = cl.array.concatenate(
-                    target_points).reshape([self.dim, -1])
+        if (
+            isinstance(target_points, np.ndarray)
+            and target_points.dtype == object
+            and isinstance(target_points[0], cl.array.Array)
+        ):
+            target_points = cl.array.concatenate(target_points).reshape([self.dim, -1])
 
         assert target_points.shape[0] == self.dim
 
@@ -288,10 +310,6 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
 
         knl = self.get_cached_optimized_kernel()
 
-        # FIXME: caching loses function mangler information
-        if self.function_manglers is not None:
-            knl = lp.register_function_manglers(knl, self.function_manglers)
-
         if self.preamble_generators is not None:
             knl = lp.register_preamble_generators(knl, self.preamble_generators)
 
@@ -300,10 +318,11 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
             target_points=target_points,
             n_targets=n_tgt_points,
             result=np.zeros(n_tgt_points, dtype=self.dtype),
-            **extra_kernel_kwargs
+            **extra_kernel_kwargs,
         )
 
         return res["result"]
+
 
 # }}} End scalar field expression eval
 
@@ -319,15 +338,18 @@ def import_code(code, name, add_to_sys_modules=True):
     to sys.modules under the given name.
     """
     import imp
+
     module = imp.new_module(name)
 
     if add_to_sys_modules:
         import sys
+
         sys.modules[name] = module
 
     exec(code, module.__dict__)
 
     return module
+
 
 # }}} End import code
 
@@ -340,7 +362,9 @@ class BoxSpecificMap(KernelCacheWrapper):
     nodes. Being box-specific means that the transform for each box is
     independent from the rest of the boxes.
     """
+
     pass
+
 
 # {{{ discrete Legendre transform
 
@@ -364,34 +388,36 @@ class DiscreteLegendreTransform(BoxSpecificMap):
         self.degree = degree
 
         # Template interval
-        self.template_interval = [-1., 1.]
-        self.template_interval_extent = 2.
-        self.template_interval_center = 0.
+        self.template_interval = [-1.0, 1.0]
+        self.template_interval_extent = 2.0
+        self.template_interval_center = 0.0
 
-        self.leg_tplt_x, self.leg_tplt_w = \
-                np.polynomial.legendre.leggauss(degree)
+        self.leg_tplt_x, self.leg_tplt_w = np.polynomial.legendre.leggauss(degree)
 
         if self.dim == 1:
-            self.V = np.polynomial.legendre.legvander(
-                    self.leg_tplt_x, self.degree - 1)
+            self.V = np.polynomial.legendre.legvander(self.leg_tplt_x, self.degree - 1)
             self.W = self.leg_tplt_w.reshape(-1)
 
         elif self.dim == 2:
             x, y = np.meshgrid(self.leg_tplt_x, self.leg_tplt_x)
             self.V = np.polynomial.legendre.legvander2d(
-                    x.reshape(-1), y.reshape(-1),
-                    [self.degree - 1] * self.dim)
-            self.W = (self.leg_tplt_w[None, :]
-                    * self.leg_tplt_w[:, None]).reshape(-1)
+                x.reshape(-1), y.reshape(-1), [self.degree - 1] * self.dim
+            )
+            self.W = (self.leg_tplt_w[None, :] * self.leg_tplt_w[:, None]).reshape(-1)
 
         elif self.dim == 3:
             x, y, z = np.meshgrid(self.leg_tplt_x, self.leg_tplt_x, self.leg_tplt_x)
             self.V = np.polynomial.legendre.legvander3d(
-                    x.reshape(-1), y.reshape(-1), z.reshape(-1),
-                    [self.degree - 1] * self.dim)
-            self.W = (self.leg_tplt_w[:, None, None]
-                    * self.leg_tplt_w[None, :, None]
-                    * self.leg_tplt_w[None, None, :]).reshape(-1)
+                x.reshape(-1),
+                y.reshape(-1),
+                z.reshape(-1),
+                [self.degree - 1] * self.dim,
+            )
+            self.W = (
+                self.leg_tplt_w[:, None, None]
+                * self.leg_tplt_w[None, :, None]
+                * self.leg_tplt_w[None, None, :]
+            ).reshape(-1)
 
         else:
             raise NotImplementedError("Dimension %d is not supported" % self.dim)
@@ -402,8 +428,8 @@ class DiscreteLegendreTransform(BoxSpecificMap):
 
         # Normalizers
         self.I = np.ascontiguousarray(  # noqa: E741
-                np.diag(
-                    (self.V.T * self.W) @ self.V))
+            np.diag((self.V.T * self.W) @ self.V)
+        )
         assert self.I.shape == (self.degree**self.dim,)
 
         # Fix strides for loopy
@@ -411,30 +437,28 @@ class DiscreteLegendreTransform(BoxSpecificMap):
 
         # Check orthogonality
         ortho_resid = np.linalg.norm(
-                self.V.T * np.matmul(self.W, self.V) - np.diag(self.I))
+            self.V.T * np.matmul(self.W, self.V) - np.diag(self.I)
+        )
         if ortho_resid > 1e-13:
-            logger.warn("Legendre polynomials' orthogonality residual = %f"
-                    % ortho_resid)
+            logger.warn(
+                "Legendre polynomials' orthogonality residual = %f" % ortho_resid
+            )
 
         self.name = "DiscreteLegendreTransform"
 
     def get_cache_key(self):
-        return (
-            type(self).__name__,
-            str(self.dim) + "D",
-            "degree=%d" % self.degree
-        )
+        return (type(self).__name__, str(self.dim) + "D", "degree=%d" % self.degree)
 
     def get_kernel(self, **kwargs):
 
         loopy_knl = lp.make_kernel(
-                [
-                    "{ [ bid ] : 0 <= bid < n_boxes }",
-                    "{ [ mid ] : 0 <= mid < n_box_nodes }",
-                    "{ [ nid ] : 0 <= nid < n_box_nodes }"
-                    ],
-                [
-                    """
+            [
+                "{ [ bid ] : 0 <= bid < n_boxes }",
+                "{ [ mid ] : 0 <= mid < n_box_nodes }",
+                "{ [ nid ] : 0 <= nid < n_box_nodes }",
+            ],
+            [
+                """
                 for bid
                     <> box_id       = boxes[bid]
                     <> box_node_beg = box_node_starts[box_id]
@@ -466,20 +490,20 @@ class DiscreteLegendreTransform(BoxSpecificMap):
                     end
                 end
                 """
-                ],
-                [
-                    lp.ValueArg("n_box_nodes, n_boxes", np.int32),
-                    # lp.ValueArg("root_extent", np.float64),
-                    lp.GlobalArg("weight, normalizer, filter_multiplier",
-                        np.float64, "n_box_nodes"),
-                    lp.GlobalArg("vandermonde", np.float64,
-                        "n_box_nodes, n_box_nodes"),
-                    lp.GlobalArg("func", np.float64, "n_box_nodes * n_boxes"),
-                    "...",
-                    ],
-                name="discrete_legendre_transform",
-                lang_version=(2018, 2),
-                )
+            ],
+            [
+                lp.ValueArg("n_box_nodes, n_boxes", np.int32),
+                # lp.ValueArg("root_extent", np.float64),
+                lp.GlobalArg(
+                    "weight, normalizer, filter_multiplier", np.float64, "n_box_nodes"
+                ),
+                lp.GlobalArg("vandermonde", np.float64, "n_box_nodes, n_box_nodes"),
+                lp.GlobalArg("func", np.float64, "n_box_nodes * n_boxes"),
+                "...",
+            ],
+            name="discrete_legendre_transform",
+            lang_version=(2018, 2),
+        )
 
         loopy_knl = lp.set_options(loopy_knl, write_cl=False)
         loopy_knl = lp.set_options(loopy_knl, return_dict=True)
@@ -490,12 +514,11 @@ class DiscreteLegendreTransform(BoxSpecificMap):
         knl = self.get_kernel(**kwargs)
         if ncpus is None:
             import multiprocessing
+
             ncpus = multiprocessing.cpu_count()
         knl = lp.split_iname(
-            knl,
-            split_iname="bid",
-            inner_length=ncpus,
-            inner_tag="g.0")
+            knl, split_iname="bid", inner_length=ncpus, inner_tag="g.0"
+        )
         return knl
 
     def __call__(self, queue, traversal, nodal_vals, filtering=None, **kwargs):
@@ -507,7 +530,8 @@ class DiscreteLegendreTransform(BoxSpecificMap):
 
         if filtering is None:
             filter_multiplier = 1 + cl.array.zeros(
-                queue, self.degree**self.dim, np.float64)
+                queue, self.degree**self.dim, np.float64
+            )
         elif isinstance(filtering, cl.array.Array):
             assert filtering.shape == (self.degree**self.dim,)
             filter_multiplier = filtering
@@ -535,6 +559,7 @@ class DiscreteLegendreTransform(BoxSpecificMap):
 
         return res["result"]
 
+
 # }}} End discrete Legendre transform
 
 # {{{ inverse discrete Legendre transform
@@ -545,7 +570,9 @@ class InverseDiscreteLegendreTransform(BoxSpecificMap):
     Box-specific transform that maps box-local modal coefficients
     to nodal values. Inverse of :class:`DiscreteLegendreTransform`.
     """
+
     pass
+
 
 # }}} End inverse discrete Legendre transform
 
@@ -561,7 +588,9 @@ class BoxSpecificReduction(KernelCacheWrapper):
     Being box-specific means that the reductions for each box is
     independent from the rest of the boxes.
     """
+
     pass
+
 
 # {{{ sum
 
@@ -584,21 +613,17 @@ class BoxSum(BoxSpecificReduction):
         self.name = "BoxSum"
 
     def get_cache_key(self):
-        return (
-            type(self).__name__,
-            str(self.dim) + "D",
-            "degree=%d" % self.degree
-        )
+        return (type(self).__name__, str(self.dim) + "D", "degree=%d" % self.degree)
 
     def get_kernel(self, **kwargs):
 
         loopy_knl = lp.make_kernel(
-                [
-                    "{ [ bid ] : 0 <= bid < n_boxes }",
-                    "{ [ nid ] : 0 <= nid < n_box_nodes }"
-                    ],
-                [
-                    """
+            [
+                "{ [ bid ] : 0 <= bid < n_boxes }",
+                "{ [ nid ] : 0 <= nid < n_box_nodes }",
+            ],
+            [
+                """
                 for bid
                     <> box_id       = boxes[bid]
                     <> box_node_beg = box_node_starts[box_id]
@@ -608,16 +633,16 @@ class BoxSum(BoxSpecificReduction):
                                       * filter_multiplier[nid])
                 end
                 """
-                ],
-                [
-                    lp.ValueArg("n_box_nodes, n_boxes", np.int32),
-                    lp.GlobalArg("filter_multiplier", np.float64, "n_box_nodes"),
-                    lp.GlobalArg("func", np.float64, "n_box_nodes * n_boxes"),
-                    "...",
-                    ],
-                name="box_filtered_sum",
-                lang_version=(2018, 2),
-                )
+            ],
+            [
+                lp.ValueArg("n_box_nodes, n_boxes", np.int32),
+                lp.GlobalArg("filter_multiplier", np.float64, "n_box_nodes"),
+                lp.GlobalArg("func", np.float64, "n_box_nodes * n_boxes"),
+                "...",
+            ],
+            name="box_filtered_sum",
+            lang_version=(2018, 2),
+        )
 
         loopy_knl = lp.set_options(loopy_knl, write_cl=False)
         loopy_knl = lp.set_options(loopy_knl, return_dict=True)
@@ -628,12 +653,11 @@ class BoxSum(BoxSpecificReduction):
         knl = self.get_kernel(**kwargs)
         if ncpus is None:
             import multiprocessing
+
             ncpus = multiprocessing.cpu_count()
         knl = lp.split_iname(
-            knl,
-            split_iname="bid",
-            inner_length=ncpus,
-            inner_tag="g.0")
+            knl, split_iname="bid", inner_length=ncpus, inner_tag="g.0"
+        )
         return knl
 
     def __call__(self, queue, traversal, nodal_vals, filtering=None, **kwargs):
@@ -649,14 +673,14 @@ class BoxSum(BoxSpecificReduction):
         """
 
         if filtering is None:
-            filter_multiplier = 1 + cl.array.zeros(queue,
-                    self.degree**self.dim, np.float64)
+            filter_multiplier = 1 + cl.array.zeros(
+                queue, self.degree**self.dim, np.float64
+            )
         elif isinstance(filtering, cl.array.Array):
             assert filtering.shape == (self.degree**self.dim,)
             filter_multiplier = filtering
         else:
-            raise RuntimeError("Invalid filtering argument: %s"
-                    % str(filtering))
+            raise RuntimeError("Invalid filtering argument: %s" % str(filtering))
 
         knl = self.get_cached_optimized_kernel()
         n_boxes = traversal.target_boxes.shape[0]
@@ -673,6 +697,7 @@ class BoxSum(BoxSpecificReduction):
         )
 
         return res["result"]
+
 
 # }}} End sum
 
@@ -694,13 +719,14 @@ def generate_leading_order_filtering(dim, n_dofs):
 
     elif dim == 2:
         return (
-            mask1d[:, None] + mask1d[None, :]
-            - mask1d[:, None] * mask1d[None, :]
+            mask1d[:, None] + mask1d[None, :] - mask1d[:, None] * mask1d[None, :]
         ).reshape(-1)
 
     elif dim == 3:
         return (
-            mask1d[:, None, None] + mask1d[None, :, None] + mask1d[None, None, :]
+            mask1d[:, None, None]
+            + mask1d[None, :, None]
+            + mask1d[None, None, :]
             - mask1d[:, None, None] * mask1d[None, :, None]
             - mask1d[:, None, None] * mask1d[None, None, :]
             - mask1d[None, :, None] * mask1d[None, None, :]
@@ -709,5 +735,6 @@ def generate_leading_order_filtering(dim, n_dofs):
 
     else:
         raise NotImplementedError("Dimension %d not supported" % dim)
+
 
 # }}} End filters for box-specific operators

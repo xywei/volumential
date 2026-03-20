@@ -36,6 +36,7 @@ import numpy as np
 
 import pymbolic as pmbl
 import pyopencl as cl
+import pyopencl.array  # noqa: F401
 
 from volumential.tools import ScalarFieldExpressionEvaluation as Eval
 
@@ -233,10 +234,10 @@ def main():
 
     from volumential.expansion_wrangler_fpnd import (
         FPNDExpansionWrangler,
-        FPNDExpansionWranglerCodeContainer,
+        FPNDTreeIndependentDataForWrangler,
     )
 
-    wcc = FPNDExpansionWranglerCodeContainer(
+    tree_indep = FPNDTreeIndependentDataForWrangler(
         ctx,
         partial(mpole_expn_class, knl),
         partial(local_expn_class, knl),
@@ -251,8 +252,7 @@ def main():
         self_extra_kwargs = {}
 
     wrangler = FPNDExpansionWrangler(
-        code_container=wcc,
-        queue=queue,
+        tree_indep=tree_indep,
         traversal=trav,
         near_field_table=nftable,
         dtype=dtype,
