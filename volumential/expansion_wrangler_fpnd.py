@@ -229,6 +229,24 @@ class FPNDSumpyTreeIndependentDataForWrangler(
             source_kernels=source_kernels,
         )
 
+    def _for_queue(self, queue):
+        setup_queue = getattr(self._setup_actx, "queue", None)
+        if queue is None or setup_queue is queue:
+            return self
+
+        tree_indep = type(self)(
+            queue.context,
+            self.multipole_expansion_factory,
+            self.local_expansion_factory,
+            self.target_kernels,
+            exclude_self=self.exclude_self,
+            use_rscale=self.use_rscale,
+            strength_usage=self.strength_usage,
+            source_kernels=self.source_kernels,
+        )
+        tree_indep._setup_actx = PyOpenCLArrayContext(queue)
+        return tree_indep
+
     def get_wrangler(
         self,
         queue,
@@ -241,12 +259,10 @@ class FPNDSumpyTreeIndependentDataForWrangler(
         *args,
         **kwargs,
     ):
-        setup_queue = getattr(self._setup_actx, "queue", None)
-        if queue is not None and setup_queue is not queue:
-            self._setup_actx = PyOpenCLArrayContext(queue)
+        tree_indep = self._for_queue(queue)
 
         return FPNDSumpyExpansionWrangler(
-            tree_indep=self,
+            tree_indep=tree_indep,
             queue=queue,
             traversal=traversal,
             *args,
@@ -312,6 +328,8 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         """
 
         queue = _resolve_queue(queue, traversal, tree_indep)
+        if hasattr(tree_indep, "_for_queue"):
+            tree_indep = tree_indep._for_queue(queue)
 
         if source_extra_kwargs is None:
             source_extra_kwargs = {}

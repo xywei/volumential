@@ -102,7 +102,9 @@ CL_MATH_FUNCS = [
 clmath_decl_code = r"""
 def FUNC_NAME(x):
     "CL math function FUNC_NAME.\n\nSee CL_MATH_URL for details."
-    return pmbl.var("FUNC_NAME")(x)
+    return pmbl.primitives.Call(
+            pmbl.primitives.Lookup(pmbl.primitives.Variable("math"), "FUNC_NAME"),
+            (x,))
 """
 
 for fname in CL_MATH_FUNCS:

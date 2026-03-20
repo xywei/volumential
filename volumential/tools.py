@@ -28,11 +28,28 @@ import loopy as lp
 import pymbolic as pmbl
 import pyopencl as cl
 import pyopencl.array  # noqa: F401
+from pymbolic.mapper import IdentityMapper
 from pymbolic.primitives import Expression as ExpressionType, Variable as VariableType
 from pytools import memoize_method
 
 
 logger = logging.getLogger(__name__)
+
+
+class _MathLookupToBareCallMapper(IdentityMapper):
+    def map_call(self, expr):
+        function = self.rec(expr.function)
+        parameters = tuple(self.rec(par) for par in expr.parameters)
+
+        if (
+            isinstance(function, pmbl.primitives.Lookup)
+            and isinstance(function.aggregate, pmbl.primitives.Variable)
+            and function.aggregate.name == "math"
+        ):
+            function = pmbl.var(function.name)
+
+        return pmbl.primitives.Call(function, parameters)
+
 
 # {{{ clean files
 
@@ -198,7 +215,8 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
         nvars = [pmbl.var("x%d" % d) for d in range(self.dim)]
         for var, nvar in zip(self.vars, nvars):
             nexpr = pmbl.substitute(nexpr, {var: nvar})
-        return nexpr
+
+        return _MathLookupToBareCallMapper()(nexpr)
 
     def get_variable_assignment_code(self):
         if self.dim == 1:
