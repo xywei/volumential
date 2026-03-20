@@ -12,8 +12,8 @@ jobs:
     name: Linting (flake8)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           # matches compat target in setup.py
           python-version: '3.8'
@@ -31,8 +31,8 @@ jobs:
     name: Testing (Linux)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.x'
       - name: "Main Script"
@@ -50,8 +50,8 @@ jobs:
     name: Testing (Nearfield Duffy)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.x'
       - name: "Main Script"
@@ -75,8 +75,8 @@ jobs:
     name: Testing (macOS)
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.x'
       - name: "Main Script"
@@ -86,6 +86,12 @@ jobs:
 
           export CONDA_ENVIRONMENT=.test-conda-env-py3-macos.yml
           export PYTEST_FLAGS="--cov=volumential"
+          export CI_TEST_CONDA_PREFIX="$PWD/.conda-root/envs/testing"
+          export CPATH="${CI_TEST_CONDA_PREFIX}/include${CPATH:+:${CPATH}}"
+          export LIBRARY_PATH="${CI_TEST_CONDA_PREFIX}/lib${LIBRARY_PATH:+:${LIBRARY_PATH}}"
+          export CPPFLAGS="${CPPFLAGS:-} -I${CI_TEST_CONDA_PREFIX}/include"
+          export CFLAGS="${CFLAGS:-} -I${CI_TEST_CONDA_PREFIX}/include"
+          export LDFLAGS="${LDFLAGS:-} -L${CI_TEST_CONDA_PREFIX}/lib"
 
           curl -L -O https://tiker.net/ci-support-v0
           . ci-support-v0
@@ -97,8 +103,8 @@ jobs:
     name: Documentation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.x'
       - name: "Main Script"
@@ -115,8 +121,8 @@ jobs:
     name: Examples
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.x'
       - name: "Main Script"

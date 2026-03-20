@@ -262,6 +262,29 @@ def _deserialize_scalar(ty, value):
     raise ValueError("Unsupported serialized value type: %s" % ty)
 
 
+def _coerce_sqlite_int(value, field_name):
+    if isinstance(value, (int, np.integer)):
+        return int(value)
+
+    if isinstance(value, str):
+        return int(value)
+
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        raw = bytes(value)
+
+        # Legacy rows could contain numpy scalar bytes if sqlite adapters
+        # treated numpy integers as blobs.
+        if len(raw) == 4:
+            return int(np.frombuffer(raw, dtype=np.int32)[0])
+
+        if len(raw) == 8:
+            return int(np.frombuffer(raw, dtype=np.int64)[0])
+
+        return int(raw.decode("ascii"))
+
+    raise TypeError(f"unsupported integer value for {field_name}: {type(value)!r}")
+
+
 def _looks_like_hdf5_file(path):
     try:
         with open(path, "rb") as f:
@@ -302,6 +325,120 @@ class ConstantKernel(ExpressionKernel):
 
 
 # }}} End constant sumpy kernel
+
+
+# {{{ cahn-hilliard sumpy kernels
+
+
+def _extract_cahn_hilliard_coefficients(kwargs, where):
+    has_b = "b" in kwargs
+    has_c = "c" in kwargs
+    has_approx = "approx_at_origin" in kwargs
+
+    if has_b != has_c:
+        raise TypeError(f"{where}: Cahn-Hilliard requires both b and c together")
+
+    if has_approx and not (has_b and has_c):
+        raise TypeError(
+            f"{where}: Cahn-Hilliard requires both b and c when approx_at_origin "
+            "is specified"
+        )
+
+    if not (has_b and has_c):
+        return None
+
+    if kwargs.get("approx_at_origin", False):
+        raise TypeError(
+            f"{where}: approx_at_origin is unsupported for sumpy Cahn-Hilliard kernels"
+        )
+
+    b = kwargs["b"]
+    c = kwargs["c"]
+    if isinstance(b, np.generic):
+        b = b.item()
+    if isinstance(c, np.generic):
+        c = c.item()
+
+    if not np.isscalar(b) or not np.isscalar(c):
+        raise TypeError(f"{where}: Cahn-Hilliard coefficients must be scalars")
+
+    if isinstance(b, (bytes, bytearray, memoryview)) or isinstance(
+        c, (bytes, bytearray, memoryview)
+    ):
+        raise TypeError(f"{where}: Cahn-Hilliard coefficients must be numeric scalars")
+
+    try:
+        b = complex(b)
+        c = complex(c)
+    except Exception as exc:
+        raise TypeError(
+            f"{where}: failed to parse Cahn-Hilliard coefficients b/c as scalars"
+        ) from exc
+
+    return b, c
+
+
+def _compute_cahn_hilliard_lambdas(b, c):
+    roots = np.roots(np.array([1.0, -b, c], dtype=np.complex128))
+    lambdas = [np.lib.scimath.sqrt(root) for root in roots]
+    lambdas.sort(key=abs, reverse=True)
+
+    lam1, lam2 = lambdas
+    if abs(lam1**2 - lam2**2) < 1e-15:
+        raise ValueError(
+            "degenerate Cahn-Hilliard coefficients: expected distinct roots"
+        )
+
+    return lam1, lam2
+
+
+class CahnHilliardKernel(ExpressionKernel):
+    init_arg_names = ("dim", "b", "c")
+
+    def __init__(self, dim: int | None = None, b: complex = 0j, c: complex = 0j):
+        if dim != 2:
+            raise NotImplementedError(
+                f"Cahn-Hilliard sumpy kernel only supports dim=2 (got {dim})"
+            )
+
+        from pymbolic import var
+        from pymbolic.primitives import make_sym_vector
+        from sumpy.symbolic import pymbolic_real_norm_2
+
+        lam1, lam2 = _compute_cahn_hilliard_lambdas(b, c)
+        denom = lam1**2 - lam2**2
+
+        r = pymbolic_real_norm_2(make_sym_vector("d", dim))
+        expr = var("hankel_1")(0, var("I") * lam1 * r) - var("hankel_1")(
+            0, var("I") * lam2 * r
+        )
+        scaling_for_k0 = var("pi") / 2 * var("I")
+        scaling = -scaling_for_k0 / (2 * var("pi") * denom)
+
+        super().__init__(dim, expression=expr, global_scaling_const=scaling)
+
+        object.__setattr__(self, "b", b)
+        object.__setattr__(self, "c", c)
+
+    @property
+    def is_complex_valued(self):
+        return True
+
+    def prepare_loopy_kernel(self, loopy_knl):
+        from sumpy.codegen import register_bessel_callables
+
+        return register_bessel_callables(loopy_knl)
+
+    def __getinitargs__(self):
+        return (self.dim, self.b, self.c)
+
+    def __repr__(self):
+        return f"CahnHilliardKnl{self.dim}D(b={self.b}, c={self.c})"
+
+    mapper_method = "map_expression_kernel"
+
+
+# }}} End cahn-hilliard sumpy kernels
 
 # {{{ table dataset manager class
 
@@ -804,6 +941,12 @@ class NearFieldInteractionTableManager:
                 f"({where}; got {', '.join(specified)})"
             )
 
+    def _reject_removed_knl_func_kwarg(self, kwargs, where):
+        if "knl_func" in kwargs:
+            raise TypeError(
+                f"knl_func has been removed; pass sumpy_knl instead ({where})"
+            )
+
     def _kwargs_for_cache_storage(self, kwargs):
         cache_kwargs = dict(kwargs)
         build_config_fingerprint = self._build_config_fingerprint(kwargs)
@@ -845,22 +988,25 @@ class NearFieldInteractionTableManager:
         return updated_kwargs
 
     def _resolve_kernel_bundle(self, table_request, kwargs, require_sumpy_kernel):
-        if "knl_func" in kwargs:
-            knl_func = kwargs["knl_func"]
-        else:
-            knl_func = self.get_kernel_function(
-                table_request.dim,
-                table_request.kernel_type,
-                **kwargs,
-            )
+        self._reject_removed_knl_func_kwarg(kwargs, "_resolve_kernel_bundle")
+
+        ch_kwargs = {
+            key: kwargs[key] for key in ("b", "c", "approx_at_origin") if key in kwargs
+        }
 
         if "sumpy_knl" in kwargs:
+            if ch_kwargs:
+                raise TypeError(
+                    "_resolve_kernel_bundle cannot mix sumpy_knl with "
+                    "Cahn-Hilliard coefficients b/c"
+                )
             sumpy_knl = kwargs["sumpy_knl"]
         else:
             try:
                 sumpy_knl = self.get_sumpy_kernel(
                     table_request.dim,
                     table_request.kernel_type,
+                    **ch_kwargs,
                 )
             except NotImplementedError:
                 sumpy_knl = None
@@ -875,6 +1021,14 @@ class NearFieldInteractionTableManager:
                 "DuffyRadial table builder requires a sumpy kernel; "
                 f"kernel_type={table_request.kernel_type!r} is unsupported "
                 "for loopy table build."
+            )
+
+        knl_func = None
+        if sumpy_knl is not None:
+            knl_func = self.get_kernel_function(
+                table_request.dim,
+                table_request.kernel_type,
+                sumpy_knl=sumpy_knl,
             )
 
         return TableKernelBundle(
@@ -975,7 +1129,7 @@ class NearFieldInteractionTableManager:
         queue=None,
         **kwargs,
     ):
-        """Get or build a table using a :class:`TableRequest`."""
+        """Get or build a table using a :class:`volumential.table_manager.TableRequest`."""
 
         t_get_start = time.perf_counter()
         request_kwargs = dict(kwargs)
@@ -984,6 +1138,10 @@ class NearFieldInteractionTableManager:
             "get_table_from_request",
         )
         self._reject_removed_top_level_duffy_knobs(
+            request_kwargs,
+            "get_table_from_request",
+        )
+        self._reject_removed_knl_func_kwarg(
             request_kwargs,
             "get_table_from_request",
         )
@@ -1086,7 +1244,7 @@ class NearFieldInteractionTableManager:
         return self.load_saved_table_from_request(table_request, **kwargs)
 
     def load_saved_table_from_request(self, table_request, **kwargs):
-        """Load a cached table using a :class:`TableRequest`."""
+        """Load a cached table using a :class:`volumential.table_manager.TableRequest`."""
 
         request_kwargs = dict(kwargs)
         self._reject_removed_compute_method_kwarg(
@@ -1094,6 +1252,10 @@ class NearFieldInteractionTableManager:
             "load_saved_table_from_request",
         )
         self._reject_removed_top_level_duffy_knobs(
+            request_kwargs,
+            "load_saved_table_from_request",
+        )
+        self._reject_removed_knl_func_kwarg(
             request_kwargs,
             "load_saved_table_from_request",
         )
@@ -1198,8 +1360,14 @@ class NearFieldInteractionTableManager:
         assert table.n_pairs == record["n_pairs"]
         assert table.quad_order == record["quad_order"]
 
-        base = record["case_encoding_base"]
-        shift = record["case_encoding_shift"]
+        base = _coerce_sqlite_int(
+            record["case_encoding_base"],
+            field_name="case_encoding_base",
+        )
+        shift = _coerce_sqlite_int(
+            record["case_encoding_shift"],
+            field_name="case_encoding_shift",
+        )
 
         def case_encode(case_vec):
             table_id = 0
@@ -1249,28 +1417,57 @@ class NearFieldInteractionTableManager:
         return table
 
     def get_kernel_function(self, dim, kernel_type, **kwargs):
-        """Kernel function is needed for building the table. This function
-        provides support for some kernels such that the user can build and
-        use the table without explicitly providing such information.
-        """
-        if kernel_type == "Laplace":
-            knl_func = vm.nearfield_potential_table.get_laplace(dim)
-        elif kernel_type == "Constant":
-            knl_func = vm.nearfield_potential_table.constant_one
-        elif kernel_type == "Cahn-Hilliard":
-            knl_func = vm.nearfield_potential_table.get_cahn_hilliard(
-                dim, kwargs["b"], kwargs["c"]
+        """Return a numerical kernel callable derived from a sumpy kernel."""
+        allowed = {"sumpy_knl", "b", "c", "approx_at_origin"}
+        unknown = sorted(set(kwargs) - allowed)
+        if unknown:
+            raise TypeError(
+                "get_kernel_function only accepts sumpy_knl, b, c, and "
+                f"approx_at_origin; got {', '.join(unknown)}"
             )
-        elif kernel_type in self.supported_kernels:
-            knl = self.get_sumpy_kernel(dim, kernel_type)
-            knl_func = vm.nearfield_potential_table.sumpy_kernel_to_lambda(knl)
-        else:
-            raise NotImplementedError("Kernel type not supported.")
 
-        return knl_func
+        ch_kwargs = {
+            key: kwargs[key] for key in ("b", "c", "approx_at_origin") if key in kwargs
+        }
 
-    def get_sumpy_kernel(self, dim, kernel_type):
+        sumpy_knl = kwargs.get("sumpy_knl")
+        if sumpy_knl is not None and ch_kwargs:
+            raise TypeError(
+                "get_kernel_function cannot mix sumpy_knl with Cahn-Hilliard "
+                "coefficients b/c"
+            )
+
+        if sumpy_knl is None:
+            sumpy_knl = self.get_sumpy_kernel(dim, kernel_type, **ch_kwargs)
+
+        if sumpy_knl is None:
+            raise RuntimeError(
+                "Kernel function derivation requires a sumpy kernel; "
+                f"kernel_type={kernel_type!r} is unsupported."
+            )
+
+        return vm.nearfield_potential_table.sumpy_kernel_to_lambda(sumpy_knl)
+
+    def get_sumpy_kernel(self, dim, kernel_type, **kwargs):
         """Sumpy (symbolic) version of the kernel."""
+
+        allowed = {"b", "c", "approx_at_origin"}
+        unknown = sorted(set(kwargs) - allowed)
+        if unknown:
+            raise TypeError(
+                "get_sumpy_kernel only accepts optional Cahn-Hilliard "
+                f"kwargs b/c/approx_at_origin; got {', '.join(unknown)}"
+            )
+
+        ch_kwargs = {
+            key: kwargs[key] for key in ("b", "c", "approx_at_origin") if key in kwargs
+        }
+        has_ch_coeffs = bool(ch_kwargs)
+        if has_ch_coeffs and not kernel_type.startswith("Cahn-Hilliard"):
+            raise TypeError(
+                "Cahn-Hilliard coefficients b/c are only valid when "
+                "kernel_type starts with 'Cahn-Hilliard'"
+            )
 
         if kernel_type == "Laplace":
             from sumpy.kernel import LaplaceKernel
@@ -1311,50 +1508,48 @@ class NearFieldInteractionTableManager:
 
             return AxisTargetDerivative(1, YukawaKernel(dim))
 
-        elif kernel_type == "Cahn-Hilliard":
-            from sumpy.kernel import FactorizedBiharmonicKernel
+        elif kernel_type.startswith("Cahn-Hilliard"):
+            from sumpy.kernel import AxisTargetDerivative
 
-            return FactorizedBiharmonicKernel(dim)
+            coeffs = _extract_cahn_hilliard_coefficients(ch_kwargs, "get_sumpy_kernel")
+            if coeffs is None:
+                try:
+                    from sumpy.kernel import FactorizedBiharmonicKernel
 
-        elif kernel_type == "Cahn-Hilliard-Laplacian":
-            from sumpy.kernel import (
-                FactorizedBiharmonicKernel,
-                LaplacianTargetDerivative,
-            )
+                    base_knl = FactorizedBiharmonicKernel(dim)
+                except (ImportError, AttributeError) as exc:
+                    raise TypeError(
+                        "Cahn-Hilliard kernels require both b and c when "
+                        "FactorizedBiharmonicKernel is unavailable in sumpy"
+                    ) from exc
+            else:
+                base_knl = CahnHilliardKernel(dim, b=coeffs[0], c=coeffs[1])
 
-            return LaplacianTargetDerivative(FactorizedBiharmonicKernel(dim))
+            if kernel_type == "Cahn-Hilliard":
+                return base_knl
 
-        elif kernel_type == "Cahn-Hilliard-Dx":
-            from sumpy.kernel import AxisTargetDerivative, FactorizedBiharmonicKernel
+            if kernel_type == "Cahn-Hilliard-Laplacian":
+                from sumpy.kernel import LaplacianTargetDerivative
 
-            return AxisTargetDerivative(0, FactorizedBiharmonicKernel(dim))
+                return LaplacianTargetDerivative(base_knl)
 
-        elif kernel_type == "Cahn-Hilliard-Laplacian-Dx":
-            from sumpy.kernel import (
-                AxisTargetDerivative,
-                FactorizedBiharmonicKernel,
-                LaplacianTargetDerivative,
-            )
+            if kernel_type == "Cahn-Hilliard-Dx":
+                return AxisTargetDerivative(0, base_knl)
 
-            return AxisTargetDerivative(
-                0, LaplacianTargetDerivative(FactorizedBiharmonicKernel(dim))
-            )
+            if kernel_type == "Cahn-Hilliard-Laplacian-Dx":
+                from sumpy.kernel import LaplacianTargetDerivative
 
-        elif kernel_type == "Cahn-Hilliard-Laplacian-Dy":
-            from sumpy.kernel import (
-                AxisTargetDerivative,
-                FactorizedBiharmonicKernel,
-                LaplacianTargetDerivative,
-            )
+                return AxisTargetDerivative(0, LaplacianTargetDerivative(base_knl))
 
-            return AxisTargetDerivative(
-                1, LaplacianTargetDerivative(FactorizedBiharmonicKernel(dim))
-            )
+            if kernel_type == "Cahn-Hilliard-Laplacian-Dy":
+                from sumpy.kernel import LaplacianTargetDerivative
 
-        elif kernel_type == "Cahn-Hilliard-Dy":
-            from sumpy.kernel import AxisTargetDerivative, FactorizedBiharmonicKernel
+                return AxisTargetDerivative(1, LaplacianTargetDerivative(base_knl))
 
-            return AxisTargetDerivative(1, FactorizedBiharmonicKernel(dim))
+            if kernel_type == "Cahn-Hilliard-Dy":
+                return AxisTargetDerivative(1, base_knl)
+
+            raise NotImplementedError("Kernel type not supported.")
 
         elif kernel_type in self.supported_kernels:
             return None
@@ -1416,7 +1611,7 @@ class NearFieldInteractionTableManager:
         queue=None,
         **kwargs,
     ):
-        """Build/update a cached table using a :class:`TableRequest`."""
+        """Build/update a cached table using a :class:`volumential.table_manager.TableRequest`."""
 
         request_kwargs = dict(kwargs)
         self._reject_removed_compute_method_kwarg(
@@ -1490,8 +1685,8 @@ class NearFieldInteractionTableManager:
         for vec in table.interaction_case_vecs:
             for case_vec_comp in vec:
                 distinct_numbers.add(case_vec_comp)
-        base = len(range(min(distinct_numbers), max(distinct_numbers) + 1))
-        shift = -min(distinct_numbers)
+        base = int(len(range(min(distinct_numbers), max(distinct_numbers) + 1)))
+        shift = int(-min(distinct_numbers))
 
         record_values = (
             table_request.dim,

@@ -84,6 +84,26 @@ def test_modes():
         assert np.allclose(val, 1)
 
 
+def test_sumpy_kernel_to_lambda_lambdifies_once(monkeypatch):
+    from sumpy.kernel import LaplaceKernel
+
+    import sympy
+
+    call_count = {"n": 0}
+    original_lambdify = sympy.lambdify
+
+    def wrapped_lambdify(*args, **kwargs):
+        call_count["n"] += 1
+        return original_lambdify(*args, **kwargs)
+
+    monkeypatch.setattr(sympy, "lambdify", wrapped_lambdify)
+
+    knl_func = npt.sumpy_kernel_to_lambda(LaplaceKernel(2))
+    assert np.isfinite(knl_func(0.5, 0.25))
+    assert np.isfinite(knl_func(0.25, 0.5))
+    assert call_count["n"] == 1
+
+
 def cheb_eval(dim, coefs, coords):
     if dim == 1:
         return chebval(coords[0], coefs)
@@ -1066,6 +1086,100 @@ def test_duffy_radial_batched_matches_scalar_reference_entries(
         )
         rel_err = abs(table.data[entry_id] - ref_val) / max(1.0, abs(ref_val))
         assert rel_err < rtol
+
+
+def test_duffy_radial_batched_laplace_center_case_is_finite(ctx_factory):
+    from sumpy.kernel import LaplaceKernel
+
+    queue = _get_cpu_queue_or_skip(ctx_factory)
+
+    table = npt.NearFieldInteractionTable(
+        quad_order=4,
+        dim=2,
+        build_method="DuffyRadial",
+        kernel_func=npt.get_laplace(2),
+        kernel_type="log",
+        sumpy_kernel=LaplaceKernel(2),
+        progress_bar=False,
+    )
+
+    invariant_info = table._get_invariant_entry_info()
+    center_case_id = table.case_indices[table.case_encode([0, 0])]
+    center_local_indices = np.flatnonzero(
+        invariant_info["case_indices"] == center_case_id
+    ).astype(np.int64)
+
+    values = table._batched_duffy_values_for_local_indices(
+        queue,
+        invariant_info,
+        center_local_indices,
+        radial_rule="tanh-sinh-fast",
+        regular_quad_order=50,
+        radial_quad_order=100,
+        mp_dps=50,
+    )
+
+    assert np.all(np.isfinite(values))
+
+
+def test_duffy_radial_batched_keeps_symmetry_reduced_storage(ctx_factory):
+    queue = _get_cpu_queue_or_skip(ctx_factory)
+
+    table = npt.NearFieldInteractionTable(
+        quad_order=4,
+        dim=2,
+        build_method="DuffyRadial",
+        kernel_func=npt.constant_one,
+        kernel_type="const",
+        sumpy_kernel=ConstantKernel(2),
+        progress_bar=False,
+    )
+    table.build_table_via_duffy_radial(
+        queue=queue,
+        radial_rule="tanh-sinh-fast",
+        regular_quad_order=8,
+        radial_quad_order=31,
+    )
+
+    invariant_entry_ids = np.asarray(
+        table._get_invariant_entry_info()["entry_ids"], dtype=np.int64
+    )
+    non_invariant_ids = np.setdiff1d(
+        np.arange(len(table.data), dtype=np.int64),
+        invariant_entry_ids,
+    )
+
+    assert non_invariant_ids.size > 0
+    assert table.table_data_is_symmetry_reduced
+    assert np.all(np.isfinite(table.data[invariant_entry_ids]))
+    assert np.all(np.isnan(table.data[non_invariant_ids]))
+
+    # Reduced tables must still provide finite values through get_entry_index.
+    for case_id in range(table.n_cases):
+        entry_id = table.get_entry_index(0, 0, case_id)
+        assert np.isfinite(table.data[entry_id])
+
+
+def test_prepare_table_data_and_entry_map_rejects_mixed_storage_modes():
+    from types import SimpleNamespace
+
+    from volumential.expansion_wrangler_fpnd import _prepare_table_data_and_entry_map
+
+    full = SimpleNamespace(
+        data=np.array([1.0, 2.0], dtype=np.float64),
+        mode_normalizers=np.array([1.0], dtype=np.float64),
+        kernel_exterior_normalizers=np.array([0.0], dtype=np.float64),
+        table_data_is_symmetry_reduced=False,
+    )
+    reduced = SimpleNamespace(
+        data=np.array([1.0, np.nan], dtype=np.float64),
+        mode_normalizers=np.array([1.0], dtype=np.float64),
+        kernel_exterior_normalizers=np.array([0.0], dtype=np.float64),
+        table_data_is_symmetry_reduced=True,
+    )
+
+    with pytest.raises(RuntimeError, match="mixed full/reduced"):
+        _prepare_table_data_and_entry_map([full, reduced])
 
 
 if __name__ == "__main__":

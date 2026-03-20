@@ -96,6 +96,65 @@ def inverse_id_map(queue, mapped_ids):
     return inv_ids
 
 
+def _prepare_table_data_and_entry_map(table_levels):
+    if not table_levels:
+        raise ValueError("table_levels cannot be empty")
+
+    table0 = table_levels[0]
+    n_full_entries = len(table0.data)
+
+    reduced_flags = [
+        bool(getattr(table, "table_data_is_symmetry_reduced", False))
+        for table in table_levels
+    ]
+    if any(flag != reduced_flags[0] for flag in reduced_flags[1:]):
+        raise RuntimeError("mixed full/reduced near-field table storage across levels")
+
+    if reduced_flags[0]:
+        kept_entry_ids = np.flatnonzero(np.isfinite(table0.data)).astype(np.int64)
+        for table in table_levels[1:]:
+            level_kept_entry_ids = np.flatnonzero(np.isfinite(table.data)).astype(
+                np.int64
+            )
+            if not np.array_equal(level_kept_entry_ids, kept_entry_ids):
+                raise RuntimeError(
+                    "near-field levels disagree on symmetry-reduced entry ids"
+                )
+    else:
+        for table in table_levels:
+            if np.any(np.isnan(table.data)):
+                raise RuntimeError("full near-field table level contains NaN entries")
+        kept_entry_ids = np.arange(n_full_entries, dtype=np.int64)
+
+    table_entry_ids = np.full(n_full_entries, -1, dtype=np.int32)
+    table_entry_ids[kept_entry_ids] = np.arange(len(kept_entry_ids), dtype=np.int32)
+
+    table_data_combined = np.zeros(
+        (len(table_levels), len(kept_entry_ids)),
+        dtype=table0.data.dtype,
+    )
+    mode_nmlz_combined = np.zeros(
+        (len(table_levels), len(table0.mode_normalizers)),
+        dtype=table0.mode_normalizers.dtype,
+    )
+    exterior_mode_nmlz_combined = np.zeros(
+        (len(table_levels), len(table0.kernel_exterior_normalizers)),
+        dtype=table0.kernel_exterior_normalizers.dtype,
+    )
+
+    for lev, table in enumerate(table_levels):
+        table_data_combined[lev, :] = table.data[kept_entry_ids]
+        mode_nmlz_combined[lev, :] = table.mode_normalizers
+        exterior_mode_nmlz_combined[lev, :] = table.kernel_exterior_normalizers
+
+    return (
+        table_data_combined,
+        mode_nmlz_combined,
+        exterior_mode_nmlz_combined,
+        table_entry_ids,
+    )
+
+
 # {{{ sumpy backend
 
 
@@ -106,8 +165,8 @@ class FPNDSumpyExpansionWranglerCodeContainer(
     for ExpansionWrangler if it is using sumpy to perform multipole
     expansion and manipulations.
 
-    Since :class:`SumpyExpansionWrangler` necessarily must have a
-    :class:`pyopencl.CommandQueue`, but this queue is allowed to be
+    Since ``SumpyExpansionWrangler`` necessarily must have a
+    ``pyopencl.CommandQueue``, but this queue is allowed to be
     more ephemeral than the code, the code's lifetime
     is decoupled by storing it in this object.
     """
@@ -493,36 +552,12 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             self.queue, symmetry_maps["mode_case_map"]
         )
 
-        # table.data
-        table_data_combined = np.zeros(
-            (
-                len(self.near_field_table[kname]),
-                len(self.near_field_table[kname][0].data),
-            ),
-            dtype=self.near_field_table[kname][0].data.dtype,
-        )
-        mode_nmlz_combined = np.zeros(
-            (
-                len(self.near_field_table[kname]),
-                len(self.near_field_table[kname][0].mode_normalizers),
-            ),
-            dtype=self.near_field_table[kname][0].mode_normalizers.dtype,
-        )
-        exterior_mode_nmlz_combined = np.zeros(
-            (
-                len(self.near_field_table[kname]),
-                len(self.near_field_table[kname][0].kernel_exterior_normalizers),
-            ),
-            dtype=self.near_field_table[kname][0].kernel_exterior_normalizers.dtype,
-        )
-        for lev in range(len(self.near_field_table[kname])):
-            table_data_combined[lev, :] = self.near_field_table[kname][lev].data
-            mode_nmlz_combined[lev, :] = self.near_field_table[kname][
-                lev
-            ].mode_normalizers
-            exterior_mode_nmlz_combined[lev, :] = self.near_field_table[kname][
-                lev
-            ].kernel_exterior_normalizers
+        (
+            table_data_combined,
+            mode_nmlz_combined,
+            exterior_mode_nmlz_combined,
+            table_entry_ids,
+        ) = _prepare_table_data_and_entry_map(self.near_field_table[kname])
 
         self.queue.finish()
         logger.info("table data for kernel " + out_kernel.__repr__() + " congregated")
@@ -532,7 +567,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             "n_tables": len(self.near_field_table[kname]),
             "n_q_points": self.near_field_table[kname][0].n_q_points,
             "n_cases": self.near_field_table[kname][0].n_cases,
-            "n_table_entries": len(self.near_field_table[kname][0].data),
+            "n_table_entries": table_data_combined.shape[1],
         }
         assert table_data_shapes["n_q_points"] == len(
             self.near_field_table[kname][0].mode_normalizers
@@ -552,6 +587,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         exterior_mode_nmlz_combined = cl.array.to_device(
             self.queue, exterior_mode_nmlz_combined
         )
+        table_entry_ids = cl.array.to_device(self.queue, table_entry_ids)
         particle_local_ids = _compute_box_local_ids(
             self.queue, self.tree, self.near_field_table[kname][0].n_q_points
         )
@@ -590,6 +626,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             encoding_shift=shift,
             mode_nmlz_combined=mode_nmlz_combined,
             exterior_mode_nmlz_combined=exterior_mode_nmlz_combined,
+            table_entry_ids=table_entry_ids,
             neighbor_source_boxes_starts=neighbor_source_boxes_starts,
             root_extent=self.tree.root_extent,
             neighbor_source_boxes_lists=neighbor_source_boxes_lists,
@@ -1227,41 +1264,12 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
             self.queue, symmetry_maps["mode_case_map"]
         )
 
-        # table.data
-        table_data_combined = np.zeros(
-            (
-                len(self.near_field_table[kname]),
-                len(self.near_field_table[kname][0].data),
-            ),
-            dtype=self.near_field_table[kname][0].data.dtype,
-        )
-        mode_nmlz_combined = np.zeros(
-            (
-                len(self.near_field_table[kname]),
-                len(self.near_field_table[kname][0].mode_normalizers),
-            ),
-            dtype=self.near_field_table[kname][0].mode_normalizers.dtype,
-        )
-        for lev in range(len(self.near_field_table[kname])):
-            table_data_combined[lev, :] = self.near_field_table[kname][lev].data
-            mode_nmlz_combined[lev, :] = self.near_field_table[kname][
-                lev
-            ].mode_normalizers
-        exterior_mode_nmlz_combined = np.zeros(
-            (
-                len(self.near_field_table[kname]),
-                len(self.near_field_table[kname][0].kernel_exterior_normalizers),
-            ),
-            dtype=self.near_field_table[kname][0].kernel_exterior_normalizers.dtype,
-        )
-        for lev in range(len(self.near_field_table[kname])):
-            table_data_combined[lev, :] = self.near_field_table[kname][lev].data
-            mode_nmlz_combined[lev, :] = self.near_field_table[kname][
-                lev
-            ].mode_normalizers
-            exterior_mode_nmlz_combined[lev, :] = self.near_field_table[kname][
-                lev
-            ].kernel_exterior_normalizers
+        (
+            table_data_combined,
+            mode_nmlz_combined,
+            exterior_mode_nmlz_combined,
+            table_entry_ids,
+        ) = _prepare_table_data_and_entry_map(self.near_field_table[kname])
 
         logger.info("Table data for kernel " + out_kernel.__repr__() + " congregated")
 
@@ -1270,7 +1278,7 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
             "n_tables": len(self.near_field_table[kname]),
             "n_q_points": self.near_field_table[kname][0].n_q_points,
             "n_cases": self.near_field_table[kname][0].n_cases,
-            "n_table_entries": len(self.near_field_table[kname][0].data),
+            "n_table_entries": table_data_combined.shape[1],
         }
         assert table_data_shapes["n_q_points"] == len(
             self.near_field_table[kname][0].mode_normalizers
@@ -1285,14 +1293,36 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
             **self.list1_extra_kwargs,
         )
 
+        table_data_combined = cl.array.to_device(self.queue, table_data_combined)
+        mode_nmlz_combined = cl.array.to_device(self.queue, mode_nmlz_combined)
+        exterior_mode_nmlz_combined = cl.array.to_device(
+            self.queue, exterior_mode_nmlz_combined
+        )
+        table_entry_ids = cl.array.to_device(self.queue, table_entry_ids)
+        particle_local_ids = _compute_box_local_ids(
+            self.queue, self.tree, self.near_field_table[kname][0].n_q_points
+        )
+
+        aligned_nboxes = self.tree.box_centers.shape[1]
+        source_counts_nonchild = np.zeros(aligned_nboxes, dtype=np.int32)
+        target_counts_nonchild = np.zeros(aligned_nboxes, dtype=np.int32)
+        source_counts_nonchild[: len(self.tree.box_target_counts_nonchild)] = (
+            self.tree.box_target_counts_nonchild.get(self.queue)
+        )
+        target_counts_nonchild[: len(self.tree.box_target_counts_nonchild)] = (
+            self.tree.box_target_counts_nonchild.get(self.queue)
+        )
+        source_counts_nonchild = cl.array.to_device(self.queue, source_counts_nonchild)
+        target_counts_nonchild = cl.array.to_device(self.queue, target_counts_nonchild)
+
         res, evt = near_field(
             self.queue,
             result=out_pot,
             box_centers=self.tree.box_centers,
             box_levels=self.tree.box_levels,
-            box_source_counts_cumul=self.tree.box_target_counts_cumul,
+            box_source_counts_nonchild=source_counts_nonchild,
             box_source_starts=self.tree.box_target_starts,
-            box_target_counts_cumul=self.tree.box_target_counts_cumul,
+            box_target_counts_nonchild=target_counts_nonchild,
             box_target_starts=self.tree.box_target_starts,
             case_indices=case_indices_dev,
             mode_qpoint_map=mode_qpoint_map_dev,
@@ -1301,12 +1331,15 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
             encoding_shift=shift,
             mode_nmlz_combined=mode_nmlz_combined,
             exterior_mode_nmlz_combined=exterior_mode_nmlz_combined,
+            table_entry_ids=table_entry_ids,
             neighbor_source_boxes_starts=neighbor_source_boxes_starts,
             root_extent=self.tree.root_extent,
             neighbor_source_boxes_lists=neighbor_source_boxes_lists,
             mode_coefs=mode_coefs,
+            source_mode_ids=particle_local_ids,
             table_data_combined=table_data_combined,
             target_boxes=target_boxes,
+            target_point_ids=particle_local_ids,
             table_root_extent=self.root_table_source_box_extent,
         )
 

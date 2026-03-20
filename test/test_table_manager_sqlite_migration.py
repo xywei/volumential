@@ -9,6 +9,7 @@ from volumential.table_manager import (
     TableDiscretization,
     TableRequest,
     TABLE_CACHE_SCHEMA_VERSION,
+    _coerce_sqlite_int,
     _deserialize_table_payload,
     _deserialize_scalar,
     _serialize_table_payload,
@@ -66,6 +67,65 @@ def test_table_request_is_composed_from_stable_specs():
     assert request.kernel_type == "Laplace"
     assert request.q_order == 4
     assert request.source_box_level == 2
+
+
+def test_get_kernel_function_uses_sumpy_route_for_laplace3d(tmp_path):
+    filename = tmp_path / "cache.sqlite"
+
+    with NFTable(str(filename), progress_bar=False) as table_manager:
+        knl_func = table_manager.get_kernel_function(3, "Laplace")
+
+    value = float(knl_func(1.0, 0.0, 0.0))
+    assert np.isclose(value, 1.0 / (4.0 * np.pi))
+
+
+def test_get_table_rejects_legacy_knl_func_kwarg(tmp_path):
+    filename = tmp_path / "cache.sqlite"
+
+    with NFTable(str(filename), progress_bar=False) as table_manager:
+        with pytest.raises(TypeError, match="knl_func has been removed"):
+            table_manager.get_table(
+                2,
+                "Laplace",
+                q_order=1,
+                knl_func=lambda x, y: x + y,
+            )
+
+
+def test_coerce_sqlite_int_accepts_int32_blob():
+    raw = np.array([-37], dtype=np.int32).tobytes()
+    assert _coerce_sqlite_int(raw, field_name="case_encoding_shift") == -37
+
+
+def test_get_kernel_function_preserves_cahn_hilliard_coefficients(tmp_path):
+    filename = tmp_path / "cache.sqlite"
+
+    b = 3.5
+    c = 2.0
+
+    with NFTable(str(filename), progress_bar=False) as table_manager:
+        knl_func = table_manager.get_kernel_function(2, "Cahn-Hilliard", b=b, c=c)
+
+    import volumential.nearfield_potential_table as npt
+
+    reference = npt.get_cahn_hilliard(2, b=b, c=c)
+    assert np.isclose(knl_func(0.2, 0.0), reference(0.2, 0.0))
+
+
+def test_get_kernel_function_rejects_partial_cahn_hilliard_coefficients(tmp_path):
+    filename = tmp_path / "cache.sqlite"
+
+    with NFTable(str(filename), progress_bar=False) as table_manager:
+        with pytest.raises(TypeError, match="requires both b and c together"):
+            table_manager.get_kernel_function(2, "Cahn-Hilliard", b=3.5)
+
+        with pytest.raises(TypeError, match="requires both b and c together"):
+            table_manager.get_kernel_function(2, "Cahn-Hilliard", c=2.0)
+
+        with pytest.raises(TypeError, match="requires both b and c"):
+            table_manager.get_kernel_function(
+                2, "Cahn-Hilliard", approx_at_origin=False
+            )
 
 
 def test_legacy_hdf5_cache_error(tmp_path):

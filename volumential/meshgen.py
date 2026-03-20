@@ -350,6 +350,24 @@ class MeshGen3D(MeshGenBase):
 # {{{ mesh utils
 
 
+def _square_bbox_for_treebuilder(bbox):
+    bbox = np.asarray(bbox)
+    if bbox.ndim != 2 or bbox.shape[1] != 2:
+        raise ValueError("bbox must have shape (dim, 2)")
+
+    lows = bbox[:, 0]
+    highs = bbox[:, 1]
+    widths = highs - lows
+    if np.any(widths <= 0):
+        raise ValueError("bbox upper bounds must exceed lower bounds")
+
+    root_extent = np.max(widths)
+    square_bbox = np.empty_like(bbox)
+    square_bbox[:, 0] = lows
+    square_bbox[:, 1] = lows + root_extent
+    return np.ascontiguousarray(square_bbox)
+
+
 def build_geometry_info(ctx, queue, dim, q_order, mesh, bbox=None, a=None, b=None):
     """Build tree, traversal and other geo info for FMM computation,
     given the box mesh over/encompassing the domain.
@@ -387,21 +405,31 @@ def build_geometry_info(ctx, queue, dim, q_order, mesh, bbox=None, a=None, b=Non
     if bbox is None:
         assert np.isscalar(a) and np.isscalar(b)
         bbox = np.array([[a, b]] * dim)
+    bbox = np.ascontiguousarray(bbox)
 
     from boxtree import TreeBuilder
     from boxtree.array_context import PyOpenCLArrayContext
+    from volumential.tree_interactive_build import build_particle_tree_from_box_tree
 
     actx = PyOpenCLArrayContext(queue)
 
-    tb = TreeBuilder(actx)
+    leaf_boxes = np.asarray(mesh.boxtree._tree.leaf_boxes)
+    leaf_levels = np.asarray(mesh.boxtree._tree.box_levels[leaf_boxes])
+    has_mixed_leaf_levels = np.unique(leaf_levels).size > 1
 
-    tree, _ = tb(
-        actx,
-        particles=q_points,
-        targets=q_points,
-        max_particles_in_box=q_order**dim * (2**dim) - 1,
-        kind="adaptive-level-restricted",
-    )
+    if has_mixed_leaf_levels:
+        treebuilder_bbox = _square_bbox_for_treebuilder(bbox)
+        tb = TreeBuilder(actx)
+        tree, _ = tb(
+            actx,
+            particles=q_points,
+            targets=q_points,
+            bbox=treebuilder_bbox,
+            max_particles_in_box=q_order**dim * (2**dim) - 1,
+            kind="adaptive-level-restricted",
+        )
+    else:
+        tree = build_particle_tree_from_box_tree(actx, mesh.boxtree, q_points_org)
 
     from boxtree.traversal import FMMTraversalBuilder
 

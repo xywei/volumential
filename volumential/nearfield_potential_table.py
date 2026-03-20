@@ -188,16 +188,35 @@ def get_cahn_hilliard_laplacian(dim, b=0, c=0):
 def sumpy_kernel_to_lambda(sknl):
     from sympy import Symbol, lambdify, symbols
 
+    import scipy.special as sp
+
+    def _hankel1(order, arg, *unused):
+        return sp.hankel1(order, arg)
+
+    def _besselk(order, arg, *unused):
+        return sp.kv(order, arg)
+
     var_name_prefix = "x"
     var_names = " ".join([var_name_prefix + str(i) for i in range(sknl.dim)])
     arg_names = symbols(var_names)
     args = [Symbol(var_name_prefix + str(i)) for i in range(sknl.dim)]
 
+    lmd = lambdify(
+        arg_names,
+        sknl.get_expression(args) * sknl.get_global_scaling_const(),
+        modules=[
+            {
+                "hankel_1": _hankel1,
+                "Hankel1": _hankel1,
+                "besselk": _besselk,
+            },
+            "scipy",
+            "numpy",
+        ],
+    )
+
     def func(x, y=None, z=None):
         coord = (x, y, z)
-        lmd = lambdify(
-            arg_names, sknl.get_expression(args) * sknl.get_global_scaling_const()
-        )
         return lmd(*coord[: sknl.dim])
 
     return func
@@ -259,6 +278,9 @@ class NearFieldInteractionTable:
 
         self.build_method = _TABLE_BUILD_METHOD
         self._auto_build_queue = None
+
+        if kernel_func is None and sumpy_kernel is not None:
+            kernel_func = sumpy_kernel_to_lambda(sumpy_kernel)
 
         if dim == 1:
             self.kernel_func = kernel_func
@@ -377,6 +399,17 @@ class NearFieldInteractionTable:
         assert source_mode_index >= 0 and source_mode_index < self.n_q_points
         assert target_point_index >= 0 and target_point_index < self.n_q_points
         pair_id = source_mode_index * self.n_q_points + target_point_index
+
+        if self.table_data_is_symmetry_reduced:
+            symmetry_maps = self._get_online_symmetry_maps()
+            source_mode_index_sym = int(
+                symmetry_maps["mode_qpoint_map"][source_mode_index, source_mode_index]
+            )
+            target_point_index_sym = int(
+                symmetry_maps["mode_qpoint_map"][source_mode_index, target_point_index]
+            )
+            case_id = int(symmetry_maps["mode_case_map"][source_mode_index, case_id])
+            pair_id = source_mode_index_sym * self.n_q_points + target_point_index_sym
 
         return case_id * self.n_pairs + pair_id
 
@@ -940,6 +973,7 @@ class NearFieldInteractionTable:
 
         setup_lines = ["<> active = 1"]
         len_terms = []
+        dist_terms = []
         basis_terms = []
         interp_eps = 8 * np.finfo(self.dtype).eps
         for iaxis in range(self.dim):
@@ -976,7 +1010,15 @@ class NearFieldInteractionTable:
                     ]
                 )
             len_terms.append(len_name)
+            dist_terms.append(d_name)
             basis_terms.append(basis_name)
+
+        # Guard against quadrature nodes that hit the singular point exactly.
+        # For such nodes, the transformed Jacobian factor drives the contribution
+        # to zero, but finite-precision evaluation of the kernel may produce
+        # non-finite values (e.g. log(0)) and then 0*inf -> nan.
+        dist2_expr = " + ".join(f"{d_name} * {d_name}" for d_name in dist_terms)
+        setup_lines.append(f"active = active and ({dist2_expr} > 0)")
 
         quad_w_expr = "node_jac_base[inode]" + "".join(
             f" * {len_name}" for len_name in len_terms
@@ -1437,15 +1479,11 @@ class NearFieldInteractionTable:
         t_scatter_end = time.perf_counter()
         self._progress_step()
 
+        # Keep table data symmetry-reduced to minimize cache/storage size.
+        # Call progress step for the legacy "symmetry fill" stage even though
+        # propagation is intentionally disabled.
         t_symmetry_fill_start = time.perf_counter()
-        for entry_id in range(len(self.data)):
-            _, centry_id = self.lookup_by_symmetry(entry_id)
-            if np.isnan(self.data[centry_id]):
-                continue
-            if centry_id == entry_id:
-                continue
-            self.data[entry_id] = self.data[centry_id]
-        t_symmetry_fill_end = time.perf_counter()
+        t_symmetry_fill_end = t_symmetry_fill_start
         self._progress_step()
 
         self.table_data_is_symmetry_reduced = bool(np.any(np.isnan(self.data)))
@@ -1666,15 +1704,11 @@ class NearFieldInteractionTable:
         t_quadrature_end = time.perf_counter()
         self._progress_step()
 
+        # Keep table data symmetry-reduced to minimize cache/storage size.
+        # Call progress step for the legacy "symmetry fill" stage even though
+        # propagation is intentionally disabled.
         t_symmetry_fill_start = time.perf_counter()
-        for entry_id in range(len(self.data)):
-            _, centry_id = self.lookup_by_symmetry(entry_id)
-            if np.isnan(self.data[centry_id]):
-                raise RuntimeError(
-                    "scalar DuffyRadial build left unresolved symmetric entries"
-                )
-            self.data[entry_id] = self.data[centry_id]
-        t_symmetry_fill_end = time.perf_counter()
+        t_symmetry_fill_end = t_symmetry_fill_start
         self._progress_step()
 
         self.table_data_is_symmetry_reduced = bool(np.isnan(self.data).any())

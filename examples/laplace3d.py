@@ -151,10 +151,13 @@ def main():
     # visuals
     print("building tree")
     from boxtree import TreeBuilder
+    from boxtree.array_context import PyOpenCLArrayContext
 
-    tb = TreeBuilder(ctx)
+    actx = PyOpenCLArrayContext(queue)
+
+    tb = TreeBuilder(actx)
     tree, _ = tb(
-        queue,
+        actx,
         particles=q_points,
         targets=q_points,
         bbox=bbox,
@@ -164,8 +167,8 @@ def main():
 
     from boxtree.traversal import FMMTraversalBuilder
 
-    tg = FMMTraversalBuilder(ctx)
-    trav, _ = tg(queue, tree)
+    tg = FMMTraversalBuilder(actx)
+    trav, _ = tg(actx, tree)
 
     # }}} End build tree and traversals
 
@@ -183,42 +186,46 @@ def main():
         radial_quad_order=60,
     )
 
-    if use_multilevel_table:
-        logger.info("Using multilevel tables")
-        assert (
-            abs(
-                int((b - a) / root_table_source_extent) * root_table_source_extent
-                - (b - a)
+    try:
+        if use_multilevel_table:
+            logger.info("Using multilevel tables")
+            assert (
+                abs(
+                    int((b - a) / root_table_source_extent) * root_table_source_extent
+                    - (b - a)
+                )
+                < 1e-15
             )
-            < 1e-15
-        )
-        nftable = []
-        for lev in range(0, tree.nlevels + 1):
-            print("Getting table at level", lev)
-            tb, _ = tm.get_table(
+            nftable = []
+            for lev in range(0, tree.nlevels + 1):
+                print("Getting table at level", lev)
+                tb, _ = tm.get_table(
+                    dim,
+                    "Laplace",
+                    q_order,
+                    source_box_level=lev,
+                    queue=queue,
+                    build_config=build_config,
+                )
+                nftable.append(tb)
+
+            print("Using table list of length", len(nftable))
+
+        else:
+            logger.info("Using single level table")
+            force_recompute = False
+            # 15 levels are sufficient (the inner most brick is 1e-15**3 in volume)
+            nftable, _ = tm.get_table(
                 dim,
                 "Laplace",
                 q_order,
-                source_box_level=lev,
+                force_recompute=force_recompute,
                 queue=queue,
                 build_config=build_config,
             )
-            nftable.append(tb)
-
-        print("Using table list of length", len(nftable))
-
-    else:
-        logger.info("Using single level table")
-        force_recompute = False
-        # 15 levels are sufficient (the inner most brick is 1e-15**3 in volume)
-        nftable, _ = tm.get_table(
-            dim,
-            "Laplace",
-            q_order,
-            force_recompute=force_recompute,
-            queue=queue,
-            build_config=build_config,
-        )
+    except NotImplementedError as exc:
+        logger.warning("Skipping laplace3d example: %s", exc)
+        return
 
     # }}} End build near field potential table
 
@@ -257,7 +264,7 @@ def main():
     wrangler = FPNDExpansionWrangler(
         code_container=wcc,
         queue=queue,
-        tree=tree,
+        traversal=trav,
         near_field_table=nftable,
         dtype=dtype,
         fmm_level_to_order=lambda kernel, kernel_args, tree, lev: m_order,

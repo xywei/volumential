@@ -35,6 +35,8 @@ from volumential.geometry import BoundingBoxFactory, BoxFMMGeometryFactory
 from volumential.interpolation import (
     ElementsToSourcesLookupBuilder,
     LeavesToNodesLookupBuilder,
+    _count_missing_nodes_from_leaf_starts,
+    _compute_leaves_to_nodes_lookup_tol,
     interpolate_from_meshmode,
     interpolate_to_meshmode,
 )
@@ -220,6 +222,141 @@ def drive_test_to_meshmode_interpolation(
 
     resid = np.linalg.norm(ref - res, ord=np.inf)
     return resid
+
+
+def test_from_meshmode_interpolation_user_order_keeps_source_axis(ctx_factory):
+    cl_ctx = ctx_factory()
+    queue = cl.CommandQueue(cl_ctx)
+
+    dim = 2
+    degree = 2
+    nel_1d = 8
+    n_levels = 4
+    q_order = 3
+    a = -0.5
+    b = 0.5
+
+    mesh = generate_regular_rect_mesh(
+        a=(a,) * dim, b=(b,) * dim, nelements_per_axis=(nel_1d,) * dim
+    )
+
+    arr_ctx = PyOpenCLArrayContext(queue)
+    group_factory = PolynomialWarpAndBlendGroupFactory(order=degree)
+    discr = Discretization(arr_ctx, mesh, group_factory)
+
+    bbox_fac = BoundingBoxFactory(dim=dim)
+    boxfmm_fac = BoxFMMGeometryFactory(
+        cl_ctx,
+        dim=dim,
+        order=q_order,
+        nlevels=n_levels,
+        bbox_getter=bbox_fac,
+        expand_to_hold_mesh=mesh,
+        mesh_padding_factor=0.0,
+    )
+    boxgeo = boxfmm_fac(queue)
+    lookup_fac = ElementsToSourcesLookupBuilder(cl_ctx, tree=boxgeo.tree, discr=discr)
+    lookup, _ = lookup_fac(queue)
+
+    func = random_polynomial_func(dim, degree, seed=17)
+    scalar_dof = eval_func_on_discr_nodes(queue, discr, func).get(queue)
+
+    dof_host = np.empty((2, 3, scalar_dof.size), dtype=scalar_dof.dtype)
+    for i in range(2):
+        for j in range(3):
+            dof_host[i, j] = (1 + i + 2 * j) * scalar_dof + (i - j)
+
+    dof_vec = cl.array.to_device(queue, dof_host)
+
+    tree_order = interpolate_from_meshmode(queue, dof_vec, lookup, order="tree")
+    user_order = interpolate_from_meshmode(queue, dof_vec, lookup, order="user")
+
+    tree_order = tree_order.get(queue)
+    user_order = user_order.get(queue)
+
+    tree = BoxtreePyOpenCLArrayContext(queue).to_numpy(boxgeo.tree)
+    expected_user_order = tree_order[..., tree.sorted_target_ids]
+
+    assert np.allclose(user_order, expected_user_order)
+
+
+def test_from_meshmode_interpolation_integer_payload_promotes_to_float(ctx_factory):
+    cl_ctx = ctx_factory()
+    queue = cl.CommandQueue(cl_ctx)
+
+    dim = 2
+    degree = 2
+    nel_1d = 8
+    n_levels = 4
+    q_order = 3
+    a = -0.5
+    b = 0.5
+
+    mesh = generate_regular_rect_mesh(
+        a=(a,) * dim, b=(b,) * dim, nelements_per_axis=(nel_1d,) * dim
+    )
+
+    arr_ctx = PyOpenCLArrayContext(queue)
+    group_factory = PolynomialWarpAndBlendGroupFactory(order=degree)
+    discr = Discretization(arr_ctx, mesh, group_factory)
+
+    bbox_fac = BoundingBoxFactory(dim=dim)
+    boxfmm_fac = BoxFMMGeometryFactory(
+        cl_ctx,
+        dim=dim,
+        order=q_order,
+        nlevels=n_levels,
+        bbox_getter=bbox_fac,
+        expand_to_hold_mesh=mesh,
+        mesh_padding_factor=0.0,
+    )
+    boxgeo = boxfmm_fac(queue)
+    lookup_fac = ElementsToSourcesLookupBuilder(cl_ctx, tree=boxgeo.tree, discr=discr)
+    lookup, _ = lookup_fac(queue)
+
+    func = random_polynomial_func(dim, degree, seed=29)
+    scalar_dof = eval_func_on_discr_nodes(queue, discr, func).get(queue)
+    dof_int_host = np.rint(16 * scalar_dof).astype(np.int32)
+
+    dof_int = cl.array.to_device(queue, dof_int_host)
+    dof_ref = cl.array.to_device(queue, dof_int_host.astype(np.float64))
+
+    interp_int = interpolate_from_meshmode(queue, dof_int, lookup, order="tree").get(
+        queue
+    )
+    interp_ref = interpolate_from_meshmode(queue, dof_ref, lookup, order="tree").get(
+        queue
+    )
+
+    assert np.issubdtype(interp_int.dtype, np.floating)
+    assert np.allclose(interp_int, interp_ref)
+
+
+def test_leaves_to_nodes_lookup_tol_scales_with_tree_extent():
+    from types import SimpleNamespace
+
+    tree64 = SimpleNamespace(coord_dtype=np.float64, root_extent=1.0, nlevels=1)
+    assert _compute_leaves_to_nodes_lookup_tol(tree64, 1.0e-12) == pytest.approx(
+        1.0e-12
+    )
+
+    tree32 = SimpleNamespace(coord_dtype=np.float32, root_extent=1.0e8, nlevels=20)
+    tol = _compute_leaves_to_nodes_lookup_tol(tree32, 1.0e-12)
+
+    root_scaled = 64.0 * np.finfo(np.float32).eps * 1.0e8
+    leaf_cap = 0.25 * (1.0e8 / (1 << 19))
+    assert tol == pytest.approx(min(root_scaled, leaf_cap))
+
+
+def test_count_missing_nodes_from_leaf_starts_device(ctx_factory):
+    cl_ctx = ctx_factory()
+    queue = cl.CommandQueue(cl_ctx)
+
+    starts = cl.array.to_device(queue, np.array([0, 2, 2, 5], dtype=np.int32))
+    assert _count_missing_nodes_from_leaf_starts(starts, queue) == 1
+
+    starts_full = cl.array.to_device(queue, np.array([0, 1, 2, 5], dtype=np.int32))
+    assert _count_missing_nodes_from_leaf_starts(starts_full, queue) == 0
 
 
 # {{{ 2d tests

@@ -36,15 +36,16 @@ sys.path.insert(0, os.path.abspath(".."))
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
 extensions = [
-        "sphinx.ext.autodoc",
-        "sphinx.ext.todo",
-        "sphinx.ext.autosummary",
-        "sphinx.ext.coverage",
-        "sphinx.ext.mathjax",
-        "sphinx.ext.ifconfig",
-        "sphinx.ext.viewcode",
-        "sphinx.ext.intersphinx",
-        "sphinx.ext.githubpages"]
+    "sphinx.ext.autodoc",
+    "sphinx.ext.todo",
+    "sphinx.ext.autosummary",
+    "sphinx.ext.coverage",
+    "sphinx.ext.mathjax",
+    "sphinx.ext.ifconfig",
+    "sphinx.ext.viewcode",
+    "sphinx.ext.intersphinx",
+    "sphinx.ext.githubpages",
+]
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ["_templates"]
@@ -84,12 +85,14 @@ release = __version__.VERSION_TEXT
 #
 # This is also used if you do content translation via gettext catalogs.
 # Usually you set "language" from the command line for these cases.
-language = None
+language = "en"
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
 # This patterns also effect to html_static_path and html_extra_path
 exclude_patterns = []
+
+suppress_warnings = ["docutils"]
 
 # The name of the Pygments (syntax highlighting) style to use.
 pygments_style = "sphinx"
@@ -140,15 +143,12 @@ latex_elements = {
     # The paper size ('letterpaper' or 'a4paper').
     #
     # 'papersize': 'letterpaper',
-
     # The font size ('10pt', '11pt' or '12pt').
     #
     # 'pointsize': '10pt',
-
     # Additional stuff for the LaTeX preamble.
     #
     # 'preamble': '',
-
     # Latex figure (float) alignment
     #
     # 'figure_align': 'htbp',
@@ -158,8 +158,13 @@ latex_elements = {
 # (source start file, target name, title,
 #  author, documentclass [howto, manual, or own class]).
 latex_documents = [
-    (master_doc, "Volumential.tex", "Volumential Documentation",
-     "Xiaoyu Wei", "manual"),
+    (
+        master_doc,
+        "Volumential.tex",
+        "Volumential Documentation",
+        "Xiaoyu Wei",
+        "manual",
+    ),
 ]
 
 
@@ -167,10 +172,7 @@ latex_documents = [
 
 # One entry per manual page. List of tuples
 # (source start file, name, description, authors, manual section).
-man_pages = [
-    (master_doc, "volumential", "Volumential Documentation",
-     [author], 1)
-]
+man_pages = [(master_doc, "volumential", "Volumential Documentation", [author], 1)]
 
 
 # -- Options for Texinfo output -------------------------------------------
@@ -179,7 +181,13 @@ man_pages = [
 # (source start file, target name, title, author,
 #  dir menu entry, description, category)
 texinfo_documents = [
-    (master_doc, "Volumential", "Volumential Documentation",
-     author, "Volumential", "One line description of project.",
-     "Miscellaneous"),
+    (
+        master_doc,
+        "Volumential",
+        "Volumential Documentation",
+        author,
+        "Volumential",
+        "One line description of project.",
+        "Miscellaneous",
+    ),
 ]

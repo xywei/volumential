@@ -955,44 +955,24 @@ def box_quad(
     vec_func=True,
     miniter=1,
 ):
-    """Computes a (tensor product) double integral, with the integrand being
-        singular at some point inside the region.
+    """Compute a singular 2D integral over an axis-aligned box.
 
-    Integrate func on [a, b]X[c, d] using transformed Gaussian quadrature with
-    absolute tolerance tol.
+    Integrate *func* on ``[a, b] x [c, d]`` using transformed Gaussian
+    quadrature around *singular_point*.
 
-    :param func: A double variable Python function or method to integrate.
-    :type func: function.
-    :param a: Lower-left corner of integration region.
-    :type a: float.
-    :param b: Lower-right corner of integration region.
-    :type b: float.
-    :param c: Upper-left corner of integration region.
-    :type c: float.
-    :param d: Upper-right corner of integration region.
-    :type d: float.
-    :param singular_point: The singular point of the integrand func.
-    :type singular_point: tuple(float, float).
-    :param args: Extra arguments to pass to function.
-    :type args: tuple, optional.
-    :param tol: rtol Iteration stops when error between last two iterates is
-                less than tol OR the relative change is less than rtol.
-    :type tol: float, optional.
-    :param rtol: Iteration stops when error between last two iterates is less
-                than tol OR the relative change is less than rtol.
-    :type rtol: float, optional.
-    :param maxiter: Maximum order of Gaussian quadrature.
-    :type maxiter: int, optional.
-    :param vec_func: True if func handles arrays as arguments (is a "vector"
-                function). Default is True.
-    :type vec_func: bool, optional.
-    :param miniter: Minimum order of Gaussian quadrature.
-    :type miniter: int, optional.
-
-    :returns:
-        - **val**: Gaussian quadrature approximation (within tolerance) to integral.
-        - **err**: Difference between last two estimates of the integral.
-    :rtype: tuple(float,float).
+    :arg func: callable integrand of two variables.
+    :arg a: lower x bound.
+    :arg b: upper x bound.
+    :arg c: lower y bound.
+    :arg d: upper y bound.
+    :arg singular_point: singular point as ``(x, y)``.
+    :arg args: extra positional arguments passed to *func*.
+    :arg tol: absolute tolerance for adaptive quadrature.
+    :arg rtol: relative tolerance for adaptive quadrature.
+    :arg maxiter: maximum adaptive quadrature order.
+    :arg vec_func: whether *func* accepts vectorized array inputs.
+    :arg miniter: minimum adaptive quadrature order.
+    :returns: ``(value, error_estimate)``.
     """
     box = ((a, c), (b, c), (b, d), (a, d))
 
@@ -1023,39 +1003,18 @@ def quadri_quad(
     vec_func=True,
     miniter=1,
 ):
-    """Computes a double integral over a (non-twisted) quadrilateral, with the
-        integrand being singular at some point inside the region.
+    """Compute a singular 2D integral over a quadrilateral.
 
-    Integrate func on [a, b]X[c, d] using transformed Gaussian quadrature with
-    absolute tolerance tol.
-
-    :param func: A double variable Python function or method to integrate.
-    :type func: function.
-    :param quadrilateral: The integration region.
-    :type quadrilateral: tuple(tuple(float,float),
-        tuple(float,float), tuple(float,float), tuple(float,float)).
-    :param singular_point: The singular point of the integrand func.
-    :type singular_point: tuple(float, float).
-    :param args: Extra arguments to pass to function.
-    :type args: tuple, optional.
-    :param tol: rtol Iteration stops when error between last two iterates is
-                less than tol OR the relative change is less than rtol.
-    :type tol: float, optional.
-    :param rtol: Iteration stops when error between last two iterates is less
-                than tol OR the relative change is less than rtol.
-    :type rtol: float, optional.
-    :param maxiter: Maximum order of Gaussian quadrature.
-    :type maxiter: int, optional.
-    :param vec_func: True if func handles arrays as arguments (is a "vector"
-                function). Default is True.
-    :type vec_func: bool, optional.
-    :param miniter: Minimum order of Gaussian quadrature.
-    :type miniter: int, optional.
-
-    :returns:
-        - **val**: Gaussian quadrature approximation (within tolerance) to integral.
-        - **err**: Difference between last two estimates of the integral.
-    :rtype: tuple(float,float).
+    :arg func: callable integrand of two variables.
+    :arg quadrilateral: vertices ``((x1, y1), ..., (x4, y4))``.
+    :arg singular_point: singular point as ``(x, y)``.
+    :arg args: extra positional arguments passed to *func*.
+    :arg tol: absolute tolerance for adaptive quadrature.
+    :arg rtol: relative tolerance for adaptive quadrature.
+    :arg maxiter: maximum adaptive quadrature order.
+    :arg vec_func: whether *func* accepts vectorized array inputs.
+    :arg miniter: minimum adaptive quadrature order.
+    :returns: ``(value, error_estimate)``.
     """
     assert len(quadrilateral) == 4
     for p in quadrilateral:

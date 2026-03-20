@@ -9,13 +9,12 @@ dependencies:
   - cmake
   - colorama
   - cython
-  - dealii
   - genpy
   - git
   - iniconfig
   - islpy
   - numpy
-  - openmp
+  - llvm-openmp
   - packaging
   - pluggy
   - pocl

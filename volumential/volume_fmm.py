@@ -124,7 +124,7 @@ def drive_volume_fmm(
     2. In the second (downward) pass, the local expansions for all boxes
     at all levels at formed from top down.
 
-    :arg traversal: A :class:`boxtree.traversal.FMMTraversalInfo` instance.
+    :arg traversal: A boxtree traversal info object.
     :arg expansion_wrangler: An object implementing the expansion
                     wrangler interface.
     :arg src_weights: Source 'density/weights/charges' time quad weights..
@@ -481,7 +481,7 @@ def interpolate_volume_potential(
         May also be None if the needed information is passed by kwargs.
     :arg potential_in_tree_order: Whether the potential is in tree order (as
         opposed to in user order).
-    :lbl_lookup: a :class:`boxtree.LeavesToBallsLookup` that has the lookup
+    :lbl_lookup: a leaves-to-balls lookup object that has the lookup
         information for target points. Can be None if the lookup lists are
         provided separately in kwargs. If it is None and no other information is
         provided, the lookup will be built from scratch.
@@ -499,7 +499,6 @@ def interpolate_volume_potential(
         q_order = kwargs["q_order"]
         dtype = kwargs["dtype"]
 
-    ctx = queue.context
     coord_dtype = tree.coord_dtype
     n_points = len(target_points[0])
 
@@ -520,8 +519,12 @@ def interpolate_volume_potential(
         # Building the lookup takes O(n*log(n))
         if lbl_lookup is None:
             from boxtree.area_query import LeavesToBallsLookupBuilder
+            from boxtree.array_context import (
+                PyOpenCLArrayContext as BoxtreePyOpenCLArrayContext,
+            )
 
-            lookup_builder = LeavesToBallsLookupBuilder(ctx)
+            boxtree_actx = BoxtreePyOpenCLArrayContext(queue)
+            lookup_builder = LeavesToBallsLookupBuilder(boxtree_actx)
 
             if target_radii is None:
                 # Set this number small enough so that all points found
@@ -530,7 +533,12 @@ def interpolate_volume_potential(
                     queue, np.ones(n_points, dtype=coord_dtype) * 1e-12
                 )
 
-            lbl_lookup, evt = lookup_builder(queue, tree, target_points, target_radii)
+            lbl_lookup, evt = lookup_builder(
+                boxtree_actx,
+                tree,
+                target_points,
+                target_radii,
+            )
 
         balls_near_box_starts = lbl_lookup.balls_near_box_starts
         balls_near_box_lists = lbl_lookup.balls_near_box_lists
