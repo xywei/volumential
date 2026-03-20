@@ -35,6 +35,7 @@ from volumential.geometry import BoundingBoxFactory, BoxFMMGeometryFactory
 from volumential.interpolation import (
     ElementsToSourcesLookupBuilder,
     LeavesToNodesLookupBuilder,
+    _count_missing_nodes_from_leaf_starts,
     _compute_leaves_to_nodes_lookup_tol,
     interpolate_from_meshmode,
     interpolate_to_meshmode,
@@ -345,6 +346,17 @@ def test_leaves_to_nodes_lookup_tol_scales_with_tree_extent():
     root_scaled = 64.0 * np.finfo(np.float32).eps * 1.0e8
     leaf_cap = 0.25 * (1.0e8 / (1 << 19))
     assert tol == pytest.approx(min(root_scaled, leaf_cap))
+
+
+def test_count_missing_nodes_from_leaf_starts_device(ctx_factory):
+    cl_ctx = ctx_factory()
+    queue = cl.CommandQueue(cl_ctx)
+
+    starts = cl.array.to_device(queue, np.array([0, 2, 2, 5], dtype=np.int32))
+    assert _count_missing_nodes_from_leaf_starts(starts, queue) == 1
+
+    starts_full = cl.array.to_device(queue, np.array([0, 1, 2, 5], dtype=np.int32))
+    assert _count_missing_nodes_from_leaf_starts(starts_full, queue) == 0
 
 
 # {{{ 2d tests

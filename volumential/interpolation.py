@@ -70,6 +70,15 @@ def _compute_leaves_to_nodes_lookup_tol(tree, tol):
     return max(float(tol), relative_tol)
 
 
+def _count_missing_nodes_from_leaf_starts(leaf_starts, queue):
+    if len(leaf_starts) <= 1:
+        return 0
+
+    hit_counts = leaf_starts[1:] - leaf_starts[:-1]
+    missing_flags = (hit_counts == 0).astype(np.int32)
+    return int(cl.array.sum(missing_flags).get(queue))
+
+
 @lru_cache(maxsize=16)
 def _build_from_meshmode_resampling_kernel(dtype_descr):
     dtype = np.dtype(dtype_descr)
@@ -911,30 +920,60 @@ class LeavesToNodesLookupBuilder:
         lookup_tol = _compute_leaves_to_nodes_lookup_tol(self.trav.tree, tol)
         radii = cl.array.zeros_like(nodes[0]) + lookup_tol
 
-        lbl_lookup, evt = self.leaves_to_balls_lookup_builder(
-            self.boxtree_actx, self.trav.tree, nodes, radii, wait_for=wait_for
+        area_query, _ = self.leaves_to_balls_lookup_builder.area_query_builder(
+            self.boxtree_actx,
+            self.trav.tree,
+            nodes,
+            radii,
+            wait_for=wait_for,
         )
 
-        lists_host = lbl_lookup.balls_near_box_lists.get(actx.queue)
-        node_count = int(nodes[0].shape[0])
-
-        covered = np.zeros(node_count, dtype=np.int8)
-        if len(lists_host):
-            covered[lists_host] = 1
-        missing = np.flatnonzero(covered == 0)
-        if len(missing):
+        missing_count = _count_missing_nodes_from_leaf_starts(
+            area_query.leaves_near_ball_starts,
+            actx.queue,
+        )
+        if missing_count:
             raise RuntimeError(
                 "leaves-to-nodes lookup failed to cover all nodes; "
-                f"missing {len(missing)} nodes. "
+                f"missing {missing_count} nodes. "
                 "Ensure the tree bounding box encloses all discretization nodes "
                 f"(lookup_tol={lookup_tol:.3e})."
             )
 
+        nkeys = self.trav.tree.nboxes
+        nballs_p_1 = len(area_query.leaves_near_ball_starts)
+
+        starts_expander_knl = (
+            self.leaves_to_balls_lookup_builder.get_starts_expander_kernel(
+                self.trav.tree.box_id_dtype
+            )
+        )
+        expanded_starts = self.boxtree_actx.np.zeros(
+            len(area_query.leaves_near_ball_lists),
+            self.trav.tree.box_id_dtype,
+        )
+        evt = starts_expander_knl(
+            expanded_starts,
+            area_query.leaves_near_ball_starts,
+            nballs_p_1,
+        )
+
+        nodes_in_leaf_starts, nodes_in_leaf_lists, evt = (
+            self.leaves_to_balls_lookup_builder.key_value_sorter(
+                self.boxtree_actx.queue,
+                area_query.leaves_near_ball_lists,
+                expanded_starts,
+                nkeys,
+                starts_dtype=self.trav.tree.box_id_dtype,
+                wait_for=[evt],
+            )
+        )
+
         return LeavesToNodesLookup(
             trav=self.trav,
             discr=self.discr,
-            nodes_in_leaf_starts=lbl_lookup.balls_near_box_starts,
-            nodes_in_leaf_lists=lbl_lookup.balls_near_box_lists,
+            nodes_in_leaf_starts=nodes_in_leaf_starts,
+            nodes_in_leaf_lists=nodes_in_leaf_lists,
         ), evt
 
 
