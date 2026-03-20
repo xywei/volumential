@@ -97,6 +97,21 @@ def test_coerce_sqlite_int_accepts_int32_blob():
     assert _coerce_sqlite_int(raw, field_name="case_encoding_shift") == -37
 
 
+def test_get_kernel_function_preserves_cahn_hilliard_coefficients(tmp_path):
+    filename = tmp_path / "cache.sqlite"
+
+    b = 3.5
+    c = 2.0
+
+    with NFTable(str(filename), progress_bar=False) as table_manager:
+        knl_func = table_manager.get_kernel_function(2, "Cahn-Hilliard", b=b, c=c)
+
+    import volumential.nearfield_potential_table as npt
+
+    reference = npt.get_cahn_hilliard(2, b=b, c=c)
+    assert np.isclose(knl_func(0.2, 0.0), reference(0.2, 0.0))
+
+
 def test_legacy_hdf5_cache_error(tmp_path):
     filename = tmp_path / "legacy-cache.hdf5"
     filename.write_bytes(b"\x89HDF\r\n\x1a\nlegacy")

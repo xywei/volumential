@@ -899,12 +899,21 @@ class NearFieldInteractionTableManager:
                 "for loopy table build."
             )
 
-        knl_func = None
+        knl_func_kwargs = {}
         if sumpy_knl is not None:
+            knl_func_kwargs["sumpy_knl"] = sumpy_knl
+
+        if table_request.kernel_type == "Cahn-Hilliard":
+            for key in ("b", "c", "approx_at_origin"):
+                if key in kwargs:
+                    knl_func_kwargs[key] = kwargs[key]
+
+        knl_func = None
+        if sumpy_knl is not None or table_request.kernel_type == "Cahn-Hilliard":
             knl_func = self.get_kernel_function(
                 table_request.dim,
                 table_request.kernel_type,
-                sumpy_knl=sumpy_knl,
+                **knl_func_kwargs,
             )
 
         return TableKernelBundle(
@@ -1294,6 +1303,31 @@ class NearFieldInteractionTableManager:
 
     def get_kernel_function(self, dim, kernel_type, **kwargs):
         """Return a numerical kernel callable derived from a sumpy kernel."""
+        if kernel_type == "Cahn-Hilliard" and (
+            "b" in kwargs or "c" in kwargs or "approx_at_origin" in kwargs
+        ):
+            allowed = {"b", "c", "approx_at_origin", "sumpy_knl"}
+            unknown = sorted(set(kwargs) - allowed)
+            if unknown:
+                raise TypeError(
+                    "get_kernel_function for Cahn-Hilliard only accepts "
+                    "sumpy_knl, b, c, and approx_at_origin; "
+                    f"got {', '.join(unknown)}"
+                )
+
+            if "sumpy_knl" in kwargs:
+                raise TypeError(
+                    "get_kernel_function for Cahn-Hilliard cannot mix sumpy_knl "
+                    "with explicit coefficients b/c"
+                )
+
+            return vm.nearfield_potential_table.get_cahn_hilliard(
+                dim,
+                kwargs.get("b", 0),
+                kwargs.get("c", 0),
+                kwargs.get("approx_at_origin", False),
+            )
+
         if kwargs:
             unknown = sorted(kwargs)
             if unknown != ["sumpy_knl"]:
