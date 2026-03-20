@@ -28,7 +28,9 @@ import loopy as lp
 import pymbolic as pmbl
 import pyopencl as cl
 import pyopencl.array  # noqa: F401
+from constantdict import constantdict
 from pymbolic.mapper import IdentityMapper
+from pymbolic.mapper.walk import WalkMapper
 from pymbolic.primitives import Expression as ExpressionType, Variable as VariableType
 from pytools import memoize_method
 
@@ -49,6 +51,84 @@ class _MathLookupToBareCallMapper(IdentityMapper):
             function = pmbl.var(function.name)
 
         return pmbl.primitives.Call(function, parameters)
+
+
+class _CallNameCollector(WalkMapper):
+    def __init__(self):
+        super().__init__()
+        self.names = set()
+
+    def map_call(self, expr):
+        if isinstance(expr.function, pmbl.primitives.Variable):
+            self.names.add(expr.function.name)
+
+        return super().map_call(expr)
+
+
+class _FunctionManglerCallable(lp.ScalarCallable):
+    def __init__(self, name, function_manglers):
+        super().__init__(name=name, name_in_target=name)
+        self.function_manglers = function_manglers
+
+    def with_types(self, arg_id_to_dtype, clbl_inf_ctx):
+        arg_num_to_dtype = {
+            id: dtype for id, dtype in arg_id_to_dtype.items() if id >= 0
+        }
+
+        # wait for full type information
+        if not arg_num_to_dtype or any(
+            dtype is None for dtype in arg_num_to_dtype.values()
+        ):
+            return self.copy(
+                arg_id_to_dtype=constantdict(arg_id_to_dtype)
+            ), clbl_inf_ctx
+
+        n_args = max(arg_num_to_dtype) + 1
+        if any(i not in arg_num_to_dtype for i in range(n_args)):
+            return self.copy(
+                arg_id_to_dtype=constantdict(arg_id_to_dtype)
+            ), clbl_inf_ctx
+
+        arg_dtypes = tuple(arg_num_to_dtype[i] for i in range(n_args))
+
+        for mangler in self.function_manglers:
+            mangle_info = mangler(None, pmbl.var(self.name), arg_dtypes)
+            if mangle_info is None:
+                mangle_info = mangler(
+                    None,
+                    pmbl.primitives.Lookup(pmbl.var("math"), self.name),
+                    arg_dtypes,
+                )
+
+            if mangle_info is None:
+                continue
+
+            updated_arg_id_to_dtype = {
+                i: dtype for i, dtype in enumerate(mangle_info.arg_dtypes)
+            }
+            updated_arg_id_to_dtype[-1] = mangle_info.result_dtypes[0]
+
+            return (
+                self.copy(
+                    name_in_target=mangle_info.target_name,
+                    arg_id_to_dtype=constantdict(updated_arg_id_to_dtype),
+                ),
+                clbl_inf_ctx,
+            )
+
+        # Fallback: assume return type matches the first argument.
+        fallback_arg_id_to_dtype = dict(arg_num_to_dtype)
+        fallback_arg_id_to_dtype[-1] = arg_num_to_dtype[0]
+        return (
+            self.copy(arg_id_to_dtype=constantdict(fallback_arg_id_to_dtype)),
+            clbl_inf_ctx,
+        )
+
+
+def _collect_called_function_names(expr):
+    collector = _CallNameCollector()
+    collector(expr)
+    return collector.names
 
 
 # {{{ clean files
@@ -194,10 +274,6 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
 
         self.dtype = dtype
         self.function_manglers = function_manglers
-        if function_manglers is not None:
-            logger.warning(
-                "function_manglers is deprecated with current loopy and is ignored"
-            )
         self.preamble_generators = preamble_generators
 
         self.name = "ScalarFieldExpressionEvaluation"
@@ -208,7 +284,28 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
             str(self.dim) + "D",
             self.expr.__str__(),
             ",".join([x.__str__() for x in self.vars]),
+            repr(self.function_manglers),
         )
+
+    def _apply_function_manglers(self, loopy_knl):
+        if self.function_manglers is None:
+            return loopy_knl
+
+        if hasattr(lp, "register_function_manglers"):
+            return lp.register_function_manglers(loopy_knl, self.function_manglers)
+
+        from loopy.target.opencl import get_opencl_callables
+
+        known_callables = set(get_opencl_callables().keys())
+        call_names = _collect_called_function_names(self.get_normalised_expr())
+        for name in sorted(call_names - known_callables):
+            loopy_knl = lp.register_callable(
+                loopy_knl,
+                name,
+                _FunctionManglerCallable(name, self.function_manglers),
+            )
+
+        return loopy_knl
 
     def get_normalised_expr(self):
         nexpr = self.expr
@@ -282,6 +379,8 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
         loopy_knl = lp.fix_parameters(loopy_knl, dim=self.dim)
         loopy_knl = lp.set_options(loopy_knl, write_cl=False)
         loopy_knl = lp.set_options(loopy_knl, return_dict=True)
+
+        loopy_knl = self._apply_function_manglers(loopy_knl)
 
         if self.preamble_generators is not None:
             loopy_knl = lp.register_preamble_generators(

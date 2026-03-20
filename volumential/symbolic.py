@@ -20,6 +20,9 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
+import numpy as np
+
+import loopy as lp
 import pymbolic as pmbl
 
 from volumential.tools import ScalarFieldExpressionEvaluation
@@ -130,6 +133,40 @@ def der_laplacian(func, coord_vars=None):
 # {{{ evaluation helper
 
 
+def math_func_mangler(target, name, arg_dtypes):
+    if len(arg_dtypes) == 1 and isinstance(name, pmbl.primitives.Lookup):
+        (arg_dtype,) = arg_dtypes
+
+        fname = name.name
+        if not (
+            isinstance(name.aggregate, pmbl.primitives.Variable)
+            and name.aggregate.name == "math"
+        ):
+            raise RuntimeError("unexpected aggregate '%s'" % str(name.aggregate))
+
+        if arg_dtype.is_complex():
+            if arg_dtype.numpy_dtype == np.complex64:
+                tpname = "cfloat"
+            elif arg_dtype.numpy_dtype == np.complex128:
+                tpname = "cdouble"
+            else:
+                raise RuntimeError("unexpected complex type '%s'" % arg_dtype)
+
+            return lp.CallMangleInfo(
+                target_name=f"{tpname}_{fname}",
+                result_dtypes=(arg_dtype,),
+                arg_dtypes=(arg_dtype,),
+            )
+
+        return lp.CallMangleInfo(
+            target_name="%s" % fname,
+            result_dtypes=(arg_dtype,),
+            arg_dtypes=(arg_dtype,),
+        )
+
+    return None
+
+
 def get_evaluator(dim, expression, variables=None):
     if variables is None:
         if dim == 1:
@@ -145,6 +182,7 @@ def get_evaluator(dim, expression, variables=None):
         dim=dim,
         expression=expression,
         variables=variables,
+        function_manglers=[math_func_mangler],
     )
 
 
