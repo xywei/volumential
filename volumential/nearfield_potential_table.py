@@ -188,16 +188,21 @@ def get_cahn_hilliard_laplacian(dim, b=0, c=0):
 def sumpy_kernel_to_lambda(sknl):
     from sympy import Symbol, lambdify, symbols
 
+    import scipy.special as sp
+
     var_name_prefix = "x"
     var_names = " ".join([var_name_prefix + str(i) for i in range(sknl.dim)])
     arg_names = symbols(var_names)
     args = [Symbol(var_name_prefix + str(i)) for i in range(sknl.dim)]
 
+    lmd = lambdify(
+        arg_names,
+        sknl.get_expression(args) * sknl.get_global_scaling_const(),
+        modules=[{"hankel_1": sp.hankel1, "besselk": sp.kv}, "scipy", "numpy"],
+    )
+
     def func(x, y=None, z=None):
         coord = (x, y, z)
-        lmd = lambdify(
-            arg_names, sknl.get_expression(args) * sknl.get_global_scaling_const()
-        )
         return lmd(*coord[: sknl.dim])
 
     return func

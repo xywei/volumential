@@ -84,6 +84,26 @@ def test_modes():
         assert np.allclose(val, 1)
 
 
+def test_sumpy_kernel_to_lambda_lambdifies_once(monkeypatch):
+    from sumpy.kernel import LaplaceKernel
+
+    import sympy
+
+    call_count = {"n": 0}
+    original_lambdify = sympy.lambdify
+
+    def wrapped_lambdify(*args, **kwargs):
+        call_count["n"] += 1
+        return original_lambdify(*args, **kwargs)
+
+    monkeypatch.setattr(sympy, "lambdify", wrapped_lambdify)
+
+    knl_func = npt.sumpy_kernel_to_lambda(LaplaceKernel(2))
+    assert np.isfinite(knl_func(0.5, 0.25))
+    assert np.isfinite(knl_func(0.25, 0.5))
+    assert call_count["n"] == 1
+
+
 def cheb_eval(dim, coefs, coords):
     if dim == 1:
         return chebval(coords[0], coefs)

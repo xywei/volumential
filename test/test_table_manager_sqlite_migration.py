@@ -112,6 +112,22 @@ def test_get_kernel_function_preserves_cahn_hilliard_coefficients(tmp_path):
     assert np.isclose(knl_func(0.2, 0.0), reference(0.2, 0.0))
 
 
+def test_get_kernel_function_rejects_partial_cahn_hilliard_coefficients(tmp_path):
+    filename = tmp_path / "cache.sqlite"
+
+    with NFTable(str(filename), progress_bar=False) as table_manager:
+        with pytest.raises(TypeError, match="requires both b and c together"):
+            table_manager.get_kernel_function(2, "Cahn-Hilliard", b=3.5)
+
+        with pytest.raises(TypeError, match="requires both b and c together"):
+            table_manager.get_kernel_function(2, "Cahn-Hilliard", c=2.0)
+
+        with pytest.raises(TypeError, match="requires both b and c"):
+            table_manager.get_kernel_function(
+                2, "Cahn-Hilliard", approx_at_origin=False
+            )
+
+
 def test_legacy_hdf5_cache_error(tmp_path):
     filename = tmp_path / "legacy-cache.hdf5"
     filename.write_bytes(b"\x89HDF\r\n\x1a\nlegacy")
