@@ -25,6 +25,7 @@ THE SOFTWARE.
 """
 
 import logging
+import os
 
 
 logger = logging.getLogger(__name__)
@@ -49,20 +50,32 @@ def main():
 
     dim = 2
 
+    smoke_mode = os.environ.get("VOLUMENTIAL_EXAMPLE_SMOKE", "").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+
     # use local SQLite cache; nearfield tables are recomputed on cache miss
-    table_filename = "nft_laplace2d.sqlite"
+    table_filename = (
+        "nft_laplace2d_smoke.sqlite" if smoke_mode else "nft_laplace2d.sqlite"
+    )
     root_table_source_extent = 2
 
     print("Using table cache:", table_filename)
 
-    q_order = 9  # quadrature order
-    n_levels = 6  # 2^(n_levels-1) subintervals in 1D
+    if smoke_mode:
+        q_order = 3
+        n_levels = 2
+        m_order = 8
+    else:
+        q_order = 9  # quadrature order
+        n_levels = 6  # 2^(n_levels-1) subintervals in 1D
+        m_order = 20  # multipole order
 
     use_multilevel_table = False
 
     dtype = np.float64
-
-    m_order = 20  # multipole order
     force_direct_evaluation = False
 
     print("Multipole order =", m_order)
@@ -179,8 +192,8 @@ def main():
     )
     build_config = DuffyBuildConfig(
         radial_rule="tanh-sinh-fast",
-        regular_quad_order=50,
-        radial_quad_order=100,
+        regular_quad_order=8 if smoke_mode else 50,
+        radial_quad_order=21 if smoke_mode else 100,
     )
 
     if use_multilevel_table:

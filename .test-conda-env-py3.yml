@@ -1,7 +1,7 @@
 name: test-conda-env-py3
 channels:
   - conda-forge
-  - defaults
+  - nodefaults
 dependencies:
   - attrs
   - cgen
@@ -24,7 +24,7 @@ dependencies:
   - pytest
   - pytest-cov
   - python-symengine
-  - python>=3.8
+  - python=3.11
   - pyvkfft
   - scipy
   - symengine

@@ -1,48 +1,27 @@
-name: CI
+name: CI Full
 on:
-  push:
-    branches: [ 'main' ]
-  pull_request:
-    branches: [ 'main' ]
+  schedule:
+    - cron: '17 3 * * 0'
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  flake8:
-    name: Linting (flake8)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
-          cache: 'pip'
-      - name: Main Script
-        run: |
-          curl -L -O https://tiker.net/ci-support-v0
-          . ./ci-support-v0
-
-          install_and_run_flake8 "$(get_proj_name)" examples/*.py test/*.py
-
-  pytest:
-    name: Testing (Linux)
-    runs-on: ubuntu-latest
+  pytest_mac:
+    name: Testing (macOS)
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
       - uses: mamba-org/setup-micromamba@v2
         with:
-          environment-file: .test-conda-env-py3.yml
+          environment-file: .test-conda-env-py3-macos.yml
           environment-name: testing
           cache-downloads: true
-          cache-environment: true
-          cache-environment-key: >-
-            ${{ runner.os }}-py3-fast-${{ hashFiles('.test-conda-env-py3.yml', 'setup.py') }}
           generate-run-shell: true
       - uses: actions/cache@v4
         with:
@@ -54,7 +33,16 @@ jobs:
         shell: micromamba-shell {0}
         run: |
           export PY_EXE=python
+          export LC_ALL=en_US.UTF-8
+          export LANG=en_US.UTF-8
+
           export PYTEST_FLAGS="--cov=volumential"
+          export CI_TEST_CONDA_PREFIX="$CONDA_PREFIX"
+          export CPATH="${CI_TEST_CONDA_PREFIX}/include${CPATH:+:${CPATH}}"
+          export LIBRARY_PATH="${CI_TEST_CONDA_PREFIX}/lib${LIBRARY_PATH:+:${LIBRARY_PATH}}"
+          export CPPFLAGS="${CPPFLAGS:-} -I${CI_TEST_CONDA_PREFIX}/include"
+          export CFLAGS="${CFLAGS:-} -I${CI_TEST_CONDA_PREFIX}/include"
+          export LDFLAGS="${LDFLAGS:-} -L${CI_TEST_CONDA_PREFIX}/lib"
 
           python -m pip install --upgrade pip
           python -m pip install --editable .[test]
@@ -64,8 +52,8 @@ jobs:
 
           test_py_project
 
-  nearfield_duffy:
-    name: Testing (Nearfield Duffy)
+  docs:
+    name: Documentation
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -74,9 +62,37 @@ jobs:
           environment-file: .test-conda-env-py3.yml
           environment-name: testing
           cache-downloads: true
-          cache-environment: true
-          cache-environment-key: >-
-            ${{ runner.os }}-py3-fast-${{ hashFiles('.test-conda-env-py3.yml', 'setup.py') }}
+          generate-run-shell: true
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('setup.py', 'setup.cfg', 'requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+      - name: Main Script
+        shell: micromamba-shell {0}
+        run: |
+          export PY_EXE=python
+
+          python -m pip install --upgrade pip
+          python -m pip install --editable .[test,doc]
+
+          curl -L -O https://tiker.net/ci-support-v0
+          . ./ci-support-v0
+
+          build_docs
+
+  examples:
+    name: Examples
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v5
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: .test-conda-env-py3.yml
+          environment-name: testing
+          cache-downloads: true
           generate-run-shell: true
       - uses: actions/cache@v4
         with:
@@ -95,44 +111,6 @@ jobs:
           curl -L -O https://tiker.net/ci-support-v0
           . ./ci-support-v0
 
-          rewrite_pyopencl_test
-          python -m pytest -q \
-            test/test_duffy_tanh_sinh.py \
-            test/test_nearfield_potential_table.py \
-            test/test_duffy_batched_manufactured.py \
-            test/test_nearfield_interaction_completeness.py \
-            -k "duffy or completeness_1"
-
-  examples_smoke:
-    name: Examples (Smoke)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v5
-      - uses: mamba-org/setup-micromamba@v2
-        with:
-          environment-file: .test-conda-env-py3.yml
-          environment-name: testing
-          cache-downloads: true
-          cache-environment: true
-          cache-environment-key: >-
-            ${{ runner.os }}-py3-fast-${{ hashFiles('.test-conda-env-py3.yml', 'setup.py') }}
-          generate-run-shell: true
-      - uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('setup.py', 'setup.cfg', 'requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-      - name: Main Script
-        shell: micromamba-shell {0}
-        run: |
-          export PY_EXE=python
-          export VOLUMENTIAL_EXAMPLE_SMOKE=1
-
-          python -m pip install --upgrade pip
-          python -m pip install --editable .[test]
-
-          python examples/laplace2d.py
+          run_examples
 
 # vim: sw=2
