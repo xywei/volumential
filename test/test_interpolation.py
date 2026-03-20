@@ -334,14 +334,17 @@ def test_from_meshmode_interpolation_integer_payload_promotes_to_float(ctx_facto
 def test_leaves_to_nodes_lookup_tol_scales_with_tree_extent():
     from types import SimpleNamespace
 
-    tree64 = SimpleNamespace(coord_dtype=np.float64, root_extent=1.0)
+    tree64 = SimpleNamespace(coord_dtype=np.float64, root_extent=1.0, nlevels=1)
     assert _compute_leaves_to_nodes_lookup_tol(tree64, 1.0e-12) == pytest.approx(
         1.0e-12
     )
 
-    tree32 = SimpleNamespace(coord_dtype=np.float32, root_extent=1.0e8)
+    tree32 = SimpleNamespace(coord_dtype=np.float32, root_extent=1.0e8, nlevels=20)
     tol = _compute_leaves_to_nodes_lookup_tol(tree32, 1.0e-12)
-    assert tol >= 64.0 * np.finfo(np.float32).eps * 1.0e8
+
+    root_scaled = 64.0 * np.finfo(np.float32).eps * 1.0e8
+    leaf_cap = 0.25 * (1.0e8 / (1 << 19))
+    assert tol == pytest.approx(min(root_scaled, leaf_cap))
 
 
 # {{{ 2d tests

@@ -58,8 +58,15 @@ def _get_boxtree_actx(context):
 
 def _compute_leaves_to_nodes_lookup_tol(tree, tol):
     coord_dtype = np.dtype(tree.coord_dtype)
-    scale = max(1.0, float(abs(tree.root_extent)))
-    relative_tol = 64.0 * np.finfo(coord_dtype).eps * scale
+    root_scale = max(1.0, float(abs(tree.root_extent)))
+    relative_tol = 64.0 * np.finfo(coord_dtype).eps * root_scale
+
+    nlevels = max(1, int(getattr(tree, "nlevels", 1)))
+    finest_level_extent = float(abs(tree.root_extent)) / (1 << (nlevels - 1))
+    leaf_cap = 0.25 * finest_level_extent
+    if leaf_cap > 0:
+        relative_tol = min(relative_tol, leaf_cap)
+
     return max(float(tol), relative_tol)
 
 
