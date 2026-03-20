@@ -258,6 +258,7 @@ def test_duffy_radial_routes_queue_to_batched_builder(monkeypatch):
         build_method="DuffyRadial",
         dim=2,
         sumpy_kernel=object(),
+        derive_kernel_func=False,
         progress_bar=False,
     )
 
@@ -295,6 +296,7 @@ def test_build_table_uses_supplied_cl_ctx_when_queue_missing(monkeypatch):
         build_method="DuffyRadial",
         dim=2,
         sumpy_kernel=object(),
+        derive_kernel_func=False,
         progress_bar=False,
     )
 
@@ -346,6 +348,7 @@ def test_duffy_radial_keeps_legacy_deg_theta_alias(monkeypatch):
         build_method="DuffyRadial",
         dim=2,
         sumpy_kernel=object(),
+        derive_kernel_func=False,
         progress_bar=False,
     )
 
@@ -384,6 +387,7 @@ def test_duffy_radial_accepts_build_config_dataclass(monkeypatch):
         build_method="DuffyRadial",
         dim=2,
         sumpy_kernel=object(),
+        derive_kernel_func=False,
         progress_bar=False,
     )
 
@@ -504,6 +508,7 @@ def test_duffy_radial_auto_tune_orders_routes_to_batched_builder(monkeypatch):
         build_method="DuffyRadial",
         dim=2,
         sumpy_kernel=object(),
+        derive_kernel_func=False,
         progress_bar=False,
     )
 
@@ -577,6 +582,7 @@ def test_duffy_radial_auto_keyword_orders_trigger_autotune(monkeypatch):
         build_method="DuffyRadial",
         dim=2,
         sumpy_kernel=object(),
+        derive_kernel_func=False,
         progress_bar=False,
     )
 
@@ -645,6 +651,7 @@ def test_duffy_radial_partial_auto_order_keeps_explicit_value(monkeypatch):
         build_method="DuffyRadial",
         dim=2,
         sumpy_kernel=object(),
+        derive_kernel_func=False,
         progress_bar=False,
     )
 
@@ -713,6 +720,7 @@ def test_duffy_autotune_two_candidates_prefers_fine_rule(monkeypatch):
         build_method="DuffyRadial",
         dim=2,
         sumpy_kernel=object(),
+        derive_kernel_func=False,
         progress_bar=False,
     )
 
@@ -813,13 +821,20 @@ def test_duffy_radial_batched_initializes_normalizers(monkeypatch):
 
 
 def test_duffy_radial_batched_clamps_decomposition_vertex(monkeypatch):
+    class DummyIntegralKernel:
+        def get_expression(self, _dvec):
+            return 0
+
+        def get_global_scaling_const(self):
+            return 1
+
     table = npt.NearFieldInteractionTable(
         quad_order=2,
         build_method="DuffyRadial",
         dim=2,
         progress_bar=False,
     )
-    table.integral_knl = object()
+    table.integral_knl = DummyIntegralKernel()
 
     captured = {}
 
@@ -920,6 +935,7 @@ def test_duffy_radial_routes_queue_to_batched_builder_1d(monkeypatch):
         build_method="DuffyRadial",
         dim=1,
         sumpy_kernel=object(),
+        derive_kernel_func=False,
         progress_bar=False,
     )
 
@@ -968,6 +984,7 @@ def test_duffy_radial_routes_queue_to_batched_builder_3d(monkeypatch):
         build_method="DuffyRadial",
         dim=3,
         sumpy_kernel=object(),
+        derive_kernel_func=False,
         progress_bar=False,
     )
 

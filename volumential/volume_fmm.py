@@ -264,7 +264,7 @@ def drive_volume_fmm(
             )
 
         # list 2 and beyond
-        # First call global p2p, then substract list 1
+        # First call global p2p, then subtract list 1
 
         from sumpy import P2P
 
@@ -681,8 +681,8 @@ def interpolate_volume_potential(
                         # Interpolate mode value in each direction
                         for iaxis
                             <> numerator[iaxis] = (barycentric_lagrange_weights[idx[iaxis]]
-                                                / diff[iaxis, idx[iaxis]]) {id=numer,dep=diff:mode_indices,dup=iaxis}
-                            <> mode_val[iaxis] = numerator[iaxis] / denom[iaxis] {id=mode_val,dep=numer:denom,dup=iaxis}
+                                                / diff[iaxis, idx[iaxis]]) {id=numerator,dep=diff:mode_indices,dup=iaxis}
+                            <> mode_val[iaxis] = numerator[iaxis] / denom[iaxis] {id=mode_val,dep=numerator:denom,dup=iaxis}
                         end
 
                         # Fix when target point coincide with a quad point

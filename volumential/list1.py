@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 
 
 class NearFieldEvalBase(KernelCacheWrapper):
-    """Base class of near-field evalulator."""
+    """Base class of near-field evaluator."""
 
     default_name = "near_field_eval_base"
 
@@ -87,7 +87,7 @@ class NearFieldEvalBase(KernelCacheWrapper):
 
         self.options = options
         self.name = name or self.default_name
-        self.divice = device
+        self.device = device
         self.extra_kwargs = kwargs
 
         # Allow user to pass more tables to force using multiple tables

@@ -33,7 +33,7 @@ __doc__ = """
 
 # {{{ expansion wrangler interface
 
-# NOTE: abstractmethod's signatures (arguement lists) are not enforced
+# NOTE: abstractmethod signatures (argument lists) are not enforced
 
 
 class ExpansionWranglerInterface:

@@ -36,7 +36,7 @@ class SymmetryOperationBase:
         if type(self) is type(other):
             return self._index < other._index
 
-        # differnt operations in lexicographical order
+        # different operations in lexicographical order
         return repr(self) < repr(other)
 
 
@@ -112,7 +112,6 @@ class CaseVecReduction:
             return flippable, swappable_groups
 
         for tag in tags:
-
             if isinstance(tag, Flip):
                 flippable[tag.axis] = 1
 
@@ -120,10 +119,7 @@ class CaseVecReduction:
                 iaxis, jaxis = tag.axes
                 gi = None
                 gj = None
-                for gid, group in zip(
-                        range(len(swappable_groups)),
-                        swappable_groups
-                        ):
+                for gid, group in zip(range(len(swappable_groups)), swappable_groups):
                     if iaxis in group:
                         assert gi is None
                         gi = gid
@@ -147,10 +143,8 @@ class CaseVecReduction:
                         else:
                             # Merge groups
                             swappable_groups.append(
-                                set().union(
-                                    swappable_groups[gi],
-                                    swappable_groups[gj])
-                                )
+                                set().union(swappable_groups[gi], swappable_groups[gj])
+                            )
                             swappable_groups.remove(swappable_groups[gi])
                             swappable_groups.remove(swappable_groups[gj])
 
@@ -248,8 +242,7 @@ class CaseVecReduction:
 
     def get_full_reduction_ratio(self):
         return (
-            self.get_inter_box_reduction_ratio()
-            * self.get_intra_box_reduction_ratio()
+            self.get_inter_box_reduction_ratio() * self.get_intra_box_reduction_ratio()
         )
 
     def get_reduced_invariant_groups(self):

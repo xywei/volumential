@@ -4,3 +4,19 @@ build-backend = "setuptools.build_meta"
 
 [tool.pytest.ini_options]
 testpaths = ["test"]
+
+[tool.basedpyright]
+include = ["volumential/version.py"]
+exclude = ["test", "examples"]
+typeCheckingMode = "basic"
+failOnWarnings = false
+reportMissingImports = "none"
+reportMissingTypeStubs = "none"
+reportUnknownVariableType = "none"
+reportUnknownMemberType = "none"
+reportUnknownArgumentType = "none"
+reportUnknownParameterType = "none"
+reportUnknownLambdaType = "none"
+reportAny = "none"
+reportUnusedCallResult = "none"
+reportUnusedImport = "none"

@@ -1,0 +1,101 @@
+name: CI Full
+on:
+  push:
+    branches: [ 'main' ]
+  schedule:
+    - cron: '17 3 * * 0'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pytest_mac:
+    name: Testing (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: .test-conda-env-py3-macos.yml
+          environment-name: testing
+          cache-downloads: true
+          generate-run-shell: true
+      - name: Main Script
+        shell: micromamba-shell {0}
+        run: |
+          export PY_EXE=python
+          export LC_ALL=en_US.UTF-8
+          export LANG=en_US.UTF-8
+
+          export PYTEST_FLAGS="--cov=volumential"
+          export CI_TEST_CONDA_PREFIX="$CONDA_PREFIX"
+          export CPATH="${CI_TEST_CONDA_PREFIX}/include${CPATH:+:${CPATH}}"
+          export LIBRARY_PATH="${CI_TEST_CONDA_PREFIX}/lib${LIBRARY_PATH:+:${LIBRARY_PATH}}"
+          export CPPFLAGS="${CPPFLAGS:-} -I${CI_TEST_CONDA_PREFIX}/include"
+          export CFLAGS="${CFLAGS:-} -I${CI_TEST_CONDA_PREFIX}/include"
+          export LDFLAGS="${LDFLAGS:-} -L${CI_TEST_CONDA_PREFIX}/lib"
+
+          python -m pip install --upgrade pip
+          python -m pip install --editable .[test]
+
+          curl -L -O https://tiker.net/ci-support-v0
+          . ./ci-support-v0
+
+          test_py_project
+
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: .test-conda-env-py3.yml
+          environment-name: testing
+          cache-downloads: true
+          generate-run-shell: true
+      - name: Main Script
+        shell: micromamba-shell {0}
+        run: |
+          export PY_EXE=python
+
+          python -m pip install --upgrade pip
+          python -m pip install --editable .[test,doc]
+
+          curl -L -O https://tiker.net/ci-support-v0
+          . ./ci-support-v0
+
+          build_docs
+
+  examples:
+    name: Examples
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v5
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: .test-conda-env-py3.yml
+          environment-name: testing
+          cache-downloads: true
+          generate-run-shell: true
+      - name: Main Script
+        shell: micromamba-shell {0}
+        run: |
+          export PY_EXE=python
+          export PYOPENCL_CTX="portable:0"
+
+          python -m pip install --upgrade pip
+          python -m pip install --editable .[test]
+
+          curl -L -O https://tiker.net/ci-support-v0
+          . ./ci-support-v0
+
+          run_examples
+
+# vim: sw=2

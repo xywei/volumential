@@ -864,7 +864,7 @@ class FPNDFMMLibTreeIndependentDataForWrangler(
     for ExpansionWrangler if it is using fmmlib to perform multipole
     expansion and manipulations.
 
-    The interface is augmented with unecessary arguments acting as
+    The interface is augmented with unnecessary arguments acting as
     placeholders, such that it can be a drop-in replacement of sumpy
     backend.
     """
@@ -1447,7 +1447,7 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
             if isinstance(out_pot, cl.array.Array):
                 out_pot.finish()
 
-        # boxtree.pyfmmlib_integration handles things diffferently
+        # boxtree.pyfmmlib_integration handles things differently
         # when target_kernels has only one element
         if len(pot) == 1:
             pot = pot[0]

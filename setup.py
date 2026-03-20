@@ -130,7 +130,7 @@ def main():
         ],
         extras_require={
             "gmsh_support": ["gmsh_interop"],
-            "test": ["pytest", "gmsh_interop"],
+            "test": ["pytest", "gmsh_interop", "filelock"],
             "doc": ["sphinx", "sphinx_rtd_theme"],
         },
         include_package_data=True,

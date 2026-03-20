@@ -1,4 +1,4 @@
-"""Function extension with regularity contraints:
+"""Function extension with regularity constraints:
 
 1. :math:`L^2`: extend with constant value
 

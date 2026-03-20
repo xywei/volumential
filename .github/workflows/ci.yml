@@ -2,48 +2,95 @@ name: CI
 on:
   push:
     branches: [ 'main' ]
-  pull_request:
-    branches: [ 'main' ]
   schedule:
     - cron: '17 3 * * 0'
+  pull_request:
+    branches: [ 'main' ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
-  flake8:
-    name: Linting (flake8)
+  typos:
+    name: Typos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: crate-ci/typos@v1
+        with:
+          config: .typos.toml
+          files: |
+            .github/workflows
+            volumential
+            README.md
+            pyproject.toml
+            setup.py
+
+  ruff:
+    name: Ruff
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
-          # matches compat target in setup.py
-          python-version: '3.8'
-      - name: "Main Script"
+          python-version: '3.11'
+          cache: 'pip'
+      - name: Main Script
         run: |
-          export CONDA_ENVIRONMENT=.test-conda-env-py3.yml
+          python -m pip install --upgrade pip
+          python -m pip install ruff
+          ruff check --select E9,F63,F7,F82
 
-          curl -L -O https://tiker.net/ci-support-v0
-          . ci-support-v0
+  basedpyright:
+    name: Type Checking (basedpyright)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: .test-conda-env-py3.yml
+          environment-name: testing
+          cache-downloads: true
+          generate-run-shell: true
+      - name: Main Script
+        shell: micromamba-shell {0}
+        run: |
+          export PY_EXE=python
 
-          build_py_project_in_conda_env
-          install_and_run_flake8 "$(get_proj_name)" examples/*.py test/*.py
+          python -m pip install --upgrade pip
+          python -m pip install --editable .[test]
+          python -m pip install basedpyright
+
+          python -m basedpyright -p pyproject.toml --level error
 
   pytest:
     name: Testing (Linux)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: mamba-org/setup-micromamba@v2
         with:
-          python-version: '3.x'
-      - name: "Main Script"
+          environment-file: .test-conda-env-py3.yml
+          environment-name: testing
+          cache-downloads: true
+          generate-run-shell: true
+      - name: Main Script
+        shell: micromamba-shell {0}
         run: |
-          export CONDA_ENVIRONMENT=.test-conda-env-py3.yml
+          export PY_EXE=python
           export PYTEST_FLAGS="--cov=volumential"
 
-          curl -L -O https://tiker.net/ci-support-v0
-          . ci-support-v0
+          python -m pip install --upgrade pip
+          python -m pip install --editable .[test]
 
-          build_py_project_in_conda_env
+          curl -L -O https://tiker.net/ci-support-v0
+          . ./ci-support-v0
+
           test_py_project
 
   nearfield_duffy:
@@ -51,19 +98,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: mamba-org/setup-micromamba@v2
         with:
-          python-version: '3.x'
-      - name: "Main Script"
+          environment-file: .test-conda-env-py3.yml
+          environment-name: testing
+          cache-downloads: true
+          generate-run-shell: true
+      - name: Main Script
+        shell: micromamba-shell {0}
         run: |
-          export CONDA_ENVIRONMENT=.test-conda-env-py3.yml
+          export PY_EXE=python
+
+          python -m pip install --upgrade pip
+          python -m pip install --editable .[test]
 
           curl -L -O https://tiker.net/ci-support-v0
-          . ci-support-v0
+          . ./ci-support-v0
 
-          build_py_project_in_conda_env
           rewrite_pyopencl_test
-          python -m pip install pytest
           python -m pytest -q \
             test/test_duffy_tanh_sinh.py \
             test/test_nearfield_potential_table.py \
@@ -71,67 +123,28 @@ jobs:
             test/test_nearfield_interaction_completeness.py \
             -k "duffy or completeness_1"
 
-  pytest_mac:
-    name: Testing (macOS)
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.x'
-      - name: "Main Script"
-        run: |
-          export LC_ALL=en_US.UTF-8
-          export LANG=en_US.UTF-8
-
-          export CONDA_ENVIRONMENT=.test-conda-env-py3-macos.yml
-          export PYTEST_FLAGS="--cov=volumential"
-          export CI_TEST_CONDA_PREFIX="$PWD/.conda-root/envs/testing"
-          export CPATH="${CI_TEST_CONDA_PREFIX}/include${CPATH:+:${CPATH}}"
-          export LIBRARY_PATH="${CI_TEST_CONDA_PREFIX}/lib${LIBRARY_PATH:+:${LIBRARY_PATH}}"
-          export CPPFLAGS="${CPPFLAGS:-} -I${CI_TEST_CONDA_PREFIX}/include"
-          export CFLAGS="${CFLAGS:-} -I${CI_TEST_CONDA_PREFIX}/include"
-          export LDFLAGS="${LDFLAGS:-} -L${CI_TEST_CONDA_PREFIX}/lib"
-
-          curl -L -O https://tiker.net/ci-support-v0
-          . ci-support-v0
-
-          build_py_project_in_conda_env
-          test_py_project
-
-  docs:
-    name: Documentation
+  examples_smoke:
+    name: Examples (Smoke)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: mamba-org/setup-micromamba@v2
         with:
-          python-version: '3.x'
-      - name: "Main Script"
+          environment-file: .test-conda-env-py3.yml
+          environment-name: testing
+          cache-downloads: true
+          generate-run-shell: true
+      - name: Main Script
+        shell: micromamba-shell {0}
         run: |
-          export CONDA_ENVIRONMENT=.test-conda-env-py3.yml
+          export PY_EXE=python
+          export VOLUMENTIAL_EXAMPLE_SMOKE=1
+          export PYOPENCL_CTX="portable:0"
 
-          curl -L -O https://tiker.net/ci-support-v0
-          . ci-support-v0
+          python -m pip install --upgrade pip
+          python -m pip install --editable .[test]
 
-          build_py_project_in_conda_env
-          build_docs
-
-  examples:
-    name: Examples
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.x'
-      - name: "Main Script"
-        run: |
-          export CONDA_ENVIRONMENT=.test-conda-env-py3.yml
-
-          curl -L -O https://tiker.net/ci-support-v0
-          . ci-support-v0
-          build_py_project_in_conda_env
-          run_examples
+          python examples/laplace2d.py
 
 # vim: sw=2
