@@ -71,12 +71,21 @@ def _compute_leaves_to_nodes_lookup_tol(tree, tol):
 
 
 def _count_missing_nodes_from_leaf_starts(leaf_starts, queue):
+    if hasattr(leaf_starts, "with_queue"):
+        leaf_starts = leaf_starts.with_queue(queue)
+
     if len(leaf_starts) <= 1:
         return 0
 
     hit_counts = leaf_starts[1:] - leaf_starts[:-1]
     missing_flags = (hit_counts == 0).astype(np.int32)
     return int(cl.array.sum(missing_flags).get(queue))
+
+
+def _make_constant_array(queue, template, value):
+    ary = cl.array.empty(queue, template.shape, dtype=template.dtype)
+    ary.fill(np.asarray(value, dtype=template.dtype))
+    return ary
 
 
 @lru_cache(maxsize=16)
@@ -917,8 +926,9 @@ class LeavesToNodesLookupBuilder:
                 raise ValueError
 
         nodes = flatten(actx.thaw(self.discr.nodes()), actx, leaf_class=DOFArray)
+        nodes = make_obj_array([coord.with_queue(actx.queue) for coord in nodes])
         lookup_tol = _compute_leaves_to_nodes_lookup_tol(self.trav.tree, tol)
-        radii = cl.array.zeros_like(nodes[0]) + lookup_tol
+        radii = _make_constant_array(actx.queue, nodes[0], lookup_tol)
 
         area_query, _ = self.leaves_to_balls_lookup_builder.area_query_builder(
             self.boxtree_actx,
