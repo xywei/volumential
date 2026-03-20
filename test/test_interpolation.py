@@ -37,6 +37,7 @@ from volumential.interpolation import (
     LeavesToNodesLookupBuilder,
     _count_missing_nodes_from_leaf_starts,
     _compute_leaves_to_nodes_lookup_tol,
+    _make_constant_array,
     interpolate_from_meshmode,
     interpolate_to_meshmode,
 )
@@ -357,6 +358,21 @@ def test_count_missing_nodes_from_leaf_starts_device(ctx_factory):
 
     starts_full = cl.array.to_device(queue, np.array([0, 1, 2, 5], dtype=np.int32))
     assert _count_missing_nodes_from_leaf_starts(starts_full, queue) == 0
+
+    starts_queue_less = cl.array.to_device(
+        queue, np.array([0, 1, 1, 4], dtype=np.int32)
+    ).with_queue(None)
+    assert _count_missing_nodes_from_leaf_starts(starts_queue_less, queue) == 1
+
+
+def test_make_constant_array_accepts_queue_less_reference(ctx_factory):
+    cl_ctx = ctx_factory()
+    queue = cl.CommandQueue(cl_ctx)
+
+    ref = cl.array.arange(queue, 7, dtype=np.float64).with_queue(None)
+    const = _make_constant_array(queue, ref, 1.25)
+
+    assert np.allclose(const.get(queue), np.full(ref.shape, 1.25, dtype=ref.dtype))
 
 
 # {{{ 2d tests
