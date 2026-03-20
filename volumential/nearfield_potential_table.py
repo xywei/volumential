@@ -198,7 +198,15 @@ def sumpy_kernel_to_lambda(sknl):
     lmd = lambdify(
         arg_names,
         sknl.get_expression(args) * sknl.get_global_scaling_const(),
-        modules=[{"hankel_1": sp.hankel1, "besselk": sp.kv}, "scipy", "numpy"],
+        modules=[
+            {
+                "hankel_1": sp.hankel1,
+                "Hankel1": sp.hankel1,
+                "besselk": sp.kv,
+            },
+            "scipy",
+            "numpy",
+        ],
     )
 
     def func(x, y=None, z=None):
