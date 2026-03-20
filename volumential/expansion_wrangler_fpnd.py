@@ -165,8 +165,8 @@ class FPNDSumpyExpansionWranglerCodeContainer(
     for ExpansionWrangler if it is using sumpy to perform multipole
     expansion and manipulations.
 
-    Since :class:`SumpyExpansionWrangler` necessarily must have a
-    :class:`pyopencl.CommandQueue`, but this queue is allowed to be
+    Since ``SumpyExpansionWrangler`` necessarily must have a
+    ``pyopencl.CommandQueue``, but this queue is allowed to be
     more ephemeral than the code, the code's lifetime
     is decoupled by storing it in this object.
     """

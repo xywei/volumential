@@ -124,7 +124,7 @@ def drive_volume_fmm(
     2. In the second (downward) pass, the local expansions for all boxes
     at all levels at formed from top down.
 
-    :arg traversal: A :class:`boxtree.traversal.FMMTraversalInfo` instance.
+    :arg traversal: A boxtree traversal info object.
     :arg expansion_wrangler: An object implementing the expansion
                     wrangler interface.
     :arg src_weights: Source 'density/weights/charges' time quad weights..
@@ -481,7 +481,7 @@ def interpolate_volume_potential(
         May also be None if the needed information is passed by kwargs.
     :arg potential_in_tree_order: Whether the potential is in tree order (as
         opposed to in user order).
-    :lbl_lookup: a :class:`boxtree.LeavesToBallsLookup` that has the lookup
+    :lbl_lookup: a leaves-to-balls lookup object that has the lookup
         information for target points. Can be None if the lookup lists are
         provided separately in kwargs. If it is None and no other information is
         provided, the lookup will be built from scratch.

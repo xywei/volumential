@@ -49,7 +49,6 @@ Table Lookup (Deprecated)
 This module produces table lookup schemes given information about the kernel and the table data format. The module is deprecated in favor of :py:mod:`volumential.nearfield_potential_table` and :py:mod:`volumential.table_manager`.
 
 .. automodule:: volumential.list1
-   :members:
 
 .. warning::
 
@@ -58,7 +57,8 @@ This module produces table lookup schemes given information about the kernel and
 Table and Table Manager
 ***********************
 
-The tables are stored in SQLite format and managed through :class:`NearFieldInteractionTableManager`.
+The tables are stored in SQLite format and managed through
+:class:`volumential.table_manager.NearFieldInteractionTableManager`.
 
 .. automodule:: volumential.nearfield_potential_table
    :members:
@@ -82,8 +82,6 @@ Although the interpolation is :math:`O(N log N)`, it is almost always indistingu
 the total runtime.
 
 .. automodule:: volumential.volume_fmm
-
-.. automodule:: volumential.list1
 
 Function Extension
 ------------------

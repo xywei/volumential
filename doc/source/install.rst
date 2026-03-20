@@ -53,7 +53,7 @@ Note that if you are using ``jupyterlab`` or ``jupyter`` notebook, you need to a
 Install Volumential
 -------------------
 
-We recommend downloading :py:mod:`volumential` using ``git``.
+We recommend downloading ``volumential`` using ``git``.
 
 .. code-block:: bash
 

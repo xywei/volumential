@@ -1129,7 +1129,7 @@ class NearFieldInteractionTableManager:
         queue=None,
         **kwargs,
     ):
-        """Get or build a table using a :class:`TableRequest`."""
+        """Get or build a table using a :class:`volumential.table_manager.TableRequest`."""
 
         t_get_start = time.perf_counter()
         request_kwargs = dict(kwargs)
@@ -1244,7 +1244,7 @@ class NearFieldInteractionTableManager:
         return self.load_saved_table_from_request(table_request, **kwargs)
 
     def load_saved_table_from_request(self, table_request, **kwargs):
-        """Load a cached table using a :class:`TableRequest`."""
+        """Load a cached table using a :class:`volumential.table_manager.TableRequest`."""
 
         request_kwargs = dict(kwargs)
         self._reject_removed_compute_method_kwarg(
@@ -1611,7 +1611,7 @@ class NearFieldInteractionTableManager:
         queue=None,
         **kwargs,
     ):
-        """Build/update a cached table using a :class:`TableRequest`."""
+        """Build/update a cached table using a :class:`volumential.table_manager.TableRequest`."""
 
         request_kwargs = dict(kwargs)
         self._reject_removed_compute_method_kwarg(
