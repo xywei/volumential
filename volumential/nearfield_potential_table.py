@@ -306,13 +306,15 @@ class NearFieldInteractionTable:
         self.build_method = _TABLE_BUILD_METHOD
         self._auto_build_queue = None
 
-        if (
-            kernel_func is None
-            and sumpy_kernel is not None
-            and derive_kernel_func
-            and _is_sumpy_kernel_like(sumpy_kernel)
-        ):
-            kernel_func = sumpy_kernel_to_lambda(sumpy_kernel, fallback_dim=dim)
+        if kernel_func is None and sumpy_kernel is not None and derive_kernel_func:
+            if _is_sumpy_kernel_like(sumpy_kernel):
+                kernel_func = sumpy_kernel_to_lambda(sumpy_kernel, fallback_dim=dim)
+            else:
+                raise TypeError(
+                    "Unsupported sumpy_kernel object. Provide a sumpy-like kernel "
+                    "with get_expression/get_global_scaling_const, pass kernel_func "
+                    "explicitly, or set derive_kernel_func=False."
+                )
 
         if dim == 1:
             self.kernel_func = kernel_func
@@ -321,20 +323,9 @@ class NearFieldInteractionTable:
 
         elif dim == 2:
             # Constant kernel can be used for fun/testing
-            if kernel_func is None:
-                if sumpy_kernel is None:
-                    kernel_func = constant_one
-                    kernel_type = "const"
-                elif derive_kernel_func:
-
-                    def unsupported_sumpy_kernel(x, y=None, z=None):
-                        raise TypeError(
-                            "Unsupported sumpy_kernel object. Provide a sumpy-like "
-                            "kernel with get_expression/get_global_scaling_const "
-                            "or pass kernel_func explicitly."
-                        )
-
-                    kernel_func = unsupported_sumpy_kernel
+            if kernel_func is None and sumpy_kernel is None:
+                kernel_func = constant_one
+                kernel_type = "const"
 
             # Kernel function differs from OpenCL's kernels
             self.kernel_func = kernel_func
@@ -1495,6 +1486,11 @@ class NearFieldInteractionTable:
             )
         if self.integral_knl is None:
             raise ValueError("batched DuffyRadial path requires integral_knl")
+        if not _is_sumpy_kernel_like(self.integral_knl):
+            raise TypeError(
+                "batched DuffyRadial path requires a sumpy-like integral_knl "
+                "with get_expression/get_global_scaling_const"
+            )
         if radial_rule == "adaptive":
             raise ValueError("batched DuffyRadial path does not support adaptive rule")
 

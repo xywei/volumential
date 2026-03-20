@@ -88,6 +88,7 @@ jobs:
         shell: micromamba-shell {0}
         run: |
           export PY_EXE=python
+          export PYOPENCL_CTX="portable:0"
 
           python -m pip install --upgrade pip
           python -m pip install --editable .[test]
