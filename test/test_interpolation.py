@@ -35,6 +35,7 @@ from volumential.geometry import BoundingBoxFactory, BoxFMMGeometryFactory
 from volumential.interpolation import (
     ElementsToSourcesLookupBuilder,
     LeavesToNodesLookupBuilder,
+    _compute_leaves_to_nodes_lookup_tol,
     interpolate_from_meshmode,
     interpolate_to_meshmode,
 )
@@ -328,6 +329,19 @@ def test_from_meshmode_interpolation_integer_payload_promotes_to_float(ctx_facto
 
     assert np.issubdtype(interp_int.dtype, np.floating)
     assert np.allclose(interp_int, interp_ref)
+
+
+def test_leaves_to_nodes_lookup_tol_scales_with_tree_extent():
+    from types import SimpleNamespace
+
+    tree64 = SimpleNamespace(coord_dtype=np.float64, root_extent=1.0)
+    assert _compute_leaves_to_nodes_lookup_tol(tree64, 1.0e-12) == pytest.approx(
+        1.0e-12
+    )
+
+    tree32 = SimpleNamespace(coord_dtype=np.float32, root_extent=1.0e8)
+    tol = _compute_leaves_to_nodes_lookup_tol(tree32, 1.0e-12)
+    assert tol >= 64.0 * np.finfo(np.float32).eps * 1.0e8
 
 
 # {{{ 2d tests

@@ -56,6 +56,13 @@ def _get_boxtree_actx(context):
     raise TypeError(f"unsupported context type: {type(context).__name__}")
 
 
+def _compute_leaves_to_nodes_lookup_tol(tree, tol):
+    coord_dtype = np.dtype(tree.coord_dtype)
+    scale = max(1.0, float(abs(tree.root_extent)))
+    relative_tol = 64.0 * np.finfo(coord_dtype).eps * scale
+    return max(float(tol), relative_tol)
+
+
 @lru_cache(maxsize=16)
 def _build_from_meshmode_resampling_kernel(dtype_descr):
     dtype = np.dtype(dtype_descr)
@@ -894,7 +901,8 @@ class LeavesToNodesLookupBuilder:
                 raise ValueError
 
         nodes = flatten(actx.thaw(self.discr.nodes()), actx, leaf_class=DOFArray)
-        radii = cl.array.zeros_like(nodes[0]) + tol
+        lookup_tol = _compute_leaves_to_nodes_lookup_tol(self.trav.tree, tol)
+        radii = cl.array.zeros_like(nodes[0]) + lookup_tol
 
         lbl_lookup, evt = self.leaves_to_balls_lookup_builder(
             self.boxtree_actx, self.trav.tree, nodes, radii, wait_for=wait_for
@@ -911,7 +919,8 @@ class LeavesToNodesLookupBuilder:
             raise RuntimeError(
                 "leaves-to-nodes lookup failed to cover all nodes; "
                 f"missing {len(missing)} nodes. "
-                "Ensure the tree bounding box encloses all discretization nodes."
+                "Ensure the tree bounding box encloses all discretization nodes "
+                f"(lookup_tol={lookup_tol:.3e})."
             )
 
         return LeavesToNodesLookup(
