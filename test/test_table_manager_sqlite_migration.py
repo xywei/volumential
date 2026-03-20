@@ -79,6 +79,182 @@ def test_get_kernel_function_uses_sumpy_route_for_laplace3d(tmp_path):
     assert np.isclose(value, 1.0 / (4.0 * np.pi))
 
 
+def test_resolve_kernel_bundle_skips_python_kernel_lookup_for_sumpy(
+    tmp_path, monkeypatch
+):
+    filename = tmp_path / "cache.sqlite"
+
+    with NFTable(str(filename), progress_bar=False) as table_manager:
+        monkeypatch.setattr(
+            table_manager,
+            "get_kernel_function",
+            lambda *args, **kwargs: pytest.fail(
+                "_resolve_kernel_bundle unexpectedly called get_kernel_function"
+            ),
+        )
+
+        bundle = table_manager._resolve_kernel_bundle(
+            TableRequest.from_args(3, "Laplace", 1),
+            {},
+            require_sumpy_kernel=False,
+        )
+
+    assert bundle.sumpy_kernel is not None
+    assert bundle.kernel_func is None
+
+
+def test_load_saved_table_uses_payload_without_python_kernel_lookup(
+    tmp_path, monkeypatch
+):
+    import volumential.table_manager as table_manager_module
+
+    filename = tmp_path / "cache.sqlite"
+
+    class PayloadBackedTable:
+        def __init__(
+            self,
+            quad_order,
+            dim,
+            kernel_func,
+            kernel_type,
+            sumpy_kernel,
+            source_box_extent,
+            precomputed_q_points=None,
+            **kwargs,
+        ):
+            self.quad_order = quad_order
+            self.dim = dim
+            self.kernel_func = kernel_func
+            self.kernel_type = kernel_type
+            self.integral_knl = sumpy_kernel
+            self.source_box_extent = source_box_extent
+
+            self.n_q_points = 1
+            self.n_pairs = 1
+            self.q_points = np.zeros((1, dim), dtype=np.float64)
+            if precomputed_q_points is not None:
+                self.q_points[:] = precomputed_q_points
+
+            self.data = np.zeros(1, dtype=np.float64)
+            self.mode_normalizers = np.zeros(1, dtype=np.float64)
+            self.kernel_exterior_normalizers = np.zeros(1, dtype=np.float64)
+            self.interaction_case_vecs = [[0] * dim]
+            self.case_indices = np.zeros(1, dtype=np.int32)
+            self.table_data_is_symmetry_reduced = False
+
+    from types import SimpleNamespace
+
+    payload_table = SimpleNamespace(
+        q_points=np.array([[0.5, 0.5, 0.5]], dtype=np.float64),
+        data=np.array([3.5], dtype=np.float64),
+        mode_normalizers=np.array([1.0], dtype=np.float64),
+        kernel_exterior_normalizers=np.array([0.0], dtype=np.float64),
+        interaction_case_vecs=[[0, 0, 0]],
+        case_indices=np.array([0], dtype=np.int32),
+        table_data_is_symmetry_reduced=False,
+    )
+    payload_blob = _serialize_table_payload(payload_table)
+
+    with NFTable(str(filename), progress_bar=False) as table_manager:
+        monkeypatch.setattr(
+            table_manager,
+            "get_kernel_function",
+            lambda *args, **kwargs: pytest.fail(
+                "load_saved_table unexpectedly called get_kernel_function"
+            ),
+        )
+        monkeypatch.setattr(
+            table_manager_module,
+            "NearFieldInteractionTable",
+            PayloadBackedTable,
+        )
+        monkeypatch.setattr(
+            table_manager,
+            "_load_record",
+            lambda *args, **kwargs: {
+                "dim": 3,
+                "quad_order": 1,
+                "build_method": "DuffyRadial",
+                "payload": payload_blob,
+                "source_box_extent": 1.0,
+                "source_box_level_stored": 0,
+                "n_q_points": 1,
+                "n_pairs": 1,
+                "case_encoding_base": 1,
+                "case_encoding_shift": 0,
+                "kernel_type_cached": "inv_power",
+            },
+        )
+        monkeypatch.setattr(
+            table_manager, "_load_record_kwargs", lambda *args, **kwargs: {}
+        )
+
+        loaded = table_manager.load_saved_table(3, "Laplace", q_order=1)
+
+    assert loaded.kernel_func is None
+    assert np.allclose(loaded.q_points, payload_table.q_points)
+    assert np.allclose(loaded.data, payload_table.data)
+
+
+def test_get_table_recompute_skips_python_kernel_lookup_for_sumpy(
+    tmp_path, monkeypatch
+):
+    import volumential.table_manager as table_manager_module
+
+    filename = tmp_path / "cache.sqlite"
+
+    class RecomputeTable:
+        def __init__(
+            self,
+            quad_order,
+            dim,
+            kernel_func,
+            kernel_type,
+            sumpy_kernel,
+            source_box_extent,
+            **kwargs,
+        ):
+            self.quad_order = quad_order
+            self.dim = dim
+            self.kernel_func = kernel_func
+            self.kernel_type = kernel_type
+            self.integral_knl = sumpy_kernel
+            self.source_box_extent = source_box_extent
+
+            self.n_q_points = 1
+            self.n_pairs = 1
+            self.q_points = np.array([[0.5, 0.5, 0.5]], dtype=np.float64)
+            self.data = np.array([1.25], dtype=np.float64)
+            self.mode_normalizers = np.array([0.0], dtype=np.float64)
+            self.kernel_exterior_normalizers = np.array([0.0], dtype=np.float64)
+            self.interaction_case_vecs = [[0, 0, 0]]
+            self.case_indices = np.array([0], dtype=np.int32)
+            self.table_data_is_symmetry_reduced = False
+            self.is_built = False
+
+        def build_table(self, *args, **kwargs):
+            self.is_built = True
+
+    with NFTable(str(filename), progress_bar=False) as table_manager:
+        monkeypatch.setattr(
+            table_manager,
+            "get_kernel_function",
+            lambda *args, **kwargs: pytest.fail(
+                "get_table recompute unexpectedly called get_kernel_function"
+            ),
+        )
+        monkeypatch.setattr(
+            table_manager_module,
+            "NearFieldInteractionTable",
+            RecomputeTable,
+        )
+
+        table, is_recomputed = table_manager.get_table(3, "Laplace", q_order=1)
+
+    assert is_recomputed
+    assert table.kernel_func is None
+
+
 def test_get_table_rejects_legacy_knl_func_kwarg(tmp_path):
     filename = tmp_path / "cache.sqlite"
 
