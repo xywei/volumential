@@ -29,8 +29,7 @@ import pymbolic as pmbl
 import pyopencl as cl
 import pyopencl.array  # noqa: F401
 from constantdict import constantdict
-from pymbolic.mapper import IdentityMapper
-from pymbolic.mapper.walk import WalkMapper
+from pymbolic.mapper import IdentityMapper, WalkMapper
 from pymbolic.primitives import Expression as ExpressionType, Variable as VariableType
 from pytools import memoize_method
 
