@@ -305,12 +305,15 @@ class NearFieldInteractionTable:
         self.build_method = _TABLE_BUILD_METHOD
         self._auto_build_queue = None
 
-        if (
-            kernel_func is None
-            and sumpy_kernel is not None
-            and _is_sumpy_kernel_like(sumpy_kernel)
-        ):
-            kernel_func = sumpy_kernel_to_lambda(sumpy_kernel, fallback_dim=dim)
+        if kernel_func is None and sumpy_kernel is not None:
+            if _is_sumpy_kernel_like(sumpy_kernel):
+                kernel_func = sumpy_kernel_to_lambda(sumpy_kernel, fallback_dim=dim)
+            else:
+                raise TypeError(
+                    "Unsupported sumpy_kernel object. Provide a sumpy-like kernel "
+                    "with get_expression/get_global_scaling_const or pass "
+                    "kernel_func explicitly."
+                )
 
         if dim == 1:
             self.kernel_func = kernel_func
