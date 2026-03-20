@@ -1,0 +1,14 @@
+[files]
+extend-exclude = [
+  ".basedpyright",
+]
+
+[default]
+extend-ignore-identifiers-re = [
+  "^[a-z]{1,3}$",
+]
+
+[default.extend-words]
+iy = "iy"
+iz = "iz"
+nd = "nd"

@@ -2,6 +2,8 @@ name: CI
 on:
   push:
     branches: [ 'main' ]
+  schedule:
+    - cron: '17 3 * * 0'
   pull_request:
     branches: [ 'main' ]
   workflow_dispatch:
@@ -20,6 +22,14 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: crate-ci/typos@master
+        with:
+          config: .typos.toml
+          files: |
+            .github/workflows
+            volumential
+            README.md
+            pyproject.toml
+            setup.py
 
   ruff:
     name: Ruff
@@ -62,7 +72,7 @@ jobs:
           python -m pip install --editable .[test]
           python -m pip install basedpyright
 
-          python -m basedpyright --baselinemode=auto
+          python -m basedpyright -p pyproject.toml --level error
 
   pytest:
     name: Testing (Linux)

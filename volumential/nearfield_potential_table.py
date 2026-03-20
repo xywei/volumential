@@ -185,7 +185,32 @@ def get_cahn_hilliard_laplacian(dim, b=0, c=0):
 # }}} End kernel function getters
 
 
-def sumpy_kernel_to_lambda(sknl):
+def _is_sumpy_kernel_like(sknl):
+    return hasattr(sknl, "get_expression") and hasattr(sknl, "get_global_scaling_const")
+
+
+def _sumpy_kernel_dim(sknl, fallback_dim=None):
+    for attr_name in ("dim", "ambient_dim"):
+        dim = getattr(sknl, attr_name, None)
+        if isinstance(dim, (int, np.integer)):
+            return int(dim)
+
+    if fallback_dim is not None:
+        return int(fallback_dim)
+
+    raise TypeError(
+        "Unable to determine sumpy kernel dimension; expected `dim` or "
+        "`ambient_dim` attribute."
+    )
+
+
+def sumpy_kernel_to_lambda(sknl, fallback_dim=None):
+    if not _is_sumpy_kernel_like(sknl):
+        raise TypeError(
+            "sumpy_kernel_to_lambda requires a sumpy-like kernel object with "
+            "get_expression and get_global_scaling_const methods"
+        )
+
     from sympy import Symbol, lambdify, symbols
 
     import scipy.special as sp
@@ -196,10 +221,11 @@ def sumpy_kernel_to_lambda(sknl):
     def _besselk(order, arg, *unused):
         return sp.kv(order, arg)
 
+    dim = _sumpy_kernel_dim(sknl, fallback_dim=fallback_dim)
     var_name_prefix = "x"
-    var_names = " ".join([var_name_prefix + str(i) for i in range(sknl.dim)])
+    var_names = " ".join([var_name_prefix + str(i) for i in range(dim)])
     arg_names = symbols(var_names)
-    args = [Symbol(var_name_prefix + str(i)) for i in range(sknl.dim)]
+    args = [Symbol(var_name_prefix + str(i)) for i in range(dim)]
 
     lmd = lambdify(
         arg_names,
@@ -217,7 +243,7 @@ def sumpy_kernel_to_lambda(sknl):
 
     def func(x, y=None, z=None):
         coord = (x, y, z)
-        return lmd(*coord[: sknl.dim])
+        return lmd(*coord[:dim])
 
     return func
 
@@ -279,8 +305,12 @@ class NearFieldInteractionTable:
         self.build_method = _TABLE_BUILD_METHOD
         self._auto_build_queue = None
 
-        if kernel_func is None and sumpy_kernel is not None:
-            kernel_func = sumpy_kernel_to_lambda(sumpy_kernel)
+        if (
+            kernel_func is None
+            and sumpy_kernel is not None
+            and _is_sumpy_kernel_like(sumpy_kernel)
+        ):
+            kernel_func = sumpy_kernel_to_lambda(sumpy_kernel, fallback_dim=dim)
 
         if dim == 1:
             self.kernel_func = kernel_func
