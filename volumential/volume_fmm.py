@@ -278,12 +278,14 @@ def drive_volume_fmm(
         if hasattr(wrangler, "kernel_extra_kwargs"):
             p2p_extra_kwargs.update(wrangler.kernel_extra_kwargs)
 
+        p2p_queue = wrangler.tree_indep._setup_actx.queue
+
         if queue is None:
             raise TypeError("unable to infer command queue for direct evaluation")
 
         for iw, sw in enumerate(src_weights):
             target_to_source = cl.array.to_device(
-                queue,
+                p2p_queue,
                 np.arange(traversal.tree.ntargets, dtype=np.int32),
             )
             p2p_kwargs = dict(p2p_extra_kwargs)

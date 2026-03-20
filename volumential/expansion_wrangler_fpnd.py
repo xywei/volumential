@@ -241,6 +241,10 @@ class FPNDSumpyTreeIndependentDataForWrangler(
         *args,
         **kwargs,
     ):
+        setup_queue = getattr(self._setup_actx, "queue", None)
+        if queue is not None and setup_queue is not queue:
+            self._setup_actx = PyOpenCLArrayContext(queue)
+
         return FPNDSumpyExpansionWrangler(
             tree_indep=self,
             queue=queue,
@@ -541,7 +545,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         # do not include quadrature weights (purely function
         # expansiona coefficients)
 
-        queue = _queue_from_array_like(mode_coefs) or self.queue
+        queue = self.queue
 
         if 0:
             print("Returns range for list1")
@@ -712,8 +716,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         for out_pot in pot:
             out_pot.finish()
 
-        timing_queue = _queue_from_array_like(mode_coefs) or self.queue
-        return (pot, SumpyTimingFuture(timing_queue, events))
+        return (pot, SumpyTimingFuture(self.queue, events))
 
     # }}} End direct evaluation of near field interactions
 
