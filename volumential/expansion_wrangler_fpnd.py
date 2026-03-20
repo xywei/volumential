@@ -103,14 +103,16 @@ def _prepare_table_data_and_entry_map(table_levels):
     table0 = table_levels[0]
     n_full_entries = len(table0.data)
 
-    if bool(getattr(table0, "table_data_is_symmetry_reduced", False)):
+    reduced_flags = [
+        bool(getattr(table, "table_data_is_symmetry_reduced", False))
+        for table in table_levels
+    ]
+    if any(flag != reduced_flags[0] for flag in reduced_flags[1:]):
+        raise RuntimeError("mixed full/reduced near-field table storage across levels")
+
+    if reduced_flags[0]:
         kept_entry_ids = np.flatnonzero(np.isfinite(table0.data)).astype(np.int64)
         for table in table_levels[1:]:
-            if not bool(getattr(table, "table_data_is_symmetry_reduced", False)):
-                raise RuntimeError(
-                    "inconsistent near-field table storage across levels"
-                )
-
             level_kept_entry_ids = np.flatnonzero(np.isfinite(table.data)).astype(
                 np.int64
             )
@@ -119,6 +121,9 @@ def _prepare_table_data_and_entry_map(table_levels):
                     "near-field levels disagree on symmetry-reduced entry ids"
                 )
     else:
+        for table in table_levels:
+            if np.any(np.isnan(table.data)):
+                raise RuntimeError("full near-field table level contains NaN entries")
         kept_entry_ids = np.arange(n_full_entries, dtype=np.int64)
 
     table_entry_ids = np.full(n_full_entries, -1, dtype=np.int32)

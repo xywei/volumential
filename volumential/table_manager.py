@@ -274,6 +274,9 @@ def _coerce_sqlite_int(value, field_name):
 
         # Legacy rows could contain numpy scalar bytes if sqlite adapters
         # treated numpy integers as blobs.
+        if len(raw) == 4:
+            return int(np.frombuffer(raw, dtype=np.int32)[0])
+
         if len(raw) == 8:
             return int(np.frombuffer(raw, dtype=np.int64)[0])
 

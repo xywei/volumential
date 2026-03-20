@@ -1134,6 +1134,33 @@ def test_duffy_radial_batched_keeps_symmetry_reduced_storage(ctx_factory):
     assert np.all(np.isfinite(table.data[invariant_entry_ids]))
     assert np.all(np.isnan(table.data[non_invariant_ids]))
 
+    # Reduced tables must still provide finite values through get_entry_index.
+    for case_id in range(table.n_cases):
+        entry_id = table.get_entry_index(0, 0, case_id)
+        assert np.isfinite(table.data[entry_id])
+
+
+def test_prepare_table_data_and_entry_map_rejects_mixed_storage_modes():
+    from types import SimpleNamespace
+
+    from volumential.expansion_wrangler_fpnd import _prepare_table_data_and_entry_map
+
+    full = SimpleNamespace(
+        data=np.array([1.0, 2.0], dtype=np.float64),
+        mode_normalizers=np.array([1.0], dtype=np.float64),
+        kernel_exterior_normalizers=np.array([0.0], dtype=np.float64),
+        table_data_is_symmetry_reduced=False,
+    )
+    reduced = SimpleNamespace(
+        data=np.array([1.0, np.nan], dtype=np.float64),
+        mode_normalizers=np.array([1.0], dtype=np.float64),
+        kernel_exterior_normalizers=np.array([0.0], dtype=np.float64),
+        table_data_is_symmetry_reduced=True,
+    )
+
+    with pytest.raises(RuntimeError, match="mixed full/reduced"):
+        _prepare_table_data_and_entry_map([full, reduced])
+
 
 if __name__ == "__main__":
     import sys

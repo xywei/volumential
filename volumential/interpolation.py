@@ -1039,7 +1039,7 @@ def interpolate_from_meshmode(actx, dof_vec, elements_to_sources_lookup, order="
     nsources = int(tree.nsources)
 
     nunit_dofs = int(degroup.unit_nodes.shape[1])
-    value_dtype = np.dtype(dof_vec.dtype)
+    value_dtype = np.dtype(np.result_type(dof_vec.dtype, np.float64))
     coord_dtype = np.dtype(tree.coord_dtype)
 
     source_element_indices = np.repeat(
@@ -1168,12 +1168,16 @@ def interpolate_from_meshmode(actx, dof_vec, elements_to_sources_lookup, order="
 
     from arraycontext.impl.pyopencl.taggable_cl_array import to_tagged_cl_array
 
-    dof_vec_flat = to_tagged_cl_array(dof_vec)
+    dof_vec_work = dof_vec
+    if np.dtype(dof_vec.dtype) != value_dtype:
+        dof_vec_work = dof_vec.astype(value_dtype)
+
+    dof_vec_flat = to_tagged_cl_array(dof_vec_work)
     sym_shape = dof_vec_flat.shape[:-1]
     nvecs = 1 if len(sym_shape) == 0 else int(np.prod(sym_shape, dtype=np.int64))
     dof_by_el = dof_vec_flat.reshape((nvecs, degroup.nelements, nunit_dofs))
 
-    source_vec = cl.array.zeros(actx.queue, (nvecs, nsources), dtype=dof_vec.dtype)
+    source_vec = cl.array.zeros(actx.queue, (nvecs, nsources), dtype=value_dtype)
 
     if n_source_slots > 0:
         apply_knl = _build_from_meshmode_resampling_kernel(value_dtype.str)
@@ -1208,7 +1212,7 @@ def interpolate_from_meshmode(actx, dof_vec, elements_to_sources_lookup, order="
         else:
             source_vec_flat = source_vec.reshape((nvecs, nsources))
             source_vec_user = cl.array.empty(
-                actx.queue, (nvecs, nsources), dtype=dof_vec.dtype
+                actx.queue, (nvecs, nsources), dtype=value_dtype
             )
             for ivec in range(nvecs):
                 source_vec_user[ivec] = source_vec_flat[ivec][tree.sorted_target_ids]

@@ -387,6 +387,7 @@ def build_geometry_info(ctx, queue, dim, q_order, mesh, bbox=None, a=None, b=Non
     if bbox is None:
         assert np.isscalar(a) and np.isscalar(b)
         bbox = np.array([[a, b]] * dim)
+    bbox = np.ascontiguousarray(bbox)
 
     from boxtree import TreeBuilder
     from boxtree.array_context import PyOpenCLArrayContext
@@ -404,6 +405,7 @@ def build_geometry_info(ctx, queue, dim, q_order, mesh, bbox=None, a=None, b=Non
             actx,
             particles=q_points,
             targets=q_points,
+            bbox=bbox,
             max_particles_in_box=q_order**dim * (2**dim) - 1,
             kind="adaptive-level-restricted",
         )

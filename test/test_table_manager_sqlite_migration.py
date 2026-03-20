@@ -9,6 +9,7 @@ from volumential.table_manager import (
     TableDiscretization,
     TableRequest,
     TABLE_CACHE_SCHEMA_VERSION,
+    _coerce_sqlite_int,
     _deserialize_table_payload,
     _deserialize_scalar,
     _serialize_table_payload,
@@ -89,6 +90,11 @@ def test_get_table_rejects_legacy_knl_func_kwarg(tmp_path):
                 q_order=1,
                 knl_func=lambda x, y: x + y,
             )
+
+
+def test_coerce_sqlite_int_accepts_int32_blob():
+    raw = np.array([-37], dtype=np.int32).tobytes()
+    assert _coerce_sqlite_int(raw, field_name="case_encoding_shift") == -37
 
 
 def test_legacy_hdf5_cache_error(tmp_path):

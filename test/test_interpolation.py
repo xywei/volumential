@@ -278,6 +278,58 @@ def test_from_meshmode_interpolation_user_order_keeps_source_axis(ctx_factory):
     assert np.allclose(user_order, expected_user_order)
 
 
+def test_from_meshmode_interpolation_integer_payload_promotes_to_float(ctx_factory):
+    cl_ctx = ctx_factory()
+    queue = cl.CommandQueue(cl_ctx)
+
+    dim = 2
+    degree = 2
+    nel_1d = 8
+    n_levels = 4
+    q_order = 3
+    a = -0.5
+    b = 0.5
+
+    mesh = generate_regular_rect_mesh(
+        a=(a,) * dim, b=(b,) * dim, nelements_per_axis=(nel_1d,) * dim
+    )
+
+    arr_ctx = PyOpenCLArrayContext(queue)
+    group_factory = PolynomialWarpAndBlendGroupFactory(order=degree)
+    discr = Discretization(arr_ctx, mesh, group_factory)
+
+    bbox_fac = BoundingBoxFactory(dim=dim)
+    boxfmm_fac = BoxFMMGeometryFactory(
+        cl_ctx,
+        dim=dim,
+        order=q_order,
+        nlevels=n_levels,
+        bbox_getter=bbox_fac,
+        expand_to_hold_mesh=mesh,
+        mesh_padding_factor=0.0,
+    )
+    boxgeo = boxfmm_fac(queue)
+    lookup_fac = ElementsToSourcesLookupBuilder(cl_ctx, tree=boxgeo.tree, discr=discr)
+    lookup, _ = lookup_fac(queue)
+
+    func = random_polynomial_func(dim, degree, seed=29)
+    scalar_dof = eval_func_on_discr_nodes(queue, discr, func).get(queue)
+    dof_int_host = np.rint(16 * scalar_dof).astype(np.int32)
+
+    dof_int = cl.array.to_device(queue, dof_int_host)
+    dof_ref = cl.array.to_device(queue, dof_int_host.astype(np.float64))
+
+    interp_int = interpolate_from_meshmode(queue, dof_int, lookup, order="tree").get(
+        queue
+    )
+    interp_ref = interpolate_from_meshmode(queue, dof_ref, lookup, order="tree").get(
+        queue
+    )
+
+    assert np.issubdtype(interp_int.dtype, np.floating)
+    assert np.allclose(interp_int, interp_ref)
+
+
 # {{{ 2d tests
 
 

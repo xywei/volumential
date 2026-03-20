@@ -286,12 +286,18 @@ class BoxFMMGeometryFactory:
         leaf_levels = np.asarray(self.engine.boxtree._tree.box_levels[leaf_boxes])
         has_mixed_leaf_levels = np.unique(leaf_levels).size > 1
 
+        bbox = np.ascontiguousarray(
+            np.column_stack((self.bbox_getter.lbounds, self.bbox_getter.ubounds)),
+            dtype=self.bbox_getter.dtype,
+        )
+
         if has_mixed_leaf_levels:
             tb = TreeBuilder(actx)
             tree, _ = tb(
                 actx,
                 particles=q_points,
                 targets=q_points,
+                bbox=bbox,
                 max_particles_in_box=(self.order**self.dim) * (2**self.dim) - 1,
                 kind="adaptive-level-restricted",
             )

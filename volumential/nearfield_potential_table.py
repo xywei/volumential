@@ -381,6 +381,17 @@ class NearFieldInteractionTable:
         assert target_point_index >= 0 and target_point_index < self.n_q_points
         pair_id = source_mode_index * self.n_q_points + target_point_index
 
+        if self.table_data_is_symmetry_reduced:
+            symmetry_maps = self._get_online_symmetry_maps()
+            source_mode_index_sym = int(
+                symmetry_maps["mode_qpoint_map"][source_mode_index, source_mode_index]
+            )
+            target_point_index_sym = int(
+                symmetry_maps["mode_qpoint_map"][source_mode_index, target_point_index]
+            )
+            case_id = int(symmetry_maps["mode_case_map"][source_mode_index, case_id])
+            pair_id = source_mode_index_sym * self.n_q_points + target_point_index_sym
+
         return case_id * self.n_pairs + pair_id
 
     # }}} End encode to table index
