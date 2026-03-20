@@ -144,6 +144,7 @@ def drive_test_completeness(ctx, queue, dim, q_order):
 
     wrangler = FPNDExpansionWrangler(
         tree_indep=tree_indep,
+        queue=queue,
         traversal=trav,
         near_field_table=nft,
         dtype=dtype,

@@ -243,6 +243,7 @@ class FPNDSumpyTreeIndependentDataForWrangler(
     ):
         return FPNDSumpyExpansionWrangler(
             tree_indep=self,
+            queue=queue,
             traversal=traversal,
             *args,
             dtype=dtype,
@@ -285,6 +286,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
     def __init__(
         self,
         tree_indep,
+        queue,
         traversal,
         dtype,
         fmm_level_to_order,
@@ -305,7 +307,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             3. otherwise, a dictionary from kernel.__repr__() to a list of its tables
         """
 
-        queue = _resolve_queue(None, traversal, tree_indep)
+        queue = _resolve_queue(queue, traversal, tree_indep)
 
         if source_extra_kwargs is None:
             source_extra_kwargs = {}

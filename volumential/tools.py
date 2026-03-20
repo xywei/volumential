@@ -224,7 +224,7 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
             id=None,
             assignee="expr_val",
             expression=self.get_normalised_expr(),
-            temp_var_type=lp.Optional(None),
+            temp_var_type=lp.Optional(),
         )
         eval_insns = [
             insn.copy(within_inames=insn.within_inames | eval_inames)

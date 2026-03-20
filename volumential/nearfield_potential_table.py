@@ -967,7 +967,7 @@ class NearFieldInteractionTable:
             id=None,
             assignee="knl_scaling",
             expression=sympy_conv(self.integral_knl.get_global_scaling_const()),
-            temp_var_type=lp.Optional(None),
+            temp_var_type=lp.Optional(),
             within_inames=frozenset(["ientry", "inode"]),
         )
 
@@ -2067,7 +2067,7 @@ class NearFieldInteractionTable:
             id=None,
             assignee="knl_scaling",
             expression=sympy_conv(self.integral_knl.get_global_scaling_const()),
-            temp_var_type=lp.Optional(None),
+            temp_var_type=lp.Optional(),
         )
 
         extra_kernel_kwarg_types = ()

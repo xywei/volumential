@@ -264,6 +264,7 @@ def main():
 
     wrangler = FPNDExpansionWrangler(
         tree_indep=tree_indep,
+        queue=queue,
         traversal=trav,
         near_field_table=nftable,
         dtype=dtype,
