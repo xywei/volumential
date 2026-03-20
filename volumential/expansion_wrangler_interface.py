@@ -38,9 +38,9 @@ __doc__ = """
 
 class ExpansionWranglerInterface:
     """
-        Abstract expansion handling interface.
-        The interface is adapted from, and stays compatible with boxtree/fmm.
-        TODO: Update docstrings
+    Abstract expansion handling interface.
+    The interface is adapted from, and stays compatible with boxtree/fmm.
+    TODO: Update docstrings
     """
 
     __metaclass__ = ABCMeta
@@ -212,23 +212,23 @@ class ExpansionWranglerInterface:
 
 # }}} End expansion wrangler interface
 
-# {{{ code container interface
+# {{{ tree-independent-data interface
 
 
-class ExpansionWranglerCodeContainerInterface:
+class TreeIndependentDataForWranglerInterface:
     """
-        Abstract expansion code container interface.
-        The interface is adapted from, and stays compatible with boxtree/fmm.
+    Abstract tree-independent data interface.
+    The interface is adapted from, and stays compatible with boxtree/fmm.
     """
 
     __metaclass__ = ABCMeta
 
     @abstractmethod
     def get_wrangler(self, *args, **kwargs):
-        """Makes a wrangler object.
-        """
+        """Makes a wrangler object."""
         pass
 
-# }}} End code container interface
+
+# }}} End tree-independent-data interface
 
 # vim: filetype=pyopencl:fdm=marker

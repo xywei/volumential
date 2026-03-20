@@ -494,7 +494,7 @@ class NearFieldInteractionTable:
 
     def get_mode(self, mode_index):
         """
-        normal modes are deined on the source box
+        normal modes are defined on the source box
         """
         assert mode_index >= 0 and mode_index < self.n_q_points
 

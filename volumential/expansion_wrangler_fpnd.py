@@ -41,8 +41,8 @@ from sumpy.kernel import (
 )
 
 from volumential.expansion_wrangler_interface import (
-    ExpansionWranglerCodeContainerInterface,
     ExpansionWranglerInterface,
+    TreeIndependentDataForWranglerInterface,
 )
 from volumential.nearfield_potential_table import NearFieldInteractionTable
 
@@ -94,6 +94,40 @@ def inverse_id_map(queue, mapped_ids):
         inv_ids = cl.array.to_device(queue, inv_ids)
 
     return inv_ids
+
+
+def _queue_from_array_like(ary):
+    if isinstance(ary, cl.array.Array):
+        return ary.queue
+
+    if isinstance(ary, np.ndarray) and ary.dtype == object:
+        for entry in ary.flat:
+            if isinstance(entry, cl.array.Array):
+                return entry.queue
+
+    return None
+
+
+def _resolve_queue(queue, traversal, tree_indep):
+    if queue is not None:
+        return queue
+
+    setup_actx = getattr(tree_indep, "_setup_actx", None)
+    actx_queue = getattr(setup_actx, "queue", None)
+    if actx_queue is not None:
+        return actx_queue
+
+    tree = getattr(traversal, "tree", None)
+    if tree is not None:
+        for ary_name in ("box_centers", "box_levels", "targets", "sources"):
+            ary = getattr(tree, ary_name, None)
+            ary_queue = _queue_from_array_like(ary)
+            if ary_queue is not None:
+                return ary_queue
+
+    raise TypeError(
+        "queue is required when it cannot be inferred from tree_indep/traversal"
+    )
 
 
 def _prepare_table_data_and_entry_map(table_levels):
@@ -158,8 +192,8 @@ def _prepare_table_data_and_entry_map(table_levels):
 # {{{ sumpy backend
 
 
-class FPNDSumpyExpansionWranglerCodeContainer(
-    ExpansionWranglerCodeContainerInterface, SumpyTreeIndependentDataForWrangler
+class FPNDSumpyTreeIndependentDataForWrangler(
+    TreeIndependentDataForWranglerInterface, SumpyTreeIndependentDataForWrangler
 ):
     """Objects of this type serve as a place to keep the code needed
     for ExpansionWrangler if it is using sumpy to perform multipole
@@ -195,6 +229,24 @@ class FPNDSumpyExpansionWranglerCodeContainer(
             source_kernels=source_kernels,
         )
 
+    def _for_queue(self, queue):
+        setup_queue = getattr(self._setup_actx, "queue", None)
+        if queue is None or setup_queue is queue:
+            return self
+
+        tree_indep = type(self)(
+            queue.context,
+            self.multipole_expansion_factory,
+            self.local_expansion_factory,
+            self.target_kernels,
+            exclude_self=self.exclude_self,
+            use_rscale=self.use_rscale,
+            strength_usage=self.strength_usage,
+            source_kernels=self.source_kernels,
+        )
+        tree_indep._setup_actx = PyOpenCLArrayContext(queue)
+        return tree_indep
+
     def get_wrangler(
         self,
         queue,
@@ -207,10 +259,12 @@ class FPNDSumpyExpansionWranglerCodeContainer(
         *args,
         **kwargs,
     ):
+        tree_indep = self._for_queue(queue)
+
         return FPNDSumpyExpansionWrangler(
-            self,
-            queue,
-            traversal,
+            tree_indep=tree_indep,
+            queue=queue,
+            traversal=traversal,
             *args,
             dtype=dtype,
             fmm_level_to_order=fmm_level_to_order,
@@ -251,18 +305,20 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
 
     def __init__(
         self,
-        code_container,
+        tree_indep,
         queue,
         traversal,
-        near_field_table,
         dtype,
         fmm_level_to_order,
+        near_field_table,
         quad_order,
         potential_kind=1,
         source_extra_kwargs=None,
         kernel_extra_kwargs=None,
         self_extra_kwargs=None,
         list1_extra_kwargs=None,
+        translation_classes_data=None,
+        preprocessed_mpole_dtype=None,
     ):
         """
         near_field_table can either one of three things:
@@ -270,6 +326,10 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             2. a list of tables, when len(target_kernels) = 1 (multiple levels)
             3. otherwise, a dictionary from kernel.__repr__() to a list of its tables
         """
+
+        queue = _resolve_queue(queue, traversal, tree_indep)
+        if hasattr(tree_indep, "_for_queue"):
+            tree_indep = tree_indep._for_queue(queue)
 
         if source_extra_kwargs is None:
             source_extra_kwargs = {}
@@ -281,16 +341,17 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             self_extra_kwargs = {}
 
         super().__init__(
-            code_container,
+            tree_indep,
             traversal,
             dtype,
             fmm_level_to_order,
             source_extra_kwargs=source_extra_kwargs,
             kernel_extra_kwargs=kernel_extra_kwargs,
             self_extra_kwargs=self_extra_kwargs,
+            translation_classes_data=translation_classes_data,
+            preprocessed_mpole_dtype=preprocessed_mpole_dtype,
         )
 
-        self.code = code_container
         self.queue = queue
 
         if "target_to_source" in self.self_extra_kwargs and isinstance(
@@ -318,16 +379,16 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         self.near_field_table = {}
         # list of tables for a single out kernel
         if isinstance(near_field_table, list):
-            assert len(self.code.target_kernels) == 1
-            self.near_field_table[self.code.target_kernels[0].__repr__()] = (
+            assert len(self.tree_indep.target_kernels) == 1
+            self.near_field_table[self.tree_indep.target_kernels[0].__repr__()] = (
                 near_field_table
             )
             self.n_tables = len(near_field_table)
 
         # single table
         elif isinstance(near_field_table, NearFieldInteractionTable):
-            assert len(self.code.target_kernels) == 1
-            self.near_field_table[self.code.target_kernels[0].__repr__()] = [
+            assert len(self.tree_indep.target_kernels) == 1
+            self.near_field_table[self.tree_indep.target_kernels[0].__repr__()] = [
                 near_field_table
             ]
             self.n_tables = 1
@@ -335,7 +396,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         # dictionary of lists of tables
         elif isinstance(near_field_table, dict):
             self.n_tables = {}
-            for out_knl in self.code.target_kernels:
+            for out_knl in self.tree_indep.target_kernels:
                 if repr(out_knl) not in near_field_table:
                     raise RuntimeError(
                         "Missing nearfield table for %s." % repr(out_knl)
@@ -357,7 +418,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         self.potential_kind = potential_kind
 
         # TODO: make all parameters table-specific (allow using inhomogeneous tables)
-        kname = repr(self.code.target_kernels[0])
+        kname = repr(self.tree_indep.target_kernels[0])
         self.root_table_source_box_extent = self.near_field_table[kname][
             0
         ].source_box_extent
@@ -365,8 +426,8 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             np.log(self.tree.root_extent / self.root_table_source_box_extent)
             / np.log(2)
         )
-        for kid in range(len(self.code.target_kernels)):
-            kname = self.code.target_kernels[kid].__repr__()
+        for kid in range(len(self.tree_indep.target_kernels)):
+            kname = self.tree_indep.target_kernels[kid].__repr__()
             for lev, table in zip(
                 range(len(self.near_field_table[kname])), self.near_field_table[kname]
             ):
@@ -502,9 +563,11 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         # do not include quadrature weights (purely function
         # expansiona coefficients)
 
+        queue = self.queue
+
         if 0:
             print("Returns range for list1")
-            out_pot[:] = cl.array.to_device(self.queue, np.arange(len(out_pot)))
+            out_pot[:] = cl.array.to_device(queue, np.arange(len(out_pot)))
             return out_pot, None
 
         kname = out_kernel.__repr__()
@@ -519,9 +582,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         if use_multilevel_tables:
             # this checks that the boxes at the coarsest level
             # and allows for some round-off error
-            min_lev = np.min(
-                self.tree.box_levels.get(self.queue)[target_boxes.get(self.queue)]
-            )
+            min_lev = np.min(self.tree.box_levels.get(queue)[target_boxes.get(queue)])
             largest_cell_extent = self.tree.root_extent * 0.5**min_lev
             if not self.near_field_table[kname][0].source_box_extent >= (
                 largest_cell_extent - 1e-15
@@ -542,15 +603,13 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         shift = -min(distinct_numbers)
 
         case_indices_dev = cl.array.to_device(
-            self.queue, self.near_field_table[kname][0].case_indices
+            queue, self.near_field_table[kname][0].case_indices
         )
         symmetry_maps = self.near_field_table[kname][0]._get_online_symmetry_maps()
         mode_qpoint_map_dev = cl.array.to_device(
-            self.queue, symmetry_maps["mode_qpoint_map"]
+            queue, symmetry_maps["mode_qpoint_map"]
         )
-        mode_case_map_dev = cl.array.to_device(
-            self.queue, symmetry_maps["mode_case_map"]
-        )
+        mode_case_map_dev = cl.array.to_device(queue, symmetry_maps["mode_case_map"])
 
         (
             table_data_combined,
@@ -559,7 +618,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             table_entry_ids,
         ) = _prepare_table_data_and_entry_map(self.near_field_table[kname])
 
-        self.queue.finish()
+        queue.finish()
         logger.info("table data for kernel " + out_kernel.__repr__() + " congregated")
 
         # The loop domain needs to know some info about the tables being used
@@ -582,36 +641,36 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             **self.list1_extra_kwargs,
         )
 
-        table_data_combined = cl.array.to_device(self.queue, table_data_combined)
-        mode_nmlz_combined = cl.array.to_device(self.queue, mode_nmlz_combined)
+        table_data_combined = cl.array.to_device(queue, table_data_combined)
+        mode_nmlz_combined = cl.array.to_device(queue, mode_nmlz_combined)
         exterior_mode_nmlz_combined = cl.array.to_device(
-            self.queue, exterior_mode_nmlz_combined
+            queue, exterior_mode_nmlz_combined
         )
-        table_entry_ids = cl.array.to_device(self.queue, table_entry_ids)
+        table_entry_ids = cl.array.to_device(queue, table_entry_ids)
         particle_local_ids = _compute_box_local_ids(
-            self.queue, self.tree, self.near_field_table[kname][0].n_q_points
+            queue, self.tree, self.near_field_table[kname][0].n_q_points
         )
 
         aligned_nboxes = self.tree.box_centers.shape[1]
         source_counts_nonchild = np.zeros(aligned_nboxes, dtype=np.int32)
         target_counts_nonchild = np.zeros(aligned_nboxes, dtype=np.int32)
         source_counts_nonchild[: len(self.tree.box_target_counts_nonchild)] = (
-            self.tree.box_target_counts_nonchild.get(self.queue)
+            self.tree.box_target_counts_nonchild.get(queue)
         )
         target_counts_nonchild[: len(self.tree.box_target_counts_nonchild)] = (
-            self.tree.box_target_counts_nonchild.get(self.queue)
+            self.tree.box_target_counts_nonchild.get(queue)
         )
-        source_counts_nonchild = cl.array.to_device(self.queue, source_counts_nonchild)
-        target_counts_nonchild = cl.array.to_device(self.queue, target_counts_nonchild)
+        source_counts_nonchild = cl.array.to_device(queue, source_counts_nonchild)
+        target_counts_nonchild = cl.array.to_device(queue, target_counts_nonchild)
 
-        self.queue.finish()
+        queue.finish()
         logger.info("sent table data to device")
 
         # NOTE: box_sources for this evaluation should be "box_targets".
         # This is due to the special features of how box-FMM works.
 
         res, evt = near_field(
-            self.queue,
+            queue,
             result=out_pot,
             box_centers=self.tree.box_centers,
             box_levels=self.tree.box_levels,
@@ -660,11 +719,11 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
     ):
         pot = self.output_zeros()
         events = []
-        for i in range(len(self.code.target_kernels)):
+        for i in range(len(self.tree_indep.target_kernels)):
             # print("processing near-field of out_kernel", i)
             pot[i], evt = self.eval_direct_single_out_kernel(
                 pot[i],
-                self.code.target_kernels[i],
+                self.tree_indep.target_kernels[i],
                 target_boxes,
                 neighbor_source_boxes_starts,
                 neighbor_source_boxes_lists,
@@ -798,8 +857,8 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
 # {{{ fmmlib backend (for laplace, helmholtz)
 
 
-class FPNDFMMLibExpansionWranglerCodeContainer(
-    ExpansionWranglerCodeContainerInterface,
+class FPNDFMMLibTreeIndependentDataForWrangler(
+    TreeIndependentDataForWranglerInterface,
 ):
     """Objects of this type serve as a place to keep the code needed
     for ExpansionWrangler if it is using fmmlib to perform multipole
@@ -876,7 +935,7 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
 
     def __init__(
         self,
-        code_container,
+        tree_indep,
         queue,
         tree,
         near_field_table,
@@ -891,7 +950,7 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
         *args,
         **kwargs,
     ):
-        self.code = code_container
+        self.tree_indep = tree_indep
         self.queue = queue
 
         tree = tree.get(queue)
@@ -908,7 +967,7 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
         source_deriv_names = []
         k_names = []
 
-        for out_knl in self.code.target_kernels:
+        for out_knl in self.tree_indep.target_kernels:
             if self.is_supported_helmknl(out_knl):
                 outputs.append(())
                 no_target_deriv_knl = out_knl
@@ -969,16 +1028,16 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
         self.near_field_table = {}
         # list of tables for a single out kernel
         if isinstance(near_field_table, list):
-            assert len(self.code.target_kernels) == 1
-            self.near_field_table[self.code.target_kernels[0].__repr__()] = (
+            assert len(self.tree_indep.target_kernels) == 1
+            self.near_field_table[self.tree_indep.target_kernels[0].__repr__()] = (
                 near_field_table
             )
             self.n_tables = len(near_field_table)
 
         # single table
         elif isinstance(near_field_table, NearFieldInteractionTable):
-            assert len(self.code.target_kernels) == 1
-            self.near_field_table[self.code.target_kernels[0].__repr__()] = [
+            assert len(self.tree_indep.target_kernels) == 1
+            self.near_field_table[self.tree_indep.target_kernels[0].__repr__()] = [
                 near_field_table
             ]
             self.n_tables = 1
@@ -986,7 +1045,7 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
         # dictionary of lists of tables
         elif isinstance(near_field_table, dict):
             self.n_tables = {}
-            for out_knl in self.code.target_kernels:
+            for out_knl in self.tree_indep.target_kernels:
                 if repr(out_knl) not in near_field_table:
                     raise RuntimeError(
                         "Missing nearfield table for %s." % repr(out_knl)
@@ -1005,7 +1064,7 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
             raise RuntimeError("Table type unrecognized.")
 
         # TODO: make all parameters table-specific (allow using inhomogeneous tables)
-        kname = repr(self.code.target_kernels[0])
+        kname = repr(self.tree_indep.target_kernels[0])
         self.root_table_source_box_extent = self.near_field_table[kname][
             0
         ].source_box_extent
@@ -1013,8 +1072,8 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
             np.log(self.tree.root_extent / self.root_table_source_box_extent)
             / np.log(2)
         )
-        for kid in range(len(self.code.target_kernels)):
-            kname = self.code.target_kernels[kid].__repr__()
+        for kid in range(len(self.tree_indep.target_kernels)):
+            kname = self.tree_indep.target_kernels[kid].__repr__()
             for lev, table in zip(
                 range(len(self.near_field_table[kname])), self.near_field_table[kname]
             ):
@@ -1372,11 +1431,11 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
                 ]
             )
         events = []
-        for i in range(len(self.code.target_kernels)):
+        for i in range(len(self.tree_indep.target_kernels)):
             # print("processing near-field of out_kernel", i)
             pot[i], evt = self.eval_direct_single_out_kernel(
                 pot[i],
-                self.code.target_kernels[i],
+                self.tree_indep.target_kernels[i],
                 target_boxes,
                 neighbor_source_boxes_starts,
                 neighbor_source_boxes_lists,
@@ -1482,8 +1541,8 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
 # }}} End fmmlib backend (for laplace, helmholtz)
 
 
-class FPNDExpansionWranglerCodeContainer(FPNDSumpyExpansionWranglerCodeContainer):
-    """The default code container."""
+class FPNDTreeIndependentDataForWrangler(FPNDSumpyTreeIndependentDataForWrangler):
+    """The default tree-independent-data class."""
 
 
 class FPNDExpansionWrangler(FPNDSumpyExpansionWrangler):

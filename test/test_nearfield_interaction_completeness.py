@@ -131,10 +131,10 @@ def drive_test_completeness(ctx, queue, dim, q_order):
 
     from volumential.expansion_wrangler_fpnd import (
         FPNDExpansionWrangler,
-        FPNDExpansionWranglerCodeContainer,
+        FPNDTreeIndependentDataForWrangler,
     )
 
-    wcc = FPNDExpansionWranglerCodeContainer(
+    tree_indep = FPNDTreeIndependentDataForWrangler(
         ctx,
         partial(mpole_expn_class, knl),
         partial(local_expn_class, knl),
@@ -143,7 +143,7 @@ def drive_test_completeness(ctx, queue, dim, q_order):
     )
 
     wrangler = FPNDExpansionWrangler(
-        code_container=wcc,
+        tree_indep=tree_indep,
         queue=queue,
         traversal=trav,
         near_field_table=nft,
