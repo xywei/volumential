@@ -1,5 +1,7 @@
 name: CI Full
 on:
+  push:
+    branches: [ 'main' ]
   schedule:
     - cron: '17 3 * * 0'
   workflow_dispatch:
@@ -23,12 +25,6 @@ jobs:
           environment-name: testing
           cache-downloads: true
           generate-run-shell: true
-      - uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('setup.py', 'setup.cfg', 'requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
       - name: Main Script
         shell: micromamba-shell {0}
         run: |
@@ -63,12 +59,6 @@ jobs:
           environment-name: testing
           cache-downloads: true
           generate-run-shell: true
-      - uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('setup.py', 'setup.cfg', 'requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
       - name: Main Script
         shell: micromamba-shell {0}
         run: |
@@ -94,12 +84,6 @@ jobs:
           environment-name: testing
           cache-downloads: true
           generate-run-shell: true
-      - uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('setup.py', 'setup.cfg', 'requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
       - name: Main Script
         shell: micromamba-shell {0}
         run: |
