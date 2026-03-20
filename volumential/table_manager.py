@@ -1023,16 +1023,8 @@ class NearFieldInteractionTableManager:
                 "for loopy table build."
             )
 
-        knl_func = None
-        if sumpy_knl is not None:
-            knl_func = self.get_kernel_function(
-                table_request.dim,
-                table_request.kernel_type,
-                sumpy_knl=sumpy_knl,
-            )
-
         return TableKernelBundle(
-            kernel_func=knl_func,
+            kernel_func=None,
             kernel_scale_type=kernel_scale_type,
             sumpy_kernel=sumpy_knl,
         )
@@ -1317,6 +1309,7 @@ class NearFieldInteractionTableManager:
                 kernel_func=kernel_bundle.kernel_func,
                 kernel_type=kernel_bundle.kernel_scale_type,
                 sumpy_kernel=kernel_bundle.sumpy_kernel,
+                derive_kernel_func=False,
                 source_box_extent=self._source_box_extent_for_level(
                     table_request.source_box_level
                 ),
@@ -1654,6 +1647,7 @@ class NearFieldInteractionTableManager:
             kernel_func=kernel_bundle.kernel_func,
             kernel_type=kernel_bundle.kernel_scale_type,
             sumpy_kernel=kernel_bundle.sumpy_kernel,
+            derive_kernel_func=False,
             build_method=_TABLE_BUILD_METHOD,
             source_box_extent=self._source_box_extent_for_level(
                 table_request.source_box_level

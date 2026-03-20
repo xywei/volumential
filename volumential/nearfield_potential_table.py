@@ -277,6 +277,7 @@ class NearFieldInteractionTable:
         build_method=_TABLE_BUILD_METHOD,
         source_box_extent=1,
         dtype=np.float64,
+        derive_kernel_func=True,
         progress_bar=True,
         **kwargs,
     ):
@@ -308,6 +309,7 @@ class NearFieldInteractionTable:
         if (
             kernel_func is None
             and sumpy_kernel is not None
+            and derive_kernel_func
             and _is_sumpy_kernel_like(sumpy_kernel)
         ):
             kernel_func = sumpy_kernel_to_lambda(sumpy_kernel, fallback_dim=dim)
@@ -323,7 +325,7 @@ class NearFieldInteractionTable:
                 if sumpy_kernel is None:
                     kernel_func = constant_one
                     kernel_type = "const"
-                else:
+                elif derive_kernel_func:
 
                     def unsupported_sumpy_kernel(x, y=None, z=None):
                         raise TypeError(
@@ -761,6 +763,21 @@ class NearFieldInteractionTable:
         radial_quad_order=61,
         mp_dps=50,
     ):
+        if self.kernel_func is None:
+            if self.integral_knl is None:
+                raise ValueError(
+                    "scalar DuffyRadial quadrature requires kernel_func or sumpy_kernel"
+                )
+            try:
+                self.kernel_func = sumpy_kernel_to_lambda(self.integral_knl)
+            except Exception as exc:
+                raise RuntimeError(
+                    "failed to derive kernel_func from sumpy_kernel for scalar "
+                    "DuffyRadial quadrature"
+                ) from exc
+
+        kernel_func = self.kernel_func
+
         entry_info = self.decode_index(entry_id)
         source_mode = self.get_mode(entry_info["source_mode_index"])
         target_point = self.find_target_point(
@@ -769,7 +786,7 @@ class NearFieldInteractionTable:
         )
 
         def integrand(x, y):
-            return source_mode(x, y) * self.kernel_func(
+            return source_mode(x, y) * kernel_func(
                 x - target_point[0], y - target_point[1]
             )
 
@@ -792,7 +809,7 @@ class NearFieldInteractionTable:
             def integrand_nd(*coords):
                 source_val = source_mode(*coords)
                 shifted = [coords[i] - target_point[i] for i in range(self.dim)]
-                return source_val * self.kernel_func(*shifted)
+                return source_val * kernel_func(*shifted)
 
             bounds = [(0.0, self.source_box_extent) for _ in range(self.dim)]
             integral, error = squad.box_quad_duffy_radial_nd(
