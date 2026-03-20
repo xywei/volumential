@@ -821,13 +821,20 @@ def test_duffy_radial_batched_initializes_normalizers(monkeypatch):
 
 
 def test_duffy_radial_batched_clamps_decomposition_vertex(monkeypatch):
+    class DummyIntegralKernel:
+        def get_expression(self, _dvec):
+            return 0
+
+        def get_global_scaling_const(self):
+            return 1
+
     table = npt.NearFieldInteractionTable(
         quad_order=2,
         build_method="DuffyRadial",
         dim=2,
         progress_bar=False,
     )
-    table.integral_knl = object()
+    table.integral_knl = DummyIntegralKernel()
 
     captured = {}
 
