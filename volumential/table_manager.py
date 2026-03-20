@@ -1509,7 +1509,7 @@ class NearFieldInteractionTableManager:
             return AxisTargetDerivative(1, YukawaKernel(dim))
 
         elif kernel_type.startswith("Cahn-Hilliard"):
-            from sumpy.kernel import AxisTargetDerivative, LaplacianTargetDerivative
+            from sumpy.kernel import AxisTargetDerivative
 
             coeffs = _extract_cahn_hilliard_coefficients(ch_kwargs, "get_sumpy_kernel")
             if coeffs is None:
@@ -1529,15 +1529,21 @@ class NearFieldInteractionTableManager:
                 return base_knl
 
             if kernel_type == "Cahn-Hilliard-Laplacian":
+                from sumpy.kernel import LaplacianTargetDerivative
+
                 return LaplacianTargetDerivative(base_knl)
 
             if kernel_type == "Cahn-Hilliard-Dx":
                 return AxisTargetDerivative(0, base_knl)
 
             if kernel_type == "Cahn-Hilliard-Laplacian-Dx":
+                from sumpy.kernel import LaplacianTargetDerivative
+
                 return AxisTargetDerivative(0, LaplacianTargetDerivative(base_knl))
 
             if kernel_type == "Cahn-Hilliard-Laplacian-Dy":
+                from sumpy.kernel import LaplacianTargetDerivative
+
                 return AxisTargetDerivative(1, LaplacianTargetDerivative(base_knl))
 
             if kernel_type == "Cahn-Hilliard-Dy":
