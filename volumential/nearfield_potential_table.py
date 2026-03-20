@@ -190,6 +190,12 @@ def sumpy_kernel_to_lambda(sknl):
 
     import scipy.special as sp
 
+    def _hankel1(order, arg, *unused):
+        return sp.hankel1(order, arg)
+
+    def _besselk(order, arg, *unused):
+        return sp.kv(order, arg)
+
     var_name_prefix = "x"
     var_names = " ".join([var_name_prefix + str(i) for i in range(sknl.dim)])
     arg_names = symbols(var_names)
@@ -200,9 +206,9 @@ def sumpy_kernel_to_lambda(sknl):
         sknl.get_expression(args) * sknl.get_global_scaling_const(),
         modules=[
             {
-                "hankel_1": sp.hankel1,
-                "Hankel1": sp.hankel1,
-                "besselk": sp.kv,
+                "hankel_1": _hankel1,
+                "Hankel1": _hankel1,
+                "besselk": _besselk,
             },
             "scipy",
             "numpy",
