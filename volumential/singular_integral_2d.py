@@ -481,7 +481,7 @@ def tria_quad(
     using Gaussian quadrature with absolute tolerance tol.
 
     The integrand, func, is allowed to have singularity at most $O(r)$ at the
-    first virtex of the tiangle. It is okay if func does not evaluate at the
+    first vertex of the triangle. It is okay if func does not evaluate at the
     singular point. This function handles that automatically.
 
     :param func: A double variable Python function or method to integrate.
@@ -979,7 +979,7 @@ def box_quad(
     if not isinstance(singular_point, tuple):
         singular_point = (singular_point[0], singular_point[1])
 
-    # When singular point is outside, project it onto the box bounday
+    # When singular point is outside, project it onto the box boundary
     # This can import speed by not integrating around the actual singularity
     # when not necessary. (The splitting is still needed since it can be quite
     # close to singular).
@@ -1053,12 +1053,12 @@ class DesingularizationMapping:
 
 def build_singular_box_quadrature(
         kernel,
-        desing_mapping,
+        design_mapping,
 
         ):
     """
     :arg kernel: an instance of :class:`sumpy.kernel.Kernel`
-    :arg desing_mapping: an instance of :class:`sumpy.kernel.Kernel`
+    :arg design_mapping: an instance of :class:`sumpy.kernel.Kernel`
     """
 '''
 

@@ -1088,7 +1088,7 @@ class NearFieldInteractionTableManager:
                             "Consistency is not fully ensured "
                             "(kwarg specified but cannot be loaded). "
                             "NOTE: this is most likely due to non-standard "
-                            "arguements being passed, since only "
+                            "arguments being passed, since only "
                             "(int, float, complex, bool, str) "
                             "are stored in the cache. "
                             "Also, some parameters related to method for "

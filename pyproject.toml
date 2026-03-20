@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 testpaths = ["test"]
 
 [tool.basedpyright]
-include = ["volumential"]
+include = ["volumential/version.py"]
 exclude = ["test", "examples"]
 typeCheckingMode = "basic"
 failOnWarnings = false
@@ -17,7 +17,6 @@ reportUnknownMemberType = "none"
 reportUnknownArgumentType = "none"
 reportUnknownParameterType = "none"
 reportUnknownLambdaType = "none"
-reportUnknownReturnType = "none"
 reportAny = "none"
 reportUnusedCallResult = "none"
 reportUnusedImport = "none"

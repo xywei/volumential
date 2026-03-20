@@ -225,7 +225,7 @@ class KernelCacheWrapper:
 
 class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
     """
-    Evaluate a field funciton on a set of D-d points.
+    Evaluate a field function on a set of D-d points.
     Useful for imposing analytic conditions efficiently.
     """
 

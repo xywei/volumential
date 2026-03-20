@@ -372,7 +372,7 @@ def build_geometry_info(ctx, queue, dim, q_order, mesh, bbox=None, a=None, b=Non
     """Build tree, traversal and other geo info for FMM computation,
     given the box mesh over/encompassing the domain.
 
-    The bouding box can be specified in one of two ways:
+    The bounding box can be specified in one of two ways:
     1. via scalars a, b, dim-homogeneous ([a, b]^dim)
     2. via bbox (e.g. np.array([[a1, b1], [a2, b2], [a3, b3]]))
     """

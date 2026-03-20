@@ -1969,7 +1969,7 @@ class NearFieldInteractionTable:
 
         # radius of source box
         hs = self.source_box_extent / 2
-        # radius of bouding sphere
+        # radius of bounding sphere
         r = hs * np.sqrt(self.dim)
         logger.debug(f"r_inner = {hs:f}, r_outer = {r:f}")
 
