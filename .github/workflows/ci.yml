@@ -14,8 +14,15 @@ permissions:
   contents: read
 
 jobs:
-  flake8:
-    name: Linting (flake8)
+  typos:
+    name: Typos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: crate-ci/typos@master
+
+  ruff:
+    name: Ruff
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -25,10 +32,40 @@ jobs:
           cache: 'pip'
       - name: Main Script
         run: |
-          curl -L -O https://tiker.net/ci-support-v0
-          . ./ci-support-v0
+          python -m pip install --upgrade pip
+          python -m pip install ruff
+          ruff check
 
-          install_and_run_flake8 "$(get_proj_name)" examples/*.py test/*.py
+  basedpyright:
+    name: Type Checking (basedpyright)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: .test-conda-env-py3.yml
+          environment-name: testing
+          cache-downloads: true
+          cache-environment: true
+          cache-environment-key: >-
+            ${{ runner.os }}-py3-fast-${{ hashFiles('.test-conda-env-py3.yml', 'setup.py') }}
+          generate-run-shell: true
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('setup.py', 'setup.cfg', 'requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+      - name: Main Script
+        shell: micromamba-shell {0}
+        run: |
+          export PY_EXE=python
+
+          python -m pip install --upgrade pip
+          python -m pip install --editable .[test]
+          python -m pip install basedpyright scipy-stubs matplotlib optype
+
+          python -m basedpyright --baselinemode=auto
 
   pytest:
     name: Testing (Linux)
