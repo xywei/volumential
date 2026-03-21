@@ -13,6 +13,9 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 jobs:
   pytest_mac:
     name: Testing (macOS)
@@ -31,6 +34,7 @@ jobs:
           export PY_EXE=python
           export LC_ALL=en_US.UTF-8
           export LANG=en_US.UTF-8
+          export PYOPENCL_CTX="portable:0"
 
           export PYTEST_FLAGS="--cov=volumential"
           export CISUPPORT_PARALLEL_PYTEST=no
@@ -85,7 +89,7 @@ jobs:
           environment-name: testing
           cache-downloads: true
           generate-run-shell: true
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: |
             nft_laplace3d.sqlite
