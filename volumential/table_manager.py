@@ -1,6 +1,9 @@
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
 __doc__ = """
+.. autoclass:: TableRequest
+   :members:
+
 .. autoclass:: NearFieldInteractionTableManager
    :members:
 """
