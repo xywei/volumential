@@ -33,6 +33,7 @@ jobs:
           export LANG=en_US.UTF-8
 
           export PYTEST_FLAGS="--cov=volumential"
+          export CISUPPORT_PARALLEL_PYTEST=no
           export CI_TEST_CONDA_PREFIX="$CONDA_PREFIX"
           export CPATH="${CI_TEST_CONDA_PREFIX}/include${CPATH:+:${CPATH}}"
           export LIBRARY_PATH="${CI_TEST_CONDA_PREFIX}/lib${LIBRARY_PATH:+:${LIBRARY_PATH}}"
@@ -84,6 +85,12 @@ jobs:
           environment-name: testing
           cache-downloads: true
           generate-run-shell: true
+      - uses: actions/cache@v4
+        with:
+          path: |
+            nft_laplace3d.sqlite
+            examples/nft_laplace3d.sqlite
+          key: laplace3d-table-cache-static-v1
       - name: Main Script
         shell: micromamba-shell {0}
         run: |
