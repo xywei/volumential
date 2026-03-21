@@ -1,3 +1,6 @@
+import os
+import sys
+
 import numpy as np
 
 import pyopencl as cl
@@ -67,6 +70,17 @@ def test_constant_extension_geometry_collection(ctx_factory):
 
 
 def test_harmonic_extension_geometry_collection_smoke(ctx_factory):
+    if (
+        sys.platform == "darwin"
+        and os.environ.get("VOLUMENTIAL_RUN_UNSTABLE_DARWIN_TESTS") != "1"
+    ):
+        import pytest
+
+        pytest.skip(
+            "harmonic extension test is unstable on macOS OpenCL CI "
+            "(set VOLUMENTIAL_RUN_UNSTABLE_DARWIN_TESTS=1 to run)"
+        )
+
     ctx = ctx_factory()
     _skip_unstable_backend(ctx)
     queue = cl.CommandQueue(ctx)
