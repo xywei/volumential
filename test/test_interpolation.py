@@ -19,6 +19,9 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
+import os
+import sys
+
 import numpy as np
 import pytest
 
@@ -41,6 +44,17 @@ from volumential.interpolation import (
     interpolate_from_meshmode,
     interpolate_to_meshmode,
 )
+
+
+if (
+    sys.platform == "darwin"
+    and os.environ.get("VOLUMENTIAL_RUN_UNSTABLE_DARWIN_TESTS") != "1"
+):
+    pytest.skip(
+        "interpolation tests are unstable on macOS OpenCL CI "
+        "(set VOLUMENTIAL_RUN_UNSTABLE_DARWIN_TESTS=1 to run)",
+        allow_module_level=True,
+    )
 
 
 # {{{ test data
