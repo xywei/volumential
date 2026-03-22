@@ -348,16 +348,15 @@ def drive_volume_fmm(
             field,
         )
         direct_timing_futures.append(timing_future)
-        potentials = (
-            _as_obj_array(field_potentials)
-            if potentials is None
-            else _add_obj_arrays(potentials, field_potentials)
-        )
+        if potentials is None:
+            potentials = field_potentials
+        else:
+            potentials = _add_obj_arrays(potentials, field_potentials)
 
     assert potentials is not None
     timing_future = _CombinedTimingFuture(direct_timing_futures)
     recorder.add("eval_direct", timing_future)
-    _debug_nan_status("fmm_l1_potentials", potentials[0])
+    _debug_nan_status("fmm_l1_potentials", _as_obj_array(potentials)[0])
 
     # Return list 1 only, for debugging
     # 'list1_only' takes precedence over 'exclude_list1'

@@ -227,6 +227,10 @@ def test_volume_fmm_list1_multi_source_superposition():
         list1_only=True,
     )
 
+    if isinstance(result, np.ndarray) and result.dtype == object:
+        assert len(result) == 1
+        result = result[0]
+
     assert np.allclose(result, np.array([66.0]))
 
 
