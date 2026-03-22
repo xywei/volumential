@@ -12,6 +12,7 @@ Welcome to Volumential's Documentation!
 
    intro
    install
+   development
    api/modules
    sphinx
    indices_tables

@@ -168,3 +168,40 @@ Success criteria:
   coverage are back.
 - Do not reintroduce removed contrib/native code unless the modern pure-Python
   path is clearly insufficient.
+
+## Execution Backlog (March 2026)
+
+The following work items are tracked as execution tasks for finishing
+modernization.
+
+- [x] **WI-01** Document a supported development environment for local and
+  remote runs.
+- [x] **WI-03** Remove the hard failure on multiple source fields in
+  `drive_volume_fmm` and handle near-field superposition explicitly.
+- [x] **WI-06** Add boundary-to-volume interoperability coverage (QBX boundary
+  data evaluated on volume mesh target points).
+- [x] **WI-07** Refresh docs for current architecture and workflow.
+- [x] **WI-08** Reconcile modernization/meta docs with current repository state.
+- [x] **WI-09** Consolidate packaging around `pyproject.toml` and `uv` workflow
+  (de-emphasize legacy `setup.py`/requirements-driven installs).
+
+- [ ] **WI-02** Complete 3D nearfield exterior normalization.
+  - **What is exterior normalization?**
+    In the fractional/inverse-power nearfield paths, the table stores local
+    interaction integrals that require an additive normalization coming from the
+    integral over the exterior domain (outside the source box but inside the
+    model used by the kernel decomposition). In 2D this is computed and cached;
+    in 3D the code currently raises `NotImplementedError`.
+
+- [ ] **WI-04** Implement or document fallback for list3/list4 "close" paths.
+  - **What are list3/list4 close interactions?**
+    In FMM traversal terms, list3/list4 are separated interactions between
+    targets and smaller/bigger source boxes. The "close" subsets are
+    geometrically near cases that are not handled by the standard far-field
+    multipole/local approximations and typically require direct evaluation or a
+    dedicated correction path. The current volume FMM flow assumes these sets
+    are empty for supported meshes/workloads.
+
+- [ ] **WI-05** Backend/platform de-quarantine (Intel OpenCL + macOS unstable
+  paths).
+  - **Status:** not planned for this modernization pass.

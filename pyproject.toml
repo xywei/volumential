@@ -1,6 +1,73 @@
 [build-system]
-requires = ["setuptools>=64", "wheel"]
+requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "volumential"
+version = "2017.1a0"
+description = "Volume potential computation powered by FMM."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE.md"]
+authors = [
+  { name = "Xiaoyu Wei", email = "wxy0516@gmail.com" },
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "Natural Language :: English",
+  "Programming Language :: Python",
+  "Topic :: Scientific/Engineering",
+  "Topic :: Scientific/Engineering :: Information Analysis",
+  "Topic :: Scientific/Engineering :: Mathematics",
+  "Topic :: Scientific/Engineering :: Visualization",
+  "Topic :: Software Development :: Libraries",
+  "Topic :: Utilities",
+]
+dependencies = [
+  "arraycontext",
+  "boxtree",
+  "loopy",
+  "meshmode",
+  "modepy",
+  "pymbolic",
+  "pyopencl",
+  "pytools",
+  "pytential",
+  "scipy",
+  "sumpy",
+]
+
+[project.optional-dependencies]
+gmsh_support = ["gmsh_interop"]
+test = ["filelock", "gmsh_interop", "pytest"]
+doc = ["sphinx", "sphinx_rtd_theme"]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["volumential*"]
+
+[tool.uv]
+default-groups = []
+
+[tool.uv.sources]
+arraycontext = { git = "https://gitlab.tiker.net/inducer/arraycontext.git" }
+boxtree = { git = "https://gitlab.tiker.net/inducer/boxtree.git" }
+cgen = { git = "https://gitlab.tiker.net/inducer/cgen.git" }
+genpy = { git = "https://gitlab.tiker.net/inducer/genpy.git" }
+gmsh_interop = { git = "https://gitlab.tiker.net/inducer/gmsh_interop.git" }
+loopy = { git = "https://gitlab.tiker.net/inducer/loopy.git" }
+meshmode = { git = "https://gitlab.tiker.net/inducer/meshmode.git" }
+modepy = { git = "https://gitlab.tiker.net/inducer/modepy.git" }
+pymbolic = { git = "https://gitlab.tiker.net/inducer/pymbolic.git" }
+pytential = { git = "https://gitlab.tiker.net/inducer/pytential.git" }
+pytools = { git = "https://gitlab.tiker.net/inducer/pytools.git" }
+pyvisfile = { git = "https://gitlab.tiker.net/inducer/pyvisfile.git" }
+sumpy = { git = "https://gitlab.tiker.net/inducer/sumpy.git" }
 
 [tool.pytest.ini_options]
 testpaths = ["test"]

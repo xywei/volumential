@@ -48,7 +48,7 @@ else:
 # }}}
 
 VERSION = (2017, 1)
-VERSION_STATUS = "alpha"
+VERSION_STATUS = "a0"
 VERSION_TEXT = ".".join(str(i) for i in VERSION) + VERSION_STATUS
 
 KERNEL_VERSION = (VERSION, _git_rev, 0)

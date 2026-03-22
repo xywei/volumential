@@ -70,6 +70,63 @@ from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
 logger = logging.getLogger(__name__)
 
 
+def _cast_source_field_dtype(field, dtype):
+    if isinstance(field, np.ndarray):
+        if field.dtype == object:
+            return field
+        return field.astype(dtype, copy=False)
+
+    if hasattr(field, "astype"):
+        return field.astype(dtype)
+
+    return np.asarray(field, dtype=dtype)
+
+
+def _normalize_source_fields(values, dtype):
+    if isinstance(values, np.ndarray) and values.dtype == object:
+        fields = list(values.flat)
+    elif isinstance(values, (list, tuple)):
+        fields = list(values)
+    elif hasattr(values, "ndim") and values.ndim > 1:
+        fields = [values[i] for i in range(values.shape[0])]
+    else:
+        fields = [values]
+
+    return make_obj_array([_cast_source_field_dtype(field, dtype) for field in fields])
+
+
+def _as_obj_array(potentials):
+    if isinstance(potentials, np.ndarray) and potentials.dtype == object:
+        return potentials
+
+    return make_obj_array([potentials])
+
+
+def _add_obj_arrays(lhs, rhs):
+    lhs_oa = _as_obj_array(lhs)
+    rhs_oa = _as_obj_array(rhs)
+
+    if len(lhs_oa) != len(rhs_oa):
+        raise ValueError("incompatible potential vector lengths")
+
+    return make_obj_array(
+        [lhs_i + rhs_i for lhs_i, rhs_i in zip(lhs_oa, rhs_oa, strict=True)]
+    )
+
+
+class _CombinedTimingFuture:
+    def __init__(self, futures):
+        self.futures = [future for future in futures if future is not None]
+
+    def __call__(self):
+        total = 0.0
+        for future in self.futures:
+            value = future()
+            if isinstance(value, (int, float)):
+                total += float(value)
+        return total
+
+
 def _debug_nan_status(label, ary):
     if not os.environ.get("VOLUMENTIAL_DEBUG_NAN"):
         return
@@ -148,16 +205,11 @@ def drive_volume_fmm(
     recorder = TimingRecorder()
     logger.info("start fmm")
 
-    # accept unpacked inputs when doing fmm for just one source field
     dtype = wrangler.dtype
-    if src_weights.ndim == 1:
-        src_weights = make_obj_array([src_weights.astype(dtype)])
-    if src_func.ndim == 1:
-        src_func = make_obj_array([src_func.astype(dtype)])
+    src_weights = _normalize_source_fields(src_weights, dtype)
+    src_func = _normalize_source_fields(src_func, dtype)
 
     assert (ns := len(src_weights)) == len(src_func)
-    if ns > 1:
-        raise NotImplementedError("Multiple outputs are not yet supported")
 
     queue = None
     if isinstance(src_func[0], cl.array.Array):
@@ -217,12 +269,24 @@ def drive_volume_fmm(
     logger.debug("direct evaluation from neighbor source boxes ('list 1')")
     # look up in the prebuilt table
     # this step also constructs the output array
-    potentials, timing_future = wrangler.eval_direct(
-        traversal.target_boxes,
-        traversal.neighbor_source_boxes_starts,
-        traversal.neighbor_source_boxes_lists,
-        src_func[0],  # FIXME: handle multiple source fields
-    )
+    direct_timing_futures = []
+    potentials = None
+    for field in src_func:
+        field_potentials, timing_future = wrangler.eval_direct(
+            traversal.target_boxes,
+            traversal.neighbor_source_boxes_starts,
+            traversal.neighbor_source_boxes_lists,
+            field,
+        )
+        direct_timing_futures.append(timing_future)
+        potentials = (
+            _as_obj_array(field_potentials)
+            if potentials is None
+            else _add_obj_arrays(potentials, field_potentials)
+        )
+
+    assert potentials is not None
+    timing_future = _CombinedTimingFuture(direct_timing_futures)
     recorder.add("eval_direct", timing_future)
     _debug_nan_status("fmm_l1_potentials", potentials[0])
 
@@ -255,6 +319,11 @@ def drive_volume_fmm(
 
     # {{{ (Optional) direct evaluation of everything and return
     if direct_evaluation:
+        if ns > 1:
+            raise NotImplementedError(
+                "direct_evaluation=True with multiple source fields is not supported"
+            )
+
         print("Warning: NOT USING FMM (forcing global p2p)")
         if len(src_weights) != len(src_func):
             print(
@@ -299,7 +368,12 @@ def drive_volume_fmm(
                 (sw,),
                 **p2p_kwargs,
             )
-            potentials[iw] += ref_pot
+            if len(potentials) == len(src_weights):
+                potentials[iw] += ref_pot
+            elif len(potentials) == 1:
+                potentials[0] += ref_pot
+            else:
+                raise ValueError("incompatible direct-evaluation potential dimensions")
         _debug_nan_status("global_p2p", potentials[0])
 
         l1_potentials, timing_future = wrangler.eval_direct_p2p(
@@ -444,6 +518,7 @@ def drive_volume_fmm(
     # }}}
 
     # {{{ Reorder potentials
+    result = potentials
     if reorder_potentials:
         logger.debug("reorder potentials")
         result = wrangler.reorder_potentials(potentials)
