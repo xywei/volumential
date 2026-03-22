@@ -94,6 +94,24 @@ def test_normalize_source_fields_rejects_point_major_matrix():
         )
 
 
+def test_normalize_source_fields_casts_object_matrix_rows():
+    from volumential.volume_fmm import _normalize_source_fields
+
+    values = np.array([[1.0, 2.0, 3.0], [10.0, 20.0, 30.0]], dtype=object)
+    normalized = _normalize_source_fields(
+        values,
+        np.float64,
+        expected_length=3,
+        field_name="src_weights",
+    )
+
+    assert len(normalized) == 2
+    assert normalized[0].dtype == np.float64
+    assert normalized[1].dtype == np.float64
+    assert np.allclose(normalized[0], np.array([1.0, 2.0, 3.0]))
+    assert np.allclose(normalized[1], np.array([10.0, 20.0, 30.0]))
+
+
 def test_volume_fmm_list1_multi_source_superposition():
     from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
     from volumential.volume_fmm import drive_volume_fmm
@@ -196,8 +214,10 @@ def test_volume_fmm_list1_multi_source_superposition():
     src0 = np.array([1.0, 2.0, 3.0], dtype=np.float64)
     src1 = np.array([10.0, 20.0, 30.0], dtype=np.float64)
 
-    src_weights = np.array([src0, src1], dtype=object)
-    src_func = np.array([src0, src1], dtype=object)
+    src_weights = np.empty(2, dtype=object)
+    src_weights[:] = [src0, src1]
+    src_func = np.empty(2, dtype=object)
+    src_func[:] = [src0, src1]
 
     result = drive_volume_fmm(
         traversal,

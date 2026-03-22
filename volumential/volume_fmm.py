@@ -73,7 +73,10 @@ logger = logging.getLogger(__name__)
 def _cast_source_field_dtype(field, dtype):
     if isinstance(field, np.ndarray):
         if field.dtype == object:
-            return field
+            try:
+                return field.astype(dtype, copy=False)
+            except (TypeError, ValueError):
+                return field
         return field.astype(dtype, copy=False)
 
     if hasattr(field, "astype"):
