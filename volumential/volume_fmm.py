@@ -120,7 +120,14 @@ def _normalize_source_fields(
     values, dtype, *, expected_length=None, field_name="source"
 ):
     if isinstance(values, np.ndarray) and values.dtype == object:
-        fields = list(values.flat)
+        if values.ndim <= 1:
+            fields = list(values.flat)
+        elif values.ndim == 2:
+            fields = _normalize_matrix_source_fields(
+                values, expected_length, field_name
+            )
+        else:
+            raise ValueError(f"{field_name} must be 1D or 2D, got ndim={values.ndim}")
     elif isinstance(values, (list, tuple)):
         fields = list(values)
     elif hasattr(values, "ndim") and values.ndim == 2:
@@ -264,6 +271,11 @@ def drive_volume_fmm(
     )
 
     assert (ns := len(src_weights)) == len(src_func)
+
+    if ns > 1 and isinstance(expansion_wrangler, FPNDFMMLibExpansionWrangler):
+        raise NotImplementedError(
+            "multiple source fields are not supported with FMMLib wranglers"
+        )
 
     queue = None
     if isinstance(src_func[0], cl.array.Array):

@@ -183,6 +183,7 @@ def test_volume_fmm_list1_multi_source_superposition():
             return potentials
 
     traversal = SimpleNamespace(
+        tree=SimpleNamespace(nsources=3, ntargets=3),
         level_start_source_box_nrs=np.array([], dtype=np.int32),
         source_boxes=np.array([], dtype=np.int32),
         level_start_source_parent_box_nrs=np.array([], dtype=np.int32),
