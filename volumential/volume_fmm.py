@@ -432,29 +432,31 @@ def drive_volume_fmm(
         if queue is None:
             raise TypeError("unable to infer command queue for direct evaluation")
 
-        for iw, sw in enumerate(src_weights):
-            target_to_source = cl.array.to_device(
-                p2p_queue,
-                np.arange(traversal.tree.ntargets, dtype=np.int32),
-            )
-            p2p_kwargs = dict(p2p_extra_kwargs)
-            if wrangler.tree_indep.exclude_self:
-                p2p_kwargs["target_to_source"] = target_to_source
+        (sw,) = src_weights
+        target_to_source = cl.array.to_device(
+            p2p_queue,
+            np.arange(traversal.tree.ntargets, dtype=np.int32),
+        )
+        p2p_kwargs = dict(p2p_extra_kwargs)
+        if wrangler.tree_indep.exclude_self:
+            p2p_kwargs["target_to_source"] = target_to_source
 
-            (ref_pot,) = p2p(
-                wrangler.tree_indep._setup_actx,
-                traversal.tree.targets,
-                traversal.tree.sources,
-                (sw,),
-                **p2p_kwargs,
-            )
-            if len(potentials) == len(src_weights):
-                potentials[iw] += ref_pot
-            elif len(potentials) == 1:
-                potentials[0] += ref_pot
-            else:
+        (ref_pot,) = p2p(
+            wrangler.tree_indep._setup_actx,
+            traversal.tree.targets,
+            traversal.tree.sources,
+            (sw,),
+            **p2p_kwargs,
+        )
+
+        if isinstance(potentials, np.ndarray) and potentials.dtype == object:
+            if len(potentials) != 1:
                 raise ValueError("incompatible direct-evaluation potential dimensions")
-        _debug_nan_status("global_p2p", potentials[0])
+            potentials[0] += ref_pot
+            _debug_nan_status("global_p2p", potentials[0])
+        else:
+            potentials = potentials + ref_pot
+            _debug_nan_status("global_p2p", potentials)
 
         l1_potentials, timing_future = wrangler.eval_direct_p2p(
             traversal.target_boxes,
@@ -462,9 +464,21 @@ def drive_volume_fmm(
             traversal.neighbor_source_boxes_lists,
             src_weights,
         )
-        _debug_nan_status("l1_potentials", l1_potentials[0])
+        if isinstance(l1_potentials, np.ndarray) and l1_potentials.dtype == object:
+            if len(l1_potentials) != 1:
+                raise ValueError("incompatible list1 potential dimensions")
+            l1_pot = l1_potentials[0]
+        else:
+            l1_pot = l1_potentials
 
-        potentials = potentials - l1_potentials
+        _debug_nan_status("l1_potentials", l1_pot)
+
+        if isinstance(potentials, np.ndarray) and potentials.dtype == object:
+            if len(potentials) != 1:
+                raise ValueError("incompatible direct-evaluation potential dimensions")
+            potentials[0] = potentials[0] - l1_pot
+        else:
+            potentials = potentials - l1_pot
 
         # list 3
         assert traversal.from_sep_close_smaller_starts is None
@@ -472,9 +486,10 @@ def drive_volume_fmm(
         # list 4
         assert traversal.from_sep_close_bigger_starts is None
 
+        result = potentials
         if reorder_potentials:
             logger.debug("reorder potentials")
-            result = wrangler.reorder_potentials(potentials)
+            result = wrangler.reorder_potentials(result)
 
         logger.debug("finalize potentials")
         result = wrangler.finalize_potentials(result)

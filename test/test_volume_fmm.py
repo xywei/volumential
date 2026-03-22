@@ -266,6 +266,161 @@ def test_volume_fmm_rejects_multi_source_full_sumpy_path(monkeypatch):
         )
 
 
+def test_volume_fmm_direct_eval_accepts_fmmlib_plain_arrays(monkeypatch):
+    from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
+    import volumential.volume_fmm as volume_fmm
+
+    class _DummyP2P:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __call__(self, setup_actx, targets, sources, strengths, **kwargs):
+            return (np.array([4.0, 5.0, 6.0], dtype=np.float64),)
+
+    class _MockFMMLibWrangler(ExpansionWranglerInterface):
+        dtype = np.float64
+
+        def __init__(self):
+            queue = object()
+            self.queue = queue
+            self.tree_indep = SimpleNamespace(
+                target_kernels=(object(),),
+                exclude_self=False,
+                _setup_actx=SimpleNamespace(queue=queue),
+            )
+
+        def multipole_expansion_zeros(self):
+            return None
+
+        def local_expansion_zeros(self):
+            return None
+
+        def output_zeros(self):
+            return np.zeros(3, dtype=self.dtype)
+
+        def reorder_sources(self, source_array):
+            return source_array
+
+        def reorder_targets(self, target_array):
+            return target_array
+
+        def reorder_potentials(self, potentials):
+            return potentials
+
+        def form_multipoles(
+            self, level_start_source_box_nrs, source_boxes, src_weights
+        ):
+            return np.array([0.0], dtype=self.dtype), None
+
+        def coarsen_multipoles(
+            self, level_start_source_parent_box_nrs, source_parent_boxes, mpoles
+        ):
+            return mpoles, None
+
+        def eval_direct(
+            self,
+            target_boxes,
+            neighbor_sources_starts,
+            neighbor_sources_lists,
+            mode_coefs,
+        ):
+            return np.array([1.0, 2.0, 3.0], dtype=self.dtype), None
+
+        def eval_direct_p2p(
+            self,
+            target_boxes,
+            neighbor_sources_starts,
+            neighbor_sources_lists,
+            src_weights,
+        ):
+            return np.array([0.5, 0.5, 0.5], dtype=self.dtype), None
+
+        def multipole_to_local(
+            self,
+            level_start_target_or_target_parent_box_nrs,
+            target_or_target_parent_boxes,
+            starts,
+            lists,
+            mpole_exps,
+        ):
+            return np.array([0.0], dtype=self.dtype), None
+
+        def eval_multipoles(
+            self,
+            level_start_target_box_nrs,
+            target_boxes,
+            starts,
+            lists,
+            mpole_exps,
+        ):
+            return np.array([0.0], dtype=self.dtype), None
+
+        def form_locals(
+            self,
+            level_start_target_or_target_parent_box_nrs,
+            target_or_target_parent_boxes,
+            starts,
+            lists,
+            src_weights,
+        ):
+            return np.array([0.0], dtype=self.dtype), None
+
+        def refine_locals(
+            self,
+            level_start_target_or_target_parent_box_nrs,
+            target_or_target_parent_boxes,
+            local_exps,
+        ):
+            return local_exps, None
+
+        def eval_locals(self, level_start_target_box_nrs, target_boxes, local_exps):
+            return np.array([0.0], dtype=self.dtype), None
+
+        def finalize_potentials(self, potentials):
+            return potentials
+
+    class _Traversal(SimpleNamespace):
+        def get(self, queue):
+            return self
+
+    monkeypatch.setattr(volume_fmm, "FPNDFMMLibExpansionWrangler", _MockFMMLibWrangler)
+    monkeypatch.setattr(volume_fmm.cl.array, "to_device", lambda queue, ary: ary)
+    monkeypatch.setitem(sys.modules, "sumpy", SimpleNamespace(P2P=_DummyP2P))
+
+    traversal = _Traversal(
+        tree=SimpleNamespace(
+            nsources=3,
+            ntargets=3,
+            targets=np.array([[0.0, 0.0, 0.0]], dtype=np.float64),
+            sources=np.array([[0.0, 0.0, 0.0]], dtype=np.float64),
+        ),
+        level_start_source_box_nrs=np.array([], dtype=np.int32),
+        source_boxes=np.array([], dtype=np.int32),
+        level_start_source_parent_box_nrs=np.array([], dtype=np.int32),
+        source_parent_boxes=np.array([], dtype=np.int32),
+        target_boxes=np.array([], dtype=np.int32),
+        neighbor_source_boxes_starts=np.array([], dtype=np.int32),
+        neighbor_source_boxes_lists=np.array([], dtype=np.int32),
+        from_sep_close_smaller_starts=None,
+        from_sep_close_bigger_starts=None,
+    )
+
+    src_weights = np.array([1.0, 1.0, 1.0], dtype=np.float64)
+    src_func = np.array([1.0, 2.0, 3.0], dtype=np.float64)
+
+    result = volume_fmm.drive_volume_fmm(
+        traversal,
+        _MockFMMLibWrangler(),
+        src_weights,
+        src_func,
+        direct_evaluation=True,
+        reorder_sources=False,
+        reorder_potentials=False,
+    )
+
+    assert np.allclose(result, np.array([4.5, 6.5, 8.5], dtype=np.float64))
+
+
 # {{{ make sure context getter works
 
 
