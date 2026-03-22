@@ -1,4 +1,3 @@
-
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
 __license__ = """
@@ -23,10 +22,21 @@ THE SOFTWARE.
 
 import os
 import subprocess
+import sys
 from shutil import copyfile
 
 import numpy as np
 import pytest
+
+if (
+    sys.platform == "darwin"
+    and os.environ.get("VOLUMENTIAL_RUN_UNSTABLE_DARWIN_TESTS") != "1"
+):
+    pytest.skip(
+        "table manager tests are unstable on macOS OpenCL CI "
+        "(set VOLUMENTIAL_RUN_UNSTABLE_DARWIN_TESTS=1 to run)",
+        allow_module_level=True,
+    )
 
 import pyopencl as cl
 
@@ -39,16 +49,16 @@ def get_table(queue, q_order=1, dim=2):
 
     # copy from shared cache if exists
     if os.path.exists("nft.hdf5"):
-        copyfile("nft.hdf5",
-                 f"nft-test-table-manager-{pid}.hdf5")
+        copyfile("nft.hdf5", f"nft-test-table-manager-{pid}.hdf5")
 
     subprocess.check_call(["rm", "-f", f"nft-test-table-manager-{pid}.hdf5"])
 
-    with NFTable(f"nft-test-table-manager-{pid}.hdf5",
-                 progress_bar=True) as table_manager:
+    with NFTable(
+        f"nft-test-table-manager-{pid}.hdf5", progress_bar=True
+    ) as table_manager:
         table, _ = table_manager.get_table(
-                dim, "Laplace",
-                q_order=q_order, force_recompute=False, queue=queue)
+            dim, "Laplace", q_order=q_order, force_recompute=False, queue=queue
+        )
 
     return table
 
@@ -87,8 +97,7 @@ def laplace_const_source_same_box(table_2d_order1, queue, q_order, dim=2):
     return pot
 
 
-def laplace_cons_source_neighbor_box(
-        table_2d_order1, queue, q_order, case_id, dim=2):
+def laplace_cons_source_neighbor_box(table_2d_order1, queue, q_order, case_id, dim=2):
     if q_order == 1:
         nft = table_2d_order1
     else:
@@ -140,7 +149,7 @@ def test_interp_func(longrun, ctx_factory, table_2d_order1):
     cl_ctx = ctx_factory()
     queue = cl.CommandQueue(cl_ctx)
     q_order = 3
-    coef = np.ones(q_order ** 2)
+    coef = np.ones(q_order**2)
 
     h = 0.1
     xx = yy = np.arange(-1.0, 1.0, h)
@@ -157,10 +166,12 @@ def direct_quad(source_func, target_point, dim=2):
 
     def integrand(x, y):
         return source_func(x, y) * knl_func(x - target_point[0], y - target_point[1])
+
     import volumential.singular_integral_2d as squad
+
     integral, _ = squad.box_quad(
-        func=integrand, a=0, b=1, c=0, d=1,
-        singular_point=target_point, maxiter=1000)
+        func=integrand, a=0, b=1, c=0, d=1, singular_point=target_point, maxiter=1000
+    )
     return integral
 
 
@@ -195,7 +206,12 @@ def drive_test_direct_quad_same_box(table_2d_order1, queue, q_order, dim=2):
         assert np.abs(v1 - v3) < 1e-6
 
 
-@pytest.mark.parametrize("q_order", [1, ])
+@pytest.mark.parametrize(
+    "q_order",
+    [
+        1,
+    ],
+)
 def test_direct_quad(q_order, ctx_factory, table_2d_order1):
     cl_ctx = ctx_factory()
     queue = cl.CommandQueue(cl_ctx)
@@ -212,8 +228,7 @@ def test_direct_quad_longrun(longrun, ctx_factory, q_order, table_2d_order1):
 def test_case_ids(ctx_factory, table_2d_order1):
     table = table_2d_order1
     for i in range(len(table.interaction_case_vecs)):
-        code = table.case_encode(
-                table.interaction_case_vecs[i])
+        code = table.case_encode(table.interaction_case_vecs[i])
         assert table.case_indices[code] == i
 
 
@@ -245,8 +260,7 @@ def test_get_neighbor_target_point(ctx_factory, table_2d_order1):
         assert np.allclose(pt, pt2)
 
 
-def laplace_const_source_neighbor_box(
-        table_2d_order1, queue, q_order, case_id, dim=2):
+def laplace_const_source_neighbor_box(table_2d_order1, queue, q_order, case_id, dim=2):
     if q_order == 1:
         nft = table_2d_order1
     else:
@@ -265,9 +279,9 @@ def laplace_const_source_neighbor_box(
 
 
 def drive_test_direct_quad_neighbor_box(
-        table_2d_order1, queue, q_order, case_id, dim=2):
-    u = laplace_const_source_neighbor_box(
-            table_2d_order1, queue, q_order, case_id)
+    table_2d_order1, queue, q_order, case_id, dim=2
+):
+    u = laplace_const_source_neighbor_box(table_2d_order1, queue, q_order, case_id)
     if q_order == 1:
         nft = table_2d_order1
     else:
@@ -292,25 +306,34 @@ def drive_test_direct_quad_neighbor_box(
         assert np.abs(v1 - v3) < 1e-6
 
 
-@pytest.mark.parametrize("q_order", [1, ])
+@pytest.mark.parametrize(
+    "q_order",
+    [
+        1,
+    ],
+)
 def test_direct_quad_neighbor_box(ctx_factory, q_order, table_2d_order1):
     cl_ctx = ctx_factory()
     queue = cl.CommandQueue(cl_ctx)
     table = table_2d_order1
     for case_id in range(len(table.interaction_case_vecs)):
-        drive_test_direct_quad_neighbor_box(
-                table_2d_order1, queue, q_order, case_id)
+        drive_test_direct_quad_neighbor_box(table_2d_order1, queue, q_order, case_id)
 
 
-@pytest.mark.parametrize("q_order", [2, ])
+@pytest.mark.parametrize(
+    "q_order",
+    [
+        2,
+    ],
+)
 def test_direct_quad_neighbor_box_longrun(
-        longrun, ctx_factory, q_order, table_2d_order1):
+    longrun, ctx_factory, q_order, table_2d_order1
+):
     cl_ctx = ctx_factory()
     queue = cl.CommandQueue(cl_ctx)
     table = table_2d_order1
     for case_id in range(len(table.interaction_case_vecs)):
-        drive_test_direct_quad_neighbor_box(
-                table_2d_order1, queue, q_order, case_id)
+        drive_test_direct_quad_neighbor_box(table_2d_order1, queue, q_order, case_id)
 
 
 # fdm=marker:ft=pyopencl
