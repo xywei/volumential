@@ -82,13 +82,51 @@ def _cast_source_field_dtype(field, dtype):
     return np.asarray(field, dtype=dtype)
 
 
-def _normalize_source_fields(values, dtype):
+def _normalize_matrix_source_fields(values, expected_length, field_name):
+    if expected_length is None:
+        raise ValueError(
+            f"{field_name} has ndim=2 but source length is unknown. "
+            "Pass multiple source fields as an object array/list in "
+            "(nfields,) form."
+        )
+
+    nrows, ncols = (int(values.shape[0]), int(values.shape[1]))
+
+    if nrows == expected_length and ncols == expected_length:
+        raise ValueError(
+            f"{field_name} has ambiguous square shape {values.shape}; "
+            "use an object array/list or an explicit (nfields, npoints) array."
+        )
+
+    if nrows == expected_length:
+        if ncols == 1:
+            return [values[:, 0]]
+
+        raise ValueError(
+            f"{field_name} has point-major shape {values.shape}. "
+            "Use object-array/list input or transpose to (nfields, npoints)."
+        )
+
+    if ncols == expected_length:
+        return [values[i] for i in range(nrows)]
+
+    raise ValueError(
+        f"{field_name} has shape {values.shape}, but one axis must match "
+        f"the source count ({expected_length})."
+    )
+
+
+def _normalize_source_fields(
+    values, dtype, *, expected_length=None, field_name="source"
+):
     if isinstance(values, np.ndarray) and values.dtype == object:
         fields = list(values.flat)
     elif isinstance(values, (list, tuple)):
         fields = list(values)
-    elif hasattr(values, "ndim") and values.ndim > 1:
-        fields = [values[i] for i in range(values.shape[0])]
+    elif hasattr(values, "ndim") and values.ndim == 2:
+        fields = _normalize_matrix_source_fields(values, expected_length, field_name)
+    elif hasattr(values, "ndim") and values.ndim > 2:
+        raise ValueError(f"{field_name} must be 1D or 2D, got ndim={values.ndim}")
     else:
         fields = [values]
 
@@ -206,8 +244,24 @@ def drive_volume_fmm(
     logger.info("start fmm")
 
     dtype = wrangler.dtype
-    src_weights = _normalize_source_fields(src_weights, dtype)
-    src_func = _normalize_source_fields(src_func, dtype)
+    expected_source_count = None
+    if hasattr(traversal, "tree"):
+        expected_source_count = getattr(traversal.tree, "nsources", None)
+        if expected_source_count is None:
+            expected_source_count = getattr(traversal.tree, "ntargets", None)
+
+    src_weights = _normalize_source_fields(
+        src_weights,
+        dtype,
+        expected_length=expected_source_count,
+        field_name="src_weights",
+    )
+    src_func = _normalize_source_fields(
+        src_func,
+        dtype,
+        expected_length=expected_source_count,
+        field_name="src_func",
+    )
 
     assert (ns := len(src_weights)) == len(src_func)
 

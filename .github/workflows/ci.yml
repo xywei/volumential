@@ -67,7 +67,7 @@ jobs:
 
           python -m pip install --upgrade pip
           python -m pip install uv
-          uv pip install --system --editable . --extra test
+          uv pip install --system --editable ".[test]"
           uv pip install --system basedpyright
 
           python -m basedpyright -p pyproject.toml --level error
@@ -91,7 +91,7 @@ jobs:
 
           python -m pip install --upgrade pip
           python -m pip install uv
-          uv pip install --system --editable . --extra test
+          uv pip install --system --editable ".[test]"
 
           curl -L -O https://tiker.net/ci-support-v0
           . ./ci-support-v0
@@ -121,7 +121,7 @@ jobs:
 
           python -m pip install --upgrade pip
           python -m pip install uv
-          uv pip install --system --editable . --extra test
+          uv pip install --system --editable ".[test]"
 
           python -m pytest -q \
             test/test_duffy_tanh_sinh.py \
@@ -145,7 +145,7 @@ jobs:
 
           python -m pip install --upgrade pip
           python -m pip install uv
-          uv pip install --system --editable . --extra test
+          uv pip install --system --editable ".[test]"
 
           curl -L -O https://tiker.net/ci-support-v0
           . ./ci-support-v0
@@ -179,7 +179,7 @@ jobs:
 
           python -m pip install --upgrade pip
           python -m pip install uv
-          uv pip install --system --editable . --extra test
+          uv pip install --system --editable ".[test]"
 
           python examples/laplace2d.py
 

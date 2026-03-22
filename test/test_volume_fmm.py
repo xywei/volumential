@@ -49,6 +49,51 @@ import volumential.meshgen as mg
 logger = logging.getLogger(__name__)
 
 
+def test_normalize_source_fields_accepts_field_major_matrix():
+    from volumential.volume_fmm import _normalize_source_fields
+
+    values = np.arange(12, dtype=np.float64).reshape(3, 4)
+    normalized = _normalize_source_fields(
+        values,
+        np.float64,
+        expected_length=4,
+        field_name="src_weights",
+    )
+
+    assert len(normalized) == 3
+    assert np.allclose(normalized[0], values[0])
+    assert np.allclose(normalized[2], values[2])
+
+
+def test_normalize_source_fields_accepts_column_vector_single_field():
+    from volumential.volume_fmm import _normalize_source_fields
+
+    values = np.arange(4, dtype=np.float64).reshape(4, 1)
+    normalized = _normalize_source_fields(
+        values,
+        np.float64,
+        expected_length=4,
+        field_name="src_weights",
+    )
+
+    assert len(normalized) == 1
+    assert np.allclose(normalized[0], values[:, 0])
+
+
+def test_normalize_source_fields_rejects_point_major_matrix():
+    from volumential.volume_fmm import _normalize_source_fields
+
+    values = np.arange(12, dtype=np.float64).reshape(4, 3)
+
+    with pytest.raises(ValueError, match="point-major shape"):
+        _normalize_source_fields(
+            values,
+            np.float64,
+            expected_length=4,
+            field_name="src_weights",
+        )
+
+
 def test_volume_fmm_list1_multi_source_superposition():
     from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
     from volumential.volume_fmm import drive_volume_fmm
