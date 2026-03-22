@@ -275,9 +275,21 @@ def drive_volume_fmm(
 
     assert (ns := len(src_weights)) == len(src_func)
 
+    list1_only = bool(kwargs.get("list1_only", False))
+
     if ns > 1 and isinstance(expansion_wrangler, FPNDFMMLibExpansionWrangler):
         raise NotImplementedError(
             "multiple source fields are not supported with FMMLib wranglers"
+        )
+
+    if (
+        ns > 1
+        and isinstance(expansion_wrangler, FPNDSumpyExpansionWrangler)
+        and not list1_only
+    ):
+        raise NotImplementedError(
+            "multiple source fields are currently supported only with "
+            "list1_only=True for Sumpy wranglers"
         )
 
     queue = None
@@ -360,7 +372,7 @@ def drive_volume_fmm(
 
     # Return list 1 only, for debugging
     # 'list1_only' takes precedence over 'exclude_list1'
-    if "list1_only" in kwargs and kwargs["list1_only"]:
+    if list1_only:
         result = potentials
         if reorder_potentials:
             logger.debug("reorder potentials")

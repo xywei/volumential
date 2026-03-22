@@ -234,6 +234,38 @@ def test_volume_fmm_list1_multi_source_superposition():
     assert np.allclose(result, np.array([66.0]))
 
 
+def test_volume_fmm_rejects_multi_source_full_sumpy_path(monkeypatch):
+    from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
+    import volumential.volume_fmm as volume_fmm
+
+    class _MockSumpyWrangler(ExpansionWranglerInterface):
+        dtype = np.float64
+
+    monkeypatch.setattr(
+        volume_fmm,
+        "FPNDSumpyExpansionWrangler",
+        _MockSumpyWrangler,
+    )
+
+    traversal = SimpleNamespace(tree=SimpleNamespace(nsources=3, ntargets=3))
+
+    src0 = np.array([1.0, 2.0, 3.0], dtype=np.float64)
+    src1 = np.array([10.0, 20.0, 30.0], dtype=np.float64)
+
+    src_weights = np.empty(2, dtype=object)
+    src_weights[:] = [src0, src1]
+    src_func = np.empty(2, dtype=object)
+    src_func[:] = [src0, src1]
+
+    with pytest.raises(NotImplementedError, match="list1_only=True"):
+        volume_fmm.drive_volume_fmm(
+            traversal,
+            _MockSumpyWrangler(),
+            src_weights,
+            src_func,
+        )
+
+
 # {{{ make sure context getter works
 
 
