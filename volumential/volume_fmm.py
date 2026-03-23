@@ -32,7 +32,7 @@ import numpy as np
 
 import pyopencl as cl
 import pyopencl.array  # noqa: F401
-from pytools.obj_array import make_obj_array
+from pytools.obj_array import new_1d as obj_array_1d
 
 try:
     from boxtree.timing import TimingRecorder
@@ -153,14 +153,14 @@ def _normalize_source_fields(
     else:
         fields = [values]
 
-    return make_obj_array([_cast_source_field_dtype(field, dtype) for field in fields])
+    return obj_array_1d([_cast_source_field_dtype(field, dtype) for field in fields])
 
 
 def _as_obj_array(potentials):
     if isinstance(potentials, np.ndarray) and potentials.dtype == object:
         return potentials
 
-    return make_obj_array([potentials])
+    return obj_array_1d([potentials])
 
 
 def _add_obj_arrays(lhs, rhs):
@@ -170,7 +170,7 @@ def _add_obj_arrays(lhs, rhs):
     if len(lhs_oa) != len(rhs_oa):
         raise ValueError("incompatible potential vector lengths")
 
-    return make_obj_array(
+    return obj_array_1d(
         [lhs_i + rhs_i for lhs_i, rhs_i in zip(lhs_oa, rhs_oa, strict=True)]
     )
 
@@ -324,9 +324,9 @@ def drive_volume_fmm(
         traversal = traversal.get(queue)
 
         if isinstance(src_weights[0], cl.array.Array):
-            src_weights = make_obj_array([sw.get(queue) for sw in src_weights])
+            src_weights = obj_array_1d([sw.get(queue) for sw in src_weights])
         if isinstance(src_func[0], cl.array.Array):
-            src_func = make_obj_array([sf.get(queue) for sf in src_func])
+            src_func = obj_array_1d([sf.get(queue) for sf in src_func])
 
     if reorder_sources:
         logger.debug("reorder source weights")
@@ -396,14 +396,14 @@ def drive_volume_fmm(
 
         logger.info("fmm complete with list 1 only")
         logger.info("fmm complete")
-        logger.warn("only list 1 results are returned")
+        logger.warning("only list 1 results are returned")
 
         return result
 
     # Do not include list 1
     if "exclude_list1" in kwargs and kwargs["exclude_list1"]:
         logger.info("Using zeros for list 1")
-        logger.warn("list 1 interactions are not included")
+        logger.warning("list 1 interactions are not included")
         potentials = wrangler.output_zeros()
 
     # these potentials are called alpha in [1]
