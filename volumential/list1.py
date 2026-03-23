@@ -217,7 +217,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
                         (table_root_extent * table_root_extent * table_root_extent)"
 
             else:
-                logger.warn(
+                logger.warning(
                     "Kernel not scalable and not using multiple tables, "
                     "to get correct results, please make sure that your "
                     "tree is uniform and only needs one table."
@@ -267,7 +267,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 logger.info("no displacement for CstKnl3D")
                 code = "0.0"
             else:
-                logger.warn(
+                logger.warning(
                     "Kernel not scalable and not using multiple tables, "
                     "to get correct results, please make sure that either "
                     "no displacement is needed, or the box "
@@ -303,7 +303,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 logger.info("scaling from table[0] for " + self.kname)
                 code = "0.0"
             else:
-                logger.warn(
+                logger.warning(
                     "Kernel not scalable and not using multiple tables, "
                     "to get correct results, please make sure that your "
                     "tree is uniform and only needs one table."

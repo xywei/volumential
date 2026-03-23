@@ -556,7 +556,7 @@ class DiscreteLegendreTransform(BoxSpecificMap):
             self.V.T * np.matmul(self.W, self.V) - np.diag(self.I)
         )
         if ortho_resid > 1e-13:
-            logger.warn(
+            logger.warning(
                 "Legendre polynomials' orthogonality residual = %f" % ortho_resid
             )
 

@@ -24,7 +24,7 @@ import numpy as np
 
 import pyopencl as cl
 from boxtree.pyfmmlib_integration import FMMLibRotationData
-from pytools.obj_array import make_obj_array
+from pytools.obj_array import new_1d as obj_array_1d
 
 
 # {{{ bounding box factory
@@ -226,7 +226,7 @@ class BoxFMMGeometryFactory:
         if queue is None:
             return q_points
         else:
-            return make_obj_array(
+            return obj_array_1d(
                 [cl.array.to_device(queue, q_points[i]) for i in range(self.dim)]
             )
 
@@ -244,7 +244,7 @@ class BoxFMMGeometryFactory:
         if queue is None:
             return cell_centers
         else:
-            return make_obj_array(
+            return obj_array_1d(
                 [cl.array.to_device(queue, cell_centers[i]) for i in range(self.dim)]
             )
 

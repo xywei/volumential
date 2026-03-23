@@ -35,7 +35,7 @@ import logging
 
 import numpy as np
 import pyopencl as cl
-from pytools.obj_array import make_obj_array
+from pytools.obj_array import new_1d as obj_array_1d
 
 from volumential.tree_interactive_build import BoxTree, QuadratureOnBoxTree
 
@@ -397,7 +397,7 @@ def build_geometry_info(ctx, queue, dim, q_order, mesh, bbox=None, a=None, b=Non
     q_points_org = q_points  # noqa: F841
     q_points = np.ascontiguousarray(np.transpose(q_points))
 
-    q_points = make_obj_array(
+    q_points = obj_array_1d(
         [cl.array.to_device(queue, q_points[i]) for i in range(dim)]
     )
     q_weights = cl.array.to_device(queue, q_weights)

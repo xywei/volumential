@@ -27,7 +27,7 @@ import numpy as np
 import pyopencl as cl
 import pyopencl.array
 from boxtree.pyfmmlib_integration import FMMLibExpansionWrangler
-from pytools.obj_array import make_obj_array
+from pytools.obj_array import new_1d as obj_array_1d
 from sumpy.array_context import PyOpenCLArrayContext
 from sumpy.fmm import (
     SumpyExpansionWrangler,
@@ -1425,7 +1425,7 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
     ):
         pot = self.output_zeros()
         if pot.dtype != object:
-            pot = make_obj_array(
+            pot = obj_array_1d(
                 [
                     pot,
                 ]
