@@ -47,7 +47,7 @@ from pytential.array_context import PyOpenCLArrayContext
 from pytential.linalg.gmres import gmres
 from pytential.target import PointsTarget
 from pytential.symbolic.stokes import StokesletWrapper, StressletWrapper
-from pytools.obj_array import make_obj_array
+from pytools.obj_array import new_1d as obj_array_1d
 from sumpy.kernel import AxisTargetDerivative, ExpressionKernel
 
 
@@ -112,7 +112,7 @@ def get_normal_vectors(queue, density_discr, loc_sign=-1):
 def get_tangent_vectors(queue, density_discr, loc_sign):
     # the domain is on the left.
     normal = get_normal_vectors(queue, density_discr, loc_sign)
-    return make_obj_array([-1 * normal[1], normal[0]])
+    return obj_array_1d([-1 * normal[1], normal[0]])
 
 
 def get_path_length(queue, density_discr):
@@ -567,7 +567,7 @@ def compute_biharmonic_extension(
 
     grad_v2 = [
         bind(qbx, GD2[iaxis])(
-            queue, mu=mu, arclength_parametrization_derivatives=make_obj_array([xp, yp])
+            queue, mu=mu, arclength_parametrization_derivatives=obj_array_1d([xp, yp])
         ).real
         for iaxis in range(dim)
     ]
@@ -638,7 +638,7 @@ def compute_biharmonic_extension(
             (qbx_stick_out, target_discr), sym.grad(dim, GS2)
         )(queue, mu=mu).real
     )
-    grad_omega_S3 = (int_rho * make_obj_array([1.0, -1.0])).real  # noqa: N806
+    grad_omega_S3 = (int_rho * obj_array_1d([1.0, -1.0])).real  # noqa: N806
     grad_omega_S = -(grad_omega_S1 + grad_omega_S2 + grad_omega_S3)  # noqa: N806
 
     omega_S1_bdry = bind(qbx, GS1_bdry)(queue, mu=mu).real  # noqa: N806
@@ -648,17 +648,17 @@ def compute_biharmonic_extension(
 
     omega_D1 = bind(  # noqa: N806
         (qbx_stick_out, target_discr), GD1
-    )(queue, mu=mu, arclength_parametrization_derivatives=make_obj_array([xp, yp])).real
+    )(queue, mu=mu, arclength_parametrization_derivatives=obj_array_1d([xp, yp])).real
     omega_D = omega_D1 + v1  # noqa: N806
 
     grad_omega_D1 = bind(  # noqa: N806
         (qbx_stick_out, target_discr), sym.grad(dim, GD1)
-    )(queue, mu=mu, arclength_parametrization_derivatives=make_obj_array([xp, yp])).real
+    )(queue, mu=mu, arclength_parametrization_derivatives=obj_array_1d([xp, yp])).real
     grad_omega_D = grad_omega_D1 + grad_v1  # noqa: N806
 
     omega_D1_bdry = bind(  # noqa: N806
         qbx, GD1_bdry
-    )(queue, mu=mu, arclength_parametrization_derivatives=make_obj_array([xp, yp])).real
+    )(queue, mu=mu, arclength_parametrization_derivatives=obj_array_1d([xp, yp])).real
     omega_D_bdry = omega_D1_bdry + v1_bdry  # noqa: N806
 
     int_bdry_mu = bind(qbx, sym.integral(dim, dim - 1, sym.make_sym_vector("mu", dim)))(
@@ -668,7 +668,7 @@ def compute_biharmonic_extension(
         int_bdry_mu[0] * target_discr.nodes()[1]
         - int_bdry_mu[1] * target_discr.nodes()[0]
     )
-    grad_omega_W = make_obj_array(  # noqa: N806
+    grad_omega_W = obj_array_1d(  # noqa: N806
         [-int_bdry_mu[1], int_bdry_mu[0]]
     )
     omega_W_bdry = (  # noqa: N806

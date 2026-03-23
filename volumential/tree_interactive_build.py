@@ -4,7 +4,7 @@ import numpy as np
 
 import pyopencl as cl
 import pyopencl.array
-from pytools.obj_array import make_obj_array
+from pytools.obj_array import new_1d as obj_array_1d
 
 from boxtree import (
     Tree,
@@ -213,7 +213,7 @@ class BoxTree:
         for ilevel in range(nlevels):
             ids = np.where(box_levels == ilevel)[0].astype(self.box_id_dtype)
             level_boxes.append(cl.array.to_device(self.queue, ids))
-        self.level_boxes = make_obj_array(level_boxes)
+        self.level_boxes = obj_array_1d(level_boxes)
 
     @property
     def dimensions(self):
@@ -286,7 +286,7 @@ class QuadratureOnBoxTree:
             + 0.5 * side_lengths[:, None, None] * ref_points[None, :, :]
         )
         q_points = q_points.reshape(-1, dim).T
-        return make_obj_array(
+        return obj_array_1d(
             [cl.array.to_device(queue, np.ascontiguousarray(comp)) for comp in q_points]
         )
 
@@ -303,7 +303,7 @@ class QuadratureOnBoxTree:
 
     def get_cell_centers(self, queue):
         centers = self._leaf_centers()
-        return make_obj_array(
+        return obj_array_1d(
             [cl.array.to_device(queue, np.ascontiguousarray(comp)) for comp in centers]
         )
 
@@ -475,7 +475,7 @@ def build_particle_tree_from_box_tree(actx, box_tree, q_points_host):
     reordered_points = q_points_host[particle_perm]
     particle_id_dtype = np.int32
 
-    sources = make_obj_array(
+    sources = obj_array_1d(
         [
             actx.from_numpy(np.ascontiguousarray(reordered_points[:, iaxis]))
             for iaxis in range(dim)
@@ -514,7 +514,7 @@ def build_particle_tree_from_box_tree(actx, box_tree, q_points_host):
         box_flags_enum.HAS_SOURCE_CHILD_BOXES | box_flags_enum.HAS_TARGET_CHILD_BOXES
     )
 
-    zeros_bbox = make_obj_array(
+    zeros_bbox = obj_array_1d(
         [
             actx.from_numpy(np.zeros(aligned_nboxes, dtype=box_tree.coord_dtype))
             for _ in range(dim)

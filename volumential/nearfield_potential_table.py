@@ -1934,7 +1934,7 @@ class NearFieldInteractionTable:
 
         where :math:`B` is the source box :math:`[0, source_box_extent]^dim`.
         """
-        logger.warn("this method is currently under construction.")
+        logger.warning("this method is currently under construction.")
 
         if ncpus is None:
             import multiprocessing
@@ -2058,7 +2058,7 @@ class NearFieldInteractionTable:
                     - bind(discr, sym.integral(self.dim, self.dim, 1))(queue)
                 ) / (np.pi * r**2 - (2 * hs) ** 2)
                 if arerr > 1e-12:
-                    log_to = logger.warn
+                    log_to = logger.warning
                 else:
                     log_to = logger.debug
                 log_to(
@@ -2072,10 +2072,10 @@ class NearFieldInteractionTable:
                     - bind(discr, sym.integral(self.dim, self.dim, 1))(queue)
                 ) / (4 / 3 * np.pi * r**3 - (2 * hs) ** 3)
                 if arerr > 1e-12:
-                    log_to = logger.warn
+                    log_to = logger.warning
                 else:
                     log_to = logger.debug
-                logger.warn(
+                logger.warning(
                     "The numerical error when computing the measure of a "
                     "unit ball is %e" % arerr
                 )
@@ -2225,7 +2225,7 @@ class NearFieldInteractionTable:
                     val - radius ** (-2 * s) * 2 * np.pi * (1 / (2 * s)) * scaling
                 ) / (radius ** (-2 * s) * 2 * np.pi * (1 / (2 * s)) * scaling)
                 if test_err > 1e-12:
-                    logger.warn("Error evaluating at origin = %f" % test_err)
+                    logger.warning("Error evaluating at origin = %f" % test_err)
 
             for tid, target in enumerate(self.q_points):
                 # The formula assumes that the source box is centered at origin

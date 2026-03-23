@@ -35,7 +35,7 @@ from boxtree.tools import DeviceDataRecord
 from meshmode.array_context import PyOpenCLArrayContext as MeshmodePyOpenCLArrayContext
 from meshmode.dof_array import DOFArray
 from pytools import ProcessLogger, memoize_method
-from pytools.obj_array import make_obj_array
+from pytools.obj_array import new_1d as obj_array_1d
 
 logger = logging.getLogger(__name__)
 
@@ -757,7 +757,7 @@ class ElementsToSourcesLookupBuilder:
             / 2
         )
 
-        ball_centers = make_obj_array(
+        ball_centers = obj_array_1d(
             [
                 cl.array.to_device(actx.queue, center_coord_comp)
                 for center_coord_comp in ball_centers_host
@@ -806,7 +806,7 @@ class ElementsToSourcesLookupBuilder:
 
         element_lookup_kernel = self.get_simplex_lookup_kernel()
 
-        vertices_dev = make_obj_array(
+        vertices_dev = obj_array_1d(
             [
                 cl.array.to_device(actx.queue, verts)
                 for verts in self.discr.mesh.vertices
@@ -926,7 +926,7 @@ class LeavesToNodesLookupBuilder:
                 raise ValueError
 
         nodes = flatten(actx.thaw(self.discr.nodes()), actx, leaf_class=DOFArray)
-        nodes = make_obj_array([coord.with_queue(actx.queue) for coord in nodes])
+        nodes = obj_array_1d([coord.with_queue(actx.queue) for coord in nodes])
         lookup_tol = _compute_leaves_to_nodes_lookup_tol(self.trav.tree, tol)
         radii = _make_constant_array(actx.queue, nodes[0], lookup_tol)
 
@@ -1118,7 +1118,7 @@ def interpolate_from_meshmode(actx, dof_vec, elements_to_sources_lookup, order="
         actx.queue, sources_in_element_lists
     )
 
-    mesh_vertices_dev = make_obj_array(
+    mesh_vertices_dev = obj_array_1d(
         [
             cl.array.to_device(
                 actx.queue,
@@ -1128,7 +1128,7 @@ def interpolate_from_meshmode(actx, dof_vec, elements_to_sources_lookup, order="
         ]
     )
     n_source_slots = len(sources_in_element_lists)
-    barycentric_dev = make_obj_array(
+    barycentric_dev = obj_array_1d(
         [
             cl.array.empty(actx.queue, n_source_slots, dtype=coord_dtype)
             for _ in range(dim + 1)
@@ -1159,7 +1159,7 @@ def interpolate_from_meshmode(actx, dof_vec, elements_to_sources_lookup, order="
             map_kwargs[f"barycentric_{iaxis}"] = barycentric_dev[iaxis]
 
         evt, map_res = map_executor(actx.queue, **map_kwargs)
-        barycentric_dev = make_obj_array(
+        barycentric_dev = obj_array_1d(
             [map_res[f"barycentric_{iaxis}"] for iaxis in range(dim + 1)]
         )
         for iaxis in range(dim + 1):
@@ -1197,7 +1197,7 @@ def interpolate_from_meshmode(actx, dof_vec, elements_to_sources_lookup, order="
             bernstein_coeffs_real, dtype=value_dtype
         )
 
-        bernstein_alpha_dev = make_obj_array(
+        bernstein_alpha_dev = obj_array_1d(
             [
                 cl.array.to_device(
                     actx.queue,
