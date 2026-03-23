@@ -113,3 +113,51 @@ def test_harmonic_extension_geometry_collection_smoke(ctx_factory):
     assert debug["gmres_result"].state == "success"
     assert result.shape == (target_points.shape[1],)
     assert np.isfinite(result).all()
+
+
+def test_harmonic_extension_to_volume_mesh_points_smoke(ctx_factory):
+    if (
+        sys.platform == "darwin"
+        and os.environ.get("VOLUMENTIAL_RUN_UNSTABLE_DARWIN_TESTS") != "1"
+    ):
+        import pytest
+
+        pytest.skip(
+            "harmonic extension test is unstable on macOS OpenCL CI "
+            "(set VOLUMENTIAL_RUN_UNSTABLE_DARWIN_TESTS=1 to run)"
+        )
+
+    ctx = ctx_factory()
+    _skip_unstable_backend(ctx)
+    queue = cl.CommandQueue(ctx)
+    actx = PyOpenCLArrayContext(queue)
+
+    qbx, density_discr = _make_test_qbx(actx, nelements=24, order=3, qbx_order=2)
+    nodes = actx.thaw(density_discr.nodes())
+    f = nodes[0]
+
+    import volumential.meshgen as mg
+
+    mesh = mg.MeshGen2D(degree=2, nlevels=2, a=-0.4, b=0.4, queue=queue)
+    target_points = np.ascontiguousarray(
+        np.asarray(mesh.get_q_points()[:16], dtype=np.float64).T
+    )
+    target_discr = PointsTarget(actx.freeze(actx.from_numpy(target_points)))
+
+    ext_f, debug = compute_harmonic_extension(
+        queue,
+        target_discr,
+        qbx,
+        density_discr,
+        f,
+        loc_sign=-1,
+        target_association_tolerance=0.05,
+        gmres_tolerance=1e-10,
+        actx=actx,
+    )
+
+    result = actx.to_numpy(ext_f)
+
+    assert debug["gmres_result"].state == "success"
+    assert result.shape == (target_points.shape[1],)
+    assert np.isfinite(result).all()

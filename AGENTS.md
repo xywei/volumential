@@ -53,7 +53,8 @@ For pytential integration work, also read:
 
 ## Current Reality / Known Debt
 
-- Packaging is old: `setup.py` only, no `pyproject.toml`, stale Python metadata.
+- Packaging is pyproject-driven and uv-first; prefer `uv sync` over legacy
+  requirements-based installs.
 - The code assumes old inducer-stack APIs in places, especially around
   `pytential`, `meshmode`, `arraycontext`, and `pyopencl`.
 - Some tests and modules already document drift. In particular,
@@ -79,6 +80,8 @@ For pytential integration work, also read:
   FMM execution explicit.
 - Prefer `arraycontext`-friendly and pytential-friendly interfaces over raw,
   ad hoc array handling.
+- Keep dependency and workflow updates centered in `pyproject.toml` and
+  `tool.uv.sources`.
 - When integrating with `pytential`, aim for workflows where boundary solves can
   feed volume evaluation without bespoke glue in user code.
 - Add or revive tests before large refactors in the integration layers.

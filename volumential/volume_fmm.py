@@ -70,6 +70,124 @@ from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
 logger = logging.getLogger(__name__)
 
 
+def _cast_source_field_dtype(field, dtype):
+    if isinstance(field, np.ndarray):
+        if field.dtype == object:
+            try:
+                return field.astype(dtype, copy=False)
+            except (TypeError, ValueError):
+                return field
+        return field.astype(dtype, copy=False)
+
+    if hasattr(field, "astype"):
+        return field.astype(dtype)
+
+    return np.asarray(field, dtype=dtype)
+
+
+def _normalize_matrix_source_fields(values, expected_length, field_name):
+    if expected_length is None:
+        raise ValueError(
+            f"{field_name} has ndim=2 but source length is unknown. "
+            "Pass multiple source fields as an object array/list in "
+            "(nfields,) form."
+        )
+
+    nrows, ncols = (int(values.shape[0]), int(values.shape[1]))
+
+    if nrows == expected_length and ncols == expected_length:
+        raise ValueError(
+            f"{field_name} has ambiguous square shape {values.shape}; "
+            "use an object array/list or an explicit (nfields, npoints) array."
+        )
+
+    if nrows == expected_length:
+        if ncols == 1:
+            return [values[:, 0]]
+
+        raise ValueError(
+            f"{field_name} has point-major shape {values.shape}. "
+            "Use object-array/list input or transpose to (nfields, npoints)."
+        )
+
+    if ncols == expected_length:
+        return [values[i] for i in range(nrows)]
+
+    raise ValueError(
+        f"{field_name} has shape {values.shape}, but one axis must match "
+        f"the source count ({expected_length})."
+    )
+
+
+def _normalize_source_fields(
+    values, dtype, *, expected_length=None, field_name="source"
+):
+    if isinstance(values, np.ndarray) and values.dtype == object:
+        if values.ndim <= 1:
+            fields = list(values.flat)
+        elif values.ndim == 2:
+            fields = _normalize_matrix_source_fields(
+                values, expected_length, field_name
+            )
+        else:
+            raise ValueError(f"{field_name} must be 1D or 2D, got ndim={values.ndim}")
+    elif isinstance(values, (list, tuple)):
+        array_values = np.asarray(values)
+
+        if array_values.ndim == 1 and array_values.dtype != object:
+            fields = [array_values]
+        elif (
+            array_values.ndim == 2
+            and array_values.dtype != object
+            and expected_length is not None
+        ):
+            fields = _normalize_matrix_source_fields(
+                array_values, expected_length, field_name
+            )
+        else:
+            fields = list(values)
+    elif hasattr(values, "ndim") and values.ndim == 2:
+        fields = _normalize_matrix_source_fields(values, expected_length, field_name)
+    elif hasattr(values, "ndim") and values.ndim > 2:
+        raise ValueError(f"{field_name} must be 1D or 2D, got ndim={values.ndim}")
+    else:
+        fields = [values]
+
+    return make_obj_array([_cast_source_field_dtype(field, dtype) for field in fields])
+
+
+def _as_obj_array(potentials):
+    if isinstance(potentials, np.ndarray) and potentials.dtype == object:
+        return potentials
+
+    return make_obj_array([potentials])
+
+
+def _add_obj_arrays(lhs, rhs):
+    lhs_oa = _as_obj_array(lhs)
+    rhs_oa = _as_obj_array(rhs)
+
+    if len(lhs_oa) != len(rhs_oa):
+        raise ValueError("incompatible potential vector lengths")
+
+    return make_obj_array(
+        [lhs_i + rhs_i for lhs_i, rhs_i in zip(lhs_oa, rhs_oa, strict=True)]
+    )
+
+
+class _CombinedTimingFuture:
+    def __init__(self, futures):
+        self.futures = [future for future in futures if future is not None]
+
+    def __call__(self):
+        total = 0.0
+        for future in self.futures:
+            value = future()
+            if isinstance(value, (int, float)):
+                total += float(value)
+        return total
+
+
 def _debug_nan_status(label, ary):
     if not os.environ.get("VOLUMENTIAL_DEBUG_NAN"):
         return
@@ -148,16 +266,44 @@ def drive_volume_fmm(
     recorder = TimingRecorder()
     logger.info("start fmm")
 
-    # accept unpacked inputs when doing fmm for just one source field
     dtype = wrangler.dtype
-    if src_weights.ndim == 1:
-        src_weights = make_obj_array([src_weights.astype(dtype)])
-    if src_func.ndim == 1:
-        src_func = make_obj_array([src_func.astype(dtype)])
+    expected_source_count = None
+    if hasattr(traversal, "tree"):
+        expected_source_count = getattr(traversal.tree, "nsources", None)
+        if expected_source_count is None:
+            expected_source_count = getattr(traversal.tree, "ntargets", None)
+
+    src_weights = _normalize_source_fields(
+        src_weights,
+        dtype,
+        expected_length=expected_source_count,
+        field_name="src_weights",
+    )
+    src_func = _normalize_source_fields(
+        src_func,
+        dtype,
+        expected_length=expected_source_count,
+        field_name="src_func",
+    )
 
     assert (ns := len(src_weights)) == len(src_func)
-    if ns > 1:
-        raise NotImplementedError("Multiple outputs are not yet supported")
+
+    list1_only = bool(kwargs.get("list1_only", False))
+
+    if ns > 1 and isinstance(expansion_wrangler, FPNDFMMLibExpansionWrangler):
+        raise NotImplementedError(
+            "multiple source fields are not supported with FMMLib wranglers"
+        )
+
+    if (
+        ns > 1
+        and isinstance(expansion_wrangler, FPNDSumpyExpansionWrangler)
+        and not list1_only
+    ):
+        raise NotImplementedError(
+            "multiple source fields are currently supported only with "
+            "list1_only=True for Sumpy wranglers"
+        )
 
     queue = None
     if isinstance(src_func[0], cl.array.Array):
@@ -217,18 +363,29 @@ def drive_volume_fmm(
     logger.debug("direct evaluation from neighbor source boxes ('list 1')")
     # look up in the prebuilt table
     # this step also constructs the output array
-    potentials, timing_future = wrangler.eval_direct(
-        traversal.target_boxes,
-        traversal.neighbor_source_boxes_starts,
-        traversal.neighbor_source_boxes_lists,
-        src_func[0],  # FIXME: handle multiple source fields
-    )
+    direct_timing_futures = []
+    potentials = None
+    for field in src_func:
+        field_potentials, timing_future = wrangler.eval_direct(
+            traversal.target_boxes,
+            traversal.neighbor_source_boxes_starts,
+            traversal.neighbor_source_boxes_lists,
+            field,
+        )
+        direct_timing_futures.append(timing_future)
+        if potentials is None:
+            potentials = field_potentials
+        else:
+            potentials = _add_obj_arrays(potentials, field_potentials)
+
+    assert potentials is not None
+    timing_future = _CombinedTimingFuture(direct_timing_futures)
     recorder.add("eval_direct", timing_future)
-    _debug_nan_status("fmm_l1_potentials", potentials[0])
+    _debug_nan_status("fmm_l1_potentials", _as_obj_array(potentials)[0])
 
     # Return list 1 only, for debugging
     # 'list1_only' takes precedence over 'exclude_list1'
-    if "list1_only" in kwargs and kwargs["list1_only"]:
+    if list1_only:
         result = potentials
         if reorder_potentials:
             logger.debug("reorder potentials")
@@ -255,6 +412,11 @@ def drive_volume_fmm(
 
     # {{{ (Optional) direct evaluation of everything and return
     if direct_evaluation:
+        if ns > 1:
+            raise NotImplementedError(
+                "direct_evaluation=True with multiple source fields is not supported"
+            )
+
         print("Warning: NOT USING FMM (forcing global p2p)")
         if len(src_weights) != len(src_func):
             print(
@@ -283,24 +445,31 @@ def drive_volume_fmm(
         if queue is None:
             raise TypeError("unable to infer command queue for direct evaluation")
 
-        for iw, sw in enumerate(src_weights):
-            target_to_source = cl.array.to_device(
-                p2p_queue,
-                np.arange(traversal.tree.ntargets, dtype=np.int32),
-            )
-            p2p_kwargs = dict(p2p_extra_kwargs)
-            if wrangler.tree_indep.exclude_self:
-                p2p_kwargs["target_to_source"] = target_to_source
+        (sw,) = src_weights
+        target_to_source = cl.array.to_device(
+            p2p_queue,
+            np.arange(traversal.tree.ntargets, dtype=np.int32),
+        )
+        p2p_kwargs = dict(p2p_extra_kwargs)
+        if wrangler.tree_indep.exclude_self:
+            p2p_kwargs["target_to_source"] = target_to_source
 
-            (ref_pot,) = p2p(
-                wrangler.tree_indep._setup_actx,
-                traversal.tree.targets,
-                traversal.tree.sources,
-                (sw,),
-                **p2p_kwargs,
-            )
-            potentials[iw] += ref_pot
-        _debug_nan_status("global_p2p", potentials[0])
+        (ref_pot,) = p2p(
+            wrangler.tree_indep._setup_actx,
+            traversal.tree.targets,
+            traversal.tree.sources,
+            (sw,),
+            **p2p_kwargs,
+        )
+
+        if isinstance(potentials, np.ndarray) and potentials.dtype == object:
+            if len(potentials) != 1:
+                raise ValueError("incompatible direct-evaluation potential dimensions")
+            potentials[0] += ref_pot
+            _debug_nan_status("global_p2p", potentials[0])
+        else:
+            potentials = potentials + ref_pot
+            _debug_nan_status("global_p2p", potentials)
 
         l1_potentials, timing_future = wrangler.eval_direct_p2p(
             traversal.target_boxes,
@@ -308,9 +477,21 @@ def drive_volume_fmm(
             traversal.neighbor_source_boxes_lists,
             src_weights,
         )
-        _debug_nan_status("l1_potentials", l1_potentials[0])
+        if isinstance(l1_potentials, np.ndarray) and l1_potentials.dtype == object:
+            if len(l1_potentials) != 1:
+                raise ValueError("incompatible list1 potential dimensions")
+            l1_pot = l1_potentials[0]
+        else:
+            l1_pot = l1_potentials
 
-        potentials = potentials - l1_potentials
+        _debug_nan_status("l1_potentials", l1_pot)
+
+        if isinstance(potentials, np.ndarray) and potentials.dtype == object:
+            if len(potentials) != 1:
+                raise ValueError("incompatible direct-evaluation potential dimensions")
+            potentials[0] = potentials[0] - l1_pot
+        else:
+            potentials = potentials - l1_pot
 
         # list 3
         assert traversal.from_sep_close_smaller_starts is None
@@ -318,9 +499,10 @@ def drive_volume_fmm(
         # list 4
         assert traversal.from_sep_close_bigger_starts is None
 
+        result = potentials
         if reorder_potentials:
             logger.debug("reorder potentials")
-            result = wrangler.reorder_potentials(potentials)
+            result = wrangler.reorder_potentials(result)
 
         logger.debug("finalize potentials")
         result = wrangler.finalize_potentials(result)
@@ -444,6 +626,7 @@ def drive_volume_fmm(
     # }}}
 
     # {{{ Reorder potentials
+    result = potentials
     if reorder_potentials:
         logger.debug("reorder potentials")
         result = wrangler.reorder_potentials(potentials)

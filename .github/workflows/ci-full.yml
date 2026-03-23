@@ -46,7 +46,8 @@ jobs:
           export LDFLAGS="${LDFLAGS:-} -L${CI_TEST_CONDA_PREFIX}/lib"
 
           python -m pip install --upgrade pip
-          python -m pip install --editable .[test]
+          python -m pip install uv
+          uv pip install --system --editable ".[test]"
 
           curl -L -O https://tiker.net/ci-support-v0
           . ./ci-support-v0
@@ -70,7 +71,8 @@ jobs:
           export PY_EXE=python
 
           python -m pip install --upgrade pip
-          python -m pip install --editable .[test,doc]
+          python -m pip install uv
+          uv pip install --system --editable ".[test,doc]"
 
           curl -L -O https://tiker.net/ci-support-v0
           . ./ci-support-v0
@@ -102,7 +104,8 @@ jobs:
           export PYOPENCL_CTX="portable:0"
 
           python -m pip install --upgrade pip
-          python -m pip install --editable .[test]
+          python -m pip install uv
+          uv pip install --system --editable ".[test]"
 
           curl -L -O https://tiker.net/ci-support-v0
           . ./ci-support-v0

@@ -23,32 +23,63 @@ THE SOFTWARE.
 # {{{ find install- or run-time git revision
 
 import os
+from hashlib import blake2b
+from pathlib import Path
 
 
-if os.environ.get("AKPYTHON_EXEC_FROM_WITHIN_WITHIN_SETUP_PY") is not None:
-    # We're just being exec'd by setup.py. We can't import anything.
-    _git_rev = None
+def _fallback_kernel_revision():
+    """Return a deterministic fingerprint for cache invalidation.
 
-else:
-    try:
-        import volumential._git_rev as _git_rev_mod
-    except ImportError:
-        _git_rev = None
-    else:
-        _git_rev = _git_rev_mod.GIT_REVISION
+    Built artifacts installed outside of a git checkout do not carry a runtime
+    revision from :func:`pytools.find_module_git_revision`. When that happens,
+    derive a revision-like token from a stable subset of source files so cached
+    kernels do not silently reuse stale binaries across upgrades.
+    """
+    source_root = Path(__file__).resolve().parent
+    fingerprint = blake2b(digest_size=12)
 
-    # If we're running from a dev tree, the last install (and hence the most
-    # recent update of the above git rev) could have taken place very long ago.
+    for rel_path in (
+        "version.py",
+        "tools.py",
+        "volume_fmm.py",
+        "list1.py",
+        "nearfield_potential_table.py",
+        "expansion_wrangler_fpnd.py",
+    ):
+        try:
+            payload = (source_root / rel_path).read_bytes()
+        except OSError:
+            continue
+
+        fingerprint.update(rel_path.encode("utf-8"))
+        fingerprint.update(b"\0")
+        fingerprint.update(payload)
+
+    return f"nogit-{fingerprint.hexdigest()}"
+
+
+def _resolve_git_revision():
+    if os.environ.get("AKPYTHON_EXEC_FROM_WITHIN_WITHIN_SETUP_PY") is not None:
+        # We're just being exec'd by setup.py. We can't import anything.
+        return None
+
+    # Generated `_git_rev.py` files can linger in local trees and become stale.
+    # Always prefer a live git query; if unavailable, derive a content hash.
     from pytools import find_module_git_revision
 
-    _runtime_git_rev = find_module_git_revision(__file__, n_levels_up=1)
-    if _runtime_git_rev is not None:
-        _git_rev = _runtime_git_rev
+    runtime_git_rev = find_module_git_revision(__file__, n_levels_up=1)
+    if runtime_git_rev is not None:
+        return runtime_git_rev
+
+    return _fallback_kernel_revision()
+
+
+_git_rev = _resolve_git_revision()
 
 # }}}
 
 VERSION = (2017, 1)
-VERSION_STATUS = "alpha"
+VERSION_STATUS = "a0"
 VERSION_TEXT = ".".join(str(i) for i in VERSION) + VERSION_STATUS
 
 KERNEL_VERSION = (VERSION, _git_rev, 0)

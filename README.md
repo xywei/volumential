@@ -12,6 +12,7 @@ efficiently via Fast Multipole Method.
 - `test/`: pytest suite
 - `examples/`: maintained end-to-end examples (`laplace2d.py`, `laplace3d.py`)
 - `doc/`: Sphinx documentation
+- `DEVELOPMENT.md`: local/remote development environment guide
 
 Legacy `contrib/`, `benchmarks/`, `experiments/`, and `docker/` trees were
 removed as part of repository cleanup.
@@ -19,12 +20,14 @@ removed as part of repository cleanup.
 ## Quick Start
 
 Install an OpenCL runtime first (for example, in conda:
-`conda install pyopencl pocl`), then:
+`conda install pyopencl pocl`), then use `uv` for dependency resolution:
 
 ```bash
-pip install -r requirements.txt
-python examples/laplace2d.py
+uv sync --active --extra test
+uv run python examples/laplace2d.py
 ```
+
+For a fully reproducible local + remote setup, see `DEVELOPMENT.md`.
 
 ## Documentation
 

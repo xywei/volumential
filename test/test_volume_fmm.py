@@ -25,6 +25,7 @@ import os
 import subprocess
 import sys
 from functools import partial
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -46,6 +47,394 @@ import volumential.meshgen as mg
 
 
 logger = logging.getLogger(__name__)
+
+
+def test_normalize_source_fields_accepts_field_major_matrix():
+    from volumential.volume_fmm import _normalize_source_fields
+
+    values = np.arange(12, dtype=np.float64).reshape(3, 4)
+    normalized = _normalize_source_fields(
+        values,
+        np.float64,
+        expected_length=4,
+        field_name="src_weights",
+    )
+
+    assert len(normalized) == 3
+    assert np.allclose(normalized[0], values[0])
+    assert np.allclose(normalized[2], values[2])
+
+
+def test_normalize_source_fields_accepts_column_vector_single_field():
+    from volumential.volume_fmm import _normalize_source_fields
+
+    values = np.arange(4, dtype=np.float64).reshape(4, 1)
+    normalized = _normalize_source_fields(
+        values,
+        np.float64,
+        expected_length=4,
+        field_name="src_weights",
+    )
+
+    assert len(normalized) == 1
+    assert np.allclose(normalized[0], values[:, 0])
+
+
+def test_normalize_source_fields_treats_scalar_sequence_as_single_field():
+    from volumential.volume_fmm import _normalize_source_fields
+
+    values = [1.0, 2.0, 3.0, 4.0]
+    normalized = _normalize_source_fields(
+        values,
+        np.float64,
+        expected_length=4,
+        field_name="src_weights",
+    )
+
+    assert len(normalized) == 1
+    assert np.allclose(normalized[0], np.array(values, dtype=np.float64))
+
+
+def test_normalize_source_fields_rejects_point_major_matrix():
+    from volumential.volume_fmm import _normalize_source_fields
+
+    values = np.arange(12, dtype=np.float64).reshape(4, 3)
+
+    with pytest.raises(ValueError, match="point-major shape"):
+        _normalize_source_fields(
+            values,
+            np.float64,
+            expected_length=4,
+            field_name="src_weights",
+        )
+
+
+def test_normalize_source_fields_casts_object_matrix_rows():
+    from volumential.volume_fmm import _normalize_source_fields
+
+    values = np.array([[1.0, 2.0, 3.0], [10.0, 20.0, 30.0]], dtype=object)
+    normalized = _normalize_source_fields(
+        values,
+        np.float64,
+        expected_length=3,
+        field_name="src_weights",
+    )
+
+    assert len(normalized) == 2
+    assert normalized[0].dtype == np.float64
+    assert normalized[1].dtype == np.float64
+    assert np.allclose(normalized[0], np.array([1.0, 2.0, 3.0]))
+    assert np.allclose(normalized[1], np.array([10.0, 20.0, 30.0]))
+
+
+def test_volume_fmm_list1_multi_source_superposition():
+    from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
+    from volumential.volume_fmm import drive_volume_fmm
+
+    class _MockWrangler(ExpansionWranglerInterface):
+        dtype = np.float64
+
+        def multipole_expansion_zeros(self):
+            return None
+
+        def local_expansion_zeros(self):
+            return None
+
+        def output_zeros(self):
+            return np.array([0.0], dtype=self.dtype)
+
+        def reorder_sources(self, source_array):
+            return source_array
+
+        def reorder_targets(self, target_array):
+            return target_array
+
+        def reorder_potentials(self, potentials):
+            return potentials
+
+        def form_multipoles(
+            self, level_start_source_box_nrs, source_boxes, src_weights
+        ):
+            return None, None
+
+        def coarsen_multipoles(
+            self, level_start_source_parent_box_nrs, source_parent_boxes, mpoles
+        ):
+            return mpoles, None
+
+        def eval_direct(
+            self,
+            target_boxes,
+            neighbor_sources_starts,
+            neighbor_sources_lists,
+            mode_coefs,
+        ):
+            return np.array([np.sum(mode_coefs)], dtype=self.dtype), None
+
+        def multipole_to_local(
+            self,
+            level_start_target_or_target_parent_box_nrs,
+            target_or_target_parent_boxes,
+            starts,
+            lists,
+            mpole_exps,
+        ):
+            return np.array([0.0], dtype=self.dtype), None
+
+        def eval_multipoles(
+            self,
+            level_start_target_box_nrs,
+            target_boxes,
+            starts,
+            lists,
+            mpole_exps,
+        ):
+            return np.array([0.0], dtype=self.dtype), None
+
+        def form_locals(
+            self,
+            level_start_target_or_target_parent_box_nrs,
+            target_or_target_parent_boxes,
+            starts,
+            lists,
+            src_weights,
+        ):
+            return np.array([0.0], dtype=self.dtype), None
+
+        def refine_locals(
+            self,
+            level_start_target_or_target_parent_box_nrs,
+            target_or_target_parent_boxes,
+            local_exps,
+        ):
+            return local_exps, None
+
+        def eval_locals(self, level_start_target_box_nrs, target_boxes, local_exps):
+            return np.array([0.0], dtype=self.dtype), None
+
+        def finalize_potentials(self, potentials):
+            return potentials
+
+    traversal = SimpleNamespace(
+        tree=SimpleNamespace(nsources=3, ntargets=3),
+        level_start_source_box_nrs=np.array([], dtype=np.int32),
+        source_boxes=np.array([], dtype=np.int32),
+        level_start_source_parent_box_nrs=np.array([], dtype=np.int32),
+        source_parent_boxes=np.array([], dtype=np.int32),
+        target_boxes=np.array([], dtype=np.int32),
+        neighbor_source_boxes_starts=np.array([], dtype=np.int32),
+        neighbor_source_boxes_lists=np.array([], dtype=np.int32),
+    )
+
+    src0 = np.array([1.0, 2.0, 3.0], dtype=np.float64)
+    src1 = np.array([10.0, 20.0, 30.0], dtype=np.float64)
+
+    src_weights = np.empty(2, dtype=object)
+    src_weights[:] = [src0, src1]
+    src_func = np.empty(2, dtype=object)
+    src_func[:] = [src0, src1]
+
+    result = drive_volume_fmm(
+        traversal,
+        _MockWrangler(),
+        src_weights,
+        src_func,
+        list1_only=True,
+    )
+
+    if isinstance(result, np.ndarray) and result.dtype == object:
+        assert len(result) == 1
+        result = result[0]
+
+    assert np.allclose(result, np.array([66.0]))
+
+
+def test_volume_fmm_rejects_multi_source_full_sumpy_path(monkeypatch):
+    from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
+    import volumential.volume_fmm as volume_fmm
+
+    class _MockSumpyWrangler(ExpansionWranglerInterface):
+        dtype = np.float64
+
+    monkeypatch.setattr(
+        volume_fmm,
+        "FPNDSumpyExpansionWrangler",
+        _MockSumpyWrangler,
+    )
+
+    traversal = SimpleNamespace(tree=SimpleNamespace(nsources=3, ntargets=3))
+
+    src0 = np.array([1.0, 2.0, 3.0], dtype=np.float64)
+    src1 = np.array([10.0, 20.0, 30.0], dtype=np.float64)
+
+    src_weights = np.empty(2, dtype=object)
+    src_weights[:] = [src0, src1]
+    src_func = np.empty(2, dtype=object)
+    src_func[:] = [src0, src1]
+
+    with pytest.raises(NotImplementedError, match="list1_only=True"):
+        volume_fmm.drive_volume_fmm(
+            traversal,
+            _MockSumpyWrangler(),
+            src_weights,
+            src_func,
+        )
+
+
+def test_volume_fmm_direct_eval_accepts_fmmlib_plain_arrays(monkeypatch):
+    from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
+    import volumential.volume_fmm as volume_fmm
+
+    class _DummyP2P:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __call__(self, setup_actx, targets, sources, strengths, **kwargs):
+            return (np.array([4.0, 5.0, 6.0], dtype=np.float64),)
+
+    class _MockFMMLibWrangler(ExpansionWranglerInterface):
+        dtype = np.float64
+
+        def __init__(self):
+            queue = object()
+            self.queue = queue
+            self.tree_indep = SimpleNamespace(
+                target_kernels=(object(),),
+                exclude_self=False,
+                _setup_actx=SimpleNamespace(queue=queue),
+            )
+
+        def multipole_expansion_zeros(self):
+            return None
+
+        def local_expansion_zeros(self):
+            return None
+
+        def output_zeros(self):
+            return np.zeros(3, dtype=self.dtype)
+
+        def reorder_sources(self, source_array):
+            return source_array
+
+        def reorder_targets(self, target_array):
+            return target_array
+
+        def reorder_potentials(self, potentials):
+            return potentials
+
+        def form_multipoles(
+            self, level_start_source_box_nrs, source_boxes, src_weights
+        ):
+            return np.array([0.0], dtype=self.dtype), None
+
+        def coarsen_multipoles(
+            self, level_start_source_parent_box_nrs, source_parent_boxes, mpoles
+        ):
+            return mpoles, None
+
+        def eval_direct(
+            self,
+            target_boxes,
+            neighbor_sources_starts,
+            neighbor_sources_lists,
+            mode_coefs,
+        ):
+            return np.array([1.0, 2.0, 3.0], dtype=self.dtype), None
+
+        def eval_direct_p2p(
+            self,
+            target_boxes,
+            neighbor_sources_starts,
+            neighbor_sources_lists,
+            src_weights,
+        ):
+            return np.array([0.5, 0.5, 0.5], dtype=self.dtype), None
+
+        def multipole_to_local(
+            self,
+            level_start_target_or_target_parent_box_nrs,
+            target_or_target_parent_boxes,
+            starts,
+            lists,
+            mpole_exps,
+        ):
+            return np.array([0.0], dtype=self.dtype), None
+
+        def eval_multipoles(
+            self,
+            level_start_target_box_nrs,
+            target_boxes,
+            starts,
+            lists,
+            mpole_exps,
+        ):
+            return np.array([0.0], dtype=self.dtype), None
+
+        def form_locals(
+            self,
+            level_start_target_or_target_parent_box_nrs,
+            target_or_target_parent_boxes,
+            starts,
+            lists,
+            src_weights,
+        ):
+            return np.array([0.0], dtype=self.dtype), None
+
+        def refine_locals(
+            self,
+            level_start_target_or_target_parent_box_nrs,
+            target_or_target_parent_boxes,
+            local_exps,
+        ):
+            return local_exps, None
+
+        def eval_locals(self, level_start_target_box_nrs, target_boxes, local_exps):
+            return np.array([0.0], dtype=self.dtype), None
+
+        def finalize_potentials(self, potentials):
+            return potentials
+
+    class _Traversal(SimpleNamespace):
+        def get(self, queue):
+            return self
+
+    monkeypatch.setattr(volume_fmm, "FPNDFMMLibExpansionWrangler", _MockFMMLibWrangler)
+    monkeypatch.setattr(volume_fmm.cl.array, "to_device", lambda queue, ary: ary)
+    monkeypatch.setitem(sys.modules, "sumpy", SimpleNamespace(P2P=_DummyP2P))
+
+    traversal = _Traversal(
+        tree=SimpleNamespace(
+            nsources=3,
+            ntargets=3,
+            targets=np.array([[0.0, 0.0, 0.0]], dtype=np.float64),
+            sources=np.array([[0.0, 0.0, 0.0]], dtype=np.float64),
+        ),
+        level_start_source_box_nrs=np.array([], dtype=np.int32),
+        source_boxes=np.array([], dtype=np.int32),
+        level_start_source_parent_box_nrs=np.array([], dtype=np.int32),
+        source_parent_boxes=np.array([], dtype=np.int32),
+        target_boxes=np.array([], dtype=np.int32),
+        neighbor_source_boxes_starts=np.array([], dtype=np.int32),
+        neighbor_source_boxes_lists=np.array([], dtype=np.int32),
+        from_sep_close_smaller_starts=None,
+        from_sep_close_bigger_starts=None,
+    )
+
+    src_weights = np.array([1.0, 1.0, 1.0], dtype=np.float64)
+    src_func = np.array([1.0, 2.0, 3.0], dtype=np.float64)
+
+    result = volume_fmm.drive_volume_fmm(
+        traversal,
+        _MockFMMLibWrangler(),
+        src_weights,
+        src_func,
+        direct_evaluation=True,
+        reorder_sources=False,
+        reorder_potentials=False,
+    )
+
+    assert np.allclose(result, np.array([4.5, 6.5, 8.5], dtype=np.float64))
+
 
 # {{{ make sure context getter works
 
