@@ -132,7 +132,20 @@ def _normalize_source_fields(
         else:
             raise ValueError(f"{field_name} must be 1D or 2D, got ndim={values.ndim}")
     elif isinstance(values, (list, tuple)):
-        fields = list(values)
+        array_values = np.asarray(values)
+
+        if array_values.ndim == 1 and array_values.dtype != object:
+            fields = [array_values]
+        elif (
+            array_values.ndim == 2
+            and array_values.dtype != object
+            and expected_length is not None
+        ):
+            fields = _normalize_matrix_source_fields(
+                array_values, expected_length, field_name
+            )
+        else:
+            fields = list(values)
     elif hasattr(values, "ndim") and values.ndim == 2:
         fields = _normalize_matrix_source_fields(values, expected_length, field_name)
     elif hasattr(values, "ndim") and values.ndim > 2:

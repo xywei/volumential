@@ -58,27 +58,23 @@ def _fallback_kernel_revision():
     return f"nogit-{fingerprint.hexdigest()}"
 
 
-if os.environ.get("AKPYTHON_EXEC_FROM_WITHIN_WITHIN_SETUP_PY") is not None:
-    # We're just being exec'd by setup.py. We can't import anything.
-    _git_rev = None
+def _resolve_git_revision():
+    if os.environ.get("AKPYTHON_EXEC_FROM_WITHIN_WITHIN_SETUP_PY") is not None:
+        # We're just being exec'd by setup.py. We can't import anything.
+        return None
 
-else:
-    try:
-        import volumential._git_rev as _git_rev_mod
-    except ImportError:
-        _git_rev = None
-    else:
-        _git_rev = _git_rev_mod.GIT_REVISION
-
-    # If we're running from a dev tree, the last install (and hence the most
-    # recent update of the above git rev) could have taken place very long ago.
+    # Generated `_git_rev.py` files can linger in local trees and become stale.
+    # Always prefer a live git query; if unavailable, derive a content hash.
     from pytools import find_module_git_revision
 
-    _runtime_git_rev = find_module_git_revision(__file__, n_levels_up=1)
-    if _runtime_git_rev is not None:
-        _git_rev = _runtime_git_rev
-    elif _git_rev is None:
-        _git_rev = _fallback_kernel_revision()
+    runtime_git_rev = find_module_git_revision(__file__, n_levels_up=1)
+    if runtime_git_rev is not None:
+        return runtime_git_rev
+
+    return _fallback_kernel_revision()
+
+
+_git_rev = _resolve_git_revision()
 
 # }}}
 

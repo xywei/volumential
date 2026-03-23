@@ -80,6 +80,21 @@ def test_normalize_source_fields_accepts_column_vector_single_field():
     assert np.allclose(normalized[0], values[:, 0])
 
 
+def test_normalize_source_fields_treats_scalar_sequence_as_single_field():
+    from volumential.volume_fmm import _normalize_source_fields
+
+    values = [1.0, 2.0, 3.0, 4.0]
+    normalized = _normalize_source_fields(
+        values,
+        np.float64,
+        expected_length=4,
+        field_name="src_weights",
+    )
+
+    assert len(normalized) == 1
+    assert np.allclose(normalized[0], np.array(values, dtype=np.float64))
+
+
 def test_normalize_source_fields_rejects_point_major_matrix():
     from volumential.volume_fmm import _normalize_source_fields
 
