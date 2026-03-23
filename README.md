@@ -10,7 +10,8 @@ efficiently via Fast Multipole Method.
 
 - `volumential/`: library source
 - `test/`: pytest suite
-- `examples/`: maintained end-to-end examples (`laplace2d.py`, `laplace3d.py`)
+- `examples/`: maintained end-to-end examples (`laplace2d.py`, `laplace3d.py`,
+  `poisson2d_pytential_volumential.ipynb`)
 - `doc/`: Sphinx documentation
 - `DEVELOPMENT.md`: local/remote development environment guide
 
