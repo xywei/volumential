@@ -1220,8 +1220,14 @@ def interpolate_volume_potential(
                 pout_host[target_point_id] += np.dot(mode_coeff, mode_basis)
                 multiplicity_host[target_point_id] += 1
 
-        safe_multiplicity = np.maximum(multiplicity_host, 1)
-        pout_host = pout_host / safe_multiplicity
+        if np.any(multiplicity_host == 0):
+            n_missing = int(np.count_nonzero(multiplicity_host == 0))
+            raise ValueError(
+                "interpolation did not cover all targets "
+                f"({n_missing} targets missed by leaves-to-balls lookup)"
+            )
+
+        pout_host = pout_host / multiplicity_host
         return cl.array.to_device(queue, pout_host)
 
     # {{{ loopy kernel for interpolation
