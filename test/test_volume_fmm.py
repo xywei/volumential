@@ -455,6 +455,67 @@ def test_build_source_only_wrangler_preserves_self_extra_kwargs(monkeypatch):
     )
 
 
+def test_build_source_only_wrangler_rebuilds_target_to_source_mapping(monkeypatch):
+    import volumential.volume_fmm as volume_fmm
+
+    class _DummyBoxtreeActx:
+        def __init__(self, queue):
+            self.queue = queue
+
+    class _DummyTraversalBuilder:
+        def __init__(self, actx):
+            self.actx = actx
+
+        def __call__(self, actx, source_tree):
+            return SimpleNamespace(tree=source_tree), None
+
+    monkeypatch.setattr("boxtree.array_context.PyOpenCLArrayContext", _DummyBoxtreeActx)
+    monkeypatch.setattr("boxtree.traversal.FMMTraversalBuilder", _DummyTraversalBuilder)
+
+    source_tree = SimpleNamespace(ntargets=3)
+    monkeypatch.setattr(
+        volume_fmm,
+        "_clone_source_side_tree_as_targets",
+        lambda tree, queue: source_tree,
+    )
+
+    class _MockWrangler:
+        def __init__(self, **kwargs):
+            if kwargs:
+                for key, value in kwargs.items():
+                    setattr(self, key, value)
+                return
+
+            self.tree_indep = object()
+            self.near_field_table = object()
+            self.dtype = np.float64
+            self.quad_order = 4
+            self.potential_kind = 1
+            self.source_extra_kwargs = {}
+            self.kernel_extra_kwargs = {}
+            # Simulate already-processed non-NumPy mapping from original wrangler.
+            self.self_extra_kwargs = {
+                "exclude_self": True,
+                "target_to_source": _FakeDeviceArray(
+                    np.array([9, 8, 7], dtype=np.int32)
+                ),
+            }
+            self.list1_extra_kwargs = {}
+            self.level_orders = (4,)
+
+    queue = object()
+    traversal = SimpleNamespace(tree=object())
+    wrangler = _MockWrangler()
+
+    _, source_wrangler = volume_fmm._build_source_only_wrangler(
+        traversal, wrangler, queue
+    )
+
+    rebuilt = source_wrangler.self_extra_kwargs["target_to_source"]
+    assert isinstance(rebuilt, np.ndarray)
+    np.testing.assert_array_equal(rebuilt, np.arange(3, dtype=np.int32))
+
+
 def test_volume_fmm_list1_multi_source_superposition():
     from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
     from volumential.volume_fmm import drive_volume_fmm
