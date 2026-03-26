@@ -1329,21 +1329,21 @@ def interpolate_volume_potential(
 
                     for mid
                         # Find the coeff of each mode
-                        <> mode_id      = box_mode_beg + mid {dup=mid}
-                        <> source_id    = mode_to_source_ids[mode_id] {dup=mid}
-                        <> mode_id_user = user_mode_ids[source_id] {dup=mid}
-                        <> mode_coeff   = potential[mode_id_user] {dup=mid}
+                        <> mode_id      = box_mode_beg + mid
+                        <> source_id    = mode_to_source_ids[mode_id]
+                        <> mode_id_user = user_mode_ids[source_id]
+                        <> mode_coeff   = potential[mode_id_user]
 
                         # Mode id in each direction
                         for iaxis
-                            idx[iaxis] = MODE_INDEX_ASSIGNMENT {id=mode_indices,dup=mid:iaxis}
+                            idx[iaxis] = MODE_INDEX_ASSIGNMENT {id=mode_indices,dup=iaxis}
                         end
 
                         # Interpolate mode value in each direction
                         for iaxis
                             <> numerator[iaxis] = (barycentric_lagrange_weights[idx[iaxis]]
-                                                / diff[iaxis, idx[iaxis]]) {id=numerator,dep=diff:mode_indices,dup=mid:iaxis}
-                            <> mode_val[iaxis] = numerator[iaxis] / denom[iaxis] {id=mode_val,dep=numerator:denom,dup=mid:iaxis}
+                                                / diff[iaxis, idx[iaxis]]) {id=numerator,dep=diff:mode_indices,dup=iaxis}
+                            <> mode_val[iaxis] = numerator[iaxis] / denom[iaxis] {id=mode_val,dep=numerator:denom,dup=iaxis}
                         end
 
                         # Fix when target point coincide with a quad point
@@ -1351,17 +1351,17 @@ def interpolate_volume_potential(
                             mode_val[iaxis] = if(
                                     tplt_coord[iaxis] == barycentric_lagrange_points[mkd],
                                     if(mkd == idx[iaxis], 1, 0),
-                                    mode_val[iaxis]) {id=fix_mode_val, dep=mode_val:mode_indices, dup=mid:iaxis}
+                                    mode_val[iaxis]) {id=fix_mode_val, dep=mode_val:mode_indices, dup=iaxis}
                         end
 
                         <> prod_mode_val = product(iaxis,
-                            mode_val[iaxis]) {id=pmod,dep=fix_mode_val,dup=mid:iaxis}
-
-                        p_out[target_point_id] = p_out[target_point_id] + (
-                            mode_coeff * prod_mode_val
-                            ) {id=p_out,dep=pmod,atomic}
+                            mode_val[iaxis]) {id=pmod,dep=fix_mode_val,dup=iaxis}
 
                     end
+
+                    p_out[target_point_id] = p_out[target_point_id] + sum(mid,
+                        mode_coeff * prod_mode_val
+                        ) {id=p_out,dep=pmod,atomic}
 
                 end
 
