@@ -445,8 +445,8 @@ class ComplexFractionalKernel(ExpressionKernel):
             d = sym.make_sym_vector("d", dim)
             z = d[0] + var("I") * d[1]
             conj_z = d[0] - var("I") * d[1]
-            expr = conj_z / z
-            scaling = 1 / (4 * var("pi") * var("I"))
+            expr = var("frac_scale") * (conj_z / z)
+            scaling = 1
         else:
             raise NotImplementedError("unsupported dimensionality")
 
@@ -563,6 +563,7 @@ def compute_biharmonic_extension(
     cplx_lin_log_knl = ComplexLinearLogKernel(dim)
     cplx_lin_knl = ComplexLinearKernel(dim)
     cplx_frac_knl = ComplexFractionalKernel(dim)
+    frac_kwargs = {"frac_scale": np.complex128(-1j / (4 * np.pi))}
 
     # convolutions
     GS1 = sym.IntG(  # noqa: N806
@@ -713,6 +714,7 @@ def compute_biharmonic_extension(
         actx,
         mu=mu,
         arclength_parametrization_derivatives=obj_array_1d([xp, yp]),
+        **frac_kwargs,
     ).real
     omega_D = omega_D1 + v1  # noqa: N806
 
@@ -722,6 +724,7 @@ def compute_biharmonic_extension(
         actx,
         mu=mu,
         arclength_parametrization_derivatives=obj_array_1d([xp, yp]),
+        **frac_kwargs,
     ).real
     grad_omega_D = grad_omega_D1 + grad_v1  # noqa: N806
 
@@ -731,6 +734,7 @@ def compute_biharmonic_extension(
         actx,
         mu=mu,
         arclength_parametrization_derivatives=obj_array_1d([xp, yp]),
+        **frac_kwargs,
     ).real
     omega_D_bdry = omega_D1_bdry + v1_bdry  # noqa: N806
 

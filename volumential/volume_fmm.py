@@ -489,7 +489,7 @@ def drive_volume_fmm(
             direct_evaluation=direct_evaluation,
             timing_data=timing_data,
             reorder_sources=reorder_sources,
-            reorder_potentials=False,
+            reorder_potentials=True,
             auto_interpolate_targets=False,
             allow_list1_p2p_fallback=allow_list1_p2p_fallback,
             **kwargs,
@@ -504,7 +504,6 @@ def drive_volume_fmm(
                     source_traversal,
                     source_wrangler,
                     source_result_i,
-                    potential_in_tree_order=True,
                     use_numpy_interpolation=True,
                 )
             )
