@@ -335,12 +335,23 @@ def _build_source_only_wrangler(traversal, wrangler, queue):
             n_targets = getattr(source_tree, "ntargets", None)
             if n_targets is None:
                 targets = getattr(source_tree, "targets", None)
-                if targets is None:
-                    raise ValueError(
-                        "source-only tree is missing target count needed to rebuild "
-                        "target_to_source mapping"
-                    )
-                n_targets = len(targets[0])
+                if targets is not None:
+                    n_targets = len(targets[0])
+
+            if n_targets is None:
+                target_to_source = self_extra_kwargs["target_to_source"]
+                if hasattr(target_to_source, "size"):
+                    n_targets = int(target_to_source.size)
+                elif hasattr(target_to_source, "__len__"):
+                    n_targets = len(target_to_source)
+                elif hasattr(target_to_source, "get"):
+                    n_targets = len(target_to_source.get(queue))
+
+            if n_targets is None:
+                raise ValueError(
+                    "source-only tree is missing target count needed to rebuild "
+                    "target_to_source mapping"
+                )
 
             self_extra_kwargs["target_to_source"] = np.arange(
                 int(n_targets), dtype=np.int32
