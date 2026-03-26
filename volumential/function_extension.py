@@ -446,7 +446,7 @@ class ComplexFractionalKernel(ExpressionKernel):
             z = d[0] + var("I") * d[1]
             conj_z = d[0] - var("I") * d[1]
             expr = conj_z / z
-            scaling = np.complex128(-1j / (4 * np.pi))
+            scaling = 1 / (4 * var("pi") * var("I"))
         else:
             raise NotImplementedError("unsupported dimensionality")
 
@@ -548,18 +548,16 @@ def compute_biharmonic_extension(
         "arclength_parametrization_derivatives", dim
     )
     density_mu_sym = sym.make_sym_vector("mu", dim)
-    imag_unit = var("I")
-    imag_kwargs = {"I": np.complex128(1j)}
     dxids_sym = (
         arclength_parametrization_derivatives_sym[0]
-        + imag_unit * arclength_parametrization_derivatives_sym[1]
+        + 1j * arclength_parametrization_derivatives_sym[1]
     )
     dxids_conj_sym = (
         arclength_parametrization_derivatives_sym[0]
-        - imag_unit * arclength_parametrization_derivatives_sym[1]
+        - 1j * arclength_parametrization_derivatives_sym[1]
     )
-    density_rho_sym = density_mu_sym[1] - imag_unit * density_mu_sym[0]
-    density_conj_rho_sym = density_mu_sym[1] + imag_unit * density_mu_sym[0]
+    density_rho_sym = density_mu_sym[1] - 1j * density_mu_sym[0]
+    density_conj_rho_sym = density_mu_sym[1] + 1j * density_mu_sym[0]
 
     cplx_log_knl = ComplexLogKernel(dim)
     cplx_lin_log_knl = ComplexLinearLogKernel(dim)
@@ -628,7 +626,6 @@ def compute_biharmonic_extension(
             actx,
             mu=mu,
             arclength_parametrization_derivatives=obj_array_1d([xp, yp]),
-            **imag_kwargs,
         ).real
         for iaxis in range(dim)
     ]
@@ -676,38 +673,36 @@ def compute_biharmonic_extension(
     int_rho = (
         1
         / (8 * np.pi)
-        * bind(qbx, sym.integral(dim, dim - 1, density_rho_sym))(
-            actx, mu=mu, **imag_kwargs
-        )
+        * bind(qbx, sym.integral(dim, dim - 1, density_rho_sym))(actx, mu=mu)
     )
 
     omega_S1 = bind(  # noqa: N806
         (qbx_stick_out, target_discr), GS1
-    )(actx, mu=mu, **imag_kwargs).real
+    )(actx, mu=mu).real
     omega_S2 = (
         -1
         * bind(  # noqa: N806
             (qbx_stick_out, target_discr), GS2
-        )(actx, mu=mu, **imag_kwargs).real
+        )(actx, mu=mu).real
     )
     omega_S3 = (z_conj * int_rho).real  # noqa: N806
     omega_S = -(omega_S1 + omega_S2 + omega_S3)  # noqa: N806
 
     grad_omega_S1 = bind(  # noqa: N806
         (qbx_stick_out, target_discr), sym.grad(dim, GS1)
-    )(actx, mu=mu, **imag_kwargs).real
+    )(actx, mu=mu).real
     grad_omega_S2 = (
         -1
         * bind(  # noqa: N806
             (qbx_stick_out, target_discr), sym.grad(dim, GS2)
-        )(actx, mu=mu, **imag_kwargs).real
+        )(actx, mu=mu).real
     )
     grad_omega_S3 = obj_array_1d([int_rho.real, int_rho.imag])  # noqa: N806
     grad_omega_S = -(grad_omega_S1 + grad_omega_S2 + grad_omega_S3)  # noqa: N806
 
-    omega_S1_bdry = bind(qbx, GS1_bdry)(actx, mu=mu, **imag_kwargs).real  # noqa: N806
+    omega_S1_bdry = bind(qbx, GS1_bdry)(actx, mu=mu).real  # noqa: N806
     omega_S2_bdry = (  # noqa: N806
-        -1 * bind(qbx, GS2_bdry)(actx, mu=mu, **imag_kwargs).real
+        -1 * bind(qbx, GS2_bdry)(actx, mu=mu).real
     )
     omega_S3_bdry = (z_conj_bdry * int_rho).real  # noqa: N806
     omega_S_bdry = -(omega_S1_bdry + omega_S2_bdry + omega_S3_bdry)  # noqa: N806
@@ -718,7 +713,6 @@ def compute_biharmonic_extension(
         actx,
         mu=mu,
         arclength_parametrization_derivatives=obj_array_1d([xp, yp]),
-        **imag_kwargs,
     ).real
     omega_D = omega_D1 + v1  # noqa: N806
 
@@ -728,7 +722,6 @@ def compute_biharmonic_extension(
         actx,
         mu=mu,
         arclength_parametrization_derivatives=obj_array_1d([xp, yp]),
-        **imag_kwargs,
     ).real
     grad_omega_D = grad_omega_D1 + grad_v1  # noqa: N806
 
@@ -738,7 +731,6 @@ def compute_biharmonic_extension(
         actx,
         mu=mu,
         arclength_parametrization_derivatives=obj_array_1d([xp, yp]),
-        **imag_kwargs,
     ).real
     omega_D_bdry = omega_D1_bdry + v1_bdry  # noqa: N806
 
