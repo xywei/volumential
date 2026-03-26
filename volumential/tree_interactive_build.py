@@ -65,7 +65,28 @@ def _enforce_level_restriction(tob):
                     refine_flags[jbox] = True
 
         if not np.any(refine_flags):
-            return tob
+            box_levels = tob.box_levels
+            box_centers = tob.box_centers
+            has_children = np.any(tob.box_child_ids != 0, axis=0)
+            leaves_set = set(map(int, leaves))
+
+            for ilevel in np.unique(box_levels.astype(np.int32)):
+                level_boxes = np.where(box_levels == ilevel)[0]
+                nonleaf_level_boxes = [
+                    ibox for ibox in level_boxes if has_children[ibox]
+                ]
+                leaf_level_boxes = [ibox for ibox in level_boxes if ibox in leaves_set]
+                for ibox in nonleaf_level_boxes:
+                    for jbox in leaf_level_boxes:
+                        if ibox == jbox:
+                            continue
+                        if _are_adjacent(
+                            tob.root_extent, box_levels, box_centers, ibox, jbox
+                        ):
+                            refine_flags[jbox] = True
+
+            if not np.any(refine_flags):
+                return tob
 
         tob = refine_and_coarsen_tree_of_boxes(tob, refine_flags=refine_flags)
         tob = _rebuild_tob_from_geometry(tob)
