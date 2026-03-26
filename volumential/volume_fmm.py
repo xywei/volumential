@@ -328,6 +328,10 @@ def _build_source_only_wrangler(traversal, wrangler, queue):
         def fmm_level_to_order(kernel, kernel_args, tree, lev):
             return 12
 
+    self_extra_kwargs = getattr(wrangler, "self_extra_kwargs", None)
+    if self_extra_kwargs is not None:
+        self_extra_kwargs = dict(self_extra_kwargs)
+
     source_wrangler = type(wrangler)(
         tree_indep=wrangler.tree_indep,
         queue=queue,
@@ -339,7 +343,7 @@ def _build_source_only_wrangler(traversal, wrangler, queue):
         potential_kind=getattr(wrangler, "potential_kind", 1),
         source_extra_kwargs=getattr(wrangler, "source_extra_kwargs", None),
         kernel_extra_kwargs=getattr(wrangler, "kernel_extra_kwargs", None),
-        self_extra_kwargs={},
+        self_extra_kwargs=self_extra_kwargs,
         list1_extra_kwargs=getattr(wrangler, "list1_extra_kwargs", None),
     )
 
@@ -924,7 +928,9 @@ def _infer_tree_local_interp_points_1d(tree, traversal, q_order, queue):
     return interp_points
 
 
-def _build_box_mode_to_source_ids(tree, traversal, q_order, interp_points_1d, queue):
+def _build_box_mode_to_source_ids(
+    tree, traversal, q_order, interp_points_1d, queue, strict=False
+):
     """Map per-box lexicographic mode ids to source indices in tree order."""
     if not hasattr(traversal, "target_boxes"):
         return None
@@ -974,6 +980,7 @@ def _build_box_mode_to_source_ids(tree, traversal, q_order, interp_points_1d, qu
     expected_modes = q_order**tree.dimensions
     mode_to_source = np.arange(len(src_coords_host[0]), dtype=np.int32)
     tol = 1e-12
+    mapping_errors = []
 
     for box_id in map(int, target_boxes_host):
         start = int(box_target_starts_host[box_id])
@@ -989,18 +996,22 @@ def _build_box_mode_to_source_ids(tree, traversal, q_order, interp_points_1d, qu
 
         axis_mode_ids = []
         valid = True
+        max_dist = None
         for iaxis in range(tree.dimensions):
             tplt = (
                 src_coords_host[iaxis][start : start + count] - centers[iaxis]
             ) / extent + 0.5
             dist = np.abs(tplt[:, np.newaxis] - interp_points_1d[np.newaxis, :])
             ids = np.argmin(dist, axis=1)
-            if np.max(np.min(dist, axis=1)) > tol:
+            max_dist = float(np.max(np.min(dist, axis=1)))
+            if max_dist > tol:
                 valid = False
                 break
             axis_mode_ids.append(ids)
 
         if not valid:
+            if strict:
+                mapping_errors.append((box_id, "unmatched_interp_node", max_dist))
             continue
 
         mode_ids = axis_mode_ids[0].astype(np.int32)
@@ -1008,10 +1019,23 @@ def _build_box_mode_to_source_ids(tree, traversal, q_order, interp_points_1d, qu
             mode_ids = mode_ids * q_order + axis_mode_ids[iaxis]
 
         if len(np.unique(mode_ids)) != expected_modes:
+            if strict:
+                mapping_errors.append((box_id, "duplicate_mode_ids", None))
             continue
 
         mode_to_source[start + mode_ids] = np.arange(
             start, start + count, dtype=np.int32
+        )
+
+    if strict and mapping_errors:
+        box_id, reason, metric = mapping_errors[0]
+        if metric is None:
+            detail = reason
+        else:
+            detail = f"{reason} (max_dist={metric:.3e})"
+        raise ValueError(
+            "could not build mode-to-source ids for "
+            f"{len(mapping_errors)} box(es); first failure at box {box_id}: {detail}"
         )
 
     return cl.array.to_device(queue, mode_to_source)
@@ -1123,7 +1147,12 @@ def interpolate_volume_potential(
     use_mode_to_source_ids = bool(kwargs.pop("use_mode_to_source_ids", False))
     if use_mode_to_source_ids:
         mode_to_source_ids = _build_box_mode_to_source_ids(
-            tree, traversal, q_order, np.asarray(blpoints.get(queue)), queue
+            tree,
+            traversal,
+            q_order,
+            np.asarray(blpoints.get(queue)),
+            queue,
+            strict=True,
         )
     else:
         mode_to_source_ids = None

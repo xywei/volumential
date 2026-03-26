@@ -247,6 +247,103 @@ def test_normalize_source_fields_casts_object_matrix_rows():
     assert np.allclose(normalized[1], np.array([10.0, 20.0, 30.0]))
 
 
+def test_build_box_mode_to_source_ids_raises_in_strict_mode(monkeypatch):
+    import volumential.volume_fmm as volume_fmm
+
+    monkeypatch.setattr(volume_fmm.cl.array, "to_device", lambda queue, ary: ary)
+
+    q_order = 2
+    traversal = SimpleNamespace(
+        target_boxes=_FakeDeviceArray(np.array([0], dtype=np.int32))
+    )
+    tree = SimpleNamespace(
+        dimensions=2,
+        root_extent=1.0,
+        box_target_starts=_FakeDeviceArray(np.array([0], dtype=np.int32)),
+        box_target_counts_cumul=_FakeDeviceArray(np.array([4], dtype=np.int32)),
+        box_levels=_FakeDeviceArray(np.array([0], dtype=np.int32)),
+        box_centers=_FakeDeviceArray(np.array([[0.5], [0.5]], dtype=np.float64)),
+        sources=np.empty(2, dtype=object),
+    )
+
+    # One coordinate is deliberately off the interpolation node by O(1e-1),
+    # which should trigger strict mapping failure.
+    tree.sources[0] = _FakeDeviceArray(np.array([0.0, 0.0, 1.0, 0.9], dtype=np.float64))
+    tree.sources[1] = _FakeDeviceArray(np.array([0.0, 1.0, 0.0, 1.0], dtype=np.float64))
+
+    with pytest.raises(ValueError, match="could not build mode-to-source ids"):
+        volume_fmm._build_box_mode_to_source_ids(
+            tree=tree,
+            traversal=traversal,
+            q_order=q_order,
+            interp_points_1d=np.array([0.0, 1.0], dtype=np.float64),
+            queue=None,
+            strict=True,
+        )
+
+
+def test_build_source_only_wrangler_preserves_self_extra_kwargs(monkeypatch):
+    import volumential.volume_fmm as volume_fmm
+
+    class _DummyBoxtreeActx:
+        def __init__(self, queue):
+            self.queue = queue
+
+    class _DummyTraversalBuilder:
+        def __init__(self, actx):
+            self.actx = actx
+
+        def __call__(self, actx, source_tree):
+            return SimpleNamespace(tree=source_tree), None
+
+    monkeypatch.setattr("boxtree.array_context.PyOpenCLArrayContext", _DummyBoxtreeActx)
+    monkeypatch.setattr("boxtree.traversal.FMMTraversalBuilder", _DummyTraversalBuilder)
+
+    source_tree = object()
+    monkeypatch.setattr(
+        volume_fmm,
+        "_clone_source_side_tree_as_targets",
+        lambda tree, queue: source_tree,
+    )
+
+    class _MockWrangler:
+        def __init__(self, **kwargs):
+            if kwargs:
+                for key, value in kwargs.items():
+                    setattr(self, key, value)
+                return
+
+            self.tree_indep = object()
+            self.near_field_table = object()
+            self.dtype = np.float64
+            self.quad_order = 4
+            self.potential_kind = 1
+            self.source_extra_kwargs = {"source_scale": 2.0}
+            self.kernel_extra_kwargs = {"kernel_scale": 3.0}
+            self.self_extra_kwargs = {
+                "exclude_self": True,
+                "target_to_source": np.array([0, 1], dtype=np.int32),
+            }
+            self.list1_extra_kwargs = {"case_encoding_bias": 1.0e-10}
+            self.level_orders = (4, 5)
+
+    queue = object()
+    traversal = SimpleNamespace(tree=object())
+    wrangler = _MockWrangler()
+
+    source_traversal, source_wrangler = volume_fmm._build_source_only_wrangler(
+        traversal, wrangler, queue
+    )
+
+    assert source_traversal.tree is source_tree
+    assert source_wrangler.self_extra_kwargs is not wrangler.self_extra_kwargs
+    assert source_wrangler.self_extra_kwargs["exclude_self"] is True
+    np.testing.assert_array_equal(
+        source_wrangler.self_extra_kwargs["target_to_source"],
+        wrangler.self_extra_kwargs["target_to_source"],
+    )
+
+
 def test_volume_fmm_list1_multi_source_superposition():
     from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
     from volumential.volume_fmm import drive_volume_fmm
