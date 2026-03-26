@@ -505,6 +505,7 @@ def drive_volume_fmm(
                     source_wrangler,
                     source_result_i,
                     potential_in_tree_order=True,
+                    use_mode_to_source_ids=True,
                     use_numpy_interpolation=True,
                 )
             )
@@ -1119,9 +1120,14 @@ def interpolate_volume_potential(
         blweights = interp.wi
     blpoints = cl.array.to_device(queue, blpoints)
     blweights = cl.array.to_device(queue, blweights)
-    mode_to_source_ids = _build_box_mode_to_source_ids(
-        tree, traversal, q_order, np.asarray(blpoints.get(queue)), queue
-    )
+    use_mode_to_source_ids = bool(kwargs.pop("use_mode_to_source_ids", False))
+    if use_mode_to_source_ids:
+        mode_to_source_ids = _build_box_mode_to_source_ids(
+            tree, traversal, q_order, np.asarray(blpoints.get(queue)), queue
+        )
+    else:
+        mode_to_source_ids = None
+
     if mode_to_source_ids is None:
         mode_to_source_ids = cl.array.arange(
             queue, len(tree.sources[0]), dtype=np.int32
