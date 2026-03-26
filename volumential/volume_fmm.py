@@ -549,6 +549,78 @@ def drive_volume_fmm(
 
     # }}}
 
+    # {{{ (Optional) direct evaluation of everything and return
+    if direct_evaluation:
+        if ns > 1:
+            raise NotImplementedError(
+                "direct_evaluation=True with multiple source fields is not supported"
+            )
+
+        print("Warning: NOT USING FMM (forcing global p2p)")
+        if len(src_weights) != len(src_func):
+            print(
+                "Using P2P with different src/tgt discretizations can be "
+                "unstable when targets are close to the sources while not "
+                "be exactly the same"
+            )
+
+        from sumpy import P2P
+
+        p2p = P2P(
+            wrangler.tree_indep.target_kernels,
+            wrangler.tree_indep.exclude_self,
+            value_dtypes=[wrangler.dtype],
+        )
+
+        p2p_extra_kwargs = {}
+        if hasattr(wrangler, "kernel_extra_kwargs"):
+            p2p_extra_kwargs.update(wrangler.kernel_extra_kwargs)
+
+        p2p_queue = wrangler.tree_indep._setup_actx.queue
+
+        if queue is None:
+            raise TypeError("unable to infer command queue for direct evaluation")
+
+        (sw,) = src_weights
+        target_to_source = cl.array.to_device(
+            p2p_queue,
+            np.arange(traversal.tree.ntargets, dtype=np.int32),
+        )
+        p2p_kwargs = dict(p2p_extra_kwargs)
+        if wrangler.tree_indep.exclude_self:
+            p2p_kwargs["target_to_source"] = target_to_source
+
+        (ref_pot,) = p2p(
+            wrangler.tree_indep._setup_actx,
+            traversal.tree.targets,
+            traversal.tree.sources,
+            (sw,),
+            **p2p_kwargs,
+        )
+
+        if isinstance(wrangler, FPNDSumpyExpansionWrangler):
+            potentials = obj_array_1d([ref_pot])
+        else:
+            potentials = ref_pot
+        _debug_nan_status("global_p2p", potentials)
+
+        assert traversal.from_sep_close_smaller_starts is None
+        assert traversal.from_sep_close_bigger_starts is None
+
+        result = potentials
+        if reorder_potentials:
+            logger.debug("reorder potentials")
+            result = wrangler.reorder_potentials(result)
+
+        logger.debug("finalize potentials")
+        result = wrangler.finalize_potentials(result)
+
+        logger.info("direct p2p complete")
+
+        return result
+
+    # }}} End Stage
+
     # {{{ Direct evaluation from neighbor source boxes ("list 1")
 
     logger.debug("direct evaluation from neighbor source boxes ('list 1')")
@@ -617,87 +689,6 @@ def drive_volume_fmm(
     # these potentials are called alpha in [1]
 
     # }}}
-
-    # {{{ (Optional) direct evaluation of everything and return
-    if direct_evaluation:
-        if ns > 1:
-            raise NotImplementedError(
-                "direct_evaluation=True with multiple source fields is not supported"
-            )
-
-        print("Warning: NOT USING FMM (forcing global p2p)")
-        if len(src_weights) != len(src_func):
-            print(
-                "Using P2P with different src/tgt discretizations can be "
-                "unstable when targets are close to the sources while not "
-                "be exactly the same"
-            )
-
-        # list 2 and beyond
-        # First call global p2p, then subtract list 1
-
-        from sumpy import P2P
-
-        p2p = P2P(
-            wrangler.tree_indep.target_kernels,
-            wrangler.tree_indep.exclude_self,
-            value_dtypes=[wrangler.dtype],
-        )
-
-        p2p_extra_kwargs = {}
-        if hasattr(wrangler, "kernel_extra_kwargs"):
-            p2p_extra_kwargs.update(wrangler.kernel_extra_kwargs)
-
-        p2p_queue = wrangler.tree_indep._setup_actx.queue
-
-        if queue is None:
-            raise TypeError("unable to infer command queue for direct evaluation")
-
-        (sw,) = src_weights
-        target_to_source = cl.array.to_device(
-            p2p_queue,
-            np.arange(traversal.tree.ntargets, dtype=np.int32),
-        )
-        p2p_kwargs = dict(p2p_extra_kwargs)
-        if wrangler.tree_indep.exclude_self:
-            p2p_kwargs["target_to_source"] = target_to_source
-
-        (ref_pot,) = p2p(
-            wrangler.tree_indep._setup_actx,
-            traversal.tree.targets,
-            traversal.tree.sources,
-            (sw,),
-            **p2p_kwargs,
-        )
-
-        # For direct evaluation, use global P2P results directly.
-        # This avoids contamination from table-based list1 terms when the
-        # list1 evaluator is not numerically reliable on a given OpenCL stack.
-        if isinstance(wrangler, FPNDSumpyExpansionWrangler):
-            potentials = obj_array_1d([ref_pot])
-        else:
-            potentials = ref_pot
-        _debug_nan_status("global_p2p", potentials)
-
-        # list 3
-        assert traversal.from_sep_close_smaller_starts is None
-
-        # list 4
-        assert traversal.from_sep_close_bigger_starts is None
-
-        result = potentials
-        if reorder_potentials:
-            logger.debug("reorder potentials")
-            result = wrangler.reorder_potentials(result)
-
-        logger.debug("finalize potentials")
-        result = wrangler.finalize_potentials(result)
-
-        logger.info("direct p2p complete")
-
-        return result
-
-    # }}} End Stage
 
     # {{{ Translate separated siblings' ("list 2") mpoles to local
 
@@ -1134,13 +1125,15 @@ def interpolate_volume_potential(
             queue, len(tree.sources[0]), dtype=np.int32
         )
 
-    use_numpy_interpolation = bool(kwargs.pop("use_numpy_interpolation", True))
+    use_numpy_interpolation = bool(kwargs.pop("use_numpy_interpolation", False))
     if use_numpy_interpolation:
 
         def _to_host(ary):
             if hasattr(ary, "with_queue"):
                 return ary.with_queue(queue).get()
-            return ary.get(queue)
+            if hasattr(ary, "get"):
+                return ary.get(queue)
+            return np.asarray(ary)
 
         target_boxes_host = _to_host(traversal.target_boxes)
         balls_near_box_starts_host = _to_host(balls_near_box_starts)

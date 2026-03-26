@@ -410,7 +410,30 @@ def _rebuild_tob_from_geometry(tob):
         (int(levels[i]), tuple(int(v) for v in grid_indices[i])) for i in range(nboxes)
     ]
     if len(set(old_keys)) != nboxes:
-        raise ValueError("duplicate level/grid-index keys in tree-of-boxes")
+        unique_old_ids = []
+        key_to_pos = {}
+        has_children = np.any(np.asarray(tob.box_child_ids) != 0, axis=0)
+
+        for old_id, key in enumerate(old_keys):
+            prev_pos = key_to_pos.get(key)
+            if prev_pos is None:
+                key_to_pos[key] = len(unique_old_ids)
+                unique_old_ids.append(old_id)
+                continue
+
+            prev_old_id = unique_old_ids[prev_pos]
+            if has_children[old_id] and not has_children[prev_old_id]:
+                unique_old_ids[prev_pos] = old_id
+
+        unique_old_ids = np.asarray(unique_old_ids, dtype=np.int32)
+        levels = levels[unique_old_ids]
+        centers = centers[:, unique_old_ids]
+        grid_indices = grid_indices[unique_old_ids]
+        nboxes = int(len(unique_old_ids))
+        old_keys = [
+            (int(levels[i]), tuple(int(v) for v in grid_indices[i]))
+            for i in range(nboxes)
+        ]
 
     new_order = sorted(
         range(nboxes),

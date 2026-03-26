@@ -548,16 +548,17 @@ def compute_biharmonic_extension(
         "arclength_parametrization_derivatives", dim
     )
     density_mu_sym = sym.make_sym_vector("mu", dim)
+    imag_unit = var("I")
     dxids_sym = (
         arclength_parametrization_derivatives_sym[0]
-        + 1j * arclength_parametrization_derivatives_sym[1]
+        + imag_unit * arclength_parametrization_derivatives_sym[1]
     )
     dxids_conj_sym = (
         arclength_parametrization_derivatives_sym[0]
-        - 1j * arclength_parametrization_derivatives_sym[1]
+        - imag_unit * arclength_parametrization_derivatives_sym[1]
     )
-    density_rho_sym = density_mu_sym[1] - 1j * density_mu_sym[0]
-    density_conj_rho_sym = density_mu_sym[1] + 1j * density_mu_sym[0]
+    density_rho_sym = density_mu_sym[1] - imag_unit * density_mu_sym[0]
+    density_conj_rho_sym = density_mu_sym[1] + imag_unit * density_mu_sym[0]
 
     cplx_log_knl = ComplexLogKernel(dim)
     cplx_lin_log_knl = ComplexLinearLogKernel(dim)
