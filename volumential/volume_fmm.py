@@ -504,6 +504,7 @@ def drive_volume_fmm(
                     source_traversal,
                     source_wrangler,
                     source_result_i,
+                    use_numpy_interpolation=True,
                 )
             )
 

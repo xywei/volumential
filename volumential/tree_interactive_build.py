@@ -435,6 +435,31 @@ def _rebuild_tob_from_geometry(tob):
             for i in range(nboxes)
         ]
 
+    key_set = set(old_keys)
+    valid_old_ids = []
+    for old_id, key in enumerate(old_keys):
+        level, idx = key
+        parent_idx = idx
+        valid = True
+        for lev in range(level, 0, -1):
+            parent_idx = tuple(v // 2 for v in parent_idx)
+            if (lev - 1, parent_idx) not in key_set:
+                valid = False
+                break
+        if valid:
+            valid_old_ids.append(old_id)
+
+    if len(valid_old_ids) != nboxes:
+        valid_old_ids = np.asarray(valid_old_ids, dtype=np.int32)
+        levels = levels[valid_old_ids]
+        centers = centers[:, valid_old_ids]
+        grid_indices = grid_indices[valid_old_ids]
+        nboxes = int(len(valid_old_ids))
+        old_keys = [
+            (int(levels[i]), tuple(int(v) for v in grid_indices[i]))
+            for i in range(nboxes)
+        ]
+
     new_order = sorted(
         range(nboxes),
         key=lambda i: (int(levels[i]),) + tuple(int(v) for v in grid_indices[i]),
