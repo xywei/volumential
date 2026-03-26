@@ -177,10 +177,10 @@ def compute_harmonic_extension(
     density_discr,
     f,
     loc_sign=1,
-    representation_mode="auto",
     target_association_tolerance=0.05,
     gmres_tolerance=1e-14,
     actx=None,
+    representation_mode="auto",
 ):
     """Harmonic extension.
 
@@ -502,10 +502,10 @@ def compute_biharmonic_extension(
     f,
     fx,
     fy,
-    loc_sign=1,
     target_association_tolerance=0.05,
     enforce_affine_match=False,
     actx=None,
+    loc_sign=1,
 ):
     """Biharmoc extension. Currently only support
     2D domains.
