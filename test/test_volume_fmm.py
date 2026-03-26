@@ -281,6 +281,46 @@ def test_build_box_mode_to_source_ids_raises_on_unmatched_nodes(monkeypatch):
         )
 
 
+def test_build_box_mode_to_source_ids_accepts_float32_roundoff(monkeypatch):
+    import volumential.volume_fmm as volume_fmm
+
+    monkeypatch.setattr(volume_fmm.cl.array, "to_device", lambda queue, ary: ary)
+
+    q_order = 2
+    traversal = SimpleNamespace(
+        target_boxes=_FakeDeviceArray(np.array([0], dtype=np.int32))
+    )
+    tree = SimpleNamespace(
+        dimensions=2,
+        root_extent=np.float32(1.0),
+        box_target_starts=_FakeDeviceArray(np.array([0], dtype=np.int32)),
+        box_target_counts_cumul=_FakeDeviceArray(np.array([4], dtype=np.int32)),
+        box_levels=_FakeDeviceArray(np.array([0], dtype=np.int32)),
+        box_centers=_FakeDeviceArray(np.array([[0.5], [0.5]], dtype=np.float32)),
+        sources=np.empty(2, dtype=object),
+    )
+
+    # Valid tensor-product nodes in float32 with small coordinate drift that is
+    # larger than 1e-12 but should be accepted for float32 matching.
+    drift = np.float32(5.0e-7)
+    tree.sources[0] = _FakeDeviceArray(
+        np.array([0.0 + drift, 0.0 + drift, 1.0 - drift, 1.0 - drift], dtype=np.float32)
+    )
+    tree.sources[1] = _FakeDeviceArray(
+        np.array([0.0 + drift, 1.0 - drift, 0.0 + drift, 1.0 - drift], dtype=np.float32)
+    )
+
+    mode_to_source = volume_fmm._build_box_mode_to_source_ids(
+        tree=tree,
+        traversal=traversal,
+        q_order=q_order,
+        interp_points_1d=np.array([0.0, 1.0], dtype=np.float32),
+        queue=None,
+    )
+
+    np.testing.assert_array_equal(mode_to_source, np.arange(4, dtype=np.int32))
+
+
 def test_build_source_only_wrangler_preserves_self_extra_kwargs(monkeypatch):
     import volumential.volume_fmm as volume_fmm
 

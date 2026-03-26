@@ -928,7 +928,9 @@ def _infer_tree_local_interp_points_1d(tree, traversal, q_order, queue):
     return interp_points
 
 
-def _build_box_mode_to_source_ids(tree, traversal, q_order, interp_points_1d, queue):
+def _build_box_mode_to_source_ids(
+    tree, traversal, q_order, interp_points_1d, queue, match_tol=None
+):
     """Map per-box lexicographic mode ids to source indices in tree order."""
     if not hasattr(traversal, "target_boxes"):
         return None
@@ -977,7 +979,17 @@ def _build_box_mode_to_source_ids(tree, traversal, q_order, interp_points_1d, qu
 
     expected_modes = q_order**tree.dimensions
     mode_to_source = np.arange(len(src_coords_host[0]), dtype=np.int32)
-    tol = 1e-12
+
+    if match_tol is None:
+        common_dtype = np.result_type(
+            interp_points_1d.dtype, *[c.dtype for c in src_coords_host]
+        )
+        if np.issubdtype(common_dtype, np.floating):
+            tol = max(1e-12, 32 * float(np.finfo(common_dtype).eps))
+        else:
+            tol = 1e-12
+    else:
+        tol = float(match_tol)
 
     for box_id in map(int, target_boxes_host):
         start = int(box_target_starts_host[box_id])
@@ -1009,7 +1021,8 @@ def _build_box_mode_to_source_ids(tree, traversal, q_order, interp_points_1d, qu
         if not valid:
             raise ValueError(
                 "could not build mode-to-source ids for box "
-                f"{box_id}: unmatched_interp_node (max_dist={max_dist:.3e})"
+                f"{box_id}: unmatched_interp_node "
+                f"(max_dist={max_dist:.3e}, tol={tol:.3e})"
             )
 
         mode_ids = axis_mode_ids[0].astype(np.int32)
@@ -1134,12 +1147,14 @@ def interpolate_volume_potential(
     blweights = cl.array.to_device(queue, blweights)
     use_mode_to_source_ids = bool(kwargs.pop("use_mode_to_source_ids", False))
     if use_mode_to_source_ids:
+        mode_to_source_match_tol = kwargs.pop("mode_to_source_match_tol", None)
         mode_to_source_ids = _build_box_mode_to_source_ids(
             tree,
             traversal,
             q_order,
             np.asarray(blpoints.get(queue)),
             queue,
+            match_tol=mode_to_source_match_tol,
         )
     else:
         mode_to_source_ids = None
