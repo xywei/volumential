@@ -505,7 +505,6 @@ def drive_volume_fmm(
                     source_wrangler,
                     source_result_i,
                     potential_in_tree_order=True,
-                    use_numpy_interpolation=True,
                 )
             )
 

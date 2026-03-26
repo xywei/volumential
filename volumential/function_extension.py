@@ -445,8 +445,8 @@ class ComplexFractionalKernel(ExpressionKernel):
             d = sym.make_sym_vector("d", dim)
             z = d[0] + var("I") * d[1]
             conj_z = d[0] - var("I") * d[1]
-            expr = conj_z / z
-            scaling = np.complex128(-1j / (4 * np.pi))
+            expr = -var("I") * (conj_z / z)
+            scaling = 1 / (4 * var("pi"))
         else:
             raise NotImplementedError("unsupported dimensionality")
 
