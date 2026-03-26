@@ -980,7 +980,6 @@ def _build_box_mode_to_source_ids(
     expected_modes = q_order**tree.dimensions
     mode_to_source = np.arange(len(src_coords_host[0]), dtype=np.int32)
     tol = 1e-12
-    mapping_errors = []
 
     for box_id in map(int, target_boxes_host):
         start = int(box_target_starts_host[box_id])
@@ -1011,7 +1010,10 @@ def _build_box_mode_to_source_ids(
 
         if not valid:
             if strict:
-                mapping_errors.append((box_id, "unmatched_interp_node", max_dist))
+                raise ValueError(
+                    "could not build mode-to-source ids for box "
+                    f"{box_id}: unmatched_interp_node (max_dist={max_dist:.3e})"
+                )
             continue
 
         mode_ids = axis_mode_ids[0].astype(np.int32)
@@ -1020,22 +1022,14 @@ def _build_box_mode_to_source_ids(
 
         if len(np.unique(mode_ids)) != expected_modes:
             if strict:
-                mapping_errors.append((box_id, "duplicate_mode_ids", None))
+                raise ValueError(
+                    "could not build mode-to-source ids for box "
+                    f"{box_id}: duplicate_mode_ids"
+                )
             continue
 
         mode_to_source[start + mode_ids] = np.arange(
             start, start + count, dtype=np.int32
-        )
-
-    if strict and mapping_errors:
-        box_id, reason, metric = mapping_errors[0]
-        if metric is None:
-            detail = reason
-        else:
-            detail = f"{reason} (max_dist={metric:.3e})"
-        raise ValueError(
-            "could not build mode-to-source ids for "
-            f"{len(mapping_errors)} box(es); first failure at box {box_id}: {detail}"
         )
 
     return cl.array.to_device(queue, mode_to_source)
