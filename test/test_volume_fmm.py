@@ -247,7 +247,7 @@ def test_normalize_source_fields_casts_object_matrix_rows():
     assert np.allclose(normalized[1], np.array([10.0, 20.0, 30.0]))
 
 
-def test_build_box_mode_to_source_ids_raises_in_strict_mode(monkeypatch):
+def test_build_box_mode_to_source_ids_raises_on_unmatched_nodes(monkeypatch):
     import volumential.volume_fmm as volume_fmm
 
     monkeypatch.setattr(volume_fmm.cl.array, "to_device", lambda queue, ary: ary)
@@ -278,7 +278,6 @@ def test_build_box_mode_to_source_ids_raises_in_strict_mode(monkeypatch):
             q_order=q_order,
             interp_points_1d=np.array([0.0, 1.0], dtype=np.float64),
             queue=None,
-            strict=True,
         )
 
 

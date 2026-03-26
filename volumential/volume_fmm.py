@@ -928,9 +928,7 @@ def _infer_tree_local_interp_points_1d(tree, traversal, q_order, queue):
     return interp_points
 
 
-def _build_box_mode_to_source_ids(
-    tree, traversal, q_order, interp_points_1d, queue, strict=False
-):
+def _build_box_mode_to_source_ids(tree, traversal, q_order, interp_points_1d, queue):
     """Map per-box lexicographic mode ids to source indices in tree order."""
     if not hasattr(traversal, "target_boxes"):
         return None
@@ -1009,24 +1007,20 @@ def _build_box_mode_to_source_ids(
             axis_mode_ids.append(ids)
 
         if not valid:
-            if strict:
-                raise ValueError(
-                    "could not build mode-to-source ids for box "
-                    f"{box_id}: unmatched_interp_node (max_dist={max_dist:.3e})"
-                )
-            continue
+            raise ValueError(
+                "could not build mode-to-source ids for box "
+                f"{box_id}: unmatched_interp_node (max_dist={max_dist:.3e})"
+            )
 
         mode_ids = axis_mode_ids[0].astype(np.int32)
         for iaxis in range(1, tree.dimensions):
             mode_ids = mode_ids * q_order + axis_mode_ids[iaxis]
 
         if len(np.unique(mode_ids)) != expected_modes:
-            if strict:
-                raise ValueError(
-                    "could not build mode-to-source ids for box "
-                    f"{box_id}: duplicate_mode_ids"
-                )
-            continue
+            raise ValueError(
+                "could not build mode-to-source ids for box "
+                f"{box_id}: duplicate_mode_ids"
+            )
 
         mode_to_source[start + mode_ids] = np.arange(
             start, start + count, dtype=np.int32
@@ -1146,7 +1140,6 @@ def interpolate_volume_potential(
             q_order,
             np.asarray(blpoints.get(queue)),
             queue,
-            strict=True,
         )
     else:
         mode_to_source_ids = None
