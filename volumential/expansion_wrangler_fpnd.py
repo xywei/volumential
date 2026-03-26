@@ -108,6 +108,57 @@ def _validate_table_box_particle_layout(
     )
 
 
+def _array_layout_cache_token(ary):
+    if isinstance(ary, cl.array.Array):
+        base_data = getattr(ary, "base_data", None)
+        int_ptr = getattr(base_data, "int_ptr", None)
+        if int_ptr is not None:
+            return (
+                "cl",
+                int(int_ptr),
+                int(getattr(ary, "offset", 0)),
+                int(ary.size),
+                ary.dtype.str,
+            )
+    return ("py", id(ary))
+
+
+def _validate_table_box_particle_layout_cached(
+    queue,
+    tree,
+    target_boxes,
+    source_boxes,
+    n_q_points,
+    validation_cache,
+):
+    if validation_cache is None:
+        _validate_table_box_particle_layout(
+            queue,
+            tree,
+            target_boxes,
+            source_boxes,
+            n_q_points,
+        )
+        return
+
+    cache_key = (
+        _array_layout_cache_token(target_boxes),
+        _array_layout_cache_token(source_boxes),
+        int(n_q_points),
+    )
+    if cache_key in validation_cache:
+        return
+
+    _validate_table_box_particle_layout(
+        queue,
+        tree,
+        target_boxes,
+        source_boxes,
+        n_q_points,
+    )
+    validation_cache.add(cache_key)
+
+
 class SumpyTimingFuture:
     def __init__(self, queue, events):
         self.queue = queue
@@ -527,6 +578,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         if list1_extra_kwargs is None:
             list1_extra_kwargs = {}
         self.list1_extra_kwargs = list1_extra_kwargs
+        self._table_layout_validation_cache = set()
 
     # }}} End constructor
 
@@ -696,12 +748,13 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             queue, self.tree, self.near_field_table[kname][0].n_q_points
         )
 
-        _validate_table_box_particle_layout(
+        _validate_table_box_particle_layout_cached(
             queue,
             self.tree,
             target_boxes,
             neighbor_source_boxes_lists,
             self.near_field_table[kname][0].n_q_points,
+            self._table_layout_validation_cache,
         )
 
         aligned_nboxes = self.tree.box_centers.shape[1]
@@ -1191,6 +1244,7 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
             list1_extra_kwargs = {}
 
         self.list1_extra_kwargs = list1_extra_kwargs
+        self._table_layout_validation_cache = set()
 
         # }}} End table setup
 
@@ -1415,12 +1469,13 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
             self.queue, self.tree, self.near_field_table[kname][0].n_q_points
         )
 
-        _validate_table_box_particle_layout(
+        _validate_table_box_particle_layout_cached(
             self.queue,
             self.tree,
             target_boxes,
             neighbor_source_boxes_lists,
             self.near_field_table[kname][0].n_q_points,
+            self._table_layout_validation_cache,
         )
 
         aligned_nboxes = self.tree.box_centers.shape[1]

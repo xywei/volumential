@@ -100,6 +100,78 @@ def test_validate_table_box_particle_layout_rejects_non_q_order_layout():
         )
 
 
+def test_validate_table_box_particle_layout_cached_reuses_result(monkeypatch):
+    import volumential.expansion_wrangler_fpnd as wrangler_mod
+
+    calls = []
+
+    def _fake_validate(queue, tree, target_boxes, source_boxes, n_q_points):
+        calls.append((id(target_boxes), id(source_boxes), int(n_q_points)))
+
+    monkeypatch.setattr(
+        wrangler_mod, "_validate_table_box_particle_layout", _fake_validate
+    )
+
+    target_boxes = np.array([0, 1], dtype=np.int32)
+    source_boxes = np.array([1, 2, 3], dtype=np.int32)
+    cache = set()
+
+    wrangler_mod._validate_table_box_particle_layout_cached(
+        queue=None,
+        tree=object(),
+        target_boxes=target_boxes,
+        source_boxes=source_boxes,
+        n_q_points=16,
+        validation_cache=cache,
+    )
+    wrangler_mod._validate_table_box_particle_layout_cached(
+        queue=None,
+        tree=object(),
+        target_boxes=target_boxes,
+        source_boxes=source_boxes,
+        n_q_points=16,
+        validation_cache=cache,
+    )
+
+    assert len(calls) == 1
+
+
+def test_validate_table_box_particle_layout_cached_separates_q_order(monkeypatch):
+    import volumential.expansion_wrangler_fpnd as wrangler_mod
+
+    calls = []
+
+    def _fake_validate(queue, tree, target_boxes, source_boxes, n_q_points):
+        calls.append(int(n_q_points))
+
+    monkeypatch.setattr(
+        wrangler_mod, "_validate_table_box_particle_layout", _fake_validate
+    )
+
+    target_boxes = np.array([0], dtype=np.int32)
+    source_boxes = np.array([0], dtype=np.int32)
+    cache = set()
+
+    wrangler_mod._validate_table_box_particle_layout_cached(
+        queue=None,
+        tree=object(),
+        target_boxes=target_boxes,
+        source_boxes=source_boxes,
+        n_q_points=16,
+        validation_cache=cache,
+    )
+    wrangler_mod._validate_table_box_particle_layout_cached(
+        queue=None,
+        tree=object(),
+        target_boxes=target_boxes,
+        source_boxes=source_boxes,
+        n_q_points=25,
+        validation_cache=cache,
+    )
+
+    assert calls == [16, 25]
+
+
 def test_rebuild_tob_from_geometry_restores_unit_level_edges():
     from boxtree import make_tree_of_boxes_root, refine_and_coarsen_tree_of_boxes
 
