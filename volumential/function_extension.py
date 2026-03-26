@@ -41,6 +41,8 @@ import logging
 import numpy as np
 
 import pyopencl as cl
+from arraycontext import flatten
+from meshmode.dof_array import DOFArray
 from pymbolic import var
 from pytential import GeometryCollection, bind, sym
 from pytential.array_context import PyOpenCLArrayContext
@@ -175,15 +177,18 @@ def compute_harmonic_extension(
     density_discr,
     f,
     loc_sign=1,
+    representation_mode="auto",
     target_association_tolerance=0.05,
     gmres_tolerance=1e-14,
     actx=None,
 ):
     """Harmonic extension.
 
-    :param: loc_sign indicates the domain for extension,
-            which equals to the negation of the loc_sign
-            for the original problem.
+    :param loc_sign: Indicates the domain for extension,
+        which equals the negation of the loc_sign for the original problem.
+    :param representation_mode: One of "auto", "s_plus_d", "d_only".
+        "auto" uses D-only for interior extension (loc_sign=-1) and S+D
+        otherwise.
     """
     dim = qbx.ambient_dim
     actx = setup_array_context(actx=actx, queue=queue)
@@ -204,10 +209,26 @@ def compute_harmonic_extension(
     sqrt_w = 1
     inv_sqrt_w_sigma = cse(sigma_sym / sqrt_w)
 
-    bdry_op_sym = loc_sign * 0.5 * sigma_sym + sqrt_w * (
-        sym.S(kernel, inv_sqrt_w_sigma, qbx_forced_limit="avg")
-        + sym.D(kernel, inv_sqrt_w_sigma, qbx_forced_limit="avg")
-    )
+    if representation_mode == "auto":
+        use_d_only = loc_sign == -1
+    elif representation_mode == "d_only":
+        use_d_only = True
+    elif representation_mode == "s_plus_d":
+        use_d_only = False
+    else:
+        raise ValueError(
+            "representation_mode must be one of 'auto', 's_plus_d', 'd_only'"
+        )
+
+    if use_d_only:
+        bdry_op_sym = loc_sign * 0.5 * sigma_sym + sqrt_w * sym.D(
+            kernel, inv_sqrt_w_sigma, qbx_forced_limit="avg"
+        )
+    else:
+        bdry_op_sym = loc_sign * 0.5 * sigma_sym + sqrt_w * (
+            sym.S(kernel, inv_sqrt_w_sigma, qbx_forced_limit="avg")
+            + sym.D(kernel, inv_sqrt_w_sigma, qbx_forced_limit="avg")
+        )
 
     # }}}
 
@@ -240,13 +261,17 @@ def compute_harmonic_extension(
     # {{{ postprocess
 
     repr_kwargs = {"qbx_forced_limit": None}
-    representation_sym = sym.S(kernel, inv_sqrt_w_sigma, **repr_kwargs) + sym.D(
-        kernel, inv_sqrt_w_sigma, **repr_kwargs
-    )
+    if use_d_only:
+        representation_sym = sym.D(kernel, inv_sqrt_w_sigma, **repr_kwargs)
+    else:
+        representation_sym = sym.S(kernel, inv_sqrt_w_sigma, **repr_kwargs) + sym.D(
+            kernel, inv_sqrt_w_sigma, **repr_kwargs
+        )
 
     debugging_info["qbx"] = qbx_stick_out
     debugging_info["places"] = places
     debugging_info["representation"] = representation_sym
+    debugging_info["representation_mode"] = "d_only" if use_d_only else "s_plus_d"
     debugging_info["density"] = sigma
 
     ext_f = bind(
@@ -307,6 +332,7 @@ def compute_harmonic_extension(
 
 class ComplexLogKernel(ExpressionKernel):
     init_arg_names = ("dim",)
+    is_complex_valued = True
 
     def __init__(self, dim=None):
         if dim == 2:
@@ -319,9 +345,7 @@ class ComplexLogKernel(ExpressionKernel):
         else:
             raise NotImplementedError("unsupported dimensionality")
 
-        super().__init__(
-            dim, expression=expr, global_scaling_const=scaling, is_complex_valued=True
-        )
+        super().__init__(dim, expression=expr, global_scaling_const=scaling)
 
     has_efficient_scale_adjustment = True
 
@@ -351,6 +375,7 @@ class ComplexLogKernel(ExpressionKernel):
 
 class ComplexLinearLogKernel(ExpressionKernel):
     init_arg_names = ("dim",)
+    is_complex_valued = True
     has_efficient_scale_adjustment = False
 
     def __init__(self, dim=None):
@@ -364,9 +389,7 @@ class ComplexLinearLogKernel(ExpressionKernel):
         else:
             raise NotImplementedError("unsupported dimensionality")
 
-        super().__init__(
-            dim, expression=expr, global_scaling_const=scaling, is_complex_valued=True
-        )
+        super().__init__(dim, expression=expr, global_scaling_const=scaling)
 
     def __getinitargs__(self):
         return (self.dim,)
@@ -379,6 +402,7 @@ class ComplexLinearLogKernel(ExpressionKernel):
 
 class ComplexLinearKernel(ExpressionKernel):
     init_arg_names = ("dim",)
+    is_complex_valued = True
     has_efficient_scale_adjustment = False
 
     def __init__(self, dim=None):
@@ -390,9 +414,7 @@ class ComplexLinearKernel(ExpressionKernel):
         else:
             raise NotImplementedError("unsupported dimensionality")
 
-        super().__init__(
-            dim, expression=expr, global_scaling_const=scaling, is_complex_valued=True
-        )
+        super().__init__(dim, expression=expr, global_scaling_const=scaling)
 
     has_efficient_scale_adjustment = True
 
@@ -415,6 +437,7 @@ class ComplexLinearKernel(ExpressionKernel):
 
 class ComplexFractionalKernel(ExpressionKernel):
     init_arg_names = ("dim",)
+    is_complex_valued = True
     has_efficient_scale_adjustment = False
 
     def __init__(self, dim=None):
@@ -427,9 +450,7 @@ class ComplexFractionalKernel(ExpressionKernel):
         else:
             raise NotImplementedError("unsupported dimensionality")
 
-        super().__init__(
-            dim, expression=expr, global_scaling_const=scaling, is_complex_valued=True
-        )
+        super().__init__(dim, expression=expr, global_scaling_const=scaling)
 
     def __getinitargs__(self):
         return (self.dim,)
@@ -481,32 +502,47 @@ def compute_biharmonic_extension(
     f,
     fx,
     fy,
+    loc_sign=1,
     target_association_tolerance=0.05,
+    enforce_affine_match=False,
+    actx=None,
 ):
     """Biharmoc extension. Currently only support
-    interior domains in 2D (i.e., extension is on the exterior).
+    2D domains.
+
+    :param loc_sign: Side for extension evaluation, following the same
+        convention used by pytential layer potentials.
+        ``+1`` evaluates the exterior side and ``-1`` evaluates the
+        interior side.
+    :param enforce_affine_match: If *True*, perform a boundary least-squares
+        affine correction.
     """
     # pylint: disable=invalid-unary-operand-type
     dim = 2
+    actx = setup_array_context(actx=actx, queue=queue)
     queue = setup_command_queue(queue=queue)
-    qbx_forced_limit = 1
 
-    normal = get_normal_vectors(queue, density_discr, loc_sign=1)
+    if loc_sign not in (-1, 1):
+        raise ValueError("loc_sign must be -1 or +1")
 
-    bdry_op_sym = get_extension_bie_symbolic_operator(loc_sign=1)
+    qbx_forced_limit = loc_sign
+
+    normal = get_normal_vectors(actx, density_discr, loc_sign=loc_sign)
+
+    bdry_op_sym = get_extension_bie_symbolic_operator(loc_sign=loc_sign)
     bound_op = bind(qbx, bdry_op_sym)
 
     bc = [fy, -fx]
-    bvp_rhs = bind(qbx, sym.make_sym_vector("bc", dim))(queue, bc=bc)
-    gmres_result = gmres(
-        bound_op.scipy_op(queue, "sigma", np.float64, mu=1.0, normal=normal),
+    bvp_rhs = bind(qbx, sym.make_sym_vector("bc", dim))(actx, bc=bc)
+    gmres_result_mu = gmres(
+        bound_op.scipy_op(actx, "sigma", np.float64, mu=1.0, normal=normal),
         bvp_rhs,
         tol=1e-9,
         progress=True,
         stall_iterations=0,
         hard_failure=True,
     )
-    mu = gmres_result.solution
+    mu = gmres_result_mu.solution
 
     arclength_parametrization_derivatives_sym = sym.make_sym_vector(
         "arclength_parametrization_derivatives", dim
@@ -523,43 +559,63 @@ def compute_biharmonic_extension(
     density_rho_sym = density_mu_sym[1] - 1j * density_mu_sym[0]
     density_conj_rho_sym = density_mu_sym[1] + 1j * density_mu_sym[0]
 
+    cplx_log_knl = ComplexLogKernel(dim)
+    cplx_lin_log_knl = ComplexLinearLogKernel(dim)
+    cplx_lin_knl = ComplexLinearKernel(dim)
+    cplx_frac_knl = ComplexFractionalKernel(dim)
+
     # convolutions
     GS1 = sym.IntG(  # noqa: N806
-        ComplexLinearLogKernel(dim), density_rho_sym, qbx_forced_limit=None
+        cplx_lin_log_knl,
+        [cplx_lin_log_knl],
+        [density_rho_sym],
+        qbx_forced_limit=None,
     )
     GS2 = sym.IntG(  # noqa: N806
-        ComplexLinearKernel(dim), density_conj_rho_sym, qbx_forced_limit=None
+        cplx_lin_knl,
+        [cplx_lin_knl],
+        [density_conj_rho_sym],
+        qbx_forced_limit=None,
     )
     GD1 = sym.IntG(  # noqa: N806
-        ComplexFractionalKernel(dim), density_rho_sym * dxids_sym, qbx_forced_limit=None
+        cplx_frac_knl,
+        [cplx_frac_knl],
+        [density_rho_sym * dxids_sym],
+        qbx_forced_limit=None,
     )
     GD2 = [
         sym.IntG(  # noqa: N806
             AxisTargetDerivative(iaxis, ComplexLogKernel(dim)),
-            density_conj_rho_sym * dxids_sym + density_rho_sym * dxids_conj_sym,
+            [cplx_log_knl],
+            [density_conj_rho_sym * dxids_sym + density_rho_sym * dxids_conj_sym],
             qbx_forced_limit=qbx_forced_limit,
         )
         for iaxis in range(dim)
     ]
 
     GS1_bdry = sym.IntG(  # noqa: N806
-        ComplexLinearLogKernel(dim), density_rho_sym, qbx_forced_limit=qbx_forced_limit
+        cplx_lin_log_knl,
+        [cplx_lin_log_knl],
+        [density_rho_sym],
+        qbx_forced_limit=qbx_forced_limit,
     )
     GS2_bdry = sym.IntG(  # noqa: N806
-        ComplexLinearKernel(dim),
-        density_conj_rho_sym,
+        cplx_lin_knl,
+        [cplx_lin_knl],
+        [density_conj_rho_sym],
         qbx_forced_limit=qbx_forced_limit,
     )
     GD1_bdry = sym.IntG(  # noqa: N806
-        ComplexFractionalKernel(dim),
-        density_rho_sym * dxids_sym,
+        cplx_frac_knl,
+        [cplx_frac_knl],
+        [density_rho_sym * dxids_sym],
         qbx_forced_limit=qbx_forced_limit,
     )
 
-    xp, yp = get_arclength_parametrization_derivative(queue, density_discr)
+    xp, yp = get_arclength_parametrization_derivative(actx, density_discr)
     xp = -xp
     yp = -yp
-    tangent = get_tangent_vectors(queue, density_discr, loc_sign=qbx_forced_limit)
+    tangent = get_tangent_vectors(actx, density_discr, loc_sign=qbx_forced_limit)
 
     # check and fix the direction of parametrization
     # logger.info("Fix all negative signs in:" +
@@ -567,7 +623,7 @@ def compute_biharmonic_extension(
 
     grad_v2 = [
         bind(qbx, GD2[iaxis])(
-            queue, mu=mu, arclength_parametrization_derivatives=obj_array_1d([xp, yp])
+            actx, mu=mu, arclength_parametrization_derivatives=obj_array_1d([xp, yp])
         ).real
         for iaxis in range(dim)
     ]
@@ -578,22 +634,23 @@ def compute_biharmonic_extension(
 
     operator_v1 = NeumannOperator(LaplaceKernel(dim), loc_sign=qbx_forced_limit)
     bound_op_v1 = bind(qbx, operator_v1.operator(var("sigma")))
-    # FIXME: the positive sign works here
-    rhs_v1 = operator_v1.prepare_rhs(1 * v2_tangent_der)
-    gmres_result = gmres(
-        bound_op_v1.scipy_op(queue, "sigma", dtype=np.float64),
+    # Sign convention: v1 solves a Neumann problem that cancels the tangential
+    # derivative contribution from v2 on the extension side.
+    rhs_v1 = operator_v1.prepare_rhs(-1 * v2_tangent_der)
+    gmres_result_sigma = gmres(
+        bound_op_v1.scipy_op(actx, "sigma", dtype=np.float64),
         rhs_v1,
         tol=1e-9,
         progress=True,
         stall_iterations=0,
         hard_failure=True,
     )
-    sigma = gmres_result.solution
+    sigma = gmres_result_sigma.solution
     qbx_stick_out = qbx.copy(target_association_tolerance=target_association_tolerance)
     v1 = bind(
         (qbx_stick_out, target_discr),
         operator_v1.representation(var("sigma"), qbx_forced_limit=None),
-    )(queue, sigma=sigma)
+    )(actx, sigma=sigma)
     grad_v1 = bind(
         (qbx_stick_out, target_discr),
         operator_v1.representation(
@@ -601,86 +658,86 @@ def compute_biharmonic_extension(
             qbx_forced_limit=None,
             map_potentials=lambda pot: sym.grad(dim, pot),
         ),
-    )(queue, sigma=sigma)
+    )(actx, sigma=sigma)
     v1_bdry = bind(
         qbx, operator_v1.representation(var("sigma"), qbx_forced_limit=qbx_forced_limit)
-    )(queue, sigma=sigma)
+    )(actx, sigma=sigma)
 
-    z_conj = target_discr.nodes()[0] - 1j * target_discr.nodes()[1]
-    z_conj_bdry = (
-        density_discr.nodes().with_queue(queue)[0]
-        - 1j * density_discr.nodes().with_queue(queue)[1]
-    )
+    target_nodes = actx.thaw(target_discr.nodes())
+    density_nodes = actx.thaw(density_discr.nodes())
+
+    z_conj = target_nodes[0] - 1j * target_nodes[1]
+    z_conj_bdry = density_nodes[0] - 1j * density_nodes[1]
     int_rho = (
         1
         / (8 * np.pi)
-        * bind(qbx, sym.integral(dim, dim - 1, density_rho_sym))(queue, mu=mu)
+        * bind(qbx, sym.integral(dim, dim - 1, density_rho_sym))(actx, mu=mu)
     )
 
     omega_S1 = bind(  # noqa: N806
         (qbx_stick_out, target_discr), GS1
-    )(queue, mu=mu).real
+    )(actx, mu=mu).real
     omega_S2 = (
         -1
         * bind(  # noqa: N806
             (qbx_stick_out, target_discr), GS2
-        )(queue, mu=mu).real
+        )(actx, mu=mu).real
     )
     omega_S3 = (z_conj * int_rho).real  # noqa: N806
     omega_S = -(omega_S1 + omega_S2 + omega_S3)  # noqa: N806
 
     grad_omega_S1 = bind(  # noqa: N806
         (qbx_stick_out, target_discr), sym.grad(dim, GS1)
-    )(queue, mu=mu).real
+    )(actx, mu=mu).real
     grad_omega_S2 = (
         -1
         * bind(  # noqa: N806
             (qbx_stick_out, target_discr), sym.grad(dim, GS2)
-        )(queue, mu=mu).real
+        )(actx, mu=mu).real
     )
-    grad_omega_S3 = (int_rho * obj_array_1d([1.0, -1.0])).real  # noqa: N806
+    grad_omega_S3 = obj_array_1d([int_rho.real, int_rho.imag])  # noqa: N806
     grad_omega_S = -(grad_omega_S1 + grad_omega_S2 + grad_omega_S3)  # noqa: N806
 
-    omega_S1_bdry = bind(qbx, GS1_bdry)(queue, mu=mu).real  # noqa: N806
-    omega_S2_bdry = -1 * bind(qbx, GS2_bdry)(queue, mu=mu).real  # noqa: N806
+    omega_S1_bdry = bind(qbx, GS1_bdry)(actx, mu=mu).real  # noqa: N806
+    omega_S2_bdry = -1 * bind(qbx, GS2_bdry)(actx, mu=mu).real  # noqa: N806
     omega_S3_bdry = (z_conj_bdry * int_rho).real  # noqa: N806
     omega_S_bdry = -(omega_S1_bdry + omega_S2_bdry + omega_S3_bdry)  # noqa: N806
 
     omega_D1 = bind(  # noqa: N806
         (qbx_stick_out, target_discr), GD1
-    )(queue, mu=mu, arclength_parametrization_derivatives=obj_array_1d([xp, yp])).real
+    )(actx, mu=mu, arclength_parametrization_derivatives=obj_array_1d([xp, yp])).real
     omega_D = omega_D1 + v1  # noqa: N806
 
     grad_omega_D1 = bind(  # noqa: N806
         (qbx_stick_out, target_discr), sym.grad(dim, GD1)
-    )(queue, mu=mu, arclength_parametrization_derivatives=obj_array_1d([xp, yp])).real
+    )(actx, mu=mu, arclength_parametrization_derivatives=obj_array_1d([xp, yp])).real
     grad_omega_D = grad_omega_D1 + grad_v1  # noqa: N806
 
     omega_D1_bdry = bind(  # noqa: N806
         qbx, GD1_bdry
-    )(queue, mu=mu, arclength_parametrization_derivatives=obj_array_1d([xp, yp])).real
+    )(actx, mu=mu, arclength_parametrization_derivatives=obj_array_1d([xp, yp])).real
     omega_D_bdry = omega_D1_bdry + v1_bdry  # noqa: N806
 
     int_bdry_mu = bind(qbx, sym.integral(dim, dim - 1, sym.make_sym_vector("mu", dim)))(
-        queue, mu=mu
+        actx, mu=mu
     )
     omega_W = (  # noqa: N806
-        int_bdry_mu[0] * target_discr.nodes()[1]
-        - int_bdry_mu[1] * target_discr.nodes()[0]
+        int_bdry_mu[0] * target_nodes[1] - int_bdry_mu[1] * target_nodes[0]
     )
     grad_omega_W = obj_array_1d(  # noqa: N806
         [-int_bdry_mu[1], int_bdry_mu[0]]
     )
     omega_W_bdry = (  # noqa: N806
-        int_bdry_mu[0] * density_discr.nodes().with_queue(queue)[1]
-        - int_bdry_mu[1] * density_discr.nodes().with_queue(queue)[0]
+        int_bdry_mu[0] * density_nodes[1] - int_bdry_mu[1] * density_nodes[0]
     )
 
     int_bdry = bind(qbx, sym.integral(dim, dim - 1, var("integrand")))(
-        queue, integrand=omega_S_bdry + omega_D_bdry + omega_W_bdry
+        actx, integrand=omega_S_bdry + omega_D_bdry + omega_W_bdry
     )
 
     debugging_info = {}
+    debugging_info["gmres_result_mu"] = gmres_result_mu
+    debugging_info["gmres_result_sigma"] = gmres_result_sigma
     debugging_info["omega_S"] = omega_S
     debugging_info["omega_D"] = omega_D
     debugging_info["omega_W"] = omega_W
@@ -688,16 +745,47 @@ def compute_biharmonic_extension(
     debugging_info["omega_D1"] = omega_D1
 
     int_interior_func_bdry = bind(qbx, sym.integral(2, 1, var("integrand")))(
-        queue, integrand=f
+        actx, integrand=f
     )
 
-    path_length = get_path_length(queue, density_discr)
-    ext_f = (
-        omega_S + omega_D + omega_W + (int_interior_func_bdry - int_bdry) / path_length
-    )
+    path_length = get_path_length(actx, density_discr)
+    matching_const = (int_interior_func_bdry - int_bdry) / path_length
+
+    ext_f = omega_S + omega_D + omega_W + matching_const
     grad_f = grad_omega_S + grad_omega_D + grad_omega_W
 
-    return ext_f, grad_f[0], grad_f[1], debugging_info
+    if enforce_affine_match:
+        ext_bdry = omega_S_bdry + omega_D_bdry + omega_W_bdry + matching_const
+        residual_flat = flatten((f - ext_bdry).real, actx, leaf_class=DOFArray)
+        x_bdry_flat = flatten(density_nodes[0], actx, leaf_class=DOFArray)
+        y_bdry_flat = flatten(density_nodes[1], actx, leaf_class=DOFArray)
+
+        residual_host = actx.to_numpy(residual_flat)
+        x_bdry_host = actx.to_numpy(x_bdry_flat)
+        y_bdry_host = actx.to_numpy(y_bdry_flat)
+
+        design = np.vstack([x_bdry_host, y_bdry_host, np.ones_like(x_bdry_host)]).T
+        coeffs, *_ = np.linalg.lstsq(design, residual_host, rcond=None)
+        affine_a, affine_b, affine_c = coeffs
+
+        ext_f = (
+            ext_f + affine_a * target_nodes[0] + affine_b * target_nodes[1] + affine_c
+        )
+        grad_f = grad_f + obj_array_1d([affine_a, affine_b])
+
+        ext_bdry_corrected = ext_bdry + (
+            affine_a * density_nodes[0] + affine_b * density_nodes[1] + affine_c
+        )
+
+        debugging_info["affine_coeffs"] = (affine_a, affine_b, affine_c)
+        debugging_info["boundary_residual_before"] = residual_flat
+        debugging_info["boundary_residual_after"] = flatten(
+            (f - ext_bdry_corrected).real, actx, leaf_class=DOFArray
+        )
+    else:
+        debugging_info["affine_coeffs"] = (0.0, 0.0, 0.0)
+
+    return ext_f.real, grad_f[0].real, grad_f[1].real, debugging_info
 
 
 # }}} End biharmonic extension

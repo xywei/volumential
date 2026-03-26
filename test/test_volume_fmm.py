@@ -49,6 +49,126 @@ import volumential.meshgen as mg
 logger = logging.getLogger(__name__)
 
 
+class _FakeDeviceArray:
+    def __init__(self, ary):
+        self._ary = np.asarray(ary)
+
+    def get(self, queue=None):
+        return self._ary
+
+
+def test_list1_gallery_includes_mixed_source_levels():
+    from volumential.list1_gallery import generate_interactions
+
+    interactions = generate_interactions(2)
+    source_radii = {int(sbox.radius) for _, sbox in interactions}
+
+    assert len(interactions) > 0
+    assert len(source_radii) > 1
+
+
+def test_validate_table_box_particle_layout_accepts_q_order_layout():
+    from volumential.expansion_wrangler_fpnd import _validate_table_box_particle_layout
+
+    tree = SimpleNamespace(
+        box_target_counts_nonchild=_FakeDeviceArray(np.array([16, 0, 16, 16]))
+    )
+
+    _validate_table_box_particle_layout(
+        queue=None,
+        tree=tree,
+        target_boxes=np.array([0, 2], dtype=np.int32),
+        source_boxes=np.array([0, 2, 3], dtype=np.int32),
+        n_q_points=16,
+    )
+
+
+def test_validate_table_box_particle_layout_rejects_non_q_order_layout():
+    from volumential.expansion_wrangler_fpnd import _validate_table_box_particle_layout
+
+    tree = SimpleNamespace(
+        box_target_counts_nonchild=_FakeDeviceArray(np.array([16, 24, 16, 31]))
+    )
+
+    with pytest.raises(ValueError, match="requires exactly 16 quadrature points"):
+        _validate_table_box_particle_layout(
+            queue=None,
+            tree=tree,
+            target_boxes=np.array([0, 1], dtype=np.int32),
+            source_boxes=np.array([0, 3], dtype=np.int32),
+            n_q_points=16,
+        )
+
+
+def test_rebuild_tob_from_geometry_restores_unit_level_edges():
+    from boxtree import make_tree_of_boxes_root, refine_and_coarsen_tree_of_boxes
+
+    from volumential.tree_interactive_build import _rebuild_tob_from_geometry
+
+    tob = make_tree_of_boxes_root((np.array([0.0, 0.0]), np.array([1.0, 1.0])))
+
+    # Step 1: split root -> level-1 leaves
+    refine_flags = np.zeros(tob.nboxes, dtype=bool)
+    refine_flags[0] = True
+    tob = refine_and_coarsen_tree_of_boxes(tob, refine_flags=refine_flags)
+
+    # Step 2: split one level-1 leaf -> introduces level-2 leaves
+    level1_leaves = np.where(
+        (tob.box_levels == 1) & (np.all(tob.box_child_ids == 0, axis=0))
+    )[0]
+    refine_flags = np.zeros(tob.nboxes, dtype=bool)
+    refine_flags[int(level1_leaves[0])] = True
+    tob = refine_and_coarsen_tree_of_boxes(tob, refine_flags=refine_flags)
+
+    # Step 3: split one level-2 leaf -> introduces level-3 leaves
+    level2_leaves = np.where(
+        (tob.box_levels == 2) & (np.all(tob.box_child_ids == 0, axis=0))
+    )[0]
+    refine_flags = np.zeros(tob.nboxes, dtype=bool)
+    refine_flags[int(level2_leaves[0])] = True
+    tob = refine_and_coarsen_tree_of_boxes(tob, refine_flags=refine_flags)
+
+    # Step 4: split another level-1 leaf -> triggers index corruption in upstream
+    level1_leaves = np.where(
+        (tob.box_levels == 1) & (np.all(tob.box_child_ids == 0, axis=0))
+    )[0]
+    refine_flags = np.zeros(tob.nboxes, dtype=bool)
+    refine_flags[int(level1_leaves[0])] = True
+    tob = refine_and_coarsen_tree_of_boxes(tob, refine_flags=refine_flags)
+
+    levels = np.asarray(tob.box_levels, dtype=np.int32)
+    bad_edges_before = 0
+    for parent in range(tob.nboxes):
+        plevel = int(levels[parent])
+        for child in tob.box_child_ids[:, parent]:
+            child = int(child)
+            if child != 0 and int(levels[child]) != plevel + 1:
+                bad_edges_before += 1
+
+    assert bad_edges_before > 0
+
+    repaired = _rebuild_tob_from_geometry(tob)
+    repaired_levels = np.asarray(repaired.box_levels, dtype=np.int32)
+    bad_edges_after = 0
+    for parent in range(repaired.nboxes):
+        plevel = int(repaired_levels[parent])
+        for child in repaired.box_child_ids[:, parent]:
+            child = int(child)
+            if child != 0 and int(repaired_levels[child]) != plevel + 1:
+                bad_edges_after += 1
+
+    assert bad_edges_after == 0
+    assert np.all(repaired_levels[:-1] <= repaired_levels[1:])
+
+    level_starts = np.asarray(repaired.level_start_box_nrs, dtype=np.int32)
+    for lev in range(len(level_starts) - 1):
+        start = int(level_starts[lev])
+        stop = int(level_starts[lev + 1])
+        if start == stop:
+            continue
+        assert np.all(repaired_levels[start:stop] == lev)
+
+
 def test_normalize_source_fields_accepts_field_major_matrix():
     from volumential.volume_fmm import _normalize_source_fields
 
@@ -216,7 +336,7 @@ def test_volume_fmm_list1_multi_source_superposition():
             return potentials
 
     traversal = SimpleNamespace(
-        tree=SimpleNamespace(nsources=3, ntargets=3),
+        tree=SimpleNamespace(nsources=3, ntargets=5),
         level_start_source_box_nrs=np.array([], dtype=np.int32),
         source_boxes=np.array([], dtype=np.int32),
         level_start_source_parent_box_nrs=np.array([], dtype=np.int32),
@@ -249,6 +369,263 @@ def test_volume_fmm_list1_multi_source_superposition():
     assert np.allclose(result, np.array([66.0]))
 
 
+def test_volume_fmm_reorders_src_func_with_source_permutation():
+    from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
+    from volumential.volume_fmm import drive_volume_fmm
+
+    class _MockWrangler(ExpansionWranglerInterface):
+        dtype = np.float64
+
+        def __init__(self):
+            self._source_map = np.array([2, 0, 1], dtype=np.int32)
+            self._target_map = np.array([3, 1, 4, 0, 2], dtype=np.int32)
+            self.reordered_src_weights = None
+
+        def multipole_expansion_zeros(self):
+            return None
+
+        def local_expansion_zeros(self):
+            return None
+
+        def output_zeros(self):
+            return np.array([0.0], dtype=self.dtype)
+
+        def reorder_sources(self, source_array):
+            src = np.asarray(source_array)
+            assert src.shape[0] == self._source_map.shape[0]
+            return src[self._source_map]
+
+        def reorder_targets(self, target_array):
+            tgt = np.asarray(target_array)
+            if tgt.shape[0] != self._target_map.shape[0]:
+                raise AssertionError(
+                    "source fields were reordered with target permutation"
+                )
+            return tgt[self._target_map]
+
+        def reorder_potentials(self, potentials):
+            return potentials
+
+        def form_multipoles(
+            self, level_start_source_box_nrs, source_boxes, src_weights
+        ):
+            self.reordered_src_weights = np.asarray(src_weights[0]).copy()
+            return None, None
+
+        def coarsen_multipoles(
+            self, level_start_source_parent_box_nrs, source_parent_boxes, mpoles
+        ):
+            return mpoles, None
+
+        def eval_direct(
+            self,
+            target_boxes,
+            neighbor_sources_starts,
+            neighbor_sources_lists,
+            mode_coefs,
+        ):
+            return np.array([np.sum(mode_coefs)], dtype=self.dtype), None
+
+        def multipole_to_local(
+            self,
+            level_start_target_or_target_parent_box_nrs,
+            target_or_target_parent_boxes,
+            starts,
+            lists,
+            mpole_exps,
+        ):
+            return np.array([0.0], dtype=self.dtype), None
+
+        def eval_multipoles(
+            self,
+            level_start_target_box_nrs,
+            target_boxes,
+            starts,
+            lists,
+            mpole_exps,
+        ):
+            return np.array([0.0], dtype=self.dtype), None
+
+        def form_locals(
+            self,
+            level_start_target_or_target_parent_box_nrs,
+            target_or_target_parent_boxes,
+            starts,
+            lists,
+            src_weights,
+        ):
+            return np.array([0.0], dtype=self.dtype), None
+
+        def refine_locals(
+            self,
+            level_start_target_or_target_parent_box_nrs,
+            target_or_target_parent_boxes,
+            local_exps,
+        ):
+            return local_exps, None
+
+        def eval_locals(self, level_start_target_box_nrs, target_boxes, local_exps):
+            return np.array([0.0], dtype=self.dtype), None
+
+        def finalize_potentials(self, potentials):
+            return potentials
+
+    traversal = SimpleNamespace(
+        tree=SimpleNamespace(nsources=3, ntargets=5),
+        level_start_source_box_nrs=np.array([], dtype=np.int32),
+        source_boxes=np.array([], dtype=np.int32),
+        level_start_source_parent_box_nrs=np.array([], dtype=np.int32),
+        source_parent_boxes=np.array([], dtype=np.int32),
+        target_boxes=np.array([], dtype=np.int32),
+        neighbor_source_boxes_starts=np.array([], dtype=np.int32),
+        neighbor_source_boxes_lists=np.array([], dtype=np.int32),
+    )
+
+    src_weights = np.array([1.0, 2.0, 4.0], dtype=np.float64)
+    src_func = np.array([10.0, 20.0, 40.0], dtype=np.float64)
+
+    wrangler = _MockWrangler()
+    result = drive_volume_fmm(
+        traversal,
+        wrangler,
+        src_weights,
+        src_func,
+        list1_only=True,
+    )
+
+    assert np.allclose(wrangler.reordered_src_weights, np.array([4.0, 1.0, 2.0]))
+    assert np.allclose(result, np.array([70.0]))
+
+
+def test_volume_fmm_list1_falls_back_to_p2p_on_nonfinite_table_values():
+    from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
+    from volumential.volume_fmm import drive_volume_fmm
+
+    class _MockWrangler(ExpansionWranglerInterface):
+        dtype = np.float64
+
+        def __init__(self):
+            self.p2p_calls = 0
+
+        def multipole_expansion_zeros(self):
+            return None
+
+        def local_expansion_zeros(self):
+            return None
+
+        def output_zeros(self):
+            return np.zeros(2, dtype=self.dtype)
+
+        def reorder_sources(self, source_array):
+            return source_array
+
+        def reorder_targets(self, target_array):
+            return target_array
+
+        def reorder_potentials(self, potentials):
+            return potentials
+
+        def form_multipoles(
+            self, level_start_source_box_nrs, source_boxes, src_weights
+        ):
+            return None, None
+
+        def coarsen_multipoles(
+            self, level_start_source_parent_box_nrs, source_parent_boxes, mpoles
+        ):
+            return mpoles, None
+
+        def eval_direct(
+            self,
+            target_boxes,
+            neighbor_sources_starts,
+            neighbor_sources_lists,
+            mode_coefs,
+        ):
+            return np.array([np.nan, 1.0], dtype=self.dtype), None
+
+        def eval_direct_p2p(
+            self,
+            target_boxes,
+            neighbor_sources_starts,
+            neighbor_sources_lists,
+            src_weights,
+        ):
+            self.p2p_calls += 1
+            return np.array([3.0, 4.0], dtype=self.dtype), None
+
+        def multipole_to_local(
+            self,
+            level_start_target_or_target_parent_box_nrs,
+            target_or_target_parent_boxes,
+            starts,
+            lists,
+            mpole_exps,
+        ):
+            return np.array([0.0], dtype=self.dtype), None
+
+        def eval_multipoles(
+            self,
+            level_start_target_box_nrs,
+            target_boxes,
+            starts,
+            lists,
+            mpole_exps,
+        ):
+            return np.array([0.0], dtype=self.dtype), None
+
+        def form_locals(
+            self,
+            level_start_target_or_target_parent_box_nrs,
+            target_or_target_parent_boxes,
+            starts,
+            lists,
+            src_weights,
+        ):
+            return np.array([0.0], dtype=self.dtype), None
+
+        def refine_locals(
+            self,
+            level_start_target_or_target_parent_box_nrs,
+            target_or_target_parent_boxes,
+            local_exps,
+        ):
+            return local_exps, None
+
+        def eval_locals(self, level_start_target_box_nrs, target_boxes, local_exps):
+            return np.array([0.0], dtype=self.dtype), None
+
+        def finalize_potentials(self, potentials):
+            return potentials
+
+    traversal = SimpleNamespace(
+        tree=SimpleNamespace(nsources=3, ntargets=2, sources_are_targets=True),
+        level_start_source_box_nrs=np.array([], dtype=np.int32),
+        source_boxes=np.array([], dtype=np.int32),
+        level_start_source_parent_box_nrs=np.array([], dtype=np.int32),
+        source_parent_boxes=np.array([], dtype=np.int32),
+        target_boxes=np.array([], dtype=np.int32),
+        neighbor_source_boxes_starts=np.array([], dtype=np.int32),
+        neighbor_source_boxes_lists=np.array([], dtype=np.int32),
+    )
+
+    src_weights = np.array([1.0, 2.0, 3.0], dtype=np.float64)
+    src_func = np.array([10.0, 20.0, 30.0], dtype=np.float64)
+
+    wrangler = _MockWrangler()
+    result = drive_volume_fmm(
+        traversal,
+        wrangler,
+        src_weights,
+        src_func,
+        list1_only=True,
+        allow_list1_p2p_fallback=True,
+    )
+
+    assert wrangler.p2p_calls == 1
+    assert np.allclose(result, np.array([3.0, 4.0]))
+
+
 def test_volume_fmm_rejects_multi_source_full_sumpy_path(monkeypatch):
     from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
     import volumential.volume_fmm as volume_fmm
@@ -262,7 +639,7 @@ def test_volume_fmm_rejects_multi_source_full_sumpy_path(monkeypatch):
         _MockSumpyWrangler,
     )
 
-    traversal = SimpleNamespace(tree=SimpleNamespace(nsources=3, ntargets=3))
+    traversal = SimpleNamespace(tree=SimpleNamespace(nsources=3, ntargets=5))
 
     src0 = np.array([1.0, 2.0, 3.0], dtype=np.float64)
     src1 = np.array([10.0, 20.0, 30.0], dtype=np.float64)
@@ -290,7 +667,7 @@ def test_volume_fmm_direct_eval_accepts_fmmlib_plain_arrays(monkeypatch):
             pass
 
         def __call__(self, setup_actx, targets, sources, strengths, **kwargs):
-            return (np.array([4.0, 5.0, 6.0], dtype=np.float64),)
+            return (np.array([4.0, 5.0, 6.0, 7.0], dtype=np.float64),)
 
     class _MockFMMLibWrangler(ExpansionWranglerInterface):
         dtype = np.float64
@@ -311,7 +688,7 @@ def test_volume_fmm_direct_eval_accepts_fmmlib_plain_arrays(monkeypatch):
             return None
 
         def output_zeros(self):
-            return np.zeros(3, dtype=self.dtype)
+            return np.zeros(4, dtype=self.dtype)
 
         def reorder_sources(self, source_array):
             return source_array
@@ -339,7 +716,7 @@ def test_volume_fmm_direct_eval_accepts_fmmlib_plain_arrays(monkeypatch):
             neighbor_sources_lists,
             mode_coefs,
         ):
-            return np.array([1.0, 2.0, 3.0], dtype=self.dtype), None
+            return np.array([1.0, 2.0, 3.0, 4.0], dtype=self.dtype), None
 
         def eval_direct_p2p(
             self,
@@ -348,7 +725,7 @@ def test_volume_fmm_direct_eval_accepts_fmmlib_plain_arrays(monkeypatch):
             neighbor_sources_lists,
             src_weights,
         ):
-            return np.array([0.5, 0.5, 0.5], dtype=self.dtype), None
+            return np.array([0.5, 0.5, 0.5, 0.5], dtype=self.dtype), None
 
         def multipole_to_local(
             self,
@@ -405,8 +782,8 @@ def test_volume_fmm_direct_eval_accepts_fmmlib_plain_arrays(monkeypatch):
     traversal = _Traversal(
         tree=SimpleNamespace(
             nsources=3,
-            ntargets=3,
-            targets=np.array([[0.0, 0.0, 0.0]], dtype=np.float64),
+            ntargets=4,
+            targets=np.array([[0.0, 0.0, 0.0, 0.0]], dtype=np.float64),
             sources=np.array([[0.0, 0.0, 0.0]], dtype=np.float64),
         ),
         level_start_source_box_nrs=np.array([], dtype=np.int32),
@@ -433,7 +810,7 @@ def test_volume_fmm_direct_eval_accepts_fmmlib_plain_arrays(monkeypatch):
         reorder_potentials=False,
     )
 
-    assert np.allclose(result, np.array([4.5, 6.5, 8.5], dtype=np.float64))
+    assert np.allclose(result, np.array([4.0, 5.0, 6.0, 7.0], dtype=np.float64))
 
 
 # {{{ make sure context getter works
@@ -634,7 +1011,6 @@ def laplace_problem(ctx_factory):
     # {{{ build tree and traversals
 
     # tune max_particles_in_box to reconstruct the mesh
-    from boxtree import TreeBuilder
     from boxtree.array_context import PyOpenCLArrayContext
     from volumential.tree_interactive_build import build_particle_tree_from_box_tree
 
@@ -745,6 +1121,109 @@ def test_volume_fmm_laplace(laplace_problem):
     max_err = np.nanmax(np.abs(exact_host - fmm_host))
     assert np.isfinite(max_err)
     assert float(max_err) < 5e-2
+
+
+@pytest.mark.skipif(
+    mg.provider != "meshgen_boxtree",
+    reason="Adaptive mesh module is not available",
+)
+@pytest.mark.parametrize("bbox_radius", [1.0, 1.3])
+def test_volume_fmm_calculus_patch_matches_source_density(
+    ctx_factory, tmp_path, bbox_radius
+):
+    from sumpy.expansion import DefaultExpansionFactory
+    from sumpy.kernel import LaplaceKernel
+    from sumpy.point_calculus import CalculusPatch
+
+    from volumential.expansion_wrangler_fpnd import (
+        FPNDExpansionWrangler,
+        FPNDTreeIndependentDataForWrangler,
+    )
+    from volumential.geometry import BoundingBoxFactory, BoxFMMGeometryFactory
+    from volumential.table_manager import NearFieldInteractionTableManager
+    from volumential.volume_fmm import drive_volume_fmm, interpolate_volume_potential
+
+    ctx = ctx_factory()
+    queue = cl.CommandQueue(ctx)
+
+    dim = 2
+    q_order = 4
+    nlevels = 5
+    fmm_order = 15
+
+    bbox = BoundingBoxFactory(
+        dim=dim,
+        center=np.array([0.0, 0.0]),
+        radius=float(bbox_radius),
+    )
+    geo = BoxFMMGeometryFactory(
+        ctx,
+        dim=dim,
+        order=q_order,
+        nlevels=nlevels,
+        bbox_getter=bbox,
+    )(queue)
+
+    patch = CalculusPatch(center=[0.0, 0.0], h=0.36, order=7)
+    patch_targets = np.empty(dim, dtype=object)
+    patch_targets[0] = cl.array.to_device(queue, np.ascontiguousarray(patch.x))
+    patch_targets[1] = cl.array.to_device(queue, np.ascontiguousarray(patch.y))
+
+    def source_density(x, y):
+        return np.exp(0.3 * x - 0.2 * y) * np.cos(0.8 * x + 0.6 * y)
+
+    src_vals_user = source_density(geo.nodes[0].get(queue), geo.nodes[1].get(queue))
+    src_vals = cl.array.to_device(queue, np.ascontiguousarray(src_vals_user))
+    src_weights = src_vals * geo.weights
+
+    knl = LaplaceKernel(dim)
+    expn_factory = DefaultExpansionFactory()
+    local_expn_class = expn_factory.get_local_expansion_class(knl)
+    mpole_expn_class = expn_factory.get_multipole_expansion_class(knl)
+
+    table_file = tmp_path / "nft-calculus-patch.sqlite"
+    tm = NearFieldInteractionTableManager(str(table_file), queue=queue)
+    nftable, _ = tm.get_table(dim, "Laplace", q_order, force_recompute=True)
+
+    tree_indep = FPNDTreeIndependentDataForWrangler(
+        ctx,
+        partial(mpole_expn_class, knl),
+        partial(local_expn_class, knl),
+        [knl],
+        exclude_self=False,
+    )
+    wrangler = FPNDExpansionWrangler(
+        tree_indep=tree_indep,
+        traversal=geo.traversal,
+        near_field_table=nftable,
+        dtype=np.float64,
+        fmm_level_to_order=lambda kernel, kernel_args, tree, lev: fmm_order,
+        quad_order=q_order,
+        queue=queue,
+    )
+
+    (u_src,) = drive_volume_fmm(
+        geo.traversal,
+        wrangler,
+        src_weights,
+        src_vals,
+        direct_evaluation=False,
+        reorder_sources=True,
+        reorder_potentials=True,
+    )
+
+    u_patch = interpolate_volume_potential(
+        patch_targets,
+        geo.traversal,
+        wrangler,
+        u_src,
+    ).get(queue)
+
+    minus_lap = -patch.laplace(u_patch)
+    rho_patch = source_density(patch.x, patch.y)
+
+    rel_residual = np.linalg.norm(minus_lap - rho_patch) / np.linalg.norm(rho_patch)
+    assert float(rel_residual) < 5.0e-4
 
 
 if __name__ == "__main__":

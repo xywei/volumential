@@ -51,6 +51,12 @@ logger = logging.getLogger(__name__)
 
 
 def _compute_box_local_ids(queue, tree, n_q_points):
+    if not getattr(tree, "sources_are_targets", False):
+        raise ValueError(
+            "table-based near-field evaluation requires sources and targets "
+            "to coincide (tree.sources_are_targets=True)"
+        )
+
     n_particles = tree.ntargets
     if n_particles % n_q_points != 0:
         raise ValueError("particle count is not divisible by box-local quadrature size")
@@ -61,6 +67,45 @@ def _compute_box_local_ids(queue, tree, n_q_points):
     )
     sorted_target_ids = tree.sorted_target_ids.get(queue)
     return cl.array.to_device(queue, user_local_ids[sorted_target_ids])
+
+
+def _validate_table_box_particle_layout(
+    queue,
+    tree,
+    target_boxes,
+    source_boxes,
+    n_q_points,
+):
+    box_counts = tree.box_target_counts_nonchild.get(queue)
+
+    if hasattr(target_boxes, "get"):
+        target_box_ids = target_boxes.get(queue)
+    else:
+        target_box_ids = np.asarray(target_boxes)
+
+    if hasattr(source_boxes, "get"):
+        source_box_ids = source_boxes.get(queue)
+    else:
+        source_box_ids = np.asarray(source_boxes)
+
+    target_counts = box_counts[target_box_ids]
+    source_counts = box_counts[source_box_ids]
+
+    target_ok = np.all(target_counts == n_q_points)
+    source_ok = np.all(source_counts == n_q_points)
+    if target_ok and source_ok:
+        return
+
+    bad_target = np.unique(target_counts[target_counts != n_q_points])
+    bad_source = np.unique(source_counts[source_counts != n_q_points])
+
+    raise ValueError(
+        "table-based near-field evaluation requires exactly "
+        f"{n_q_points} quadrature points per active source/target box; "
+        f"found target counts {bad_target.tolist()} and source counts "
+        f"{bad_source.tolist()}. Build the particle tree from the mesh box-tree "
+        "(build_particle_tree_from_box_tree) to preserve per-cell quadrature layout."
+    )
 
 
 class SumpyTimingFuture:
@@ -649,6 +694,14 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         table_entry_ids = cl.array.to_device(queue, table_entry_ids)
         particle_local_ids = _compute_box_local_ids(
             queue, self.tree, self.near_field_table[kname][0].n_q_points
+        )
+
+        _validate_table_box_particle_layout(
+            queue,
+            self.tree,
+            target_boxes,
+            neighbor_source_boxes_lists,
+            self.near_field_table[kname][0].n_q_points,
         )
 
         aligned_nboxes = self.tree.box_centers.shape[1]
@@ -1360,6 +1413,14 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
         table_entry_ids = cl.array.to_device(self.queue, table_entry_ids)
         particle_local_ids = _compute_box_local_ids(
             self.queue, self.tree, self.near_field_table[kname][0].n_q_points
+        )
+
+        _validate_table_box_particle_layout(
+            self.queue,
+            self.tree,
+            target_boxes,
+            neighbor_source_boxes_lists,
+            self.near_field_table[kname][0].n_q_points,
         )
 
         aligned_nboxes = self.tree.box_centers.shape[1]

@@ -413,23 +413,7 @@ def build_geometry_info(ctx, queue, dim, q_order, mesh, bbox=None, a=None, b=Non
 
     actx = PyOpenCLArrayContext(queue)
 
-    leaf_boxes = np.asarray(mesh.boxtree._tree.leaf_boxes)
-    leaf_levels = np.asarray(mesh.boxtree._tree.box_levels[leaf_boxes])
-    has_mixed_leaf_levels = np.unique(leaf_levels).size > 1
-
-    if has_mixed_leaf_levels:
-        treebuilder_bbox = _square_bbox_for_treebuilder(bbox)
-        tb = TreeBuilder(actx)
-        tree, _ = tb(
-            actx,
-            particles=q_points,
-            targets=q_points,
-            bbox=treebuilder_bbox,
-            max_particles_in_box=q_order**dim * (2**dim) - 1,
-            kind="adaptive-level-restricted",
-        )
-    else:
-        tree = build_particle_tree_from_box_tree(actx, mesh.boxtree, q_points_org)
+    tree = build_particle_tree_from_box_tree(actx, mesh.boxtree, q_points_org)
 
     from boxtree.traversal import FMMTraversalBuilder
 
