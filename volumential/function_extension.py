@@ -446,7 +446,7 @@ class ComplexFractionalKernel(ExpressionKernel):
             z = d[0] + var("I") * d[1]
             conj_z = d[0] - var("I") * d[1]
             expr = conj_z / z
-            scaling = 1 / (4 * var("pi") * var("I"))
+            scaling = np.complex128(-1j / (4 * np.pi))
         else:
             raise NotImplementedError("unsupported dimensionality")
 
