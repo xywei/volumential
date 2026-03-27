@@ -831,7 +831,7 @@ def test_volume_fmm_list1_falls_back_to_p2p_on_nonfinite_table_values():
             src_weights,
         ):
             self.p2p_calls += 1
-            self.p2p_src_weights = np.asarray(src_weights).copy()
+            self.p2p_src_weights = np.asarray(src_weights[0]).copy()
             return np.array([3.0, 4.0], dtype=self.dtype), None
 
         def multipole_to_local(
