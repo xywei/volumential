@@ -38,6 +38,13 @@ def _are_adjacent(root_extent, levels, centers, ibox, jbox, tol=1.0e-15):
 
 
 def _enforce_level_restriction(tob):
+    """Enforce only 2:1 leaf-level balancing.
+
+    Two adjacent leaves are allowed to differ by at most one level.
+    No extra same-level colleague balancing is applied.
+    """
+    tob = _rebuild_tob_from_geometry(tob)
+
     while True:
         leaves = _leaf_boxes_numpy(tob)
         refine_flags = np.zeros(tob.nboxes, dtype=bool)
@@ -82,6 +89,7 @@ def _enforce_level_restriction(tob):
                 return tob
 
         tob = refine_and_coarsen_tree_of_boxes(tob, refine_flags=refine_flags)
+        tob = _rebuild_tob_from_geometry(tob)
 
 
 def _enforce_same_level_colleagues(tob):
@@ -191,13 +199,16 @@ class BoxTree:
                 coarsen_flags=np.zeros_like(coarsen_flags),
                 error_on_ignored_flags=error_on_ignored_flags,
             )
+        self._tree = _rebuild_tob_from_geometry(self._tree)
         self._sync_device_views()
 
     def _sync_device_views(self):
         assert self.queue is not None
         assert self._tree is not None
 
+        self._tree = _rebuild_tob_from_geometry(self._tree)
         self._tree = _enforce_level_restriction(self._tree)
+        self._tree = _rebuild_tob_from_geometry(self._tree)
         self._tree = _prune_unreachable_boxes(self._tree)
 
         box_levels = np.asarray(self._tree.box_levels, dtype=self.box_level_dtype)
@@ -390,6 +401,147 @@ def _compute_box_flags(box_child_ids):
     return box_flags
 
 
+def _rebuild_tob_from_geometry(tob):
+    from boxtree.tree import TreeOfBoxes
+
+    centers = np.asarray(tob.box_centers)
+    levels = np.asarray(tob.box_levels, dtype=np.int32)
+
+    nboxes = int(tob.nboxes)
+    dim = int(tob.dimensions)
+    nchildren = 2**dim
+
+    root_candidates = np.where(levels == 0)[0]
+    if len(root_candidates) != 1:
+        raise ValueError("expected exactly one root box at level 0")
+
+    root_center = centers[:, int(root_candidates[0])]
+    root_extent = float(tob.root_extent)
+    root_min = root_center - 0.5 * root_extent
+
+    grid_indices = np.empty((nboxes, dim), dtype=np.int64)
+    for ibox in range(nboxes):
+        lev = int(levels[ibox])
+        box_size = root_extent / (1 << lev)
+        grid_indices[ibox, :] = np.rint(
+            (centers[:, ibox] - root_min) / box_size - 0.5
+        ).astype(np.int64)
+
+    old_keys = [
+        (int(levels[i]), tuple(int(v) for v in grid_indices[i])) for i in range(nboxes)
+    ]
+    if len(set(old_keys)) != nboxes:
+        unique_old_ids = []
+        key_to_pos = {}
+        has_children = np.any(np.asarray(tob.box_child_ids) != 0, axis=0)
+
+        for old_id, key in enumerate(old_keys):
+            prev_pos = key_to_pos.get(key)
+            if prev_pos is None:
+                key_to_pos[key] = len(unique_old_ids)
+                unique_old_ids.append(old_id)
+                continue
+
+            prev_old_id = unique_old_ids[prev_pos]
+            if has_children[old_id] and not has_children[prev_old_id]:
+                unique_old_ids[prev_pos] = old_id
+
+        unique_old_ids = np.asarray(unique_old_ids, dtype=np.int32)
+        levels = levels[unique_old_ids]
+        centers = centers[:, unique_old_ids]
+        grid_indices = grid_indices[unique_old_ids]
+        nboxes = int(len(unique_old_ids))
+        old_keys = [
+            (int(levels[i]), tuple(int(v) for v in grid_indices[i]))
+            for i in range(nboxes)
+        ]
+
+    key_set = set(old_keys)
+    valid_old_ids = []
+    for old_id, key in enumerate(old_keys):
+        level, idx = key
+        parent_idx = idx
+        valid = True
+        for lev in range(level, 0, -1):
+            parent_idx = tuple(v // 2 for v in parent_idx)
+            if (lev - 1, parent_idx) not in key_set:
+                valid = False
+                break
+        if valid:
+            valid_old_ids.append(old_id)
+
+    if len(valid_old_ids) != nboxes:
+        valid_old_ids = np.asarray(valid_old_ids, dtype=np.int32)
+        levels = levels[valid_old_ids]
+        centers = centers[:, valid_old_ids]
+        grid_indices = grid_indices[valid_old_ids]
+        nboxes = int(len(valid_old_ids))
+        old_keys = [
+            (int(levels[i]), tuple(int(v) for v in grid_indices[i]))
+            for i in range(nboxes)
+        ]
+
+    new_order = sorted(
+        range(nboxes),
+        key=lambda i: (int(levels[i]),) + tuple(int(v) for v in grid_indices[i]),
+    )
+
+    new_levels = levels[new_order]
+    new_centers = centers[:, new_order]
+    new_grid_indices = grid_indices[new_order]
+
+    key_to_new = {old_keys[old_id]: new_id for new_id, old_id in enumerate(new_order)}
+
+    new_parent_ids = np.full(nboxes, -1, dtype=tob.box_id_dtype)
+    new_child_ids = np.zeros((nchildren, nboxes), dtype=tob.box_id_dtype)
+
+    for new_id in range(nboxes):
+        level = int(new_levels[new_id])
+        idx = new_grid_indices[new_id]
+
+        if level > 0:
+            parent_key = (level - 1, tuple((idx // 2).tolist()))
+            parent_id = key_to_new.get(parent_key)
+            if parent_id is None:
+                raise ValueError("missing parent while rebuilding tree-of-boxes")
+            new_parent_ids[new_id] = parent_id
+
+        for morton_nr in range(nchildren):
+            bits = np.array(
+                [(morton_nr >> (dim - 1 - iaxis)) & 1 for iaxis in range(dim)],
+                dtype=np.int64,
+            )
+            child_key = (level + 1, tuple((2 * idx + bits).tolist()))
+            child_id = key_to_new.get(child_key)
+            if child_id is not None:
+                new_child_ids[morton_nr, new_id] = child_id
+
+    max_level = int(np.max(new_levels))
+    level_counts = np.bincount(new_levels, minlength=max_level + 1)
+    level_start_box_nrs = np.zeros(max_level + 2, dtype=tob.box_id_dtype)
+    level_start_box_nrs[1:] = np.cumsum(level_counts).astype(tob.box_id_dtype)
+
+    return TreeOfBoxes(
+        box_centers=np.asarray(new_centers, dtype=tob.coord_dtype),
+        root_extent=tob.root_extent,
+        box_parent_ids=np.asarray(new_parent_ids, dtype=tob.box_id_dtype),
+        box_child_ids=np.asarray(new_child_ids, dtype=tob.box_id_dtype),
+        box_levels=np.asarray(new_levels, dtype=tob.box_level_dtype),
+        box_flags=np.asarray(
+            _compute_box_flags(new_child_ids), dtype=box_flags_enum.dtype
+        ),
+        level_start_box_nrs=np.asarray(level_start_box_nrs, dtype=tob.box_id_dtype),
+        box_id_dtype=tob.box_id_dtype,
+        box_level_dtype=tob.box_level_dtype,
+        coord_dtype=tob.coord_dtype,
+        sources_have_extent=tob.sources_have_extent,
+        targets_have_extent=tob.targets_have_extent,
+        extent_norm=tob.extent_norm,
+        stick_out_factor=tob.stick_out_factor,
+        _is_pruned=tob._is_pruned,
+    )
+
+
 def build_particle_tree_from_box_tree(actx, box_tree, q_points_host):
     tob = box_tree._tree
     dim = tob.dimensions
@@ -455,23 +607,6 @@ def build_particle_tree_from_box_tree(actx, box_tree, q_points_host):
     box_source_counts_nonchild = box_target_counts_nonchild.copy()
     box_source_counts_cumul = box_target_counts_cumul.copy()
 
-    def equalize_levels(ibox):
-        children = [int(ch) for ch in tob.box_child_ids[:, ibox] if int(ch) != 0]
-        if not children:
-            return int(tob.box_levels[ibox])
-
-        child_levels = [equalize_levels(ch) for ch in children]
-        max_level = max(child_levels)
-        for child, child_level in zip(children, child_levels):
-            if child_level < max_level:
-                box_target_counts_nonchild[child] = 0
-                box_source_counts_nonchild[child] = 0
-                box_target_counts_cumul[child] = box_target_counts_cumul[child]
-                box_source_counts_cumul[child] = box_source_counts_cumul[child]
-        return max_level
-
-    equalize_levels(0)
-
     reordered_points = q_points_host[particle_perm]
     particle_id_dtype = np.int32
 
@@ -504,6 +639,8 @@ def build_particle_tree_from_box_tree(actx, box_tree, q_points_host):
         for child in box_child_ids[:, parent]:
             if child != 0:
                 box_parent_ids[int(child)] = parent
+    if tob.nboxes:
+        box_parent_ids[0] = 0
 
     box_flags = np.zeros(tob.nboxes, dtype=box_flags_enum.dtype)
     has_children = np.any(box_child_ids[:, : tob.nboxes] != 0, axis=0)

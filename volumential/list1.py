@@ -41,6 +41,9 @@ from volumential.tools import KernelCacheWrapper
 logger = logging.getLogger(__name__)
 
 
+CASE_ENCODING_BIAS_DEFAULT = 1.0e-10
+
+
 # {{{ near field eval base class
 
 
@@ -89,6 +92,17 @@ class NearFieldEvalBase(KernelCacheWrapper):
         self.name = name or self.default_name
         self.device = device
         self.extra_kwargs = kwargs
+
+        if "case_encoding_bias" not in self.extra_kwargs:
+            self.extra_kwargs["case_encoding_bias"] = CASE_ENCODING_BIAS_DEFAULT
+        self.extra_kwargs["case_encoding_bias"] = float(
+            self.extra_kwargs["case_encoding_bias"]
+        )
+
+        if self.extra_kwargs.get("case_encoding_warn_tol") is not None:
+            self.extra_kwargs["case_encoding_warn_tol"] = float(
+                self.extra_kwargs["case_encoding_warn_tol"]
+            )
 
         # Allow user to pass more tables to force using multiple tables
         # instead of performing kernel scaling
@@ -159,6 +173,10 @@ class NearFieldFromCSR(NearFieldEvalBase):
             dimension = self.dim - 1
         else:
             dimension = d
+        bias = float(self.extra_kwargs["case_encoding_bias"])
+        # Keep encoded case ids away from integer truncation boundaries.
+        # Some OpenCL stacks evaluate this expression slightly below the
+        # mathematically integral value for non-dyadic box extents.
         return (
             "("
             + "(box_centers["
@@ -168,8 +186,80 @@ class NearFieldFromCSR(NearFieldEvalBase):
             + str(dimension)
             + ", source_box_id]"
             + ") / sbox_extent * 4.0 + encoding_shift"
+            + f" + {bias:.17g}"
             + ")"
         )
+
+    def _to_host_array(self, queue, ary):
+        if isinstance(ary, np.ndarray):
+            return ary
+        if hasattr(ary, "get"):
+            return ary.get(queue)
+        return np.asarray(ary)
+
+    def _warn_case_encoding_drift(
+        self,
+        queue,
+        box_centers,
+        box_levels,
+        root_extent,
+        target_boxes,
+        neighbor_source_boxes_starts,
+        neighbor_source_boxes_lists,
+        encoding_shift,
+        warn_tol,
+    ):
+        if warn_tol is None:
+            return
+
+        box_centers_h = self._to_host_array(queue, box_centers)
+        box_levels_h = self._to_host_array(queue, box_levels)
+        target_boxes_h = self._to_host_array(queue, target_boxes)
+        starts_h = self._to_host_array(queue, neighbor_source_boxes_starts)
+        lists_h = self._to_host_array(queue, neighbor_source_boxes_lists)
+
+        if len(target_boxes_h) == 0:
+            return
+
+        root_extent = float(root_extent)
+        encoding_shift = float(encoding_shift)
+
+        max_drift = 0.0
+        worst_pair = None
+        worst_dim = None
+        worst_raw = None
+
+        for i_tbox, target_box_id in enumerate(target_boxes_h):
+            target_box_id = int(target_box_id)
+            for i_sbox in range(int(starts_h[i_tbox]), int(starts_h[i_tbox + 1])):
+                source_box_id = int(lists_h[i_sbox])
+                source_box_level = int(box_levels_h[source_box_id])
+                source_box_extent = root_extent * (0.5**source_box_level)
+
+                for d in range(self.dim):
+                    raw_component = (
+                        box_centers_h[d, target_box_id]
+                        - box_centers_h[d, source_box_id]
+                    ) / source_box_extent * 4.0 + encoding_shift
+                    drift = abs(raw_component - np.rint(raw_component))
+
+                    if drift > max_drift:
+                        max_drift = float(drift)
+                        worst_pair = (target_box_id, source_box_id)
+                        worst_dim = d
+                        worst_raw = float(raw_component)
+
+        if max_drift > warn_tol and worst_pair is not None:
+            logger.warning(
+                "List1 case encoding drift %.3e exceeds %.3e for "
+                "target box %d, source box %d, dim %d (raw %.17g)",
+                max_drift,
+                warn_tol,
+                worst_pair[0],
+                worst_pair[1],
+                worst_dim,
+                worst_raw,
+            )
 
     def codegen_vec_id(self):
         dim = self.dim
@@ -498,6 +588,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
             "complex_kernel=" + str(self.integral_kernel.is_complex_valued),
             "potential_kind=%d" % self.potential_kind,
             "infer_scaling=" + str(self.extra_kwargs["infer_kernel_scaling"]),
+            "case_encoding_bias=" + repr(self.extra_kwargs["case_encoding_bias"]),
             "scaling_policy=" + self.codegen_compute_scaling(),
             "displacement_policy=" + self.codegen_compute_displacement(),
         )
@@ -551,6 +642,18 @@ class NearFieldFromCSR(NearFieldEvalBase):
         for key, val in integral_kernel_init_kargs.items():
             if key in entry_knl.arg_dict:
                 extra_knl_args_from_init[key] = val
+
+        self._warn_case_encoding_drift(
+            queue=queue,
+            box_centers=box_centers,
+            box_levels=box_levels,
+            root_extent=root_extent,
+            target_boxes=target_boxes,
+            neighbor_source_boxes_starts=neighbor_source_boxes_starts,
+            neighbor_source_boxes_lists=neighbor_source_boxes_lists,
+            encoding_shift=encoding_shift,
+            warn_tol=self.extra_kwargs.get("case_encoding_warn_tol"),
+        )
 
         evt, res = knl(
             queue,

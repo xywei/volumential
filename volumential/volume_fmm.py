@@ -27,6 +27,8 @@ __doc__ = """
 
 import logging
 import os
+import inspect
+from dataclasses import replace
 
 import numpy as np
 
@@ -218,6 +220,193 @@ def _debug_sample_values(label, ary, count=8):
     logger.warning("%s sample=%s", label, arr[:count])
 
 
+def _contains_nonfinite(values):
+    values_oa = _as_obj_array(values)
+    for entry in values_oa:
+        arr = entry if isinstance(entry, np.ndarray) else entry.get()
+        if np.isnan(arr).any() or np.isinf(arr).any():
+            return True
+    return False
+
+
+def _to_host_array(ary, queue):
+    if ary is None:
+        return None
+    if hasattr(ary, "with_queue"):
+        return ary.with_queue(queue).get()
+    return ary.get(queue)
+
+
+def _clone_source_side_tree_as_targets(tree, queue):
+    required_attrs = (
+        "user_source_ids",
+        "sources",
+        "box_source_starts",
+        "box_source_counts_nonchild",
+        "box_source_counts_cumul",
+    )
+    if any(getattr(tree, name, None) is None for name in required_attrs):
+        return None
+
+    user_source_ids_host = _to_host_array(tree.user_source_ids, queue)
+    if user_source_ids_host is None:
+        return None
+
+    inv_user_to_tree = np.empty_like(user_source_ids_host)
+    inv_user_to_tree[user_source_ids_host] = np.arange(
+        len(user_source_ids_host), dtype=user_source_ids_host.dtype
+    )
+    sorted_target_ids = cl.array.to_device(
+        queue,
+        np.ascontiguousarray(inv_user_to_tree),
+    )
+
+    source_bbox_min = getattr(tree, "box_source_bounding_box_min", None)
+    source_bbox_max = getattr(tree, "box_source_bounding_box_max", None)
+    target_bbox_min = (
+        source_bbox_min
+        if source_bbox_min is not None
+        else getattr(tree, "box_target_bounding_box_min", None)
+    )
+    target_bbox_max = (
+        source_bbox_max
+        if source_bbox_max is not None
+        else getattr(tree, "box_target_bounding_box_max", None)
+    )
+
+    try:
+        return replace(
+            tree,
+            sources_are_targets=True,
+            targets=tree.sources,
+            target_radii=tree.source_radii,
+            sorted_target_ids=sorted_target_ids,
+            box_target_starts=tree.box_source_starts,
+            box_target_counts_nonchild=tree.box_source_counts_nonchild,
+            box_target_counts_cumul=tree.box_source_counts_cumul,
+            box_target_bounding_box_min=target_bbox_min,
+            box_target_bounding_box_max=target_bbox_max,
+        )
+    except TypeError:
+        return None
+
+
+def _build_source_only_wrangler(traversal, wrangler, queue):
+    from boxtree.array_context import (
+        PyOpenCLArrayContext as BoxtreePyOpenCLArrayContext,
+    )
+    from boxtree.traversal import FMMTraversalBuilder
+
+    tree = traversal.tree
+
+    source_only = getattr(wrangler, "_source_only_fmm_context", None)
+    if source_only is not None:
+        cached_queue, cached_tree_id, source_traversal, source_wrangler = source_only
+        if cached_queue is queue and cached_tree_id == id(tree):
+            return source_traversal, source_wrangler
+
+    boxtree_actx = BoxtreePyOpenCLArrayContext(queue)
+
+    source_tree = _clone_source_side_tree_as_targets(tree, queue)
+    if source_tree is None:
+        raise ValueError(
+            "source-only solve requires cloning source-side tree metadata to "
+            "a sources_are_targets tree; source-only TreeBuilder reconstruction "
+            "is disabled because it produces incorrect near-field results"
+        )
+
+    trav_builder = FMMTraversalBuilder(boxtree_actx)
+    source_traversal, _ = trav_builder(boxtree_actx, source_tree)
+
+    if hasattr(wrangler, "level_orders"):
+        level_orders = tuple(int(order) for order in wrangler.level_orders)
+
+        def fmm_level_to_order(kernel, kernel_args, tree, lev):
+            return level_orders[min(lev, len(level_orders) - 1)]
+
+    else:
+
+        def fmm_level_to_order(kernel, kernel_args, tree, lev):
+            return 12
+
+    self_extra_kwargs = getattr(wrangler, "self_extra_kwargs", None)
+    if self_extra_kwargs is not None:
+        self_extra_kwargs = dict(self_extra_kwargs)
+        if "target_to_source" in self_extra_kwargs:
+            n_targets = getattr(source_tree, "ntargets", None)
+            if n_targets is None:
+                targets = getattr(source_tree, "targets", None)
+                if targets is not None:
+                    n_targets = len(targets[0])
+
+            if n_targets is None:
+                target_to_source = self_extra_kwargs["target_to_source"]
+                if hasattr(target_to_source, "size"):
+                    n_targets = int(target_to_source.size)
+                elif hasattr(target_to_source, "__len__"):
+                    n_targets = len(target_to_source)
+                elif hasattr(target_to_source, "get"):
+                    n_targets = len(target_to_source.get(queue))
+
+            if n_targets is None:
+                raise ValueError(
+                    "source-only tree is missing target count needed to rebuild "
+                    "target_to_source mapping"
+                )
+
+            self_extra_kwargs["target_to_source"] = np.arange(
+                int(n_targets), dtype=np.int32
+            )
+
+    source_wrangler_kwargs = dict(
+        tree_indep=wrangler.tree_indep,
+        queue=queue,
+        traversal=source_traversal,
+        near_field_table=wrangler.near_field_table,
+        dtype=wrangler.dtype,
+        fmm_level_to_order=fmm_level_to_order,
+        quad_order=wrangler.quad_order,
+        potential_kind=getattr(wrangler, "potential_kind", 1),
+        source_extra_kwargs=getattr(wrangler, "source_extra_kwargs", None),
+        kernel_extra_kwargs=getattr(wrangler, "kernel_extra_kwargs", None),
+        self_extra_kwargs=self_extra_kwargs,
+        list1_extra_kwargs=getattr(wrangler, "list1_extra_kwargs", None),
+    )
+
+    try:
+        ctor_signature = inspect.signature(type(wrangler).__init__)
+    except (TypeError, ValueError):
+        ctor_signature = None
+
+    accepts_varkw = False
+    ctor_param_names = set()
+    if ctor_signature is not None:
+        for param_name, param in ctor_signature.parameters.items():
+            if param_name == "self":
+                continue
+            if param.kind == inspect.Parameter.VAR_KEYWORD:
+                accepts_varkw = True
+            else:
+                ctor_param_names.add(param_name)
+
+    for attr_name in ("translation_classes_data", "preprocessed_mpole_dtype"):
+        attr_value = getattr(wrangler, attr_name, None)
+        if attr_value is None:
+            continue
+        if accepts_varkw or attr_name in ctor_param_names:
+            source_wrangler_kwargs[attr_name] = attr_value
+
+    source_wrangler = type(wrangler)(**source_wrangler_kwargs)
+
+    wrangler._source_only_fmm_context = (
+        queue,
+        id(tree),
+        source_traversal,
+        source_wrangler,
+    )
+    return source_traversal, source_wrangler
+
+
 # {{{ volume FMM driver
 
 
@@ -289,6 +478,8 @@ def drive_volume_fmm(
     assert (ns := len(src_weights)) == len(src_func)
 
     list1_only = bool(kwargs.get("list1_only", False))
+    auto_interpolate_targets = bool(kwargs.pop("auto_interpolate_targets", True))
+    allow_list1_p2p_fallback = bool(kwargs.pop("allow_list1_p2p_fallback", True))
 
     if ns > 1 and isinstance(expansion_wrangler, FPNDFMMLibExpansionWrangler):
         raise NotImplementedError(
@@ -328,11 +519,69 @@ def drive_volume_fmm(
         if isinstance(src_func[0], cl.array.Array):
             src_func = obj_array_1d([sf.get(queue) for sf in src_func])
 
+    tree = getattr(traversal, "tree", None)
+    if (
+        auto_interpolate_targets
+        and isinstance(expansion_wrangler, FPNDSumpyExpansionWrangler)
+        and not direct_evaluation
+        and tree is not None
+        and not getattr(tree, "sources_are_targets", False)
+    ):
+        logger.info(
+            "non-coincident source/target tree detected; "
+            "solving on source modes and interpolating to requested targets"
+        )
+
+        source_traversal, source_wrangler = _build_source_only_wrangler(
+            traversal, wrangler, queue
+        )
+
+        source_result = drive_volume_fmm(
+            source_traversal,
+            source_wrangler,
+            src_weights,
+            src_func,
+            direct_evaluation=direct_evaluation,
+            timing_data=timing_data,
+            reorder_sources=reorder_sources,
+            reorder_potentials=False,
+            auto_interpolate_targets=False,
+            allow_list1_p2p_fallback=allow_list1_p2p_fallback,
+            **kwargs,
+        )
+
+        source_result_oa = _as_obj_array(source_result)
+        interpolated = []
+        for source_result_i in source_result_oa:
+            interpolated.append(
+                interpolate_volume_potential(
+                    tree.targets,
+                    source_traversal,
+                    source_wrangler,
+                    source_result_i,
+                    potential_in_tree_order=True,
+                    use_mode_to_source_ids=True,
+                    use_numpy_interpolation=True,
+                )
+            )
+
+        if len(interpolated) == 1:
+            result = obj_array_1d([interpolated[0]])
+        else:
+            result = obj_array_1d(interpolated)
+
+        if reorder_potentials:
+            logger.debug("reorder interpolated potentials")
+            result = wrangler.reorder_potentials(result)
+
+        logger.debug("finalize interpolated potentials")
+        return wrangler.finalize_potentials(result)
+
     if reorder_sources:
         logger.debug("reorder source weights")
         for idx_s in range(ns):
             src_weights[idx_s] = wrangler.reorder_sources(src_weights[idx_s])
-            src_func[idx_s] = wrangler.reorder_targets(src_func[idx_s])
+            src_func[idx_s] = wrangler.reorder_sources(src_func[idx_s])
 
     # {{{ Construct local multipoles
 
@@ -358,6 +607,78 @@ def drive_volume_fmm(
 
     # }}}
 
+    # {{{ (Optional) direct evaluation of everything and return
+    if direct_evaluation:
+        if ns > 1:
+            raise NotImplementedError(
+                "direct_evaluation=True with multiple source fields is not supported"
+            )
+
+        print("Warning: NOT USING FMM (forcing global p2p)")
+        if len(src_weights) != len(src_func):
+            print(
+                "Using P2P with different src/tgt discretizations can be "
+                "unstable when targets are close to the sources while not "
+                "be exactly the same"
+            )
+
+        from sumpy import P2P
+
+        p2p = P2P(
+            wrangler.tree_indep.target_kernels,
+            wrangler.tree_indep.exclude_self,
+            value_dtypes=[wrangler.dtype],
+        )
+
+        p2p_extra_kwargs = {}
+        if hasattr(wrangler, "kernel_extra_kwargs"):
+            p2p_extra_kwargs.update(wrangler.kernel_extra_kwargs)
+
+        p2p_queue = wrangler.tree_indep._setup_actx.queue
+
+        if queue is None:
+            raise TypeError("unable to infer command queue for direct evaluation")
+
+        (sw,) = src_weights
+        target_to_source = cl.array.to_device(
+            p2p_queue,
+            np.arange(traversal.tree.ntargets, dtype=np.int32),
+        )
+        p2p_kwargs = dict(p2p_extra_kwargs)
+        if wrangler.tree_indep.exclude_self:
+            p2p_kwargs["target_to_source"] = target_to_source
+
+        (ref_pot,) = p2p(
+            wrangler.tree_indep._setup_actx,
+            traversal.tree.targets,
+            traversal.tree.sources,
+            (sw,),
+            **p2p_kwargs,
+        )
+
+        if isinstance(wrangler, FPNDSumpyExpansionWrangler):
+            potentials = obj_array_1d([ref_pot])
+        else:
+            potentials = ref_pot
+        _debug_nan_status("global_p2p", potentials)
+
+        assert traversal.from_sep_close_smaller_starts is None
+        assert traversal.from_sep_close_bigger_starts is None
+
+        result = potentials
+        if reorder_potentials:
+            logger.debug("reorder potentials")
+            result = wrangler.reorder_potentials(result)
+
+        logger.debug("finalize potentials")
+        result = wrangler.finalize_potentials(result)
+
+        logger.info("direct p2p complete")
+
+        return result
+
+    # }}} End Stage
+
     # {{{ Direct evaluation from neighbor source boxes ("list 1")
 
     logger.debug("direct evaluation from neighbor source boxes ('list 1')")
@@ -365,13 +686,30 @@ def drive_volume_fmm(
     # this step also constructs the output array
     direct_timing_futures = []
     potentials = None
-    for field in src_func:
+    for idx_s, field in enumerate(src_func):
         field_potentials, timing_future = wrangler.eval_direct(
             traversal.target_boxes,
             traversal.neighbor_source_boxes_starts,
             traversal.neighbor_source_boxes_lists,
             field,
         )
+
+        if allow_list1_p2p_fallback and _contains_nonfinite(field_potentials):
+            logger.warning(
+                "table-based list1 evaluation produced non-finite values; "
+                "falling back to discrete list1 p2p for field %d",
+                idx_s,
+            )
+
+            p2p_l1_potentials, p2p_l1_timing_future = wrangler.eval_direct_p2p(
+                traversal.target_boxes,
+                traversal.neighbor_source_boxes_starts,
+                traversal.neighbor_source_boxes_lists,
+                obj_array_1d([src_weights[idx_s]]),
+            )
+            field_potentials = p2p_l1_potentials
+            timing_future = _CombinedTimingFuture([timing_future, p2p_l1_timing_future])
+
         direct_timing_futures.append(timing_future)
         if potentials is None:
             potentials = field_potentials
@@ -409,109 +747,6 @@ def drive_volume_fmm(
     # these potentials are called alpha in [1]
 
     # }}}
-
-    # {{{ (Optional) direct evaluation of everything and return
-    if direct_evaluation:
-        if ns > 1:
-            raise NotImplementedError(
-                "direct_evaluation=True with multiple source fields is not supported"
-            )
-
-        print("Warning: NOT USING FMM (forcing global p2p)")
-        if len(src_weights) != len(src_func):
-            print(
-                "Using P2P with different src/tgt discretizations can be "
-                "unstable when targets are close to the sources while not "
-                "be exactly the same"
-            )
-
-        # list 2 and beyond
-        # First call global p2p, then subtract list 1
-
-        from sumpy import P2P
-
-        p2p = P2P(
-            wrangler.tree_indep.target_kernels,
-            wrangler.tree_indep.exclude_self,
-            value_dtypes=[wrangler.dtype],
-        )
-
-        p2p_extra_kwargs = {}
-        if hasattr(wrangler, "kernel_extra_kwargs"):
-            p2p_extra_kwargs.update(wrangler.kernel_extra_kwargs)
-
-        p2p_queue = wrangler.tree_indep._setup_actx.queue
-
-        if queue is None:
-            raise TypeError("unable to infer command queue for direct evaluation")
-
-        (sw,) = src_weights
-        target_to_source = cl.array.to_device(
-            p2p_queue,
-            np.arange(traversal.tree.ntargets, dtype=np.int32),
-        )
-        p2p_kwargs = dict(p2p_extra_kwargs)
-        if wrangler.tree_indep.exclude_self:
-            p2p_kwargs["target_to_source"] = target_to_source
-
-        (ref_pot,) = p2p(
-            wrangler.tree_indep._setup_actx,
-            traversal.tree.targets,
-            traversal.tree.sources,
-            (sw,),
-            **p2p_kwargs,
-        )
-
-        if isinstance(potentials, np.ndarray) and potentials.dtype == object:
-            if len(potentials) != 1:
-                raise ValueError("incompatible direct-evaluation potential dimensions")
-            potentials[0] += ref_pot
-            _debug_nan_status("global_p2p", potentials[0])
-        else:
-            potentials = potentials + ref_pot
-            _debug_nan_status("global_p2p", potentials)
-
-        l1_potentials, timing_future = wrangler.eval_direct_p2p(
-            traversal.target_boxes,
-            traversal.neighbor_source_boxes_starts,
-            traversal.neighbor_source_boxes_lists,
-            src_weights,
-        )
-        if isinstance(l1_potentials, np.ndarray) and l1_potentials.dtype == object:
-            if len(l1_potentials) != 1:
-                raise ValueError("incompatible list1 potential dimensions")
-            l1_pot = l1_potentials[0]
-        else:
-            l1_pot = l1_potentials
-
-        _debug_nan_status("l1_potentials", l1_pot)
-
-        if isinstance(potentials, np.ndarray) and potentials.dtype == object:
-            if len(potentials) != 1:
-                raise ValueError("incompatible direct-evaluation potential dimensions")
-            potentials[0] = potentials[0] - l1_pot
-        else:
-            potentials = potentials - l1_pot
-
-        # list 3
-        assert traversal.from_sep_close_smaller_starts is None
-
-        # list 4
-        assert traversal.from_sep_close_bigger_starts is None
-
-        result = potentials
-        if reorder_potentials:
-            logger.debug("reorder potentials")
-            result = wrangler.reorder_potentials(result)
-
-        logger.debug("finalize potentials")
-        result = wrangler.finalize_potentials(result)
-
-        logger.info("direct p2p complete")
-
-        return result
-
-    # }}} End Stage
 
     # {{{ Translate separated siblings' ("list 2") mpoles to local
 
@@ -666,6 +901,198 @@ def compute_barycentric_lagrange_params(q_order):
     return (interp_points, interp_weights)
 
 
+def _infer_tree_local_interp_points_1d(tree, traversal, q_order, queue):
+    """Infer per-box 1D interpolation nodes from tree geometry.
+
+    This is used for source-only trees built from source samples only, where the
+    tree root bounding box may differ from the original source-grid root box.
+    In that case, the local coordinates of source samples in a leaf box are not
+    the canonical Legendre-Gauss points.
+    """
+    if not hasattr(traversal, "target_boxes"):
+        return None
+
+    target_boxes = traversal.target_boxes
+    if hasattr(target_boxes, "with_queue"):
+        target_boxes_host = target_boxes.with_queue(queue).get()
+    else:
+        target_boxes_host = target_boxes.get(queue)
+
+    if len(target_boxes_host) == 0:
+        return None
+
+    box_id = int(target_boxes_host[0])
+
+    box_target_starts = tree.box_target_starts
+    box_target_counts_cumul = tree.box_target_counts_cumul
+    box_levels = tree.box_levels
+    box_centers = tree.box_centers
+
+    if hasattr(box_target_starts, "with_queue"):
+        box_target_starts_host = box_target_starts.with_queue(queue).get()
+    else:
+        box_target_starts_host = box_target_starts.get(queue)
+
+    if hasattr(box_target_counts_cumul, "with_queue"):
+        box_target_counts_host = box_target_counts_cumul.with_queue(queue).get()
+    else:
+        box_target_counts_host = box_target_counts_cumul.get(queue)
+
+    if hasattr(box_levels, "with_queue"):
+        box_levels_host = box_levels.with_queue(queue).get()
+    else:
+        box_levels_host = box_levels.get(queue)
+
+    if hasattr(box_centers, "with_queue"):
+        box_centers_host = box_centers.with_queue(queue).get()
+    else:
+        box_centers_host = box_centers.get(queue)
+
+    start = int(box_target_starts_host[box_id])
+    count = int(box_target_counts_host[box_id])
+    if count <= 0:
+        return None
+
+    expected_modes = q_order**tree.dimensions
+    if count < expected_modes:
+        return None
+
+    level = int(box_levels_host[box_id])
+    extent = float(tree.root_extent) * (1.0 / (2**level))
+    center_x = float(box_centers_host[0, box_id])
+
+    xcoords = tree.targets[0]
+    if hasattr(xcoords, "with_queue"):
+        xcoords_host = xcoords.with_queue(queue).get()
+    else:
+        xcoords_host = xcoords.get(queue)
+
+    xcoords_box = xcoords_host[start : start + count]
+    xcoords_tpl = (xcoords_box - center_x) / extent + 0.5
+
+    # Robustly identify the q_order unique interpolation nodes.
+    rounded = np.round(xcoords_tpl, decimals=14)
+    interp_points = np.sort(np.unique(rounded))
+    if len(interp_points) != q_order:
+        return None
+
+    return interp_points
+
+
+def _build_box_mode_to_source_ids(
+    tree, traversal, q_order, interp_points_1d, queue, match_tol=None
+):
+    """Map per-box lexicographic mode ids to source indices in tree order."""
+    if not hasattr(traversal, "target_boxes"):
+        return None
+
+    target_boxes = traversal.target_boxes
+    if hasattr(target_boxes, "with_queue"):
+        target_boxes_host = target_boxes.with_queue(queue).get()
+    else:
+        target_boxes_host = target_boxes.get(queue)
+
+    if len(target_boxes_host) == 0:
+        return None
+
+    box_target_starts = tree.box_target_starts
+    box_target_counts_cumul = tree.box_target_counts_cumul
+    box_levels = tree.box_levels
+    box_centers = tree.box_centers
+
+    if hasattr(box_target_starts, "with_queue"):
+        box_target_starts_host = box_target_starts.with_queue(queue).get()
+    else:
+        box_target_starts_host = box_target_starts.get(queue)
+
+    if hasattr(box_target_counts_cumul, "with_queue"):
+        box_target_counts_host = box_target_counts_cumul.with_queue(queue).get()
+    else:
+        box_target_counts_host = box_target_counts_cumul.get(queue)
+
+    if hasattr(box_levels, "with_queue"):
+        box_levels_host = box_levels.with_queue(queue).get()
+    else:
+        box_levels_host = box_levels.get(queue)
+
+    if hasattr(box_centers, "with_queue"):
+        box_centers_host = box_centers.with_queue(queue).get()
+    else:
+        box_centers_host = box_centers.get(queue)
+
+    src_coords_host = []
+    for iaxis in range(tree.dimensions):
+        coords = tree.sources[iaxis]
+        if hasattr(coords, "with_queue"):
+            src_coords_host.append(coords.with_queue(queue).get())
+        else:
+            src_coords_host.append(coords.get(queue))
+
+    expected_modes = q_order**tree.dimensions
+    mode_to_source = np.arange(len(src_coords_host[0]), dtype=np.int32)
+
+    if match_tol is None:
+        common_dtype = np.result_type(
+            interp_points_1d.dtype, *[c.dtype for c in src_coords_host]
+        )
+        if np.issubdtype(common_dtype, np.floating):
+            tol = max(1e-12, 32 * float(np.finfo(common_dtype).eps))
+        else:
+            tol = 1e-12
+    else:
+        tol = float(match_tol)
+
+    for box_id in map(int, target_boxes_host):
+        start = int(box_target_starts_host[box_id])
+        count = int(box_target_counts_host[box_id])
+        if count != expected_modes:
+            continue
+
+        level = int(box_levels_host[box_id])
+        extent = float(tree.root_extent) * (1.0 / (2**level))
+        centers = [
+            float(box_centers_host[iaxis, box_id]) for iaxis in range(tree.dimensions)
+        ]
+
+        axis_mode_ids = []
+        valid = True
+        max_dist = None
+        for iaxis in range(tree.dimensions):
+            tplt = (
+                src_coords_host[iaxis][start : start + count] - centers[iaxis]
+            ) / extent + 0.5
+            dist = np.abs(tplt[:, np.newaxis] - interp_points_1d[np.newaxis, :])
+            ids = np.argmin(dist, axis=1)
+            max_dist = float(np.max(np.min(dist, axis=1)))
+            if max_dist > tol:
+                valid = False
+                break
+            axis_mode_ids.append(ids)
+
+        if not valid:
+            raise ValueError(
+                "could not build mode-to-source ids for box "
+                f"{box_id}: unmatched_interp_node "
+                f"(max_dist={max_dist:.3e}, tol={tol:.3e})"
+            )
+
+        mode_ids = axis_mode_ids[0].astype(np.int32)
+        for iaxis in range(1, tree.dimensions):
+            mode_ids = mode_ids * q_order + axis_mode_ids[iaxis]
+
+        if len(np.unique(mode_ids)) != expected_modes:
+            raise ValueError(
+                "could not build mode-to-source ids for box "
+                f"{box_id}: duplicate_mode_ids"
+            )
+
+        mode_to_source[start + mode_ids] = np.arange(
+            start, start + count, dtype=np.int32
+        )
+
+    return cl.array.to_device(queue, mode_to_source)
+
+
 def interpolate_volume_potential(
     target_points,
     traversal,
@@ -756,9 +1183,141 @@ def interpolate_volume_potential(
 
     # map all boxes to a template [0,1]^2 so that the interpolation
     # weights and modes can be precomputed
-    (blpoints, blweights) = compute_barycentric_lagrange_params(q_order)
+    interp_points_1d = _infer_tree_local_interp_points_1d(
+        tree, traversal, q_order, queue
+    )
+    if interp_points_1d is None:
+        (blpoints, blweights) = compute_barycentric_lagrange_params(q_order)
+    else:
+        from scipy.interpolate import BarycentricInterpolator as Interpolator
+
+        interp = Interpolator(xi=interp_points_1d, yi=None)
+        blpoints = interp.xi
+        blweights = interp.wi
     blpoints = cl.array.to_device(queue, blpoints)
     blweights = cl.array.to_device(queue, blweights)
+    use_mode_to_source_ids = bool(kwargs.pop("use_mode_to_source_ids", False))
+    if use_mode_to_source_ids:
+        mode_to_source_match_tol = kwargs.pop("mode_to_source_match_tol", None)
+        mode_to_source_ids = _build_box_mode_to_source_ids(
+            tree,
+            traversal,
+            q_order,
+            np.asarray(blpoints.get(queue)),
+            queue,
+            match_tol=mode_to_source_match_tol,
+        )
+    else:
+        mode_to_source_ids = None
+
+    if mode_to_source_ids is None:
+        mode_to_source_ids = cl.array.arange(
+            queue, len(tree.sources[0]), dtype=np.int32
+        )
+
+    use_numpy_interpolation = bool(kwargs.pop("use_numpy_interpolation", False))
+    if use_numpy_interpolation:
+
+        def _to_host(ary):
+            if hasattr(ary, "with_queue"):
+                return ary.with_queue(queue).get()
+            if hasattr(ary, "get"):
+                return ary.get(queue)
+            return np.asarray(ary)
+
+        target_boxes_host = _to_host(traversal.target_boxes)
+        balls_near_box_starts_host = _to_host(balls_near_box_starts)
+        balls_near_box_lists_host = _to_host(balls_near_box_lists)
+        box_levels_host = _to_host(tree.box_levels)
+        box_centers_host = _to_host(tree.box_centers)
+        box_target_starts_host = _to_host(tree.box_target_starts)
+        box_target_counts_host = _to_host(tree.box_target_counts_cumul)
+        mode_to_source_ids_host = _to_host(mode_to_source_ids)
+        blpoints_host = _to_host(blpoints)
+        blweights_host = _to_host(blweights)
+
+        target_points_host = []
+        for iaxis in range(dim):
+            target_points_host.append(_to_host(target_points[iaxis]))
+
+        if potential_in_tree_order:
+            potential_tree_host = _to_host(potential)
+        else:
+            user_mode_ids_host = _to_host(tree.user_source_ids)
+            potential_user_host = _to_host(potential)
+            potential_tree_host = potential_user_host[user_mode_ids_host]
+
+        n_box_modes_expected = q_order**dim
+        pout_host = np.zeros(n_points, dtype=dtype)
+        multiplicity_host = np.zeros(n_points, dtype=np.int32)
+
+        for target_box_id in map(int, target_boxes_host):
+            tpt_begin = int(balls_near_box_starts_host[target_box_id])
+            tpt_end = int(balls_near_box_starts_host[target_box_id + 1])
+            if tpt_begin >= tpt_end:
+                continue
+
+            box_level = int(box_levels_host[target_box_id])
+            box_mode_beg = int(box_target_starts_host[target_box_id])
+            n_box_modes = int(box_target_counts_host[target_box_id])
+            if n_box_modes != n_box_modes_expected:
+                continue
+
+            box_extent = float(tree.root_extent) * (1.0 / (2**box_level))
+            box_center = box_centers_host[:, target_box_id]
+
+            box_mode_ids = mode_to_source_ids_host[
+                box_mode_beg : box_mode_beg + n_box_modes
+            ]
+            mode_coeff = potential_tree_host[box_mode_ids]
+
+            for tpt in range(tpt_begin, tpt_end):
+                target_point_id = int(balls_near_box_lists_host[tpt])
+
+                tplt_coord = np.empty(dim, dtype=coord_dtype)
+                for iaxis in range(dim):
+                    real_coord = target_points_host[iaxis][target_point_id]
+                    tplt_coord[iaxis] = (
+                        real_coord - box_center[iaxis]
+                    ) / box_extent + 0.5
+
+                mode_val_1d = []
+                for iaxis in range(dim):
+                    diff = tplt_coord[iaxis] - blpoints_host
+                    if np.any(diff == 0):
+                        vals = np.zeros(q_order, dtype=dtype)
+                        vals[np.where(diff == 0)[0][0]] = 1
+                    else:
+                        denom = np.sum(blweights_host / diff)
+                        vals = (blweights_host / diff) / denom
+                    mode_val_1d.append(vals)
+
+                if dim == 1:
+                    mode_basis = mode_val_1d[0]
+                elif dim == 2:
+                    mode_basis = np.outer(mode_val_1d[0], mode_val_1d[1]).reshape(-1)
+                elif dim == 3:
+                    mode_basis = np.einsum(
+                        "i,j,k->ijk",
+                        mode_val_1d[0],
+                        mode_val_1d[1],
+                        mode_val_1d[2],
+                    ).reshape(-1)
+                else:
+                    raise NotImplementedError
+
+                pout_host[target_point_id] += np.dot(mode_coeff, mode_basis)
+                multiplicity_host[target_point_id] += 1
+
+        if np.any(multiplicity_host == 0):
+            n_missing = int(np.count_nonzero(multiplicity_host == 0))
+            raise ValueError(
+                "interpolation did not cover all targets "
+                f"({n_missing} targets missed by leaves-to-balls lookup)"
+            )
+
+        pout_host = pout_host / multiplicity_host
+        return cl.array.to_device(queue, pout_host)
 
     # {{{ loopy kernel for interpolation
 
@@ -853,7 +1412,8 @@ def interpolate_volume_potential(
                     for mid
                         # Find the coeff of each mode
                         <> mode_id      = box_mode_beg + mid
-                        <> mode_id_user = user_mode_ids[mode_id]
+                        <> source_id    = mode_to_source_ids[mode_id]
+                        <> mode_id_user = user_mode_ids[source_id]
                         <> mode_coeff   = potential[mode_id_user]
 
                         # Mode id in each direction
@@ -953,6 +1513,7 @@ def interpolate_volume_potential(
         box_target_counts_cumul=tree.box_target_counts_cumul,
         potential=potential,
         user_mode_ids=user_mode_ids,
+        mode_to_source_ids=mode_to_source_ids,
         target_boxes=traversal.target_boxes,
         root_extent=tree.root_extent,
         n_tgt_boxes=len(traversal.target_boxes),
