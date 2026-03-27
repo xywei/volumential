@@ -1975,7 +1975,8 @@ class NearFieldInteractionTable:
         from meshmode.array_context import PyOpenCLArrayContext
         from meshmode.discretization import Discretization
         from meshmode.discretization.poly_element import (
-            PolynomialWarpAndBlendGroupFactory,
+            PolynomialWarpAndBlend2DRestrictingGroupFactory,
+            PolynomialWarpAndBlend3DRestrictingGroupFactory,
         )
         from meshmode.dof_array import flatten, thaw
         from meshmode.mesh.io import read_gmsh
@@ -2043,9 +2044,18 @@ class NearFieldInteractionTable:
         # }}} End gmsh processing
 
         arr_ctx = PyOpenCLArrayContext(queue)
-        discr = Discretization(
-            arr_ctx, mesh, PolynomialWarpAndBlendGroupFactory(order=quad_order)
-        )
+        if self.dim == 2:
+            group_factory = PolynomialWarpAndBlend2DRestrictingGroupFactory(
+                order=quad_order
+            )
+        elif self.dim == 3:
+            group_factory = PolynomialWarpAndBlend3DRestrictingGroupFactory(
+                order=quad_order
+            )
+        else:
+            raise NotImplementedError(f"unsupported dimension: {self.dim}")
+
+        discr = Discretization(arr_ctx, mesh, group_factory)
 
         from pytential import bind, sym
 
@@ -2165,6 +2175,7 @@ class NearFieldInteractionTable:
         lpknl = lp.fix_parameters(lpknl, dim=self.dim)
         lpknl = lp.set_options(lpknl, write_cl=False)
         lpknl = lp.set_options(lpknl, return_dict=True)
+        lpknl_exec = lpknl.executor(queue.context)
 
         # }}} End kernel evaluation
 
@@ -2174,7 +2185,7 @@ class NearFieldInteractionTable:
         int_vals = []
 
         for target in self.q_points:
-            evt, res = lpknl(queue, quad_points=nodes, target_point=target)
+            evt, res = lpknl_exec(queue, quad_points=nodes, target_point=target)
             knl_vals = res["result"]
 
             integ = bind(discr, sym.integral(self.dim, self.dim, sym.var("integrand")))(

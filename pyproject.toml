@@ -71,6 +71,10 @@ sumpy = { git = "https://gitlab.tiker.net/inducer/sumpy.git" }
 
 [tool.pytest.ini_options]
 testpaths = ["test"]
+filterwarnings = [
+  "once:'bcast_numpy_array=True' is deprecated and will be unsupported from 2025\\.:DeprecationWarning:meshmode\\.dof_array",
+  "once:Broadcasting array context array types across <class 'meshmode\\.dof_array\\.DOFArray'> has been implicitly enabled\\..*:DeprecationWarning:meshmode\\.dof_array",
+]
 
 [tool.basedpyright]
 include = ["volumential/version.py"]

@@ -24,7 +24,8 @@ import os
 from pytools.persistent_dict import WriteOncePersistentDict
 
 from volumential.nearfield_potential_table import (  # noqa: F401
-    NearFieldInteractionTable)
+    NearFieldInteractionTable,
+)
 from volumential.singular_integral_2d import box_quad
 from volumential.table_manager import NearFieldInteractionTableManager  # noqa: F401
 from volumential.version import VERSION_TEXT
@@ -38,7 +39,10 @@ __doc__ = """
 :mod:`volumential` can compute 2/3D volume potentials using FMM.
 """
 
-code_cache = WriteOncePersistentDict("volumential-code-cache-v0-"+VERSION_TEXT)
+code_cache = WriteOncePersistentDict(
+    "volumential-code-cache-v0-" + VERSION_TEXT,
+    safe_sync=False,
+)
 
 # {{{ optimization control
 
@@ -52,6 +56,7 @@ def set_optimization_enabled(flag):
     global OPT_ENABLED
     OPT_ENABLED = flag
 
+
 # }}}
 
 # {{{ cache control
@@ -60,8 +65,8 @@ def set_optimization_enabled(flag):
 CACHING_ENABLED = True
 
 CACHING_ENABLED = (
-    "VOLUMENTIAL_NO_CACHE" not in os.environ
-    and "CG_NO_CACHE" not in os.environ)
+    "VOLUMENTIAL_NO_CACHE" not in os.environ and "CG_NO_CACHE" not in os.environ
+)
 
 
 def set_caching_enabled(flag):
@@ -89,6 +94,7 @@ class CacheMode:
         global CACHING_ENABLED
         CACHING_ENABLED = self.previous_mode
         del self.previous_mode
+
 
 # }}}
 

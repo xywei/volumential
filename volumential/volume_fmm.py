@@ -1499,7 +1499,8 @@ def interpolate_volume_potential(
     lpknl = loopy.set_options(lpknl, return_dict=True)
     lpknl = loopy.fix_parameters(lpknl, dim=int(dim), q_order=int(q_order))
     lpknl = loopy.split_iname(lpknl, "tbox", 128, outer_tag="g.0", inner_tag="l.0")
-    evt, res_dict = lpknl(
+    lpknl_exec = lpknl.executor(queue.context)
+    evt, res_dict = lpknl_exec(
         queue,
         p_out=pout,
         multiplicity=multiplicity,

@@ -805,6 +805,7 @@ class ElementsToSourcesLookupBuilder:
         logger.debug("element-to-source lookup: refine starts")
 
         element_lookup_kernel = self.get_simplex_lookup_kernel()
+        element_lookup_executor = element_lookup_kernel.executor(actx.queue.context)
 
         vertices_dev = obj_array_1d(
             [
@@ -822,7 +823,7 @@ class ElementsToSourcesLookupBuilder:
             for iaxis in range(self.dim)
         }
 
-        evt, res = element_lookup_kernel(
+        evt, res = element_lookup_executor(
             actx.queue,
             dim=self.dim,
             nboxes=self.tree.nboxes,
