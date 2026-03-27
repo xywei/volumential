@@ -456,6 +456,7 @@ def test_build_source_only_wrangler_preserves_self_extra_kwargs(monkeypatch):
         source_wrangler.self_extra_kwargs["target_to_source"],
         wrangler.self_extra_kwargs["target_to_source"],
     )
+    assert source_wrangler.list1_extra_kwargs == wrangler.list1_extra_kwargs
     assert source_wrangler.translation_classes_data is wrangler.translation_classes_data
     assert source_wrangler.preprocessed_mpole_dtype == wrangler.preprocessed_mpole_dtype
 
@@ -783,6 +784,7 @@ def test_volume_fmm_list1_falls_back_to_p2p_on_nonfinite_table_values():
 
         def __init__(self):
             self.p2p_calls = 0
+            self.p2p_src_weights = None
 
         def multipole_expansion_zeros(self):
             return None
@@ -829,6 +831,7 @@ def test_volume_fmm_list1_falls_back_to_p2p_on_nonfinite_table_values():
             src_weights,
         ):
             self.p2p_calls += 1
+            self.p2p_src_weights = np.asarray(src_weights).copy()
             return np.array([3.0, 4.0], dtype=self.dtype), None
 
         def multipole_to_local(
@@ -900,6 +903,7 @@ def test_volume_fmm_list1_falls_back_to_p2p_on_nonfinite_table_values():
     )
 
     assert wrangler.p2p_calls == 1
+    np.testing.assert_array_equal(wrangler.p2p_src_weights, src_weights)
     assert np.allclose(result, np.array([3.0, 4.0]))
 
 
@@ -1487,6 +1491,7 @@ def test_volume_fmm_calculus_patch_matches_source_density(
         direct_evaluation=False,
         reorder_sources=True,
         reorder_potentials=True,
+        allow_list1_p2p_fallback=False,
     )
 
     u_patch = interpolate_volume_potential(
