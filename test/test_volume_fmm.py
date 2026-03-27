@@ -653,6 +653,7 @@ def test_volume_fmm_reorders_src_func_with_source_permutation():
             self._source_map = np.array([2, 0, 1], dtype=np.int32)
             self._target_map = np.array([3, 1, 4, 0, 2], dtype=np.int32)
             self.reordered_src_weights = None
+            self.reordered_src_func = None
 
         def multipole_expansion_zeros(self):
             return None
@@ -697,6 +698,7 @@ def test_volume_fmm_reorders_src_func_with_source_permutation():
             neighbor_sources_lists,
             mode_coefs,
         ):
+            self.reordered_src_func = np.asarray(mode_coefs).copy()
             return np.array([np.sum(mode_coefs)], dtype=self.dtype), None
 
         def multipole_to_local(
@@ -767,6 +769,7 @@ def test_volume_fmm_reorders_src_func_with_source_permutation():
     )
 
     assert np.allclose(wrangler.reordered_src_weights, np.array([4.0, 1.0, 2.0]))
+    assert np.allclose(wrangler.reordered_src_func, np.array([40.0, 10.0, 20.0]))
     assert np.allclose(result, np.array([70.0]))
 
 
