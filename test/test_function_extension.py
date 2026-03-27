@@ -234,9 +234,8 @@ def test_biharmonic_extension_linear_accuracy(ctx_factory):
     qbx, density_discr = _make_test_qbx(actx, nelements=40, order=4, qbx_order=3)
 
     bdry_nodes = actx.thaw(density_discr.nodes())
-    flat_bdry_nodes = flatten(bdry_nodes, actx, leaf_class=DOFArray)
-    xb = actx.to_numpy(flat_bdry_nodes[0])
-    yb = actx.to_numpy(flat_bdry_nodes[1])
+    xb = actx.to_numpy(flatten(bdry_nodes[0], actx, leaf_class=DOFArray))
+    yb = actx.to_numpy(flatten(bdry_nodes[1], actx, leaf_class=DOFArray))
 
     f = unflatten(
         bdry_nodes[0],
@@ -314,9 +313,8 @@ def test_biharmonic_extension_cubic_accuracy(ctx_factory):
     qbx, density_discr = _make_test_qbx(actx, nelements=40, order=4, qbx_order=3)
 
     bdry_nodes = actx.thaw(density_discr.nodes())
-    flat_bdry_nodes = flatten(bdry_nodes, actx, leaf_class=DOFArray)
-    xb = actx.to_numpy(flat_bdry_nodes[0])
-    yb = actx.to_numpy(flat_bdry_nodes[1])
+    xb = actx.to_numpy(flatten(bdry_nodes[0], actx, leaf_class=DOFArray))
+    yb = actx.to_numpy(flatten(bdry_nodes[1], actx, leaf_class=DOFArray))
 
     def u_exact(x, y):
         return x**3 + y**3

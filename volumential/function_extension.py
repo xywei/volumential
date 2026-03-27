@@ -212,6 +212,12 @@ def compute_harmonic_extension(
     if representation_mode == "auto":
         use_d_only = loc_sign == -1
     elif representation_mode == "d_only":
+        if loc_sign != -1:
+            raise ValueError(
+                "representation_mode='d_only' is only supported for interior "
+                "extension (loc_sign=-1); use 's_plus_d' or 'auto' for "
+                "exterior extension"
+            )
         use_d_only = True
     elif representation_mode == "s_plus_d":
         use_d_only = False

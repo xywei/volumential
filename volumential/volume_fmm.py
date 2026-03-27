@@ -27,6 +27,7 @@ __doc__ = """
 
 import logging
 import os
+import inspect
 from dataclasses import replace
 
 import numpy as np
@@ -357,7 +358,7 @@ def _build_source_only_wrangler(traversal, wrangler, queue):
                 int(n_targets), dtype=np.int32
             )
 
-    source_wrangler = type(wrangler)(
+    source_wrangler_kwargs = dict(
         tree_indep=wrangler.tree_indep,
         queue=queue,
         traversal=source_traversal,
@@ -371,6 +372,31 @@ def _build_source_only_wrangler(traversal, wrangler, queue):
         self_extra_kwargs=self_extra_kwargs,
         list1_extra_kwargs=getattr(wrangler, "list1_extra_kwargs", None),
     )
+
+    try:
+        ctor_signature = inspect.signature(type(wrangler).__init__)
+    except (TypeError, ValueError):
+        ctor_signature = None
+
+    accepts_varkw = False
+    ctor_param_names = set()
+    if ctor_signature is not None:
+        for param_name, param in ctor_signature.parameters.items():
+            if param_name == "self":
+                continue
+            if param.kind == inspect.Parameter.VAR_KEYWORD:
+                accepts_varkw = True
+            else:
+                ctor_param_names.add(param_name)
+
+    for attr_name in ("translation_classes_data", "preprocessed_mpole_dtype"):
+        attr_value = getattr(wrangler, attr_name, None)
+        if attr_value is None:
+            continue
+        if accepts_varkw or attr_name in ctor_param_names:
+            source_wrangler_kwargs[attr_name] = attr_value
+
+    source_wrangler = type(wrangler)(**source_wrangler_kwargs)
 
     wrangler._source_only_fmm_context = (
         queue,

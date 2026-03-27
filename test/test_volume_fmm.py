@@ -437,6 +437,8 @@ def test_build_source_only_wrangler_preserves_self_extra_kwargs(monkeypatch):
             }
             self.list1_extra_kwargs = {"case_encoding_bias": 1.0e-10}
             self.level_orders = (4, 5)
+            self.translation_classes_data = object()
+            self.preprocessed_mpole_dtype = np.float32
 
     queue = object()
     traversal = SimpleNamespace(tree=object())
@@ -453,6 +455,8 @@ def test_build_source_only_wrangler_preserves_self_extra_kwargs(monkeypatch):
         source_wrangler.self_extra_kwargs["target_to_source"],
         wrangler.self_extra_kwargs["target_to_source"],
     )
+    assert source_wrangler.translation_classes_data is wrangler.translation_classes_data
+    assert source_wrangler.preprocessed_mpole_dtype == wrangler.preprocessed_mpole_dtype
 
 
 def test_build_source_only_wrangler_rebuilds_target_to_source_mapping(monkeypatch):
