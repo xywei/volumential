@@ -30,7 +30,10 @@ from arraycontext import flatten
 from boxtree.array_context import PyOpenCLArrayContext as BoxtreePyOpenCLArrayContext
 from meshmode.array_context import PyOpenCLArrayContext
 from meshmode.discretization import Discretization
-from meshmode.discretization.poly_element import PolynomialWarpAndBlendGroupFactory
+from meshmode.discretization.poly_element import (
+    PolynomialWarpAndBlend2DRestrictingGroupFactory,
+    PolynomialWarpAndBlend3DRestrictingGroupFactory,
+)
 from meshmode.dof_array import DOFArray
 from meshmode.mesh.generation import generate_regular_rect_mesh
 
@@ -95,6 +98,14 @@ def eval_func_on_discr_nodes(queue, discr, func):
     return cl.array.to_device(queue, fvals)
 
 
+def _group_factory_for_dim(dim, degree):
+    if dim == 2:
+        return PolynomialWarpAndBlend2DRestrictingGroupFactory(order=degree)
+    if dim == 3:
+        return PolynomialWarpAndBlend3DRestrictingGroupFactory(order=degree)
+    raise ValueError(f"unsupported dimension for warp-and-blend factory: {dim}")
+
+
 # }}} End test data
 
 
@@ -120,7 +131,7 @@ def drive_test_from_meshmode_interpolation(
     )
 
     arr_ctx = PyOpenCLArrayContext(queue)
-    group_factory = PolynomialWarpAndBlendGroupFactory(order=degree)
+    group_factory = _group_factory_for_dim(dim, degree)
     discr = Discretization(arr_ctx, mesh, group_factory)
 
     bbox_fac = BoundingBoxFactory(dim=dim)
@@ -135,7 +146,7 @@ def drive_test_from_meshmode_interpolation(
     )
     boxgeo = boxfmm_fac(queue)
     lookup_fac = ElementsToSourcesLookupBuilder(cl_ctx, tree=boxgeo.tree, discr=discr)
-    lookup, evt = lookup_fac(queue)
+    lookup, evt = lookup_fac(arr_ctx)
 
     if test_case == "exact":
         # algebraically exact interpolation
@@ -157,7 +168,7 @@ def drive_test_from_meshmode_interpolation(
         raise ValueError()
 
     dof_vec = eval_func_on_discr_nodes(queue, discr, func)
-    res = interpolate_from_meshmode(queue, dof_vec, lookup).get(queue)
+    res = interpolate_from_meshmode(arr_ctx, dof_vec, lookup).get(queue)
 
     tree = BoxtreePyOpenCLArrayContext(queue).to_numpy(boxgeo.tree)
     ref = func(np.vstack(tree.sources))
@@ -191,7 +202,7 @@ def drive_test_to_meshmode_interpolation(
     )
 
     arr_ctx = PyOpenCLArrayContext(queue)
-    group_factory = PolynomialWarpAndBlendGroupFactory(order=degree)
+    group_factory = _group_factory_for_dim(dim, degree)
     discr = Discretization(arr_ctx, mesh, group_factory)
 
     bbox_fac = BoundingBoxFactory(dim=dim)
@@ -206,7 +217,7 @@ def drive_test_to_meshmode_interpolation(
     )
     boxgeo = boxfmm_fac(queue)
     lookup_fac = LeavesToNodesLookupBuilder(cl_ctx, trav=boxgeo.trav, discr=discr)
-    lookup, evt = lookup_fac(queue)
+    lookup, evt = lookup_fac(arr_ctx)
 
     if test_case == "exact":
         # algebraically exact interpolation
@@ -229,7 +240,7 @@ def drive_test_to_meshmode_interpolation(
 
     tree = BoxtreePyOpenCLArrayContext(queue).to_numpy(boxgeo.tree)
     potential = func(np.vstack(tree.sources))
-    res = interpolate_to_meshmode(queue, potential, lookup).get(queue)
+    res = interpolate_to_meshmode(arr_ctx, potential, lookup).get(queue)
     ref = eval_func_on_discr_nodes(queue, discr, func).get(queue)
 
     if test_case == "exact":
@@ -256,7 +267,7 @@ def test_from_meshmode_interpolation_user_order_keeps_source_axis(ctx_factory):
     )
 
     arr_ctx = PyOpenCLArrayContext(queue)
-    group_factory = PolynomialWarpAndBlendGroupFactory(order=degree)
+    group_factory = _group_factory_for_dim(dim, degree)
     discr = Discretization(arr_ctx, mesh, group_factory)
 
     bbox_fac = BoundingBoxFactory(dim=dim)
@@ -271,7 +282,7 @@ def test_from_meshmode_interpolation_user_order_keeps_source_axis(ctx_factory):
     )
     boxgeo = boxfmm_fac(queue)
     lookup_fac = ElementsToSourcesLookupBuilder(cl_ctx, tree=boxgeo.tree, discr=discr)
-    lookup, _ = lookup_fac(queue)
+    lookup, _ = lookup_fac(arr_ctx)
 
     func = random_polynomial_func(dim, degree, seed=17)
     scalar_dof = eval_func_on_discr_nodes(queue, discr, func).get(queue)
@@ -283,8 +294,8 @@ def test_from_meshmode_interpolation_user_order_keeps_source_axis(ctx_factory):
 
     dof_vec = cl.array.to_device(queue, dof_host)
 
-    tree_order = interpolate_from_meshmode(queue, dof_vec, lookup, order="tree")
-    user_order = interpolate_from_meshmode(queue, dof_vec, lookup, order="user")
+    tree_order = interpolate_from_meshmode(arr_ctx, dof_vec, lookup, order="tree")
+    user_order = interpolate_from_meshmode(arr_ctx, dof_vec, lookup, order="user")
 
     tree_order = tree_order.get(queue)
     user_order = user_order.get(queue)
@@ -312,7 +323,7 @@ def test_from_meshmode_interpolation_integer_payload_promotes_to_float(ctx_facto
     )
 
     arr_ctx = PyOpenCLArrayContext(queue)
-    group_factory = PolynomialWarpAndBlendGroupFactory(order=degree)
+    group_factory = _group_factory_for_dim(dim, degree)
     discr = Discretization(arr_ctx, mesh, group_factory)
 
     bbox_fac = BoundingBoxFactory(dim=dim)
@@ -327,7 +338,7 @@ def test_from_meshmode_interpolation_integer_payload_promotes_to_float(ctx_facto
     )
     boxgeo = boxfmm_fac(queue)
     lookup_fac = ElementsToSourcesLookupBuilder(cl_ctx, tree=boxgeo.tree, discr=discr)
-    lookup, _ = lookup_fac(queue)
+    lookup, _ = lookup_fac(arr_ctx)
 
     func = random_polynomial_func(dim, degree, seed=29)
     scalar_dof = eval_func_on_discr_nodes(queue, discr, func).get(queue)
@@ -336,10 +347,10 @@ def test_from_meshmode_interpolation_integer_payload_promotes_to_float(ctx_facto
     dof_int = cl.array.to_device(queue, dof_int_host)
     dof_ref = cl.array.to_device(queue, dof_int_host.astype(np.float64))
 
-    interp_int = interpolate_from_meshmode(queue, dof_int, lookup, order="tree").get(
+    interp_int = interpolate_from_meshmode(arr_ctx, dof_int, lookup, order="tree").get(
         queue
     )
-    interp_ref = interpolate_from_meshmode(queue, dof_ref, lookup, order="tree").get(
+    interp_ref = interpolate_from_meshmode(arr_ctx, dof_ref, lookup, order="tree").get(
         queue
     )
 
