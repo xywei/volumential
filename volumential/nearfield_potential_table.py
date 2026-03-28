@@ -1033,10 +1033,15 @@ class NearFieldInteractionTable:
             complex_dtype=np.complex128,
         )
         quad_inames = frozenset(["ientry", "inode"])
-        quad_kernel_insns = [
-            insn.copy(within_inames=insn.within_inames | quad_inames)
-            for insn in loopy_insns
-        ]
+        quad_kernel_insns = []
+        for insn in loopy_insns:
+            predicates = getattr(insn, "predicates", frozenset())
+            quad_kernel_insns.append(
+                insn.copy(
+                    within_inames=insn.within_inames | quad_inames,
+                    predicates=frozenset(predicates) | frozenset(["active"]),
+                )
+            )
         sympy_conv = SympyToPymbolicMapper()
         scaling_assignment = lp.Assignment(
             id=None,

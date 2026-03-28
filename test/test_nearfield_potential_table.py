@@ -1232,6 +1232,85 @@ def test_prepare_table_data_and_entry_map_rejects_mixed_storage_modes():
         _prepare_table_data_and_entry_map([full, reduced])
 
 
+def test_batched_duffy_non_cl_executor_signature(monkeypatch):
+    table = npt.NearFieldInteractionTable(quad_order=1, dim=2, progress_bar=False)
+
+    invariant_info = {
+        "mode_axes": np.array([[0, 0]], dtype=np.int32),
+        "case_indices": np.array([0], dtype=np.int32),
+        "target_point_indices": np.array([0], dtype=np.int32),
+    }
+
+    def fake_node_data(
+        self, radial_rule, regular_quad_order, radial_quad_order, mp_dps
+    ):
+        del radial_rule, regular_quad_order, radial_quad_order, mp_dps
+        return {
+            "n_nodes": 1,
+            "node_u": np.zeros((self.dim, 1), dtype=self.dtype),
+            "node_sign": np.ones((self.dim, 1), dtype=self.dtype),
+            "node_jac_base": np.ones(1, dtype=self.dtype),
+        }
+
+    def fake_case_target_points(self):
+        return np.zeros((self.dim, 1, self.n_q_points), dtype=self.dtype)
+
+    def fake_bary(self):
+        return np.array([0.5], dtype=self.dtype), np.array([1], dtype=self.dtype)
+
+    recorded = {}
+
+    class FakeProgram:
+        def executor(self, *args):
+            recorded["executor_args"] = args
+
+            def run(*args, **kwargs):
+                recorded["call_args"] = args
+                recorded["call_kwargs"] = kwargs
+                return None, {"result": np.array([3.14], dtype=table.dtype)}
+
+            return run
+
+    monkeypatch.setattr(
+        npt.NearFieldInteractionTable,
+        "_get_duffy_radial_node_data",
+        fake_node_data,
+    )
+    monkeypatch.setattr(
+        npt.NearFieldInteractionTable,
+        "_get_case_target_points",
+        fake_case_target_points,
+    )
+    monkeypatch.setattr(
+        npt.NearFieldInteractionTable,
+        "_get_barycentric_data",
+        fake_bary,
+    )
+    monkeypatch.setattr(
+        npt.NearFieldInteractionTable,
+        "_get_fused_invariant_duffy_table_program",
+        lambda self, queue, n_entries, n_nodes: FakeProgram(),
+    )
+
+    values = table._batched_duffy_values_for_local_indices(
+        queue=object(),
+        invariant_info=invariant_info,
+        local_entry_indices=np.array([0], dtype=np.int64),
+        radial_rule="tanh-sinh-fast",
+        regular_quad_order=8,
+        radial_quad_order=31,
+        mp_dps=50,
+    )
+
+    assert recorded["executor_args"] == ()
+    assert recorded["call_args"] == ()
+    assert recorded["call_kwargs"]["source_box_extent"] == table.dtype(
+        table.source_box_extent
+    )
+    assert values.shape == (1,)
+    assert np.allclose(values, np.array([3.14], dtype=table.dtype))
+
+
 if __name__ == "__main__":
     import sys
 

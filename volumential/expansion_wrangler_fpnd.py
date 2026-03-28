@@ -308,21 +308,26 @@ class FPNDSumpyTreeIndependentDataForWrangler(
         local_expansion_factory,
         target_kernels,
         exclude_self=True,
-        use_rscale=True,
+        use_rscale=None,
         strength_usage=None,
         source_kernels=None,
     ):
         queue = cl.CommandQueue(cl_context)
         actx = PyOpenCLArrayContext(queue)
+        super_kwargs = dict(
+            target_kernels=target_kernels,
+            exclude_self=exclude_self,
+            strength_usage=strength_usage,
+            source_kernels=source_kernels,
+        )
+        if use_rscale is not None:
+            super_kwargs["use_rscale"] = use_rscale
+
         super().__init__(
             actx,
             multipole_expansion_factory,
             local_expansion_factory,
-            target_kernels=target_kernels,
-            exclude_self=exclude_self,
-            use_rscale=use_rscale,
-            strength_usage=strength_usage,
-            source_kernels=source_kernels,
+            **super_kwargs,
         )
 
     def _for_queue(self, queue):
@@ -330,15 +335,21 @@ class FPNDSumpyTreeIndependentDataForWrangler(
         if queue is None or setup_queue is queue:
             return self
 
+        ctor_kwargs = dict(
+            exclude_self=self.exclude_self,
+            strength_usage=self.strength_usage,
+            source_kernels=self.source_kernels,
+        )
+        use_rscale = getattr(self, "use_rscale", None)
+        if use_rscale is not None:
+            ctor_kwargs["use_rscale"] = use_rscale
+
         tree_indep = type(self)(
             queue.context,
             self.multipole_expansion_factory,
             self.local_expansion_factory,
             self.target_kernels,
-            exclude_self=self.exclude_self,
-            use_rscale=self.use_rscale,
-            strength_usage=self.strength_usage,
-            source_kernels=self.source_kernels,
+            **ctor_kwargs,
         )
         tree_indep._setup_actx = PyOpenCLArrayContext(queue)
         return tree_indep
