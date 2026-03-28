@@ -796,6 +796,26 @@ def test_mode_remap_is_elementwise_for_vectorized_inputs():
     assert np.allclose(scalar_vals, vector_vals)
 
 
+def test_quad_order_one_mode_preserves_numpy_broadcasting():
+    table = npt.NearFieldInteractionTable(quad_order=1, dim=2, progress_bar=False)
+
+    x = np.array([0.1, 0.2, 0.3], dtype=np.float64)[:, np.newaxis]
+    y = np.array([0.4, 0.5], dtype=np.float64)[np.newaxis, :]
+
+    mode = table.get_mode(0)
+    template_mode = table.get_template_mode(0)
+
+    mode_vals = mode(x, y)
+    template_mode_vals = template_mode(x, y)
+
+    assert mode_vals.shape == (3, 2)
+    assert template_mode_vals.shape == (3, 2)
+    assert np.all(mode_vals == 1)
+    assert np.all(template_mode_vals == 1)
+    assert np.isscalar(mode(0.1, 0.2))
+    assert np.isscalar(template_mode(0.1, 0.2))
+
+
 def test_duffy_radial_batched_initializes_normalizers(monkeypatch):
     table = npt.NearFieldInteractionTable(
         quad_order=2,

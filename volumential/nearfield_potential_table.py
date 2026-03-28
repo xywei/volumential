@@ -499,9 +499,9 @@ class NearFieldInteractionTable:
 
             def mode(*coords):
                 assert len(coords) == self.dim
-                coords0 = np.asarray(coords[0])
-                is_scalar = all(np.asarray(coord).ndim == 0 for coord in coords)
-                fvals = np.ones(coords0.shape, dtype=self.dtype)
+                bcoords = np.broadcast_arrays(*(np.asarray(coord) for coord in coords))
+                is_scalar = all(coord.ndim == 0 for coord in bcoords)
+                fvals = np.ones(bcoords[0].shape, dtype=self.dtype)
                 if is_scalar and fvals.size == 1:
                     return fvals.item()
                 return fvals
@@ -551,9 +551,9 @@ class NearFieldInteractionTable:
 
             def mode(*coords):
                 assert len(coords) == self.dim
-                coords0 = np.asarray(coords[0])
-                is_scalar = all(np.asarray(coord).ndim == 0 for coord in coords)
-                fvals = np.ones(coords0.shape, dtype=self.dtype)
+                bcoords = np.broadcast_arrays(*(np.asarray(coord) for coord in coords))
+                is_scalar = all(coord.ndim == 0 for coord in bcoords)
+                fvals = np.ones(bcoords[0].shape, dtype=self.dtype)
                 if is_scalar and fvals.size == 1:
                     return fvals.item()
                 return fvals
@@ -1351,8 +1351,7 @@ class NearFieldInteractionTable:
             bw_arg = np.ascontiguousarray(bw, dtype=self.dtype)
             mode_i_arg = mode_i
 
-        _, res = prg_exec(
-            queue,
+        common_kwargs = dict(
             source_box_extent=self.dtype(self.source_box_extent),
             target_points=target_points_arg,
             decomposition_targets=decomposition_targets_arg,
@@ -1363,6 +1362,11 @@ class NearFieldInteractionTable:
             bary_w=bw_arg,
             mode_i=mode_i_arg,
         )
+
+        if queue_is_cl:
+            _, res = prg_exec(queue, **common_kwargs)
+        else:
+            _, res = prg_exec(**common_kwargs)
 
         result = res["result"]
         if hasattr(result, "get"):
