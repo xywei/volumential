@@ -41,7 +41,7 @@ import logging
 import numpy as np
 
 import pyopencl as cl
-from arraycontext import flatten
+from arraycontext import BcastUntilActxArray, flatten
 from meshmode.dof_array import DOFArray
 from pymbolic import var
 from pytential import GeometryCollection, bind, sym
@@ -573,27 +573,27 @@ def compute_biharmonic_extension(
     # convolutions
     GS1 = sym.IntG(  # noqa: N806
         cplx_lin_log_knl,
-        [cplx_lin_log_knl],
-        [density_rho_sym],
+        (cplx_lin_log_knl,),
+        (density_rho_sym,),
         qbx_forced_limit=None,
     )
     GS2 = sym.IntG(  # noqa: N806
         cplx_lin_knl,
-        [cplx_lin_knl],
-        [density_conj_rho_sym],
+        (cplx_lin_knl,),
+        (density_conj_rho_sym,),
         qbx_forced_limit=None,
     )
     GD1 = sym.IntG(  # noqa: N806
         cplx_frac_knl,
-        [cplx_frac_knl],
-        [density_rho_sym * dxids_sym],
+        (cplx_frac_knl,),
+        (density_rho_sym * dxids_sym,),
         qbx_forced_limit=None,
     )
     GD2 = [
         sym.IntG(  # noqa: N806
             AxisTargetDerivative(iaxis, ComplexLogKernel(dim)),
-            [cplx_log_knl],
-            [density_conj_rho_sym * dxids_sym + density_rho_sym * dxids_conj_sym],
+            (cplx_log_knl,),
+            (density_conj_rho_sym * dxids_sym + density_rho_sym * dxids_conj_sym,),
             qbx_forced_limit=qbx_forced_limit,
         )
         for iaxis in range(dim)
@@ -601,20 +601,20 @@ def compute_biharmonic_extension(
 
     GS1_bdry = sym.IntG(  # noqa: N806
         cplx_lin_log_knl,
-        [cplx_lin_log_knl],
-        [density_rho_sym],
+        (cplx_lin_log_knl,),
+        (density_rho_sym,),
         qbx_forced_limit=qbx_forced_limit,
     )
     GS2_bdry = sym.IntG(  # noqa: N806
         cplx_lin_knl,
-        [cplx_lin_knl],
-        [density_conj_rho_sym],
+        (cplx_lin_knl,),
+        (density_conj_rho_sym,),
         qbx_forced_limit=qbx_forced_limit,
     )
     GD1_bdry = sym.IntG(  # noqa: N806
         cplx_frac_knl,
-        [cplx_frac_knl],
-        [density_rho_sym * dxids_sym],
+        (cplx_frac_knl,),
+        (density_rho_sym * dxids_sym,),
         qbx_forced_limit=qbx_forced_limit,
     )
 
@@ -640,7 +640,11 @@ def compute_biharmonic_extension(
     from pytential.symbolic.pde.scalar import NeumannOperator
     from sumpy.kernel import LaplaceKernel
 
-    operator_v1 = NeumannOperator(LaplaceKernel(dim), loc_sign=qbx_forced_limit)
+    operator_v1 = NeumannOperator(
+        LaplaceKernel(dim),
+        loc_sign=qbx_forced_limit,
+        use_l2_weighting=True,
+    )
     bound_op_v1 = bind(qbx, operator_v1.operator(var("sigma")))
     # Sign convention: v1 solves a Neumann problem that cancels the tangential
     # derivative contribution from v2 on the extension side.
@@ -674,6 +678,9 @@ def compute_biharmonic_extension(
     target_nodes = actx.thaw(target_discr.nodes())
     density_nodes = actx.thaw(density_discr.nodes())
 
+    def bcast_to_dofs(value):
+        return BcastUntilActxArray(actx, value)
+
     z_conj = target_nodes[0] - 1j * target_nodes[1]
     z_conj_bdry = density_nodes[0] - 1j * density_nodes[1]
     int_rho = (
@@ -691,7 +698,7 @@ def compute_biharmonic_extension(
             (qbx_stick_out, target_discr), GS2
         )(actx, mu=mu).real
     )
-    omega_S3 = (z_conj * int_rho).real  # noqa: N806
+    omega_S3 = (bcast_to_dofs(int_rho) * z_conj).real  # noqa: N806
     omega_S = -(omega_S1 + omega_S2 + omega_S3)  # noqa: N806
 
     grad_omega_S1 = bind(  # noqa: N806
@@ -710,7 +717,7 @@ def compute_biharmonic_extension(
     omega_S2_bdry = (  # noqa: N806
         -1 * bind(qbx, GS2_bdry)(actx, mu=mu).real
     )
-    omega_S3_bdry = (z_conj_bdry * int_rho).real  # noqa: N806
+    omega_S3_bdry = (bcast_to_dofs(int_rho) * z_conj_bdry).real  # noqa: N806
     omega_S_bdry = -(omega_S1_bdry + omega_S2_bdry + omega_S3_bdry)  # noqa: N806
 
     omega_D1 = bind(  # noqa: N806
@@ -744,13 +751,15 @@ def compute_biharmonic_extension(
         actx, mu=mu
     )
     omega_W = (  # noqa: N806
-        int_bdry_mu[0] * target_nodes[1] - int_bdry_mu[1] * target_nodes[0]
+        bcast_to_dofs(int_bdry_mu[0]) * target_nodes[1]
+        - bcast_to_dofs(int_bdry_mu[1]) * target_nodes[0]
     )
     grad_omega_W = obj_array_1d(  # noqa: N806
         [-int_bdry_mu[1], int_bdry_mu[0]]
     )
     omega_W_bdry = (  # noqa: N806
-        int_bdry_mu[0] * density_nodes[1] - int_bdry_mu[1] * density_nodes[0]
+        bcast_to_dofs(int_bdry_mu[0]) * density_nodes[1]
+        - bcast_to_dofs(int_bdry_mu[1]) * density_nodes[0]
     )
 
     int_bdry = bind(qbx, sym.integral(dim, dim - 1, var("integrand")))(
@@ -773,11 +782,13 @@ def compute_biharmonic_extension(
     path_length = get_path_length(actx, density_discr)
     matching_const = (int_interior_func_bdry - int_bdry) / path_length
 
-    ext_f = omega_S + omega_D + omega_W + matching_const
+    ext_f = omega_S + omega_D + omega_W + bcast_to_dofs(matching_const)
     grad_f = grad_omega_S + grad_omega_D + grad_omega_W
 
     if enforce_affine_match:
-        ext_bdry = omega_S_bdry + omega_D_bdry + omega_W_bdry + matching_const
+        ext_bdry = (
+            omega_S_bdry + omega_D_bdry + omega_W_bdry + bcast_to_dofs(matching_const)
+        )
         residual_flat = flatten((f - ext_bdry).real, actx, leaf_class=DOFArray)
         x_bdry_flat = flatten(density_nodes[0], actx, leaf_class=DOFArray)
         y_bdry_flat = flatten(density_nodes[1], actx, leaf_class=DOFArray)

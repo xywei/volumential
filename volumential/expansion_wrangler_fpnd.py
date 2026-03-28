@@ -308,7 +308,7 @@ class FPNDSumpyTreeIndependentDataForWrangler(
         local_expansion_factory,
         target_kernels,
         exclude_self=True,
-        use_rscale=None,
+        use_rscale=True,
         strength_usage=None,
         source_kernels=None,
     ):

@@ -648,7 +648,10 @@ def tria_quad_duffy_radial(
         ch_t = np.cosh(t)
         arg = 0.5 * np.pi * sh_t
         rho_nodes = 0.5 * (1.0 + np.tanh(arg))
-        rho_weights = 0.25 * np.pi * h * ch_t / np.cosh(arg) ** 2
+        abs_arg = np.abs(arg)
+        exp_term = np.exp(-2.0 * abs_arg)
+        sech2 = 4.0 * exp_term / (1.0 + exp_term) ** 2
+        rho_weights = 0.25 * np.pi * h * ch_t * sech2
 
         mask = (rho_nodes > 0.0) & (rho_nodes < 1.0) & np.isfinite(rho_weights)
         rho_nodes = rho_nodes[mask]
@@ -816,7 +819,10 @@ def _duffy_radial_nodes_weights(radial_rule, radial_quad_order, mp_dps):
         ch_t = np.cosh(t)
         arg = 0.5 * np.pi * sh_t
         rho_nodes = 0.5 * (1.0 + np.tanh(arg))
-        rho_weights = 0.25 * np.pi * h * ch_t / np.cosh(arg) ** 2
+        abs_arg = np.abs(arg)
+        exp_term = np.exp(-2.0 * abs_arg)
+        sech2 = 4.0 * exp_term / (1.0 + exp_term) ** 2
+        rho_weights = 0.25 * np.pi * h * ch_t * sech2
         mask = (rho_nodes > 0.0) & (rho_nodes < 1.0) & np.isfinite(rho_weights)
         return rho_nodes[mask], rho_weights[mask]
     elif radial_rule == "tanh-sinh":

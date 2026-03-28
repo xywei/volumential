@@ -119,9 +119,9 @@ def main():
 
     q_points = np.ascontiguousarray(np.transpose(q_points))
 
-    from pytools.obj_array import make_obj_array
+    from pytools.obj_array import new_1d as obj_array_1d
 
-    q_points = make_obj_array(
+    q_points = obj_array_1d(
         [cl.array.to_device(queue, q_points[i]) for i in range(dim)]
     )
 
@@ -333,7 +333,7 @@ def main():
         out_x = np.arange(a, b + h, h)
         out_y = np.arange(a, b + h, h)
         oxx, oyy = np.meshgrid(out_x, out_y)
-        out_targets = make_obj_array(
+        out_targets = obj_array_1d(
             [
                 cl.array.to_device(queue, oxx.flatten()),
                 cl.array.to_device(queue, oyy.flatten()),

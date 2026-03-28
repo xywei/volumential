@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 
 import pyopencl as cl
@@ -20,6 +22,9 @@ _COARSENING_DISABLED_WARNING = (
     "volumential's historical adaptive mesh workflow; retrying with refinement "
     "only."
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 def _leaf_boxes_numpy(tob):
@@ -190,9 +195,7 @@ class BoxTree:
                 error_on_ignored_flags=error_on_ignored_flags,
             )
         except OverflowError:
-            import warnings
-
-            warnings.warn(_COARSENING_DISABLED_WARNING, stacklevel=2)
+            logger.warning(_COARSENING_DISABLED_WARNING)
             self._tree = refine_and_coarsen_tree_of_boxes(
                 self._tree,
                 refine_flags=refine_flags,
@@ -261,7 +264,7 @@ class QuadratureOnBoxTree:
         if quadrature_formula is None:
             from modepy import LegendreGaussQuadrature
 
-            quadrature_formula = LegendreGaussQuadrature(0)
+            quadrature_formula = LegendreGaussQuadrature(0, force_dim_axis=True)
 
         self.quadrature_formula = quadrature_formula
 

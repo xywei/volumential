@@ -1268,9 +1268,9 @@ def laplace_problem(ctx_factory):
     q_points_org = q_points
     q_points = np.ascontiguousarray(np.transpose(q_points))
 
-    from pytools.obj_array import make_obj_array
+    from pytools.obj_array import new_1d as obj_array_1d
 
-    q_points = make_obj_array(
+    q_points = obj_array_1d(
         [cl.array.to_device(queue, q_points[i]) for i in range(dim)]
     )
 

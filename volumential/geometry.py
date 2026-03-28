@@ -175,7 +175,10 @@ class BoxFMMGeometryFactory:
             from modepy import LegendreGaussQuadrature
 
             # order = degree + 1
-            self.quadrature_formula = LegendreGaussQuadrature(order - 1)
+            self.quadrature_formula = LegendreGaussQuadrature(
+                order - 1,
+                force_dim_axis=True,
+            )
         else:
             raise NotImplementedError()
 

@@ -29,15 +29,52 @@ def _skip_unstable_backend(ctx):
         pytest.skip("QBX function-extension tests are unstable on Intel(R) OpenCL")
 
 
+def _make_closed_curve_mesh_skip_orientation(curve_f, element_boundaries, order):
+    import modepy as mp
+    from meshmode.mesh import SimplexElementGroup, make_mesh
+
+    nelements = len(element_boundaries) - 1
+    unit_nodes = mp.warp_and_blend_nodes(1, order)
+    nodes_01 = 0.5 * (unit_nodes + 1)
+
+    vertices = curve_f(element_boundaries)[:, :nelements]
+    vertex_indices = np.vstack(
+        [
+            np.arange(0, nelements, dtype=np.int32),
+            np.arange(1, nelements + 1, dtype=np.int32) % nelements,
+        ]
+    ).T
+
+    el_lengths = np.diff(element_boundaries)
+    el_starts = element_boundaries[:-1]
+    t = el_starts[:, np.newaxis] + el_lengths[:, np.newaxis] * nodes_01
+    nodes = curve_f(t.ravel()).reshape(vertices.shape[0], nelements, -1)
+
+    egroup = SimplexElementGroup.make_group(
+        order,
+        vertex_indices=vertex_indices,
+        nodes=nodes,
+        unit_nodes=unit_nodes,
+    )
+
+    return make_mesh(
+        vertices=vertices,
+        groups=[egroup],
+        is_conforming=True,
+        skip_element_orientation_test=True,
+    )
+
+
 def _make_test_qbx(actx, nelements=40, order=4, qbx_order=3):
     from functools import partial
 
-    from meshmode.mesh.generation import make_curve_mesh
     from meshmode.mesh.generation import ellipse
     from pytential.qbx import QBXLayerPotentialSource
 
-    mesh = make_curve_mesh(
-        partial(ellipse, 1.0), np.linspace(0, 1, nelements + 1), order
+    mesh = _make_closed_curve_mesh_skip_orientation(
+        partial(ellipse, 1.0),
+        np.linspace(0, 1, nelements + 1),
+        order,
     )
     discr = Discretization(
         actx, mesh, InterpolatoryQuadratureSimplexGroupFactory(order)
