@@ -30,7 +30,10 @@ import pyopencl as cl
 import pyopencl.array  # noqa: F401
 from constantdict import constantdict
 from pymbolic.mapper import IdentityMapper, WalkMapper
-from pymbolic.primitives import Expression as ExpressionType, Variable as VariableType
+from pymbolic.primitives import (
+    ExpressionNode as ExpressionType,
+    Variable as VariableType,
+)
 from pytools import memoize_method
 
 
@@ -429,7 +432,9 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
         if self.preamble_generators is not None:
             knl = lp.register_preamble_generators(knl, self.preamble_generators)
 
-        evt, res = knl(
+        knl_exec = knl.executor(queue.context)
+
+        evt, res = knl_exec(
             queue,
             target_points=target_points,
             n_targets=n_tgt_points,
@@ -655,8 +660,9 @@ class DiscreteLegendreTransform(BoxSpecificMap):
             raise RuntimeError(f"Invalid filtering argument: {str(filtering)}")
 
         knl = self.get_cached_optimized_kernel()
+        knl_exec = knl.executor(queue.context)
 
-        evt, res = knl(
+        evt, res = knl_exec(
             queue,
             boxes=traversal.target_boxes,
             box_node_starts=traversal.tree.box_target_starts,
@@ -799,9 +805,10 @@ class BoxSum(BoxSpecificReduction):
             raise RuntimeError("Invalid filtering argument: %s" % str(filtering))
 
         knl = self.get_cached_optimized_kernel()
+        knl_exec = knl.executor(queue.context)
         n_boxes = traversal.target_boxes.shape[0]
 
-        evt, res = knl(
+        evt, res = knl_exec(
             queue,
             boxes=traversal.target_boxes,
             box_node_starts=traversal.tree.box_target_starts,

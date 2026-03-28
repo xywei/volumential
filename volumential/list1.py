@@ -491,10 +491,11 @@ class NearFieldFromCSR(NearFieldEvalBase):
 
                         <> displacement = COMPUTE_DISPLACEMENT
 
-                        <> integ = if(has_entry,
+                        <> integ = (
                                 table_data[table_lev, entry_id] * scaling
-                                + displacement,
-                                0) {id=integ,dep=tab_lev}
+                                + displacement
+                                if has_entry
+                                else 0) {id=integ,dep=tab_lev}
                         # <> source_id_tree = user_source_ids[source_id]
                         <> coef = source_coefs[source_id] {id=coef}
 
@@ -655,7 +656,9 @@ class NearFieldFromCSR(NearFieldEvalBase):
             warn_tol=self.extra_kwargs.get("case_encoding_warn_tol"),
         )
 
-        evt, res = knl(
+        knl_exec = knl.executor(queue.context)
+
+        evt, res = knl_exec(
             queue,
             result=result,
             # db_table_lev=np.zeros(out_pot.shape),

@@ -891,6 +891,12 @@ def compute_barycentric_lagrange_params(q_order):
     q_points_1d = (q_points_1d + 1) * 0.5
     q_weights_1d *= 0.5
 
+    if q_order == 1:
+        return (
+            np.asarray(q_points_1d, dtype=np.float64),
+            np.ones(1, dtype=np.float64),
+        )
+
     # interpolation weights for barycentric Lagrange interpolation
     from scipy.interpolate import BarycentricInterpolator as Interpolator
 
@@ -1188,6 +1194,9 @@ def interpolate_volume_potential(
     )
     if interp_points_1d is None:
         (blpoints, blweights) = compute_barycentric_lagrange_params(q_order)
+    elif len(interp_points_1d) == 1:
+        blpoints = np.asarray(interp_points_1d, dtype=np.float64)
+        blweights = np.ones(1, dtype=np.float64)
     else:
         from scipy.interpolate import BarycentricInterpolator as Interpolator
 
@@ -1324,28 +1333,36 @@ def interpolate_volume_potential(
     if dim == 1:
         code_target_coords_assignment = """target_coords_x[target_point_id]"""
     if dim == 2:
-        code_target_coords_assignment = """if(
-        iaxis == 0, target_coords_x[target_point_id],
-                    target_coords_y[target_point_id])"""
+        code_target_coords_assignment = """(
+        target_coords_x[target_point_id]
+            if iaxis == 0
+            else target_coords_y[target_point_id])"""
     elif dim == 3:
-        code_target_coords_assignment = """if(
-        iaxis == 0, target_coords_x[target_point_id], if(
-        iaxis == 1, target_coords_y[target_point_id],
-                    target_coords_z[target_point_id]))"""
+        code_target_coords_assignment = """(
+        target_coords_x[target_point_id]
+            if iaxis == 0
+            else (
+                target_coords_y[target_point_id]
+                    if iaxis == 1
+                    else target_coords_z[target_point_id]))"""
     else:
         raise NotImplementedError
 
     if dim == 1:
         code_mode_index_assignment = """mid"""
     elif dim == 2:
-        code_mode_index_assignment = """if(
-        iaxis == 0, mid / Q_ORDER,
-                    mid % Q_ORDER)""".replace("Q_ORDER", "q_order")
+        code_mode_index_assignment = """(
+        mid / Q_ORDER
+            if iaxis == 0
+            else mid % Q_ORDER)""".replace("Q_ORDER", "q_order")
     elif dim == 3:
-        code_mode_index_assignment = """if(
-        iaxis == 0, mid / (Q_ORDER * Q_ORDER), if(
-        iaxis == 1, mid % (Q_ORDER * Q_ORDER) / Q_ORDER,
-                    mid % (Q_ORDER * Q_ORDER) % Q_ORDER))""".replace(
+        code_mode_index_assignment = """(
+        mid / (Q_ORDER * Q_ORDER)
+            if iaxis == 0
+            else (
+                mid % (Q_ORDER * Q_ORDER) / Q_ORDER
+                    if iaxis == 1
+                    else mid % (Q_ORDER * Q_ORDER) % Q_ORDER))""".replace(
             "Q_ORDER", "q_order"
         )
     else:
@@ -1399,10 +1416,10 @@ def interpolate_volume_potential(
                     end
 
                     for iaxis, mjd
-                         <> diff[iaxis, mjd] = if( \
-                                          tplt_coord[iaxis] == barycentric_lagrange_points[mjd], \
-                                          1, \
-                                          tplt_coord[iaxis] - barycentric_lagrange_points[mjd]) \
+                         <> diff[iaxis, mjd] = ( \
+                                          1 \
+                                              if tplt_coord[iaxis] == barycentric_lagrange_points[mjd] \
+                                              else tplt_coord[iaxis] - barycentric_lagrange_points[mjd]) \
                                           {id=diff, dep=reinit_denom, dup=iaxis:mjd}
                          denom[iaxis] = denom[iaxis] + \
                                  barycentric_lagrange_weights[mjd] / diff[iaxis, mjd] \
@@ -1430,10 +1447,10 @@ def interpolate_volume_potential(
 
                         # Fix when target point coincide with a quad point
                         for mkd, iaxis
-                            mode_val[iaxis] = if(
-                                    tplt_coord[iaxis] == barycentric_lagrange_points[mkd],
-                                    if(mkd == idx[iaxis], 1, 0),
-                                    mode_val[iaxis]) {id=fix_mode_val, dep=mode_val:mode_indices, dup=iaxis}
+                            mode_val[iaxis] = (
+                                    (1 if mkd == idx[iaxis] else 0)
+                                        if tplt_coord[iaxis] == barycentric_lagrange_points[mkd]
+                                        else mode_val[iaxis]) {id=fix_mode_val, dep=mode_val:mode_indices, dup=iaxis}
                         end
 
                         <> prod_mode_val = product(iaxis,
@@ -1498,7 +1515,7 @@ def interpolate_volume_potential(
 
     lpknl = loopy.set_options(lpknl, return_dict=True)
     lpknl = loopy.fix_parameters(lpknl, dim=int(dim), q_order=int(q_order))
-    lpknl = loopy.split_iname(lpknl, "tbox", 128, outer_tag="g.0", inner_tag="l.0")
+    lpknl = loopy.remove_unused_inames(lpknl)
     lpknl_exec = lpknl.executor(queue.context)
     evt, res_dict = lpknl_exec(
         queue,

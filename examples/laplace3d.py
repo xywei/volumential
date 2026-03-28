@@ -108,9 +108,9 @@ def main():
 
     q_points = np.ascontiguousarray(np.transpose(q_points))
 
-    from pytools.obj_array import make_obj_array
+    from pytools.obj_array import new_1d as obj_array_1d
 
-    q_points = make_obj_array(
+    q_points = obj_array_1d(
         [cl.array.to_device(queue, q_points[i]) for i in range(dim)]
     )
 
@@ -320,7 +320,7 @@ def main():
     test_x = np.array([0.0])
     test_y = np.array([0.0])
     test_z = np.array([0.0])
-    test_nodes = make_obj_array(
+    test_nodes = obj_array_1d(
         # get() first for CL compatibility issues
         [
             cl.array.to_device(queue, test_x),
@@ -392,7 +392,7 @@ def main():
         box_nodes_x = box_discr.nodes()[0].with_queue(queue).get()
         box_nodes_y = box_discr.nodes()[1].with_queue(queue).get()
         box_nodes_z = box_discr.nodes()[2].with_queue(queue).get()
-        box_nodes = make_obj_array(
+        box_nodes = obj_array_1d(
             # get() first for CL compatibility issues
             [
                 cl.array.to_device(queue, box_nodes_x),

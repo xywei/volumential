@@ -704,10 +704,9 @@ class ElementsToSourcesLookupBuilder:
                         {code_get_point}
                         {code_compute_simplex_measures}
 
-                        result[source_id] = if(
-                            {code_measures_have_common_sign},
-                            iel,
-                            result[source_id])  {{atomic}}
+                        result[source_id] = (
+                            iel if {code_measures_have_common_sign} else result[source_id]
+                        )  {{atomic}}
                     end
                 end
             end

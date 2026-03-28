@@ -72,9 +72,9 @@ def drive_test_completeness(ctx, queue, dim, q_order):
     q_points_org = q_points
     q_points = np.ascontiguousarray(np.transpose(q_points))
 
-    from pytools.obj_array import make_obj_array
+    from pytools.obj_array import new_1d as obj_array_1d
 
-    q_points = make_obj_array(
+    q_points = obj_array_1d(
         [cl.array.to_device(queue, q_points[i]) for i in range(dim)]
     )
 
@@ -138,8 +138,8 @@ def drive_test_completeness(ctx, queue, dim, q_order):
 
     knl = LaplaceKernel(dim)
     out_kernels = [knl]
-    local_expn_class = partial(VolumeTaylorLocalExpansion, use_rscale=None)
-    mpole_expn_class = partial(VolumeTaylorMultipoleExpansion, use_rscale=None)
+    local_expn_class = partial(VolumeTaylorLocalExpansion, use_rscale=True)
+    mpole_expn_class = partial(VolumeTaylorMultipoleExpansion, use_rscale=True)
 
     from volumential.expansion_wrangler_fpnd import (
         FPNDExpansionWrangler,

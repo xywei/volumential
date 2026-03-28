@@ -495,6 +495,19 @@ class NearFieldInteractionTable:
         """
         idx = self.unwrap_mode_index(mode_index)
 
+        if self.quad_order == 1:
+
+            def mode(*coords):
+                assert len(coords) == self.dim
+                bcoords = np.broadcast_arrays(*(np.asarray(coord) for coord in coords))
+                is_scalar = all(coord.ndim == 0 for coord in bcoords)
+                fvals = np.ones(bcoords[0].shape, dtype=self.dtype)
+                if is_scalar and fvals.size == 1:
+                    return fvals.item()
+                return fvals
+
+            return mode
+
         xi = (
             np.array([p[self.dim - 1] for p in self.q_points[: self.quad_order]])
             / self.source_box_extent
@@ -533,6 +546,19 @@ class NearFieldInteractionTable:
         assert mode_index >= 0 and mode_index < self.n_q_points
 
         idx = self.unwrap_mode_index(mode_index)
+
+        if self.quad_order == 1:
+
+            def mode(*coords):
+                assert len(coords) == self.dim
+                bcoords = np.broadcast_arrays(*(np.asarray(coord) for coord in coords))
+                is_scalar = all(coord.ndim == 0 for coord in bcoords)
+                fvals = np.ones(bcoords[0].shape, dtype=self.dtype)
+                if is_scalar and fvals.size == 1:
+                    return fvals.item()
+                return fvals
+
+            return mode
 
         xi = np.array([p[self.dim - 1] for p in self.q_points[: self.quad_order]])
         assert len(xi) == self.quad_order
@@ -1007,10 +1033,15 @@ class NearFieldInteractionTable:
             complex_dtype=np.complex128,
         )
         quad_inames = frozenset(["ientry", "inode"])
-        quad_kernel_insns = [
-            insn.copy(within_inames=insn.within_inames | quad_inames)
-            for insn in loopy_insns
-        ]
+        quad_kernel_insns = []
+        for insn in loopy_insns:
+            predicates = getattr(insn, "predicates", frozenset())
+            quad_kernel_insns.append(
+                insn.copy(
+                    within_inames=insn.within_inames | quad_inames,
+                    predicates=frozenset(predicates) | frozenset(["active"]),
+                )
+            )
         sympy_conv = SympyToPymbolicMapper()
         scaling_assignment = lp.Assignment(
             id=None,
@@ -1038,11 +1069,11 @@ class NearFieldInteractionTable:
             num_name = f"num{iaxis}"
             setup_lines.extend(
                 [
-                    f"<> {len_name} = if(node_sign[{iaxis}, inode] < 0, decomposition_targets[{iaxis}, ientry], source_box_extent - decomposition_targets[{iaxis}, ientry])",
+                    f"<> {len_name} = (decomposition_targets[{iaxis}, ientry] if node_sign[{iaxis}, inode] < 0 else source_box_extent - decomposition_targets[{iaxis}, ientry])",
                     f"<> {pos_name} = ({len_name} > 0)",
                     f"active = active and {pos_name}",
                     f"<> {q_name} = decomposition_targets[{iaxis}, ientry] + node_sign[{iaxis}, inode] * {len_name} * node_u[{iaxis}, inode]",
-                    f"<> {d_name} = if({pos_name}, {q_name} - target_points[{iaxis}, ientry], 1)",
+                    f"<> {d_name} = ({q_name} - target_points[{iaxis}, ientry] if {pos_name} else 1)",
                 ]
             )
             if self.quad_order == 1:
@@ -1051,11 +1082,11 @@ class NearFieldInteractionTable:
                 setup_lines.extend(
                     [
                         f"<> {tol_name} = {interp_eps} * source_box_extent",
-                        f"<> {hit_mode_name} = if(abs({q_name} - interp_nodes[mode_i[{iaxis}, ientry]]) < {tol_name}, 1, 0)",
-                        f"<> {hit_any_name} = sum(jq, if(abs({q_name} - interp_nodes[jq]) < {tol_name}, 1, 0))",
-                        f"<> {den_name} = sum(jq, if(abs({q_name} - interp_nodes[jq]) < {tol_name}, 0, bary_w[jq] / ({q_name} - interp_nodes[jq])))",
-                        f"<> {num_name} = if({hit_mode_name}, 0, bary_w[mode_i[{iaxis}, ientry]] / ({q_name} - interp_nodes[mode_i[{iaxis}, ientry]]))",
-                        f"<> {basis_name} = if({hit_any_name} > 0, {hit_mode_name}, {num_name} / {den_name})",
+                        f"<> {hit_mode_name} = (1 if abs({q_name} - interp_nodes[mode_i[{iaxis}, ientry]]) < {tol_name} else 0)",
+                        f"<> {hit_any_name} = sum(jq, (1 if abs({q_name} - interp_nodes[jq]) < {tol_name} else 0))",
+                        f"<> {den_name} = sum(jq, (0 if abs({q_name} - interp_nodes[jq]) < {tol_name} else bary_w[jq] / ({q_name} - interp_nodes[jq])))",
+                        f"<> {num_name} = (0 if {hit_mode_name} else bary_w[mode_i[{iaxis}, ientry]] / ({q_name} - interp_nodes[mode_i[{iaxis}, ientry]]))",
+                        f"<> {basis_name} = ({hit_mode_name} if {hit_any_name} > 0 else {num_name} / {den_name})",
                     ]
                 )
             len_terms.append(len_name)
@@ -1088,10 +1119,10 @@ class NearFieldInteractionTable:
             + [scaling_assignment]
             + [
                 """
-            result[ientry] = sum(inode, if(active, knl_val * knl_scaling * quad_w * """
+            result[ientry] = sum(inode, ((knl_val * knl_scaling * quad_w * """
                 + basis_expr
                 + """
-                , 0)
+                ) if active else 0)
             )
             """
             ],
@@ -1121,6 +1152,7 @@ class NearFieldInteractionTable:
                 "jq": "unr",
             },
         )
+        tunit = lp.remove_unused_inames(tunit)
         return tunit
 
     def _get_fused_invariant_duffy_table_program(self, queue, n_entries, n_nodes):
@@ -1278,6 +1310,14 @@ class NearFieldInteractionTable:
         prg = self._get_fused_invariant_duffy_table_program(queue, n_entries, n_nodes)
 
         queue_is_cl = isinstance(queue, cl.CommandQueue)
+        if hasattr(prg, "executor"):
+            if queue_is_cl:
+                prg_exec = prg.executor(queue.context)
+            else:
+                prg_exec = prg.executor()
+        else:
+            prg_exec = prg
+
         if queue_is_cl:
             import pyopencl.array as cla
 
@@ -1316,8 +1356,7 @@ class NearFieldInteractionTable:
             bw_arg = np.ascontiguousarray(bw, dtype=self.dtype)
             mode_i_arg = mode_i
 
-        _, res = prg(
-            queue,
+        common_kwargs = dict(
             source_box_extent=self.dtype(self.source_box_extent),
             target_points=target_points_arg,
             decomposition_targets=decomposition_targets_arg,
@@ -1328,6 +1367,11 @@ class NearFieldInteractionTable:
             bary_w=bw_arg,
             mode_i=mode_i_arg,
         )
+
+        if queue_is_cl:
+            _, res = prg_exec(queue, **common_kwargs)
+        else:
+            _, res = prg_exec(**common_kwargs)
 
         result = res["result"]
         if hasattr(result, "get"):

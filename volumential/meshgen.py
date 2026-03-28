@@ -71,7 +71,10 @@ class MeshGenBase:
         assert degree > 0
         assert nlevels > 0
         self.degree = degree
-        self.quadrature_formula = LegendreGaussQuadrature(degree - 1)
+        self.quadrature_formula = LegendreGaussQuadrature(
+            degree - 1,
+            force_dim_axis=True,
+        )
         self.nlevels = nlevels
 
         self.bound_a = np.array([a]).flatten()

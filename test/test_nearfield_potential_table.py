@@ -796,6 +796,26 @@ def test_mode_remap_is_elementwise_for_vectorized_inputs():
     assert np.allclose(scalar_vals, vector_vals)
 
 
+def test_quad_order_one_mode_preserves_numpy_broadcasting():
+    table = npt.NearFieldInteractionTable(quad_order=1, dim=2, progress_bar=False)
+
+    x = np.array([0.1, 0.2, 0.3], dtype=np.float64)[:, np.newaxis]
+    y = np.array([0.4, 0.5], dtype=np.float64)[np.newaxis, :]
+
+    mode = table.get_mode(0)
+    template_mode = table.get_template_mode(0)
+
+    mode_vals = mode(x, y)
+    template_mode_vals = template_mode(x, y)
+
+    assert mode_vals.shape == (3, 2)
+    assert template_mode_vals.shape == (3, 2)
+    assert np.all(mode_vals == 1)
+    assert np.all(template_mode_vals == 1)
+    assert np.isscalar(mode(0.1, 0.2))
+    assert np.isscalar(template_mode(0.1, 0.2))
+
+
 def test_duffy_radial_batched_initializes_normalizers(monkeypatch):
     table = npt.NearFieldInteractionTable(
         quad_order=2,
@@ -1210,6 +1230,85 @@ def test_prepare_table_data_and_entry_map_rejects_mixed_storage_modes():
 
     with pytest.raises(RuntimeError, match="mixed full/reduced"):
         _prepare_table_data_and_entry_map([full, reduced])
+
+
+def test_batched_duffy_non_cl_executor_signature(monkeypatch):
+    table = npt.NearFieldInteractionTable(quad_order=1, dim=2, progress_bar=False)
+
+    invariant_info = {
+        "mode_axes": np.array([[0, 0]], dtype=np.int32),
+        "case_indices": np.array([0], dtype=np.int32),
+        "target_point_indices": np.array([0], dtype=np.int32),
+    }
+
+    def fake_node_data(
+        self, radial_rule, regular_quad_order, radial_quad_order, mp_dps
+    ):
+        del radial_rule, regular_quad_order, radial_quad_order, mp_dps
+        return {
+            "n_nodes": 1,
+            "node_u": np.zeros((self.dim, 1), dtype=self.dtype),
+            "node_sign": np.ones((self.dim, 1), dtype=self.dtype),
+            "node_jac_base": np.ones(1, dtype=self.dtype),
+        }
+
+    def fake_case_target_points(self):
+        return np.zeros((self.dim, 1, self.n_q_points), dtype=self.dtype)
+
+    def fake_bary(self):
+        return np.array([0.5], dtype=self.dtype), np.array([1], dtype=self.dtype)
+
+    recorded = {}
+
+    class FakeProgram:
+        def executor(self, *args):
+            recorded["executor_args"] = args
+
+            def run(*args, **kwargs):
+                recorded["call_args"] = args
+                recorded["call_kwargs"] = kwargs
+                return None, {"result": np.array([3.14], dtype=table.dtype)}
+
+            return run
+
+    monkeypatch.setattr(
+        npt.NearFieldInteractionTable,
+        "_get_duffy_radial_node_data",
+        fake_node_data,
+    )
+    monkeypatch.setattr(
+        npt.NearFieldInteractionTable,
+        "_get_case_target_points",
+        fake_case_target_points,
+    )
+    monkeypatch.setattr(
+        npt.NearFieldInteractionTable,
+        "_get_barycentric_data",
+        fake_bary,
+    )
+    monkeypatch.setattr(
+        npt.NearFieldInteractionTable,
+        "_get_fused_invariant_duffy_table_program",
+        lambda self, queue, n_entries, n_nodes: FakeProgram(),
+    )
+
+    values = table._batched_duffy_values_for_local_indices(
+        queue=object(),
+        invariant_info=invariant_info,
+        local_entry_indices=np.array([0], dtype=np.int64),
+        radial_rule="tanh-sinh-fast",
+        regular_quad_order=8,
+        radial_quad_order=31,
+        mp_dps=50,
+    )
+
+    assert recorded["executor_args"] == ()
+    assert recorded["call_args"] == ()
+    assert recorded["call_kwargs"]["source_box_extent"] == table.dtype(
+        table.source_box_extent
+    )
+    assert values.shape == (1,)
+    assert np.allclose(values, np.array([3.14], dtype=table.dtype))
 
 
 if __name__ == "__main__":
