@@ -648,7 +648,8 @@ def compute_biharmonic_extension(
     bound_op_v1 = bind(qbx, operator_v1.operator(var("sigma")))
     # Sign convention: v1 solves a Neumann problem that cancels the tangential
     # derivative contribution from v2 on the extension side.
-    rhs_v1 = operator_v1.prepare_rhs(-1 * v2_tangent_der)
+    sqrt_weight = bind(qbx, operator_v1.get_sqrt_weight())(actx)
+    rhs_v1 = sqrt_weight * (-1 * v2_tangent_der)
     gmres_result_sigma = gmres(
         bound_op_v1.scipy_op(actx, "sigma", dtype=np.float64),
         rhs_v1,

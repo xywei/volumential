@@ -1305,10 +1305,13 @@ class NearFieldInteractionTable:
         prg = self._get_fused_invariant_duffy_table_program(queue, n_entries, n_nodes)
 
         queue_is_cl = isinstance(queue, cl.CommandQueue)
-        if queue_is_cl:
-            prg_exec = prg.executor(queue.context)
+        if hasattr(prg, "executor"):
+            if queue_is_cl:
+                prg_exec = prg.executor(queue.context)
+            else:
+                prg_exec = prg.executor()
         else:
-            prg_exec = prg.executor()
+            prg_exec = prg
 
         if queue_is_cl:
             import pyopencl.array as cla
