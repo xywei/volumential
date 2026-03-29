@@ -1016,14 +1016,27 @@ def test_volume_fmm_strict_guard_rejects_split_tree_source_nodes(tmp_path, monke
         )
 
 
-def test_volume_fmm_split_tree_auto_interpolation_matches_manual_backends(tmp_path):
+def test_volume_fmm_split_tree_auto_interpolation_matches_manual_backends(
+    tmp_path,
+    monkeypatch,
+):
+    import volumential.volume_fmm as volume_fmm
+
     from pytools.obj_array import new_1d as obj_array_1d
 
     from volumential.volume_fmm import (
         _build_source_only_wrangler,
         drive_volume_fmm,
-        interpolate_volume_potential,
     )
+
+    orig_interpolate = volume_fmm.interpolate_volume_potential
+    auto_interp_flags = []
+
+    def _record_interpolate(*args, **kwargs):
+        auto_interp_flags.append(bool(kwargs.get("use_numpy_interpolation", False)))
+        return orig_interpolate(*args, **kwargs)
+
+    monkeypatch.setattr(volume_fmm, "interpolate_volume_potential", _record_interpolate)
 
     ctx = _create_non_intel_opencl_context_or_skip()
     queue = cl.CommandQueue(ctx)
@@ -1046,6 +1059,9 @@ def test_volume_fmm_split_tree_auto_interpolation_matches_manual_backends(tmp_pa
         return_state=True,
         tree_mode="mesh_aligned",
     )
+
+    assert auto_interp_flags
+    assert auto_interp_flags[0] is False
 
     assert not split_tree_case["tree_sources_are_targets"]
 
@@ -1076,14 +1092,14 @@ def test_volume_fmm_split_tree_auto_interpolation_matches_manual_backends(tmp_pa
         "potential_in_tree_order": True,
         "use_mode_to_source_ids": True,
     }
-    interp_tree_cl = interpolate_volume_potential(
+    interp_tree_cl = orig_interpolate(
         split_traversal.tree.targets,
         split_traversal,
         split_wrangler,
         source_potential_tree_order,
         **interp_kwargs,
     )
-    interp_tree_numpy = interpolate_volume_potential(
+    interp_tree_numpy = orig_interpolate(
         split_traversal.tree.targets,
         split_traversal,
         split_wrangler,

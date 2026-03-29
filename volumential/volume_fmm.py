@@ -733,16 +733,34 @@ def drive_volume_fmm(
         source_result_oa = _as_obj_array(source_result)
         interpolated = []
         for source_result_i in source_result_oa:
-            interpolated.append(
-                interpolate_volume_potential(
-                    tree.targets,
-                    source_traversal,
-                    source_wrangler,
-                    source_result_i,
-                    potential_in_tree_order=True,
-                    use_mode_to_source_ids=True,
+            try:
+                interpolated.append(
+                    interpolate_volume_potential(
+                        tree.targets,
+                        source_traversal,
+                        source_wrangler,
+                        source_result_i,
+                        potential_in_tree_order=True,
+                        use_mode_to_source_ids=True,
+                    )
                 )
-            )
+            except cl.Error as err:
+                logger.warning(
+                    "OpenCL interpolation unavailable (%s); "
+                    "falling back to NumPy interpolation",
+                    err,
+                )
+                interpolated.append(
+                    interpolate_volume_potential(
+                        tree.targets,
+                        source_traversal,
+                        source_wrangler,
+                        source_result_i,
+                        potential_in_tree_order=True,
+                        use_mode_to_source_ids=True,
+                        use_numpy_interpolation=True,
+                    )
+                )
 
         if len(interpolated) == 1:
             result = obj_array_1d([interpolated[0]])
