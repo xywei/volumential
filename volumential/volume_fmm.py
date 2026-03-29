@@ -106,6 +106,19 @@ def _is_interpolation_capability_failure(err):
     return has_atomic_signal and (has_known_code or has_capability_hint)
 
 
+def _ensure_interpolated_potential_finite(interpolated_potential, queue):
+    if hasattr(interpolated_potential, "get"):
+        potential_host = interpolated_potential.get(queue)
+    else:
+        potential_host = np.asarray(interpolated_potential)
+
+    if not np.all(np.isfinite(potential_host)):
+        raise ValueError(
+            "interpolate_volume_potential produced non-finite values; "
+            "target interpolation may be incomplete"
+        )
+
+
 def _cast_source_field_dtype(field, dtype):
     if isinstance(field, np.ndarray):
         if field.dtype == object:
@@ -758,16 +771,16 @@ def drive_volume_fmm(
         interpolated = []
         for source_result_i in source_result_oa:
             try:
-                interpolated.append(
-                    interpolate_volume_potential(
-                        tree.targets,
-                        source_traversal,
-                        source_wrangler,
-                        source_result_i,
-                        potential_in_tree_order=True,
-                        use_mode_to_source_ids=True,
-                    )
+                interpolated_i = interpolate_volume_potential(
+                    tree.targets,
+                    source_traversal,
+                    source_wrangler,
+                    source_result_i,
+                    potential_in_tree_order=True,
+                    use_mode_to_source_ids=True,
                 )
+                _ensure_interpolated_potential_finite(interpolated_i, queue)
+                interpolated.append(interpolated_i)
             except (cl.LogicError, cl.RuntimeError) as err:
                 if not _is_interpolation_capability_failure(err):
                     raise
@@ -777,17 +790,17 @@ def drive_volume_fmm(
                     "falling back to NumPy interpolation",
                     err,
                 )
-                interpolated.append(
-                    interpolate_volume_potential(
-                        tree.targets,
-                        source_traversal,
-                        source_wrangler,
-                        source_result_i,
-                        potential_in_tree_order=True,
-                        use_mode_to_source_ids=True,
-                        use_numpy_interpolation=True,
-                    )
+                interpolated_i = interpolate_volume_potential(
+                    tree.targets,
+                    source_traversal,
+                    source_wrangler,
+                    source_result_i,
+                    potential_in_tree_order=True,
+                    use_mode_to_source_ids=True,
+                    use_numpy_interpolation=True,
                 )
+                _ensure_interpolated_potential_finite(interpolated_i, queue)
+                interpolated.append(interpolated_i)
 
         if len(interpolated) == 1:
             result = obj_array_1d([interpolated[0]])
