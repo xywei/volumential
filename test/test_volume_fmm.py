@@ -816,6 +816,7 @@ def _run_3d_gaussian_case(
     split_targets,
     return_state=False,
     tree_mode="mesh_aligned",
+    alpha=80.0,
 ):
     from sumpy.expansion import DefaultExpansionFactory
     from sumpy.kernel import LaplaceKernel
@@ -827,7 +828,6 @@ def _run_3d_gaussian_case(
     from volumential.volume_fmm import drive_volume_fmm
 
     dim = 3
-    alpha = 80.0
 
     def rhs_f(x, y, z):
         r2 = x * x + y * y + z * z
@@ -1205,6 +1205,11 @@ def test_volume_fmm_3d_calculus_patch_residual_regression(tmp_path):
         q_order,
     )
 
+    # Use a moderately concentrated manufactured profile so the residual remains
+    # sensitive to FMM/interpolation behavior without being dominated by
+    # calculus-patch truncation error.
+    alpha = 20.0
+
     coarse = _run_3d_gaussian_case(
         ctx,
         queue,
@@ -1215,6 +1220,7 @@ def test_volume_fmm_3d_calculus_patch_residual_regression(tmp_path):
         split_targets=False,
         return_state=True,
         tree_mode="mesh_aligned",
+        alpha=alpha,
     )
     fine = _run_3d_gaussian_case(
         ctx,
@@ -1226,6 +1232,7 @@ def test_volume_fmm_3d_calculus_patch_residual_regression(tmp_path):
         split_targets=False,
         return_state=True,
         tree_mode="mesh_aligned",
+        alpha=alpha,
     )
 
     patch = CalculusPatch(center=[0.0, 0.0, 0.0], h=0.3, order=5)
@@ -1268,6 +1275,10 @@ def test_volume_fmm_3d_calculus_patch_residual_regression(tmp_path):
     assert rel_residual_fine < 0.7 * rel_residual_coarse, (
         "3D calculus-patch residual improvement is too weak under refinement "
         f"(coarse={rel_residual_coarse:.3e}, fine={rel_residual_fine:.3e})"
+    )
+    assert rel_residual_fine < 2.0e-1, (
+        "3D calculus-patch residual remains too large after refinement "
+        f"(fine={rel_residual_fine:.3e}, coarse={rel_residual_coarse:.3e})"
     )
 
 
