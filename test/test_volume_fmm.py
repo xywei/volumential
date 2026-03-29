@@ -839,6 +839,13 @@ def _run_3d_gaussian_case(
     mesh = mg.MeshGen3D(q_order, nlevels, -0.5, 0.5, queue=queue)
 
     if tree_mode == "mesh_aligned":
+        from dataclasses import replace
+
+        from boxtree.array_context import PyOpenCLArrayContext
+        from boxtree.traversal import FMMTraversalBuilder
+
+        from volumential.volume_fmm import _clone_source_side_tree_as_targets
+
         q_points, source_weights, tree, traversal = mg.build_geometry_info(
             ctx,
             queue,
@@ -859,6 +866,18 @@ def _run_3d_gaussian_case(
                 )
             ),
         )
+
+        if split_targets:
+            split_tree = _clone_source_side_tree_as_targets(tree, queue)
+            if split_tree is None:
+                raise ValueError("unable to build split target tree from source tree")
+
+            split_tree = replace(split_tree, sources_are_targets=False)
+
+            actx = PyOpenCLArrayContext(queue)
+            tg = FMMTraversalBuilder(actx)
+            traversal, _ = tg(actx, split_tree)
+            tree = split_tree
     elif tree_mode == "treebuilder":
         from boxtree import TreeBuilder
         from boxtree.array_context import PyOpenCLArrayContext
@@ -964,6 +983,8 @@ def _run_3d_gaussian_case(
                 "traversal": traversal,
                 "wrangler": wrangler,
                 "potentials": potentials,
+                "source_vals": source_vals,
+                "source_weights": source_weights,
             }
         )
 
@@ -993,6 +1014,102 @@ def test_volume_fmm_strict_guard_rejects_split_tree_source_nodes(tmp_path, monke
             split_targets=True,
             tree_mode="treebuilder",
         )
+
+
+def test_volume_fmm_split_tree_auto_interpolation_matches_manual_backends(tmp_path):
+    from pytools.obj_array import new_1d as obj_array_1d
+
+    from volumential.volume_fmm import (
+        _build_source_only_wrangler,
+        drive_volume_fmm,
+        interpolate_volume_potential,
+    )
+
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 2
+    table = _get_laplace_3d_table(
+        queue,
+        tmp_path / "nft-split-tree-auto-interp.sqlite",
+        q_order,
+    )
+
+    split_tree_case = _run_3d_gaussian_case(
+        ctx,
+        queue,
+        table,
+        q_order=q_order,
+        nlevels=3,
+        fmm_order=12,
+        split_targets=True,
+        return_state=True,
+        tree_mode="mesh_aligned",
+    )
+
+    assert not split_tree_case["tree_sources_are_targets"]
+
+    split_traversal = split_tree_case["traversal"]
+    split_wrangler = split_tree_case["wrangler"]
+    source_vals = split_tree_case["source_vals"]
+    source_weights = split_tree_case["source_weights"]
+
+    source_traversal, source_wrangler = _build_source_only_wrangler(
+        split_traversal,
+        split_wrangler,
+        queue,
+    )
+    assert source_traversal.tree.sources_are_targets
+
+    (source_potential_tree_order,) = drive_volume_fmm(
+        source_traversal,
+        source_wrangler,
+        source_vals * source_weights,
+        source_vals,
+        direct_evaluation=False,
+        reorder_sources=True,
+        reorder_potentials=False,
+        auto_interpolate_targets=False,
+    )
+
+    interp_kwargs = {
+        "potential_in_tree_order": True,
+        "use_mode_to_source_ids": True,
+    }
+    interp_tree_cl = interpolate_volume_potential(
+        split_traversal.tree.targets,
+        split_traversal,
+        split_wrangler,
+        source_potential_tree_order,
+        **interp_kwargs,
+    )
+    interp_tree_numpy = interpolate_volume_potential(
+        split_traversal.tree.targets,
+        split_traversal,
+        split_wrangler,
+        source_potential_tree_order,
+        use_numpy_interpolation=True,
+        **interp_kwargs,
+    )
+
+    def _to_user_order_host(potential_tree_order):
+        result = split_wrangler.reorder_potentials(obj_array_1d([potential_tree_order]))
+        result = split_wrangler.finalize_potentials(result)
+        return result[0].get(queue)
+
+    auto_host = split_tree_case["potentials"].get(queue)
+    interp_cl_host = _to_user_order_host(interp_tree_cl)
+    interp_numpy_host = _to_user_order_host(interp_tree_numpy)
+
+    assert np.all(np.isfinite(interp_cl_host))
+    assert np.all(np.isfinite(interp_numpy_host))
+    assert np.allclose(
+        interp_cl_host,
+        interp_numpy_host,
+        rtol=1.0e-11,
+        atol=1.0e-11,
+    )
+    assert np.allclose(auto_host, interp_cl_host, rtol=1.0e-11, atol=1.0e-11)
 
 
 def test_volume_fmm_3d_gaussian_convergence_regression(tmp_path):
