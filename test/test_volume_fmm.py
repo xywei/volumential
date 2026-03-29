@@ -529,11 +529,55 @@ def test_looks_like_coincident_source_target_setup_matches_user_ids():
         sources_are_targets=False,
         nsources=4,
         ntargets=4,
+        dimensions=2,
         user_source_ids=_FakeDeviceArray(np.array([2, 0, 3, 1], dtype=np.int32)),
         user_target_ids=_FakeDeviceArray(np.array([2, 0, 3, 1], dtype=np.int32)),
+        sources=np.empty(2, dtype=object),
+        targets=np.empty(2, dtype=object),
+    )
+    tree.sources[0] = _FakeDeviceArray(
+        np.array([0.2, -0.5, 0.8, 0.1], dtype=np.float64)
+    )
+    tree.sources[1] = _FakeDeviceArray(
+        np.array([1.5, -0.2, 0.3, 1.2], dtype=np.float64)
+    )
+    tree.targets[0] = _FakeDeviceArray(
+        np.array([0.2, -0.5, 0.8, 0.1], dtype=np.float64)
+    )
+    tree.targets[1] = _FakeDeviceArray(
+        np.array([1.5, -0.2, 0.3, 1.2], dtype=np.float64)
     )
 
     assert volume_fmm._looks_like_coincident_source_target_setup(tree, queue=None)
+
+
+def test_looks_like_coincident_source_target_setup_rejects_equal_ids_mismatched_coords():
+    import volumential.volume_fmm as volume_fmm
+
+    tree = SimpleNamespace(
+        sources_are_targets=False,
+        nsources=4,
+        ntargets=4,
+        dimensions=2,
+        user_source_ids=_FakeDeviceArray(np.array([2, 0, 3, 1], dtype=np.int32)),
+        user_target_ids=_FakeDeviceArray(np.array([2, 0, 3, 1], dtype=np.int32)),
+        sources=np.empty(2, dtype=object),
+        targets=np.empty(2, dtype=object),
+    )
+    tree.sources[0] = _FakeDeviceArray(
+        np.array([0.2, -0.5, 0.8, 0.1], dtype=np.float64)
+    )
+    tree.sources[1] = _FakeDeviceArray(
+        np.array([1.5, -0.2, 0.3, 1.2], dtype=np.float64)
+    )
+    tree.targets[0] = _FakeDeviceArray(
+        np.array([0.2, -0.5, 0.8, 0.1], dtype=np.float64)
+    )
+    tree.targets[1] = _FakeDeviceArray(
+        np.array([1.5, -0.2, 0.3, 1.25], dtype=np.float64)
+    )
+
+    assert not volume_fmm._looks_like_coincident_source_target_setup(tree, queue=None)
 
 
 def test_looks_like_coincident_source_target_setup_rejects_mismatched_user_ids():
@@ -610,9 +654,16 @@ def test_maybe_guard_coincident_source_target_tree_warns_once(caplog, monkeypatc
         sources_are_targets=False,
         nsources=3,
         ntargets=3,
+        dimensions=2,
         user_source_ids=_FakeDeviceArray(np.array([0, 1, 2], dtype=np.int32)),
         user_target_ids=_FakeDeviceArray(np.array([0, 1, 2], dtype=np.int32)),
+        sources=np.empty(2, dtype=object),
+        targets=np.empty(2, dtype=object),
     )
+    tree.sources[0] = _FakeDeviceArray(np.array([0.1, 0.2, 0.3], dtype=np.float64))
+    tree.sources[1] = _FakeDeviceArray(np.array([-0.4, 0.5, 0.6], dtype=np.float64))
+    tree.targets[0] = _FakeDeviceArray(np.array([0.1, 0.2, 0.3], dtype=np.float64))
+    tree.targets[1] = _FakeDeviceArray(np.array([-0.4, 0.5, 0.6], dtype=np.float64))
 
     with caplog.at_level(logging.WARNING):
         assert volume_fmm._maybe_guard_coincident_source_target_tree(tree, queue=None)
@@ -634,9 +685,16 @@ def test_maybe_guard_coincident_source_target_tree_strict_mode(monkeypatch):
         sources_are_targets=False,
         nsources=3,
         ntargets=3,
+        dimensions=2,
         user_source_ids=_FakeDeviceArray(np.array([0, 1, 2], dtype=np.int32)),
         user_target_ids=_FakeDeviceArray(np.array([0, 1, 2], dtype=np.int32)),
+        sources=np.empty(2, dtype=object),
+        targets=np.empty(2, dtype=object),
     )
+    tree.sources[0] = _FakeDeviceArray(np.array([0.1, 0.2, 0.3], dtype=np.float64))
+    tree.sources[1] = _FakeDeviceArray(np.array([-0.4, 0.5, 0.6], dtype=np.float64))
+    tree.targets[0] = _FakeDeviceArray(np.array([0.1, 0.2, 0.3], dtype=np.float64))
+    tree.targets[1] = _FakeDeviceArray(np.array([-0.4, 0.5, 0.6], dtype=np.float64))
 
     with pytest.raises(ValueError, match="targets=None"):
         volume_fmm._maybe_guard_coincident_source_target_tree(tree, queue=None)

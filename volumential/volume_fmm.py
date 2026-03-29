@@ -321,7 +321,7 @@ def _looks_like_coincident_source_target_setup(tree, queue):
         return False
 
     if np.array_equal(user_source_ids, user_target_ids):
-        return True
+        return _coords_match_same_tree_order(tree, queue, nsources, ntargets)
 
     sources = getattr(tree, "sources", None)
     targets = getattr(tree, "targets", None)
@@ -365,10 +365,22 @@ def _looks_like_coincident_source_target_setup(tree, queue):
     return True
 
 
-def _maybe_guard_coincident_source_target_tree(tree, queue):
+def _maybe_guard_coincident_source_target_tree(tree, queue, cache=None):
     global _COINCIDENT_TREE_WARNING_EMITTED
 
-    if not _looks_like_coincident_source_target_setup(tree, queue):
+    cache_key = None
+    if cache is not None:
+        cache_key = id(tree)
+        looks_like_coincident = cache.get(cache_key)
+    else:
+        looks_like_coincident = None
+
+    if looks_like_coincident is None:
+        looks_like_coincident = _looks_like_coincident_source_target_setup(tree, queue)
+        if cache is not None:
+            cache[cache_key] = looks_like_coincident
+
+    if not looks_like_coincident:
         return False
 
     message = (
@@ -671,6 +683,20 @@ def drive_volume_fmm(
             src_func = obj_array_1d([sf.get(queue) for sf in src_func])
 
     tree = getattr(traversal, "tree", None)
+    coincident_tree_guard_cache = getattr(
+        wrangler, "_coincident_tree_guard_cache", None
+    )
+    if coincident_tree_guard_cache is None:
+        coincident_tree_guard_cache = {}
+        wrangler._coincident_tree_guard_cache = coincident_tree_guard_cache
+
+    if tree is not None and not getattr(tree, "sources_are_targets", False):
+        _maybe_guard_coincident_source_target_tree(
+            tree,
+            queue,
+            cache=coincident_tree_guard_cache,
+        )
+
     if (
         auto_interpolate_targets
         and isinstance(expansion_wrangler, FPNDSumpyExpansionWrangler)
@@ -678,7 +704,6 @@ def drive_volume_fmm(
         and tree is not None
         and not getattr(tree, "sources_are_targets", False)
     ):
-        _maybe_guard_coincident_source_target_tree(tree, queue)
         logger.info(
             "non-coincident source/target tree detected; "
             "solving on source modes and interpolating to requested targets"
