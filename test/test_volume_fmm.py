@@ -1060,9 +1060,6 @@ def test_volume_fmm_split_tree_auto_interpolation_matches_manual_backends(
         tree_mode="mesh_aligned",
     )
 
-    assert auto_interp_flags
-    assert auto_interp_flags[0] is False
-
     assert not split_tree_case["tree_sources_are_targets"]
 
     split_traversal = split_tree_case["traversal"]
@@ -1092,13 +1089,19 @@ def test_volume_fmm_split_tree_auto_interpolation_matches_manual_backends(
         "potential_in_tree_order": True,
         "use_mode_to_source_ids": True,
     }
-    interp_tree_cl = orig_interpolate(
-        split_traversal.tree.targets,
-        split_traversal,
-        split_wrangler,
-        source_potential_tree_order,
-        **interp_kwargs,
-    )
+    interp_tree_cl = None
+    interp_cl_error = None
+    try:
+        interp_tree_cl = orig_interpolate(
+            split_traversal.tree.targets,
+            split_traversal,
+            split_wrangler,
+            source_potential_tree_order,
+            **interp_kwargs,
+        )
+    except (cl.LogicError, cl.RuntimeError) as err:
+        interp_cl_error = err
+
     interp_tree_numpy = orig_interpolate(
         split_traversal.tree.targets,
         split_traversal,
@@ -1114,18 +1117,26 @@ def test_volume_fmm_split_tree_auto_interpolation_matches_manual_backends(
         return result[0].get(queue)
 
     auto_host = split_tree_case["potentials"].get(queue)
-    interp_cl_host = _to_user_order_host(interp_tree_cl)
     interp_numpy_host = _to_user_order_host(interp_tree_numpy)
 
-    assert np.all(np.isfinite(interp_cl_host))
     assert np.all(np.isfinite(interp_numpy_host))
-    assert np.allclose(
-        interp_cl_host,
-        interp_numpy_host,
-        rtol=1.0e-11,
-        atol=1.0e-11,
-    )
-    assert np.allclose(auto_host, interp_cl_host, rtol=1.0e-11, atol=1.0e-11)
+
+    assert auto_interp_flags
+    assert auto_interp_flags[0] is False
+
+    if interp_tree_cl is None:
+        assert auto_interp_flags[:2] == [False, True], interp_cl_error
+        assert np.allclose(auto_host, interp_numpy_host, rtol=1.0e-11, atol=1.0e-11)
+    else:
+        interp_cl_host = _to_user_order_host(interp_tree_cl)
+        assert np.all(np.isfinite(interp_cl_host))
+        assert np.allclose(
+            interp_cl_host,
+            interp_numpy_host,
+            rtol=1.0e-11,
+            atol=1.0e-11,
+        )
+        assert np.allclose(auto_host, interp_cl_host, rtol=1.0e-11, atol=1.0e-11)
 
 
 def test_volume_fmm_3d_gaussian_convergence_regression(tmp_path):

@@ -82,6 +82,30 @@ def _env_flag_enabled(name):
     }
 
 
+def _is_interpolation_capability_failure(err):
+    err_text = str(err).lower()
+    has_atomic_signal = "atomic" in err_text
+
+    status_code = getattr(err, "code", None)
+    build_failure_code = getattr(cl.status_code, "BUILD_PROGRAM_FAILURE", None)
+    invalid_operation_code = getattr(cl.status_code, "INVALID_OPERATION", None)
+    known_codes = {build_failure_code, invalid_operation_code}
+    known_codes.discard(None)
+
+    has_known_code = status_code in known_codes
+    has_capability_hint = any(
+        token in err_text
+        for token in (
+            "not supported",
+            "unsupported",
+            "extension",
+            "build",
+        )
+    )
+
+    return has_atomic_signal and (has_known_code or has_capability_hint)
+
+
 def _cast_source_field_dtype(field, dtype):
     if isinstance(field, np.ndarray):
         if field.dtype == object:
@@ -744,7 +768,10 @@ def drive_volume_fmm(
                         use_mode_to_source_ids=True,
                     )
                 )
-            except cl.Error as err:
+            except (cl.LogicError, cl.RuntimeError) as err:
+                if not _is_interpolation_capability_failure(err):
+                    raise
+
                 logger.warning(
                     "OpenCL interpolation unavailable (%s); "
                     "falling back to NumPy interpolation",
