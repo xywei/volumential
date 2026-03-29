@@ -25,6 +25,7 @@ THE SOFTWARE.
 """
 
 import logging
+import os
 from functools import partial
 
 import numpy as np
@@ -32,12 +33,25 @@ import numpy as np
 import pymbolic as pmbl
 import pyopencl as cl
 import pyopencl.array  # noqa: F401
+from pytools.obj_array import new_1d as obj_array_1d
 
 from volumential.tools import ScalarFieldExpressionEvaluation as Eval
 
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
+
+
+def _int_env(name, default):
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning("Ignoring invalid integer %s=%s", name, raw)
+        return default
 
 
 def main():
@@ -52,13 +66,13 @@ def main():
 
     logger.info("Using table cache: " + table_filename)
 
-    q_order = 7  # quadrature order
-    n_levels = 5
+    q_order = _int_env("VOLUMENTIAL_LAPLACE3D_Q_ORDER", 7)
+    n_levels = _int_env("VOLUMENTIAL_LAPLACE3D_N_LEVELS", 5)
     use_multilevel_table = False
 
     dtype = np.float64
 
-    m_order = 10  # multipole order
+    m_order = _int_env("VOLUMENTIAL_LAPLACE3D_M_ORDER", 10)
     force_direct_evaluation = False
 
     logger.info("Multipole order = " + str(m_order))
@@ -100,21 +114,15 @@ def main():
 
     mesh = mg.MeshGen3D(q_order, n_levels, a, b, queue=queue)
     mesh.print_info()
-    q_points = mesh.get_q_points()
-    q_weights = mesh.get_q_weights()
-
-    assert len(q_points) == len(q_weights)
-    assert q_points.shape[1] == dim
-
-    q_points = np.ascontiguousarray(np.transpose(q_points))
-
-    from pytools.obj_array import new_1d as obj_array_1d
-
-    q_points = obj_array_1d(
-        [cl.array.to_device(queue, q_points[i]) for i in range(dim)]
+    q_points, q_weights, tree, trav = mg.build_geometry_info(
+        ctx,
+        queue,
+        dim,
+        q_order,
+        mesh,
+        bbox=np.array([[a, b]] * dim, dtype=dtype),
     )
-
-    q_weights = cl.array.to_device(queue, q_weights)
+    assert tree.sources_are_targets
 
     # }}}
 
@@ -128,50 +136,6 @@ def main():
     # particle_weigt = source_val * q_weight
 
     # }}} End discretize the source field
-
-    # {{{ build tree and traversals
-
-    from boxtree.tools import AXIS_NAMES
-
-    axis_names = AXIS_NAMES[:dim]
-
-    from pytools import single_valued
-
-    coord_dtype = single_valued(coord.dtype for coord in q_points)
-    from boxtree.bounding_box import make_bounding_box_dtype
-
-    bbox_type, _ = make_bounding_box_dtype(ctx.devices[0], dim, coord_dtype)
-
-    bbox = np.empty(1, bbox_type)
-    for ax in axis_names:
-        bbox["min_" + ax] = a
-        bbox["max_" + ax] = b
-
-    # tune max_particles_in_box to reconstruct the mesh
-    # TODO: use points from FieldPlotter are used as target points for better
-    # visuals
-    print("building tree")
-    from boxtree import TreeBuilder
-    from boxtree.array_context import PyOpenCLArrayContext
-
-    actx = PyOpenCLArrayContext(queue)
-
-    tb = TreeBuilder(actx)
-    tree, _ = tb(
-        actx,
-        particles=q_points,
-        targets=q_points,
-        bbox=bbox,
-        max_particles_in_box=q_order**3 * 8 - 1,
-        kind="adaptive-level-restricted",
-    )
-
-    from boxtree.traversal import FMMTraversalBuilder
-
-    tg = FMMTraversalBuilder(actx)
-    trav, _ = tg(actx, tree)
-
-    # }}} End build tree and traversals
 
     # {{{ build near field potential table
 
@@ -314,6 +278,16 @@ def main():
     # print(pot)
 
     solu_eval = Eval(dim, solu_expr, [x, y, z])
+    q_coord_host = np.array([coords.get() for coords in q_points])
+    exact_q = solu_eval(queue, q_coord_host)
+    approx_q = pot.get()
+    q_abs_err = np.abs(exact_q - approx_q)
+    q_rel_l2 = np.linalg.norm(exact_q - approx_q) / max(
+        np.linalg.norm(exact_q), 1.0e-15
+    )
+    print("Quadrature-node max abs error =", np.max(q_abs_err))
+    print("Quadrature-node relative L2 error =", q_rel_l2)
+
     # x = q_points[0].get()
     # y = q_points[1].get()
     # z = q_points[2].get()

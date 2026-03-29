@@ -11,6 +11,7 @@ efficiently via Fast Multipole Method.
 - `volumential/`: library source
 - `test/`: pytest suite
 - `examples/`: maintained end-to-end examples (`laplace2d.py`, `laplace3d.py`,
+  `poisson3d.py`, `poisson3d_volumential.ipynb`,
   `poisson2d_pytential_volumential.ipynb`)
 - `doc/`: Sphinx documentation
 - `DEVELOPMENT.md`: local/remote development environment guide
@@ -26,9 +27,15 @@ Install an OpenCL runtime first (for example, in conda:
 ```bash
 uv sync --active --extra test
 uv run python examples/laplace2d.py
+uv run python examples/poisson3d.py
 ```
 
 For a fully reproducible local + remote setup, see `DEVELOPMENT.md`.
+
+Debug tip: when validating source-node evaluations, set
+`VOLUMENTIAL_STRICT_SOURCE_TARGET_TREE=1` to fail fast if a traversal is built
+with separate-but-identical source/target arrays (use `targets=None` to build a
+true coincident tree).
 
 ## Documentation
 
