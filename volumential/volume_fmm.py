@@ -384,9 +384,12 @@ def _maybe_guard_coincident_source_target_tree(tree, queue, cache=None):
         return False
 
     message = (
-        "tree.sources_are_targets is False, but source/target counts and user ids "
-        "match exactly. This usually means the same physical points were passed as "
-        "separate source/target arrays, which can add avoidable interpolation error. "
+        "tree.sources_are_targets is False, but source/target geometry appears "
+        "coincident (matching counts with equivalent user-id mappings, including "
+        "offset user_target_ids, or coordinate-only fallback when user_target_ids "
+        "are unavailable). This usually means the same physical points were passed "
+        "as separate source/target arrays, which can add avoidable interpolation "
+        "error. "
         "Build the tree with targets=None when evaluating on source nodes."
     )
 
