@@ -70,6 +70,16 @@ from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
 
 
 logger = logging.getLogger(__name__)
+_COINCIDENT_TREE_WARNING_EMITTED = False
+
+
+def _env_flag_enabled(name):
+    return os.environ.get(name, "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 def _cast_source_field_dtype(field, dtype):
@@ -234,7 +244,148 @@ def _to_host_array(ary, queue):
         return None
     if hasattr(ary, "with_queue"):
         return ary.with_queue(queue).get()
-    return ary.get(queue)
+    if hasattr(ary, "get"):
+        try:
+            return ary.get(queue)
+        except TypeError:
+            return ary.get()
+    return np.asarray(ary)
+
+
+def _build_inverse_user_permutation(user_ids, nitems, *, offset=0):
+    user_ids = np.asarray(user_ids)
+    if user_ids.ndim != 1 or len(user_ids) != nitems:
+        return None
+
+    local_ids = user_ids - int(offset)
+    if np.any(local_ids < 0) or np.any(local_ids >= nitems):
+        return None
+
+    inv = np.full(nitems, -1, dtype=np.int64)
+    inv[local_ids] = np.arange(nitems, dtype=np.int64)
+    if np.any(inv < 0):
+        return None
+
+    return inv
+
+
+def _coords_match_same_tree_order(tree, queue, nsources, ntargets):
+    if int(nsources) != int(ntargets):
+        return False
+
+    sources = getattr(tree, "sources", None)
+    targets = getattr(tree, "targets", None)
+    dimensions = getattr(tree, "dimensions", None)
+    if sources is None or targets is None or dimensions is None:
+        return False
+
+    for iaxis in range(int(dimensions)):
+        source_coords = np.asarray(_to_host_array(sources[iaxis], queue))
+        target_coords = np.asarray(_to_host_array(targets[iaxis], queue))
+        if source_coords.shape != target_coords.shape:
+            return False
+
+        coord_dtype = np.result_type(source_coords.dtype, target_coords.dtype)
+        if np.issubdtype(coord_dtype, np.floating):
+            atol = max(1e-12, 64 * float(np.finfo(coord_dtype).eps))
+        else:
+            atol = 0.0
+
+        if not np.allclose(source_coords, target_coords, rtol=0.0, atol=atol):
+            return False
+
+    return True
+
+
+def _looks_like_coincident_source_target_setup(tree, queue):
+    if tree is None or getattr(tree, "sources_are_targets", False):
+        return False
+
+    nsources = getattr(tree, "nsources", None)
+    ntargets = getattr(tree, "ntargets", None)
+    if nsources is None or ntargets is None:
+        return False
+
+    if int(nsources) != int(ntargets):
+        return False
+
+    user_source_ids = _to_host_array(getattr(tree, "user_source_ids", None), queue)
+    user_target_ids = _to_host_array(getattr(tree, "user_target_ids", None), queue)
+    if user_source_ids is None or user_target_ids is None:
+        return _coords_match_same_tree_order(tree, queue, nsources, ntargets)
+
+    user_source_ids = np.asarray(user_source_ids)
+    user_target_ids = np.asarray(user_target_ids)
+
+    if user_source_ids.shape != user_target_ids.shape:
+        return False
+
+    if np.array_equal(user_source_ids, user_target_ids):
+        return True
+
+    sources = getattr(tree, "sources", None)
+    targets = getattr(tree, "targets", None)
+    dimensions = getattr(tree, "dimensions", None)
+    if sources is None or targets is None or dimensions is None:
+        return False
+
+    source_inv = _build_inverse_user_permutation(
+        user_source_ids, int(nsources), offset=0
+    )
+    if source_inv is None:
+        return False
+
+    target_offset = int(np.min(user_target_ids))
+    target_inv = _build_inverse_user_permutation(
+        user_target_ids,
+        int(ntargets),
+        offset=target_offset,
+    )
+    if target_inv is None:
+        return False
+
+    for iaxis in range(int(dimensions)):
+        source_coords = _to_host_array(sources[iaxis], queue)
+        target_coords = _to_host_array(targets[iaxis], queue)
+
+        source_sorted = np.asarray(source_coords)[source_inv]
+        target_sorted = np.asarray(target_coords)[target_inv]
+        if source_sorted.shape != target_sorted.shape:
+            return False
+
+        coord_dtype = np.result_type(source_sorted.dtype, target_sorted.dtype)
+        if np.issubdtype(coord_dtype, np.floating):
+            atol = max(1e-12, 64 * float(np.finfo(coord_dtype).eps))
+        else:
+            atol = 0.0
+
+        if not np.allclose(source_sorted, target_sorted, rtol=0.0, atol=atol):
+            return False
+
+    return True
+
+
+def _maybe_guard_coincident_source_target_tree(tree, queue):
+    global _COINCIDENT_TREE_WARNING_EMITTED
+
+    if not _looks_like_coincident_source_target_setup(tree, queue):
+        return False
+
+    message = (
+        "tree.sources_are_targets is False, but source/target counts and user ids "
+        "match exactly. This usually means the same physical points were passed as "
+        "separate source/target arrays, which can add avoidable interpolation error. "
+        "Build the tree with targets=None when evaluating on source nodes."
+    )
+
+    if _env_flag_enabled("VOLUMENTIAL_STRICT_SOURCE_TARGET_TREE"):
+        raise ValueError(message)
+
+    if not _COINCIDENT_TREE_WARNING_EMITTED:
+        logger.warning(message)
+        _COINCIDENT_TREE_WARNING_EMITTED = True
+
+    return True
 
 
 def _clone_source_side_tree_as_targets(tree, queue):
@@ -527,6 +678,7 @@ def drive_volume_fmm(
         and tree is not None
         and not getattr(tree, "sources_are_targets", False)
     ):
+        _maybe_guard_coincident_source_target_tree(tree, queue)
         logger.info(
             "non-coincident source/target tree detected; "
             "solving on source modes and interpolating to requested targets"

@@ -522,6 +522,553 @@ def test_build_source_only_wrangler_rebuilds_target_to_source_mapping(monkeypatc
     np.testing.assert_array_equal(rebuilt, np.arange(3, dtype=np.int32))
 
 
+def test_looks_like_coincident_source_target_setup_matches_user_ids():
+    import volumential.volume_fmm as volume_fmm
+
+    tree = SimpleNamespace(
+        sources_are_targets=False,
+        nsources=4,
+        ntargets=4,
+        user_source_ids=_FakeDeviceArray(np.array([2, 0, 3, 1], dtype=np.int32)),
+        user_target_ids=_FakeDeviceArray(np.array([2, 0, 3, 1], dtype=np.int32)),
+    )
+
+    assert volume_fmm._looks_like_coincident_source_target_setup(tree, queue=None)
+
+
+def test_looks_like_coincident_source_target_setup_rejects_mismatched_user_ids():
+    import volumential.volume_fmm as volume_fmm
+
+    tree = SimpleNamespace(
+        sources_are_targets=False,
+        nsources=4,
+        ntargets=4,
+        user_source_ids=_FakeDeviceArray(np.array([0, 1, 2, 3], dtype=np.int32)),
+        user_target_ids=_FakeDeviceArray(np.array([3, 2, 1, 0], dtype=np.int32)),
+    )
+
+    assert not volume_fmm._looks_like_coincident_source_target_setup(tree, queue=None)
+
+
+def test_looks_like_coincident_source_target_setup_matches_offset_target_ids():
+    import volumential.volume_fmm as volume_fmm
+
+    tree = SimpleNamespace(
+        sources_are_targets=False,
+        nsources=4,
+        ntargets=4,
+        dimensions=2,
+        user_source_ids=_FakeDeviceArray(np.array([2, 0, 3, 1], dtype=np.int32)),
+        user_target_ids=_FakeDeviceArray(np.array([14, 12, 15, 13], dtype=np.int32)),
+        sources=np.empty(2, dtype=object),
+        targets=np.empty(2, dtype=object),
+    )
+    tree.sources[0] = _FakeDeviceArray(
+        np.array([0.2, -0.5, 0.8, 0.1], dtype=np.float64)
+    )
+    tree.sources[1] = _FakeDeviceArray(
+        np.array([1.5, -0.2, 0.3, 1.2], dtype=np.float64)
+    )
+    tree.targets[0] = _FakeDeviceArray(
+        np.array([0.2, -0.5, 0.8, 0.1], dtype=np.float64)
+    )
+    tree.targets[1] = _FakeDeviceArray(
+        np.array([1.5, -0.2, 0.3, 1.2], dtype=np.float64)
+    )
+
+    assert volume_fmm._looks_like_coincident_source_target_setup(tree, queue=None)
+
+
+def test_looks_like_coincident_source_target_setup_matches_without_user_target_ids():
+    import volumential.volume_fmm as volume_fmm
+
+    tree = SimpleNamespace(
+        sources_are_targets=False,
+        nsources=3,
+        ntargets=3,
+        dimensions=2,
+        user_source_ids=_FakeDeviceArray(np.array([0, 1, 2], dtype=np.int32)),
+        user_target_ids=None,
+        sources=np.empty(2, dtype=object),
+        targets=np.empty(2, dtype=object),
+    )
+    tree.sources[0] = _FakeDeviceArray(np.array([0.1, 0.2, 0.3], dtype=np.float64))
+    tree.sources[1] = _FakeDeviceArray(np.array([-0.4, 0.5, 0.6], dtype=np.float64))
+    tree.targets[0] = _FakeDeviceArray(np.array([0.1, 0.2, 0.3], dtype=np.float64))
+    tree.targets[1] = _FakeDeviceArray(np.array([-0.4, 0.5, 0.6], dtype=np.float64))
+
+    assert volume_fmm._looks_like_coincident_source_target_setup(tree, queue=None)
+
+
+def test_maybe_guard_coincident_source_target_tree_warns_once(caplog, monkeypatch):
+    import volumential.volume_fmm as volume_fmm
+
+    monkeypatch.delenv("VOLUMENTIAL_STRICT_SOURCE_TARGET_TREE", raising=False)
+    monkeypatch.setattr(volume_fmm, "_COINCIDENT_TREE_WARNING_EMITTED", False)
+
+    tree = SimpleNamespace(
+        sources_are_targets=False,
+        nsources=3,
+        ntargets=3,
+        user_source_ids=_FakeDeviceArray(np.array([0, 1, 2], dtype=np.int32)),
+        user_target_ids=_FakeDeviceArray(np.array([0, 1, 2], dtype=np.int32)),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        assert volume_fmm._maybe_guard_coincident_source_target_tree(tree, queue=None)
+        assert volume_fmm._maybe_guard_coincident_source_target_tree(tree, queue=None)
+
+    warning_records = [
+        rec for rec in caplog.records if "targets=None" in rec.getMessage()
+    ]
+    assert len(warning_records) == 1
+
+
+def test_maybe_guard_coincident_source_target_tree_strict_mode(monkeypatch):
+    import volumential.volume_fmm as volume_fmm
+
+    monkeypatch.setenv("VOLUMENTIAL_STRICT_SOURCE_TARGET_TREE", "1")
+    monkeypatch.setattr(volume_fmm, "_COINCIDENT_TREE_WARNING_EMITTED", False)
+
+    tree = SimpleNamespace(
+        sources_are_targets=False,
+        nsources=3,
+        ntargets=3,
+        user_source_ids=_FakeDeviceArray(np.array([0, 1, 2], dtype=np.int32)),
+        user_target_ids=_FakeDeviceArray(np.array([0, 1, 2], dtype=np.int32)),
+    )
+
+    with pytest.raises(ValueError, match="targets=None"):
+        volume_fmm._maybe_guard_coincident_source_target_tree(tree, queue=None)
+
+
+def test_treebuilder_targets_none_sets_sources_are_targets(ctx_factory):
+    from boxtree import TreeBuilder
+    from boxtree.array_context import PyOpenCLArrayContext
+    from pytools.obj_array import new_1d as obj_array_1d
+
+    ctx = ctx_factory()
+    queue = cl.CommandQueue(ctx)
+    actx = PyOpenCLArrayContext(queue)
+
+    source_points_host = np.array(
+        [
+            [-0.25, -0.25, -0.25],
+            [-0.25, -0.25, +0.25],
+            [-0.25, +0.25, -0.25],
+            [-0.25, +0.25, +0.25],
+            [+0.25, -0.25, -0.25],
+            [+0.25, -0.25, +0.25],
+            [+0.25, +0.25, -0.25],
+            [+0.25, +0.25, +0.25],
+        ],
+        dtype=np.float64,
+    )
+    source_points_t = np.ascontiguousarray(source_points_host.T)
+    source_points = obj_array_1d(
+        [
+            cl.array.to_device(queue, source_points_t[iaxis])
+            for iaxis in range(source_points_t.shape[0])
+        ]
+    )
+
+    tb = TreeBuilder(actx)
+    tree_coincident, _ = tb(
+        actx,
+        particles=source_points,
+        targets=None,
+        max_particles_in_box=8,
+        kind="adaptive-level-restricted",
+    )
+    tree_split, _ = tb(
+        actx,
+        particles=source_points,
+        targets=source_points,
+        max_particles_in_box=8,
+        kind="adaptive-level-restricted",
+    )
+
+    assert bool(tree_coincident.sources_are_targets)
+    assert not bool(tree_split.sources_are_targets)
+
+
+def _create_non_intel_opencl_context_or_skip():
+    try:
+        platforms = cl.get_platforms()
+    except cl.LogicError as exc:
+        pytest.skip(f"OpenCL platforms unavailable: {exc}")
+
+    gpu_candidates = []
+    fallback_candidates = []
+    for platform in platforms:
+        if platform.name == "Intel(R) OpenCL":
+            continue
+        for device in platform.get_devices():
+            if device.type & cl.device_type.GPU:
+                gpu_candidates.append(device)
+            else:
+                fallback_candidates.append(device)
+
+    devices = gpu_candidates or fallback_candidates
+    if not devices:
+        pytest.skip("No non-Intel OpenCL device available for convergence regression")
+
+    return cl.Context(devices=[devices[0]])
+
+
+def _get_laplace_3d_table(queue, table_path, q_order):
+    from volumential.nearfield_potential_table import DuffyBuildConfig
+    from volumential.table_manager import NearFieldInteractionTableManager
+
+    if q_order <= 2:
+        regular_quad_order = 6
+        radial_quad_order = 21
+    else:
+        regular_quad_order = 8
+        radial_quad_order = 31
+
+    with NearFieldInteractionTableManager(
+        str(table_path), root_extent=2.0, queue=queue
+    ) as tm:
+        build_config = DuffyBuildConfig(
+            radial_rule="tanh-sinh-fast",
+            regular_quad_order=regular_quad_order,
+            radial_quad_order=radial_quad_order,
+        )
+        table, _ = tm.get_table(
+            3,
+            "Laplace",
+            q_order,
+            force_recompute=False,
+            queue=queue,
+            build_config=build_config,
+        )
+
+    return table
+
+
+def _run_3d_gaussian_case(
+    ctx,
+    queue,
+    table,
+    *,
+    q_order,
+    nlevels,
+    fmm_order,
+    split_targets,
+    return_state=False,
+    tree_mode="mesh_aligned",
+):
+    from sumpy.expansion import DefaultExpansionFactory
+    from sumpy.kernel import LaplaceKernel
+
+    from volumential.expansion_wrangler_fpnd import (
+        FPNDExpansionWrangler,
+        FPNDTreeIndependentDataForWrangler,
+    )
+    from volumential.volume_fmm import drive_volume_fmm
+
+    dim = 3
+    alpha = 80.0
+
+    def rhs_f(x, y, z):
+        r2 = x * x + y * y + z * z
+        return (2 * dim * alpha - 4 * alpha * alpha * r2) * np.exp(-alpha * r2)
+
+    def u_exact(x, y, z):
+        return np.exp(-alpha * (x * x + y * y + z * z))
+
+    mesh = mg.MeshGen3D(q_order, nlevels, -0.5, 0.5, queue=queue)
+
+    if tree_mode == "mesh_aligned":
+        q_points, source_weights, tree, traversal = mg.build_geometry_info(
+            ctx,
+            queue,
+            dim,
+            q_order,
+            mesh,
+            bbox=np.array([[-0.5, 0.5]] * dim, dtype=np.float64),
+        )
+        source_coords_host = np.array([coords.get(queue) for coords in q_points])
+        source_points_host = np.ascontiguousarray(source_coords_host.T)
+        source_vals = cl.array.to_device(
+            queue,
+            np.ascontiguousarray(
+                rhs_f(
+                    source_coords_host[0],
+                    source_coords_host[1],
+                    source_coords_host[2],
+                )
+            ),
+        )
+    elif tree_mode == "treebuilder":
+        from boxtree import TreeBuilder
+        from boxtree.array_context import PyOpenCLArrayContext
+        from boxtree.traversal import FMMTraversalBuilder
+        from pytools.obj_array import new_1d as obj_array_1d
+
+        source_points_host = np.ascontiguousarray(mesh.get_q_points())
+        source_weights_host = np.ascontiguousarray(mesh.get_q_weights())
+        source_points_t = np.ascontiguousarray(source_points_host.T)
+
+        source_points = obj_array_1d(
+            [
+                cl.array.to_device(queue, source_points_t[iaxis])
+                for iaxis in range(source_points_t.shape[0])
+            ]
+        )
+        source_vals = cl.array.to_device(
+            queue,
+            np.ascontiguousarray(
+                rhs_f(
+                    source_points_host[:, 0],
+                    source_points_host[:, 1],
+                    source_points_host[:, 2],
+                )
+            ),
+        )
+        source_weights = cl.array.to_device(queue, source_weights_host)
+
+        actx = PyOpenCLArrayContext(queue)
+        tb = TreeBuilder(actx)
+        targets = source_points if split_targets else None
+        tree, _ = tb(
+            actx,
+            particles=source_points,
+            targets=targets,
+            max_particles_in_box=q_order**3 * 8 - 1,
+            kind="adaptive-level-restricted",
+        )
+
+        tg = FMMTraversalBuilder(actx)
+        traversal, _ = tg(actx, tree)
+    else:
+        raise ValueError(f"unknown tree_mode '{tree_mode}'")
+
+    knl = LaplaceKernel(dim)
+    expn_factory = DefaultExpansionFactory()
+    local_expn_class = expn_factory.get_local_expansion_class(knl)
+    mpole_expn_class = expn_factory.get_multipole_expansion_class(knl)
+
+    tree_indep = FPNDTreeIndependentDataForWrangler(
+        ctx,
+        partial(mpole_expn_class, knl),
+        partial(local_expn_class, knl),
+        [knl],
+        exclude_self=True,
+    )
+
+    self_extra_kwargs = {}
+    if tree.sources_are_targets:
+        self_extra_kwargs = {
+            "target_to_source": np.arange(tree.ntargets, dtype=np.int32)
+        }
+
+    wrangler = FPNDExpansionWrangler(
+        tree_indep=tree_indep,
+        queue=queue,
+        traversal=traversal,
+        near_field_table=table,
+        dtype=np.float64,
+        fmm_level_to_order=lambda kernel, kernel_args, tree, lev: fmm_order,
+        quad_order=q_order,
+        self_extra_kwargs=self_extra_kwargs,
+    )
+
+    (potentials,) = drive_volume_fmm(
+        traversal,
+        wrangler,
+        source_vals * source_weights,
+        source_vals,
+        direct_evaluation=False,
+        list1_only=False,
+    )
+
+    exact = u_exact(
+        source_points_host[:, 0],
+        source_points_host[:, 1],
+        source_points_host[:, 2],
+    )
+    abs_err = np.abs(potentials.get(queue) - exact)
+    rel_l2 = np.linalg.norm(abs_err) / np.linalg.norm(exact)
+
+    result = {
+        "tree_sources_are_targets": bool(tree.sources_are_targets),
+        "n_points": int(source_points_host.shape[0]),
+        "root_extent": float(tree.root_extent),
+        "rel_l2": float(rel_l2),
+        "alpha": alpha,
+    }
+
+    if return_state:
+        result.update(
+            {
+                "traversal": traversal,
+                "wrangler": wrangler,
+                "potentials": potentials,
+            }
+        )
+
+    return result
+
+
+def test_volume_fmm_strict_guard_rejects_split_tree_source_nodes(tmp_path, monkeypatch):
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 2
+    table = _get_laplace_3d_table(
+        queue,
+        tmp_path / "nft-strict-guard-3d.sqlite",
+        q_order,
+    )
+
+    monkeypatch.setenv("VOLUMENTIAL_STRICT_SOURCE_TARGET_TREE", "1")
+    with pytest.raises(ValueError, match="targets=None"):
+        _run_3d_gaussian_case(
+            ctx,
+            queue,
+            table,
+            q_order=q_order,
+            nlevels=2,
+            fmm_order=8,
+            split_targets=True,
+            tree_mode="treebuilder",
+        )
+
+
+def test_volume_fmm_3d_gaussian_convergence_regression(tmp_path):
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 3
+    table = _get_laplace_3d_table(
+        queue,
+        tmp_path / "nft-convergence-3d.sqlite",
+        q_order,
+    )
+
+    coarse = _run_3d_gaussian_case(
+        ctx,
+        queue,
+        table,
+        q_order=q_order,
+        nlevels=3,
+        fmm_order=12,
+        split_targets=False,
+        tree_mode="mesh_aligned",
+    )
+    fine = _run_3d_gaussian_case(
+        ctx,
+        queue,
+        table,
+        q_order=q_order,
+        nlevels=4,
+        fmm_order=12,
+        split_targets=False,
+        tree_mode="mesh_aligned",
+    )
+
+    err_ratio = fine["rel_l2"] / coarse["rel_l2"]
+    observed_order = -np.log2(err_ratio)
+
+    assert coarse["tree_sources_are_targets"]
+    assert fine["tree_sources_are_targets"]
+    assert abs(coarse["root_extent"] - 1.0) < 1.0e-12
+    assert abs(fine["root_extent"] - 1.0) < 1.0e-12
+    assert err_ratio < 0.2, (
+        "3D regression: rel-L2 error did not improve enough under refinement "
+        f"(coarse={coarse['rel_l2']:.3e}, fine={fine['rel_l2']:.3e}, "
+        f"ratio={err_ratio:.3f})"
+    )
+    assert observed_order > 2.0, (
+        "3D regression: observed refinement order is too low "
+        f"(order={observed_order:.3f}, coarse={coarse['rel_l2']:.3e}, "
+        f"fine={fine['rel_l2']:.3e}, points={coarse['n_points']}->{fine['n_points']})"
+    )
+
+
+def test_volume_fmm_3d_calculus_patch_residual_regression(tmp_path):
+    from sumpy.point_calculus import CalculusPatch
+
+    from volumential.volume_fmm import interpolate_volume_potential
+
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 3
+    table = _get_laplace_3d_table(
+        queue,
+        tmp_path / "nft-calculus-patch-3d.sqlite",
+        q_order,
+    )
+
+    coarse = _run_3d_gaussian_case(
+        ctx,
+        queue,
+        table,
+        q_order=q_order,
+        nlevels=3,
+        fmm_order=12,
+        split_targets=False,
+        return_state=True,
+        tree_mode="mesh_aligned",
+    )
+    fine = _run_3d_gaussian_case(
+        ctx,
+        queue,
+        table,
+        q_order=q_order,
+        nlevels=4,
+        fmm_order=12,
+        split_targets=False,
+        return_state=True,
+        tree_mode="mesh_aligned",
+    )
+
+    patch = CalculusPatch(center=[0.0, 0.0, 0.0], h=0.3, order=5)
+    patch_targets = np.empty(3, dtype=object)
+    patch_targets[0] = cl.array.to_device(queue, np.ascontiguousarray(patch.x))
+    patch_targets[1] = cl.array.to_device(queue, np.ascontiguousarray(patch.y))
+    patch_targets[2] = cl.array.to_device(queue, np.ascontiguousarray(patch.z))
+
+    u_patch_coarse = interpolate_volume_potential(
+        patch_targets,
+        coarse["traversal"],
+        coarse["wrangler"],
+        coarse["potentials"],
+    ).get(queue)
+    u_patch_fine = interpolate_volume_potential(
+        patch_targets,
+        fine["traversal"],
+        fine["wrangler"],
+        fine["potentials"],
+    ).get(queue)
+
+    alpha = float(coarse["alpha"])
+
+    def rhs_f(x, y, z):
+        r2 = x * x + y * y + z * z
+        return (6 * alpha - 4 * alpha * alpha * r2) * np.exp(-alpha * r2)
+
+    rho_patch = rhs_f(patch.x, patch.y, patch.z)
+    rel_residual_coarse = np.linalg.norm(
+        -patch.laplace(u_patch_coarse) - rho_patch
+    ) / np.linalg.norm(rho_patch)
+    rel_residual_fine = np.linalg.norm(
+        -patch.laplace(u_patch_fine) - rho_patch
+    ) / np.linalg.norm(rho_patch)
+
+    assert rel_residual_fine < rel_residual_coarse, (
+        "3D calculus-patch residual did not improve under refinement "
+        f"(coarse={rel_residual_coarse:.3e}, fine={rel_residual_fine:.3e})"
+    )
+    assert rel_residual_fine < 0.7 * rel_residual_coarse, (
+        "3D calculus-patch residual improvement is too weak under refinement "
+        f"(coarse={rel_residual_coarse:.3e}, fine={rel_residual_fine:.3e})"
+    )
+
+
 def test_volume_fmm_list1_multi_source_superposition():
     from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
     from volumential.volume_fmm import drive_volume_fmm
