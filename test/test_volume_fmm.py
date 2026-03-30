@@ -320,6 +320,99 @@ def test_normalize_source_fields_casts_object_matrix_rows():
     assert np.allclose(normalized[1], np.array([10.0, 20.0, 30.0]))
 
 
+def test_is_interpolation_capability_failure_detects_atom_intrinsics():
+    import volumential.volume_fmm as volume_fmm
+
+    class _FakeClError(RuntimeError):
+        def __init__(self, message, code):
+            super().__init__(message)
+            self._message = message
+            self.code = code
+
+        def __str__(self):
+            return self._message
+
+    err = _FakeClError(
+        "OpenCL build error: use of undeclared identifier 'atom_add'",
+        code=getattr(cl.status_code, "BUILD_PROGRAM_FAILURE", -11),
+    )
+
+    assert volume_fmm._is_interpolation_capability_failure(err)
+
+
+def test_is_interpolation_capability_failure_rejects_generic_runtime_errors():
+    import volumential.volume_fmm as volume_fmm
+
+    class _FakeClError(RuntimeError):
+        def __init__(self, message, code):
+            super().__init__(message)
+            self._message = message
+            self.code = code
+
+        def __str__(self):
+            return self._message
+
+    err = _FakeClError(
+        "clEnqueueNDRangeKernel failed: out of resources",
+        code=getattr(cl.status_code, "OUT_OF_RESOURCES", -5),
+    )
+
+    assert not volume_fmm._is_interpolation_capability_failure(err)
+
+
+def test_ensure_interpolation_target_coverage_rejects_missing_targets():
+    from volumential.volume_fmm import _ensure_interpolation_target_coverage
+
+    with pytest.raises(ValueError, match="missed by leaves-to-balls lookup"):
+        _ensure_interpolation_target_coverage(
+            np.array([1, 0, 2], dtype=np.int32),
+            queue=None,
+        )
+
+
+def test_ensure_interpolation_target_coverage_accepts_positive_multiplicity():
+    from volumential.volume_fmm import _ensure_interpolation_target_coverage
+
+    _ensure_interpolation_target_coverage(
+        np.array([1, 1, 3], dtype=np.int32),
+        queue=None,
+    )
+
+
+def test_ensure_interpolation_target_coverage_accepts_empty_array():
+    from volumential.volume_fmm import _ensure_interpolation_target_coverage
+
+    _ensure_interpolation_target_coverage(
+        np.array([], dtype=np.int32),
+        queue=None,
+    )
+
+
+def test_ensure_interpolation_target_coverage_accepts_empty_device_like_array(
+    monkeypatch,
+):
+    import volumential.volume_fmm as volume_fmm
+
+    class _EmptyDeviceLike:
+        size = 0
+
+        def with_queue(self, queue):
+            return self
+
+        def get(self, queue=None):
+            raise AssertionError("host transfer should not happen for empty input")
+
+    def _fail_min(*args, **kwargs):
+        raise AssertionError("cl.array.min should not be called for empty input")
+
+    monkeypatch.setattr(volume_fmm.cl.array, "min", _fail_min)
+
+    volume_fmm._ensure_interpolation_target_coverage(
+        _EmptyDeviceLike(),
+        queue=None,
+    )
+
+
 def test_build_box_mode_to_source_ids_raises_on_unmatched_nodes(monkeypatch):
     import volumential.volume_fmm as volume_fmm
 
@@ -816,6 +909,7 @@ def _run_3d_gaussian_case(
     split_targets,
     return_state=False,
     tree_mode="mesh_aligned",
+    alpha=80.0,
 ):
     from sumpy.expansion import DefaultExpansionFactory
     from sumpy.kernel import LaplaceKernel
@@ -827,7 +921,6 @@ def _run_3d_gaussian_case(
     from volumential.volume_fmm import drive_volume_fmm
 
     dim = 3
-    alpha = 80.0
 
     def rhs_f(x, y, z):
         r2 = x * x + y * y + z * z
@@ -839,6 +932,13 @@ def _run_3d_gaussian_case(
     mesh = mg.MeshGen3D(q_order, nlevels, -0.5, 0.5, queue=queue)
 
     if tree_mode == "mesh_aligned":
+        from dataclasses import replace
+
+        from boxtree.array_context import PyOpenCLArrayContext
+        from boxtree.traversal import FMMTraversalBuilder
+
+        from volumential.volume_fmm import _clone_source_side_tree_as_targets
+
         q_points, source_weights, tree, traversal = mg.build_geometry_info(
             ctx,
             queue,
@@ -859,6 +959,18 @@ def _run_3d_gaussian_case(
                 )
             ),
         )
+
+        if split_targets:
+            split_tree = _clone_source_side_tree_as_targets(tree, queue)
+            if split_tree is None:
+                raise ValueError("unable to build split target tree from source tree")
+
+            split_tree = replace(split_tree, sources_are_targets=False)
+
+            actx = PyOpenCLArrayContext(queue)
+            tg = FMMTraversalBuilder(actx)
+            traversal, _ = tg(actx, split_tree)
+            tree = split_tree
     elif tree_mode == "treebuilder":
         from boxtree import TreeBuilder
         from boxtree.array_context import PyOpenCLArrayContext
@@ -964,6 +1076,8 @@ def _run_3d_gaussian_case(
                 "traversal": traversal,
                 "wrangler": wrangler,
                 "potentials": potentials,
+                "source_vals": source_vals,
+                "source_weights": source_weights,
             }
         )
 
@@ -993,6 +1107,129 @@ def test_volume_fmm_strict_guard_rejects_split_tree_source_nodes(tmp_path, monke
             split_targets=True,
             tree_mode="treebuilder",
         )
+
+
+def test_volume_fmm_split_tree_auto_interpolation_matches_manual_backends(
+    tmp_path,
+    monkeypatch,
+):
+    import volumential.volume_fmm as volume_fmm
+
+    from pytools.obj_array import new_1d as obj_array_1d
+
+    from volumential.volume_fmm import (
+        _build_source_only_wrangler,
+        drive_volume_fmm,
+    )
+
+    orig_interpolate = volume_fmm.interpolate_volume_potential
+    auto_interp_flags = []
+
+    def _record_interpolate(*args, **kwargs):
+        auto_interp_flags.append(bool(kwargs.get("use_numpy_interpolation", False)))
+        return orig_interpolate(*args, **kwargs)
+
+    monkeypatch.setattr(volume_fmm, "interpolate_volume_potential", _record_interpolate)
+
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 2
+    table = _get_laplace_3d_table(
+        queue,
+        tmp_path / "nft-split-tree-auto-interp.sqlite",
+        q_order,
+    )
+
+    split_tree_case = _run_3d_gaussian_case(
+        ctx,
+        queue,
+        table,
+        q_order=q_order,
+        nlevels=3,
+        fmm_order=12,
+        split_targets=True,
+        return_state=True,
+        tree_mode="mesh_aligned",
+    )
+
+    assert not split_tree_case["tree_sources_are_targets"]
+
+    split_traversal = split_tree_case["traversal"]
+    split_wrangler = split_tree_case["wrangler"]
+    source_vals = split_tree_case["source_vals"]
+    source_weights = split_tree_case["source_weights"]
+
+    source_traversal, source_wrangler = _build_source_only_wrangler(
+        split_traversal,
+        split_wrangler,
+        queue,
+    )
+    assert source_traversal.tree.sources_are_targets
+
+    (source_potential_tree_order,) = drive_volume_fmm(
+        source_traversal,
+        source_wrangler,
+        source_vals * source_weights,
+        source_vals,
+        direct_evaluation=False,
+        reorder_sources=True,
+        reorder_potentials=False,
+        auto_interpolate_targets=False,
+    )
+
+    interp_kwargs = {
+        "potential_in_tree_order": True,
+        "use_mode_to_source_ids": True,
+    }
+    interp_tree_cl = None
+    interp_cl_error = None
+    try:
+        interp_tree_cl = orig_interpolate(
+            split_traversal.tree.targets,
+            split_traversal,
+            split_wrangler,
+            source_potential_tree_order,
+            **interp_kwargs,
+        )
+    except (cl.LogicError, cl.RuntimeError) as err:
+        interp_cl_error = err
+
+    interp_tree_numpy = orig_interpolate(
+        split_traversal.tree.targets,
+        split_traversal,
+        split_wrangler,
+        source_potential_tree_order,
+        use_numpy_interpolation=True,
+        **interp_kwargs,
+    )
+
+    def _to_user_order_host(potential_tree_order):
+        result = split_wrangler.reorder_potentials(obj_array_1d([potential_tree_order]))
+        result = split_wrangler.finalize_potentials(result)
+        return result[0].get(queue)
+
+    auto_host = split_tree_case["potentials"].get(queue)
+    interp_numpy_host = _to_user_order_host(interp_tree_numpy)
+
+    assert np.all(np.isfinite(interp_numpy_host))
+
+    assert auto_interp_flags
+    assert auto_interp_flags[0] is False
+
+    if interp_tree_cl is None:
+        assert auto_interp_flags[:2] == [False, True], interp_cl_error
+        assert np.allclose(auto_host, interp_numpy_host, rtol=1.0e-11, atol=1.0e-11)
+    else:
+        interp_cl_host = _to_user_order_host(interp_tree_cl)
+        assert np.all(np.isfinite(interp_cl_host))
+        assert np.allclose(
+            interp_cl_host,
+            interp_numpy_host,
+            rtol=1.0e-11,
+            atol=1.0e-11,
+        )
+        assert np.allclose(auto_host, interp_cl_host, rtol=1.0e-11, atol=1.0e-11)
 
 
 def test_volume_fmm_3d_gaussian_convergence_regression(tmp_path):
@@ -1061,6 +1298,11 @@ def test_volume_fmm_3d_calculus_patch_residual_regression(tmp_path):
         q_order,
     )
 
+    # Use a moderately concentrated manufactured profile so the residual remains
+    # sensitive to FMM/interpolation behavior without being dominated by
+    # calculus-patch truncation error.
+    alpha = 20.0
+
     coarse = _run_3d_gaussian_case(
         ctx,
         queue,
@@ -1071,6 +1313,7 @@ def test_volume_fmm_3d_calculus_patch_residual_regression(tmp_path):
         split_targets=False,
         return_state=True,
         tree_mode="mesh_aligned",
+        alpha=alpha,
     )
     fine = _run_3d_gaussian_case(
         ctx,
@@ -1082,6 +1325,7 @@ def test_volume_fmm_3d_calculus_patch_residual_regression(tmp_path):
         split_targets=False,
         return_state=True,
         tree_mode="mesh_aligned",
+        alpha=alpha,
     )
 
     patch = CalculusPatch(center=[0.0, 0.0, 0.0], h=0.3, order=5)
@@ -1124,6 +1368,10 @@ def test_volume_fmm_3d_calculus_patch_residual_regression(tmp_path):
     assert rel_residual_fine < 0.7 * rel_residual_coarse, (
         "3D calculus-patch residual improvement is too weak under refinement "
         f"(coarse={rel_residual_coarse:.3e}, fine={rel_residual_fine:.3e})"
+    )
+    assert rel_residual_fine < 2.0e-1, (
+        "3D calculus-patch residual remains too large after refinement "
+        f"(fine={rel_residual_fine:.3e}, coarse={rel_residual_coarse:.3e})"
     )
 
 

@@ -82,6 +82,72 @@ def _env_flag_enabled(name):
     }
 
 
+def _is_interpolation_capability_failure(err):
+    err_text = str(err).lower()
+
+    has_atomic_signal = any(
+        token in err_text
+        for token in (
+            "atomic",
+            "atom_",
+            "atomadd",
+            "atomcmpxchg",
+            "atomic_add",
+            "atomic_cmpxchg",
+            "cl_khr_global_int32_base_atomics",
+            "cl_khr_local_int32_base_atomics",
+            "cl_khr_int64_base_atomics",
+        )
+    )
+
+    status_code = getattr(err, "code", None)
+    build_failure_code = getattr(cl.status_code, "BUILD_PROGRAM_FAILURE", None)
+    invalid_operation_code = getattr(cl.status_code, "INVALID_OPERATION", None)
+    known_codes = {build_failure_code, invalid_operation_code}
+    known_codes.discard(None)
+
+    has_known_code = status_code in known_codes
+    has_capability_hint = any(
+        token in err_text
+        for token in (
+            "not supported",
+            "unsupported",
+            "requires extension",
+            "undeclared",
+            "extension",
+            "build",
+        )
+    )
+
+    return has_atomic_signal and (has_known_code or has_capability_hint)
+
+
+def _ensure_interpolation_target_coverage(multiplicity, queue):
+    if hasattr(multiplicity, "with_queue"):
+        multiplicity_dev = multiplicity.with_queue(queue)
+        if int(multiplicity_dev.size) == 0:
+            return
+        min_mult = float(cl.array.min(multiplicity_dev).get(queue))
+        if min_mult > 0:
+            return
+        multiplicity_host = multiplicity_dev.get(queue)
+    elif hasattr(multiplicity, "get"):
+        multiplicity_host = multiplicity.get(queue)
+    else:
+        multiplicity_host = np.asarray(multiplicity)
+
+    if multiplicity_host.size == 0:
+        return
+
+    missing_mask = multiplicity_host <= 0
+    if np.any(missing_mask):
+        n_missing = int(np.count_nonzero(missing_mask))
+        raise ValueError(
+            "interpolation did not cover all targets "
+            f"({n_missing} targets missed by leaves-to-balls lookup)"
+        )
+
+
 def _cast_source_field_dtype(field, dtype):
     if isinstance(field, np.ndarray):
         if field.dtype == object:
@@ -733,8 +799,26 @@ def drive_volume_fmm(
         source_result_oa = _as_obj_array(source_result)
         interpolated = []
         for source_result_i in source_result_oa:
-            interpolated.append(
-                interpolate_volume_potential(
+            try:
+                interpolated_i = interpolate_volume_potential(
+                    tree.targets,
+                    source_traversal,
+                    source_wrangler,
+                    source_result_i,
+                    potential_in_tree_order=True,
+                    use_mode_to_source_ids=True,
+                )
+                interpolated.append(interpolated_i)
+            except (cl.LogicError, cl.RuntimeError) as err:
+                if not _is_interpolation_capability_failure(err):
+                    raise
+
+                logger.warning(
+                    "OpenCL interpolation unavailable (%s); "
+                    "falling back to NumPy interpolation",
+                    err,
+                )
+                interpolated_i = interpolate_volume_potential(
                     tree.targets,
                     source_traversal,
                     source_wrangler,
@@ -743,7 +827,7 @@ def drive_volume_fmm(
                     use_mode_to_source_ids=True,
                     use_numpy_interpolation=True,
                 )
-            )
+                interpolated.append(interpolated_i)
 
         if len(interpolated) == 1:
             result = obj_array_1d([interpolated[0]])
@@ -1722,6 +1806,8 @@ def interpolate_volume_potential(
     assert multiplicity is res_dict["multiplicity"]
     pout.add_event(evt)
     multiplicity.add_event(evt)
+
+    _ensure_interpolation_target_coverage(multiplicity, queue)
 
     return pout / multiplicity
 
