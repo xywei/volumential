@@ -320,6 +320,65 @@ def test_normalize_source_fields_casts_object_matrix_rows():
     assert np.allclose(normalized[1], np.array([10.0, 20.0, 30.0]))
 
 
+def test_is_interpolation_capability_failure_detects_atom_intrinsics():
+    import volumential.volume_fmm as volume_fmm
+
+    class _FakeClError(RuntimeError):
+        def __init__(self, message, code):
+            super().__init__(message)
+            self._message = message
+            self.code = code
+
+        def __str__(self):
+            return self._message
+
+    err = _FakeClError(
+        "OpenCL build error: use of undeclared identifier 'atom_add'",
+        code=getattr(cl.status_code, "BUILD_PROGRAM_FAILURE", -11),
+    )
+
+    assert volume_fmm._is_interpolation_capability_failure(err)
+
+
+def test_is_interpolation_capability_failure_rejects_generic_runtime_errors():
+    import volumential.volume_fmm as volume_fmm
+
+    class _FakeClError(RuntimeError):
+        def __init__(self, message, code):
+            super().__init__(message)
+            self._message = message
+            self.code = code
+
+        def __str__(self):
+            return self._message
+
+    err = _FakeClError(
+        "clEnqueueNDRangeKernel failed: out of resources",
+        code=getattr(cl.status_code, "OUT_OF_RESOURCES", -5),
+    )
+
+    assert not volume_fmm._is_interpolation_capability_failure(err)
+
+
+def test_ensure_interpolation_target_coverage_rejects_missing_targets():
+    from volumential.volume_fmm import _ensure_interpolation_target_coverage
+
+    with pytest.raises(ValueError, match="missed by leaves-to-balls lookup"):
+        _ensure_interpolation_target_coverage(
+            np.array([1, 0, 2], dtype=np.int32),
+            queue=None,
+        )
+
+
+def test_ensure_interpolation_target_coverage_accepts_positive_multiplicity():
+    from volumential.volume_fmm import _ensure_interpolation_target_coverage
+
+    _ensure_interpolation_target_coverage(
+        np.array([1, 1, 3], dtype=np.int32),
+        queue=None,
+    )
+
+
 def test_build_box_mode_to_source_ids_raises_on_unmatched_nodes(monkeypatch):
     import volumential.volume_fmm as volume_fmm
 

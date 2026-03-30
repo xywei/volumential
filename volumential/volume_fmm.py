@@ -84,7 +84,21 @@ def _env_flag_enabled(name):
 
 def _is_interpolation_capability_failure(err):
     err_text = str(err).lower()
-    has_atomic_signal = "atomic" in err_text
+
+    has_atomic_signal = any(
+        token in err_text
+        for token in (
+            "atomic",
+            "atom_",
+            "atomadd",
+            "atomcmpxchg",
+            "atomic_add",
+            "atomic_cmpxchg",
+            "cl_khr_global_int32_base_atomics",
+            "cl_khr_local_int32_base_atomics",
+            "cl_khr_int64_base_atomics",
+        )
+    )
 
     status_code = getattr(err, "code", None)
     build_failure_code = getattr(cl.status_code, "BUILD_PROGRAM_FAILURE", None)
@@ -98,6 +112,8 @@ def _is_interpolation_capability_failure(err):
         for token in (
             "not supported",
             "unsupported",
+            "requires extension",
+            "undeclared",
             "extension",
             "build",
         )
@@ -106,16 +122,24 @@ def _is_interpolation_capability_failure(err):
     return has_atomic_signal and (has_known_code or has_capability_hint)
 
 
-def _ensure_interpolated_potential_finite(interpolated_potential, queue):
-    if hasattr(interpolated_potential, "get"):
-        potential_host = interpolated_potential.get(queue)
+def _ensure_interpolation_target_coverage(multiplicity, queue):
+    if hasattr(multiplicity, "with_queue"):
+        multiplicity_dev = multiplicity.with_queue(queue)
+        min_mult = float(cl.array.min(multiplicity_dev).get(queue))
+        if min_mult > 0:
+            return
+        multiplicity_host = multiplicity_dev.get(queue)
+    elif hasattr(multiplicity, "get"):
+        multiplicity_host = multiplicity.get(queue)
     else:
-        potential_host = np.asarray(interpolated_potential)
+        multiplicity_host = np.asarray(multiplicity)
 
-    if not np.all(np.isfinite(potential_host)):
+    missing_mask = multiplicity_host <= 0
+    if np.any(missing_mask):
+        n_missing = int(np.count_nonzero(missing_mask))
         raise ValueError(
-            "interpolate_volume_potential produced non-finite values; "
-            "target interpolation may be incomplete"
+            "interpolation did not cover all targets "
+            f"({n_missing} targets missed by leaves-to-balls lookup)"
         )
 
 
@@ -779,7 +803,6 @@ def drive_volume_fmm(
                     potential_in_tree_order=True,
                     use_mode_to_source_ids=True,
                 )
-                _ensure_interpolated_potential_finite(interpolated_i, queue)
                 interpolated.append(interpolated_i)
             except (cl.LogicError, cl.RuntimeError) as err:
                 if not _is_interpolation_capability_failure(err):
@@ -799,7 +822,6 @@ def drive_volume_fmm(
                     use_mode_to_source_ids=True,
                     use_numpy_interpolation=True,
                 )
-                _ensure_interpolated_potential_finite(interpolated_i, queue)
                 interpolated.append(interpolated_i)
 
         if len(interpolated) == 1:
@@ -1779,6 +1801,8 @@ def interpolate_volume_potential(
     assert multiplicity is res_dict["multiplicity"]
     pout.add_event(evt)
     multiplicity.add_event(evt)
+
+    _ensure_interpolation_target_coverage(multiplicity, queue)
 
     return pout / multiplicity
 
