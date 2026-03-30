@@ -388,6 +388,31 @@ def test_ensure_interpolation_target_coverage_accepts_empty_array():
     )
 
 
+def test_ensure_interpolation_target_coverage_accepts_empty_device_like_array(
+    monkeypatch,
+):
+    import volumential.volume_fmm as volume_fmm
+
+    class _EmptyDeviceLike:
+        size = 0
+
+        def with_queue(self, queue):
+            return self
+
+        def get(self, queue=None):
+            raise AssertionError("host transfer should not happen for empty input")
+
+    def _fail_min(*args, **kwargs):
+        raise AssertionError("cl.array.min should not be called for empty input")
+
+    monkeypatch.setattr(volume_fmm.cl.array, "min", _fail_min)
+
+    volume_fmm._ensure_interpolation_target_coverage(
+        _EmptyDeviceLike(),
+        queue=None,
+    )
+
+
 def test_build_box_mode_to_source_ids_raises_on_unmatched_nodes(monkeypatch):
     import volumential.volume_fmm as volume_fmm
 
