@@ -379,6 +379,15 @@ def test_ensure_interpolation_target_coverage_accepts_positive_multiplicity():
     )
 
 
+def test_ensure_interpolation_target_coverage_accepts_empty_array():
+    from volumential.volume_fmm import _ensure_interpolation_target_coverage
+
+    _ensure_interpolation_target_coverage(
+        np.array([], dtype=np.int32),
+        queue=None,
+    )
+
+
 def test_build_box_mode_to_source_ids_raises_on_unmatched_nodes(monkeypatch):
     import volumential.volume_fmm as volume_fmm
 

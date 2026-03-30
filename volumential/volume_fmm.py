@@ -125,6 +125,8 @@ def _is_interpolation_capability_failure(err):
 def _ensure_interpolation_target_coverage(multiplicity, queue):
     if hasattr(multiplicity, "with_queue"):
         multiplicity_dev = multiplicity.with_queue(queue)
+        if int(multiplicity_dev.size) == 0:
+            return
         min_mult = float(cl.array.min(multiplicity_dev).get(queue))
         if min_mult > 0:
             return
@@ -133,6 +135,9 @@ def _ensure_interpolation_target_coverage(multiplicity, queue):
         multiplicity_host = multiplicity.get(queue)
     else:
         multiplicity_host = np.asarray(multiplicity)
+
+    if multiplicity_host.size == 0:
+        return
 
     missing_mask = multiplicity_host <= 0
     if np.any(missing_mask):
