@@ -1631,16 +1631,12 @@ def test_volume_fmm_reorders_src_func_with_source_permutation():
     assert np.allclose(result, np.array([70.0]))
 
 
-def test_volume_fmm_list1_falls_back_to_p2p_on_nonfinite_table_values():
+def test_volume_fmm_list1_nonfinite_table_values_raise():
     from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
     from volumential.volume_fmm import drive_volume_fmm
 
     class _MockWrangler(ExpansionWranglerInterface):
         dtype = np.float64
-
-        def __init__(self):
-            self.p2p_calls = 0
-            self.p2p_src_weights = None
 
         def multipole_expansion_zeros(self):
             return None
@@ -1686,9 +1682,7 @@ def test_volume_fmm_list1_falls_back_to_p2p_on_nonfinite_table_values():
             neighbor_sources_lists,
             src_weights,
         ):
-            self.p2p_calls += 1
-            self.p2p_src_weights = np.asarray(src_weights[0]).copy()
-            return np.array([3.0, 4.0], dtype=self.dtype), None
+            raise AssertionError("list1 p2p fallback should never be used")
 
         def multipole_to_local(
             self,
@@ -1749,18 +1743,135 @@ def test_volume_fmm_list1_falls_back_to_p2p_on_nonfinite_table_values():
     src_func = np.array([10.0, 20.0, 30.0], dtype=np.float64)
 
     wrangler = _MockWrangler()
-    result = drive_volume_fmm(
-        traversal,
-        wrangler,
-        src_weights,
-        src_func,
-        list1_only=True,
-        allow_list1_p2p_fallback=True,
+    with pytest.raises(RuntimeError, match="non-finite values"):
+        drive_volume_fmm(
+            traversal,
+            wrangler,
+            src_weights,
+            src_func,
+            list1_only=True,
+        )
+
+
+def test_volume_fmm_rejects_allow_list1_p2p_fallback_option():
+    from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
+    from volumential.volume_fmm import drive_volume_fmm
+
+    class _MockWrangler(ExpansionWranglerInterface):
+        dtype = np.float64
+
+        def multipole_expansion_zeros(self):
+            return None
+
+        def local_expansion_zeros(self):
+            return None
+
+        def output_zeros(self):
+            return np.zeros(1, dtype=self.dtype)
+
+        def reorder_sources(self, source_array):
+            return source_array
+
+        def reorder_targets(self, target_array):
+            return target_array
+
+        def reorder_potentials(self, potentials):
+            return potentials
+
+        def form_multipoles(
+            self, level_start_source_box_nrs, source_boxes, src_weights
+        ):
+            return None, None
+
+        def coarsen_multipoles(
+            self, level_start_source_parent_box_nrs, source_parent_boxes, mpoles
+        ):
+            return mpoles, None
+
+        def eval_direct(
+            self,
+            target_boxes,
+            neighbor_sources_starts,
+            neighbor_sources_lists,
+            mode_coefs,
+        ):
+            return np.array([0.0], dtype=self.dtype), None
+
+        def eval_direct_p2p(
+            self,
+            target_boxes,
+            neighbor_sources_starts,
+            neighbor_sources_lists,
+            src_weights,
+        ):
+            return np.array([0.0], dtype=self.dtype), None
+
+        def multipole_to_local(
+            self,
+            level_start_target_or_target_parent_box_nrs,
+            target_or_target_parent_boxes,
+            starts,
+            lists,
+            mpole_exps,
+        ):
+            return np.array([0.0], dtype=self.dtype), None
+
+        def eval_multipoles(
+            self,
+            level_start_target_box_nrs,
+            target_boxes,
+            starts,
+            lists,
+            mpole_exps,
+        ):
+            return np.array([0.0], dtype=self.dtype), None
+
+        def form_locals(
+            self,
+            level_start_target_or_target_parent_box_nrs,
+            target_or_target_parent_boxes,
+            starts,
+            lists,
+            src_weights,
+        ):
+            return np.array([0.0], dtype=self.dtype), None
+
+        def refine_locals(
+            self,
+            level_start_target_or_target_parent_box_nrs,
+            target_or_target_parent_boxes,
+            local_exps,
+        ):
+            return local_exps, None
+
+        def eval_locals(self, level_start_target_box_nrs, target_boxes, local_exps):
+            return np.array([0.0], dtype=self.dtype), None
+
+        def finalize_potentials(self, potentials):
+            return potentials
+
+    traversal = SimpleNamespace(
+        tree=SimpleNamespace(nsources=1, ntargets=1, sources_are_targets=True),
+        level_start_source_box_nrs=np.array([], dtype=np.int32),
+        source_boxes=np.array([], dtype=np.int32),
+        level_start_source_parent_box_nrs=np.array([], dtype=np.int32),
+        source_parent_boxes=np.array([], dtype=np.int32),
+        target_boxes=np.array([], dtype=np.int32),
+        neighbor_source_boxes_starts=np.array([], dtype=np.int32),
+        neighbor_source_boxes_lists=np.array([], dtype=np.int32),
     )
 
-    assert wrangler.p2p_calls == 1
-    np.testing.assert_array_equal(wrangler.p2p_src_weights, src_weights)
-    assert np.allclose(result, np.array([3.0, 4.0]))
+    src_weights = np.array([1.0], dtype=np.float64)
+    src_func = np.array([2.0], dtype=np.float64)
+
+    with pytest.raises(TypeError, match="allow_list1_p2p_fallback"):
+        drive_volume_fmm(
+            traversal,
+            _MockWrangler(),
+            src_weights,
+            src_func,
+            allow_list1_p2p_fallback=True,
+        )
 
 
 def test_volume_fmm_rejects_multi_source_full_sumpy_path(monkeypatch):
@@ -2347,7 +2458,6 @@ def test_volume_fmm_calculus_patch_matches_source_density(
         direct_evaluation=False,
         reorder_sources=True,
         reorder_potentials=True,
-        allow_list1_p2p_fallback=False,
     )
 
     u_patch = interpolate_volume_potential(
