@@ -687,7 +687,12 @@ def drive_volume_fmm(
 
     list1_only = bool(kwargs.get("list1_only", False))
     auto_interpolate_targets = bool(kwargs.pop("auto_interpolate_targets", True))
-    allow_list1_p2p_fallback = bool(kwargs.pop("allow_list1_p2p_fallback", True))
+
+    if "allow_list1_p2p_fallback" in kwargs:
+        raise TypeError(
+            "drive_volume_fmm no longer accepts allow_list1_p2p_fallback; "
+            "non-finite list1 table results now raise an error"
+        )
 
     if ns > 1 and isinstance(expansion_wrangler, FPNDFMMLibExpansionWrangler):
         raise NotImplementedError(
@@ -768,7 +773,6 @@ def drive_volume_fmm(
             reorder_sources=reorder_sources,
             reorder_potentials=False,
             auto_interpolate_targets=False,
-            allow_list1_p2p_fallback=allow_list1_p2p_fallback,
             **kwargs,
         )
 
@@ -914,21 +918,11 @@ def drive_volume_fmm(
             field,
         )
 
-        if allow_list1_p2p_fallback and _contains_nonfinite(field_potentials):
-            logger.warning(
-                "table-based list1 evaluation produced non-finite values; "
-                "falling back to discrete list1 p2p for field %d",
-                idx_s,
+        if _contains_nonfinite(field_potentials):
+            raise RuntimeError(
+                "table-based list1 evaluation produced non-finite values for "
+                f"field {idx_s}; check near-field table data integrity"
             )
-
-            p2p_l1_potentials, p2p_l1_timing_future = wrangler.eval_direct_p2p(
-                traversal.target_boxes,
-                traversal.neighbor_source_boxes_starts,
-                traversal.neighbor_source_boxes_lists,
-                obj_array_1d([src_weights[idx_s]]),
-            )
-            field_potentials = p2p_l1_potentials
-            timing_future = _CombinedTimingFuture([timing_future, p2p_l1_timing_future])
 
         direct_timing_futures.append(timing_future)
         if potentials is None:

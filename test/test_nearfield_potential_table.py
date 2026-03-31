@@ -1232,6 +1232,64 @@ def test_prepare_table_data_and_entry_map_rejects_mixed_storage_modes():
         _prepare_table_data_and_entry_map([full, reduced])
 
 
+def test_prepare_table_data_and_entry_map_filters_nonfinite_full_entries():
+    from types import SimpleNamespace
+
+    from volumential.expansion_wrangler_fpnd import _prepare_table_data_and_entry_map
+
+    table0 = SimpleNamespace(
+        data=np.array([1.0, np.inf, 3.0, np.nan], dtype=np.float64),
+        mode_normalizers=np.array([1.0, 2.0], dtype=np.float64),
+        kernel_exterior_normalizers=np.array([0.0, 0.0], dtype=np.float64),
+        table_data_is_symmetry_reduced=False,
+    )
+    table1 = SimpleNamespace(
+        data=np.array([10.0, np.inf, 30.0, np.nan], dtype=np.float64),
+        mode_normalizers=np.array([4.0, 5.0], dtype=np.float64),
+        kernel_exterior_normalizers=np.array([0.0, 0.0], dtype=np.float64),
+        table_data_is_symmetry_reduced=False,
+    )
+
+    (
+        table_data_combined,
+        mode_nmlz_combined,
+        exterior_mode_nmlz_combined,
+        table_entry_ids,
+    ) = _prepare_table_data_and_entry_map([table0, table1])
+
+    assert table_data_combined.shape == (2, 2)
+    np.testing.assert_allclose(table_data_combined[0], np.array([1.0, 3.0]))
+    np.testing.assert_allclose(table_data_combined[1], np.array([10.0, 30.0]))
+    np.testing.assert_array_equal(table_entry_ids, np.array([0, -1, 1, -1]))
+    np.testing.assert_allclose(mode_nmlz_combined[0], table0.mode_normalizers)
+    np.testing.assert_allclose(mode_nmlz_combined[1], table1.mode_normalizers)
+    np.testing.assert_allclose(
+        exterior_mode_nmlz_combined[0], table0.kernel_exterior_normalizers
+    )
+
+
+def test_prepare_table_data_and_entry_map_rejects_mismatched_finite_masks():
+    from types import SimpleNamespace
+
+    from volumential.expansion_wrangler_fpnd import _prepare_table_data_and_entry_map
+
+    table0 = SimpleNamespace(
+        data=np.array([1.0, np.inf, 3.0], dtype=np.float64),
+        mode_normalizers=np.array([1.0], dtype=np.float64),
+        kernel_exterior_normalizers=np.array([0.0], dtype=np.float64),
+        table_data_is_symmetry_reduced=False,
+    )
+    table1 = SimpleNamespace(
+        data=np.array([1.0, 2.0, np.inf], dtype=np.float64),
+        mode_normalizers=np.array([1.0], dtype=np.float64),
+        kernel_exterior_normalizers=np.array([0.0], dtype=np.float64),
+        table_data_is_symmetry_reduced=False,
+    )
+
+    with pytest.raises(RuntimeError, match="finite table entry ids"):
+        _prepare_table_data_and_entry_map([table0, table1])
+
+
 def test_batched_duffy_non_cl_executor_signature(monkeypatch):
     table = npt.NearFieldInteractionTable(quad_order=1, dim=2, progress_bar=False)
 

@@ -240,21 +240,19 @@ def _prepare_table_data_and_entry_map(table_levels):
     if any(flag != reduced_flags[0] for flag in reduced_flags[1:]):
         raise RuntimeError("mixed full/reduced near-field table storage across levels")
 
-    if reduced_flags[0]:
-        kept_entry_ids = np.flatnonzero(np.isfinite(table0.data)).astype(np.int64)
-        for table in table_levels[1:]:
-            level_kept_entry_ids = np.flatnonzero(np.isfinite(table.data)).astype(
-                np.int64
-            )
-            if not np.array_equal(level_kept_entry_ids, kept_entry_ids):
+    finite_mask = np.isfinite(table0.data)
+    for table in table_levels[1:]:
+        level_finite_mask = np.isfinite(table.data)
+        if not np.array_equal(level_finite_mask, finite_mask):
+            if reduced_flags[0]:
                 raise RuntimeError(
                     "near-field levels disagree on symmetry-reduced entry ids"
                 )
-    else:
-        for table in table_levels:
-            if np.any(np.isnan(table.data)):
-                raise RuntimeError("full near-field table level contains NaN entries")
-        kept_entry_ids = np.arange(n_full_entries, dtype=np.int64)
+            raise RuntimeError("near-field levels disagree on finite table entry ids")
+
+    kept_entry_ids = np.flatnonzero(finite_mask).astype(np.int64)
+    if len(kept_entry_ids) == 0:
+        raise RuntimeError("near-field table contains no finite entries")
 
     table_entry_ids = np.full(n_full_entries, -1, dtype=np.int32)
     table_entry_ids[kept_entry_ids] = np.arange(len(kept_entry_ids), dtype=np.int32)
