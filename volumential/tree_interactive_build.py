@@ -144,6 +144,18 @@ def _resize_bool_flags(flags, new_size):
 
 
 def _box_keys_from_geometry(tob):
+    _, levels, _, _, grid_indices = _geometry_grid_indices(tob)
+
+    keys = []
+    for ibox in range(tob.nboxes):
+        level = int(levels[ibox])
+        idx = grid_indices[ibox]
+        keys.append((level, tuple(int(v) for v in idx)))
+
+    return keys
+
+
+def _geometry_grid_indices(tob):
     centers = np.asarray(tob.box_centers)
     levels = np.asarray(tob.box_levels, dtype=np.int32)
 
@@ -155,14 +167,18 @@ def _box_keys_from_geometry(tob):
     root_extent = float(tob.root_extent)
     root_min = root_center - 0.5 * root_extent
 
-    keys = []
-    for ibox in range(tob.nboxes):
+    nboxes = int(tob.nboxes)
+    dim = int(tob.dimensions)
+
+    grid_indices = np.empty((nboxes, dim), dtype=np.int64)
+    for ibox in range(nboxes):
         level = int(levels[ibox])
         box_size = root_extent / (1 << level)
-        idx = np.rint((centers[:, ibox] - root_min) / box_size - 0.5).astype(np.int64)
-        keys.append((level, tuple(int(v) for v in idx)))
+        grid_indices[ibox, :] = np.rint(
+            (centers[:, ibox] - root_min) / box_size - 0.5
+        ).astype(np.int64)
 
-    return keys
+    return centers, levels, root_extent, root_min, grid_indices
 
 
 def _box_paths_from_topology(tob):
@@ -586,28 +602,11 @@ def _compute_box_flags(box_child_ids):
 def _rebuild_tob_from_geometry(tob):
     from boxtree.tree import TreeOfBoxes
 
-    centers = np.asarray(tob.box_centers)
-    levels = np.asarray(tob.box_levels, dtype=np.int32)
+    centers, levels, root_extent, root_min, grid_indices = _geometry_grid_indices(tob)
 
-    nboxes = int(tob.nboxes)
+    nboxes = int(centers.shape[1])
     dim = int(tob.dimensions)
     nchildren = 2**dim
-
-    root_candidates = np.where(levels == 0)[0]
-    if len(root_candidates) != 1:
-        raise ValueError("expected exactly one root box at level 0")
-
-    root_center = centers[:, int(root_candidates[0])]
-    root_extent = float(tob.root_extent)
-    root_min = root_center - 0.5 * root_extent
-
-    grid_indices = np.empty((nboxes, dim), dtype=np.int64)
-    for ibox in range(nboxes):
-        lev = int(levels[ibox])
-        box_size = root_extent / (1 << lev)
-        grid_indices[ibox, :] = np.rint(
-            (centers[:, ibox] - root_min) / box_size - 0.5
-        ).astype(np.int64)
 
     old_keys = [
         (int(levels[i]), tuple(int(v) for v in grid_indices[i])) for i in range(nboxes)
