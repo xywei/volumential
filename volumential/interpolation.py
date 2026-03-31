@@ -515,6 +515,16 @@ class LeavesToNodesLookup(DeviceDataRecord):
             in the leaves-to-nodes lookup. :mod:`volumential` automatically computes
             the average contribution from overlapping boxes.
 
+    .. attribute:: leaves_near_ball_starts
+
+        Precomputed target-major lookup starts from the underlying area query,
+        aligned with flattened discretization nodes.
+
+    .. attribute:: leaves_near_ball_lists
+
+        Precomputed target-major lookup lists from the underlying area query,
+        aligned with flattened discretization nodes.
+
     .. automethod:: get
     """
 
@@ -984,6 +994,8 @@ class LeavesToNodesLookupBuilder:
             discr=self.discr,
             nodes_in_leaf_starts=nodes_in_leaf_starts,
             nodes_in_leaf_lists=nodes_in_leaf_lists,
+            leaves_near_ball_starts=area_query.leaves_near_ball_starts,
+            leaves_near_ball_lists=area_query.leaves_near_ball_lists,
         ), evt
 
 
@@ -1344,6 +1356,17 @@ def interpolate_to_meshmode(actx, potential, leaves_to_nodes_lookup, order="tree
     q_order = int(pts_per_box ** (1 / dim) + 0.25)
     assert q_order**dim == pts_per_box
 
+    interp_kwargs = {}
+    leaves_near_ball_starts = getattr(
+        leaves_to_nodes_lookup, "leaves_near_ball_starts", None
+    )
+    leaves_near_ball_lists = getattr(
+        leaves_to_nodes_lookup, "leaves_near_ball_lists", None
+    )
+    if leaves_near_ball_starts is not None and leaves_near_ball_lists is not None:
+        interp_kwargs["leaves_near_ball_starts"] = leaves_near_ball_starts
+        interp_kwargs["leaves_near_ball_lists"] = leaves_near_ball_lists
+
     interp_p = interpolate_volume_potential(
         target_points=target_points,
         traversal=traversal,
@@ -1355,9 +1378,7 @@ def interpolate_to_meshmode(actx, potential, leaves_to_nodes_lookup, order="tree
         queue=actx.queue,
         q_order=q_order,
         dtype=potential.dtype,
-        lbl_lookup=None,
-        balls_near_box_starts=leaves_to_nodes_lookup.nodes_in_leaf_starts,
-        balls_near_box_lists=leaves_to_nodes_lookup.nodes_in_leaf_lists,
+        **interp_kwargs,
     )
 
     return interp_p
