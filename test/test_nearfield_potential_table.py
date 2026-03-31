@@ -1312,6 +1312,39 @@ def test_prepare_table_data_and_entry_map_rejects_mismatched_reduced_masks():
         _prepare_table_data_and_entry_map([table0, table1])
 
 
+def test_prepare_table_data_and_entry_map_accepts_consistent_reduced_masks():
+    from types import SimpleNamespace
+
+    from volumential.expansion_wrangler_fpnd import _prepare_table_data_and_entry_map
+
+    table0 = SimpleNamespace(
+        data=np.array([1.0, np.nan, 3.0], dtype=np.float64),
+        mode_normalizers=np.array([1.0], dtype=np.float64),
+        kernel_exterior_normalizers=np.array([0.0], dtype=np.float64),
+        table_data_is_symmetry_reduced=True,
+    )
+    table1 = SimpleNamespace(
+        data=np.array([10.0, np.nan, 30.0], dtype=np.float64),
+        mode_normalizers=np.array([2.0], dtype=np.float64),
+        kernel_exterior_normalizers=np.array([0.0], dtype=np.float64),
+        table_data_is_symmetry_reduced=True,
+    )
+
+    (
+        table_data_combined,
+        mode_nmlz_combined,
+        _,
+        table_entry_ids,
+    ) = _prepare_table_data_and_entry_map([table0, table1])
+
+    assert table_data_combined.shape == (2, 2)
+    np.testing.assert_allclose(table_data_combined[0], np.array([1.0, 3.0]))
+    np.testing.assert_allclose(table_data_combined[1], np.array([10.0, 30.0]))
+    np.testing.assert_array_equal(table_entry_ids, np.array([0, -1, 1]))
+    np.testing.assert_allclose(mode_nmlz_combined[0], table0.mode_normalizers)
+    np.testing.assert_allclose(mode_nmlz_combined[1], table1.mode_normalizers)
+
+
 def test_batched_duffy_non_cl_executor_signature(monkeypatch):
     table = npt.NearFieldInteractionTable(quad_order=1, dim=2, progress_bar=False)
 
