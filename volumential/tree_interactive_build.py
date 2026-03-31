@@ -164,8 +164,13 @@ def _coarsen_tree_of_boxes_compat(
     if np.any(valid_parent_flags):
         valid_parents = source_parents[valid_parent_flags]
         peer_ids = np.asarray(tob.box_child_ids, dtype=np.int64)[:, valid_parents]
-        has_complete_peer_set = np.all(peer_ids != 0, axis=0)
-        all_peers_leaf = np.all(box_is_leaf[peer_ids], axis=0)
+
+        nonzero_peer_mask = peer_ids != 0
+        leaf_flags = np.ones(peer_ids.shape, dtype=bool)
+        leaf_flags[nonzero_peer_mask] = box_is_leaf[peer_ids[nonzero_peer_mask]]
+
+        has_complete_peer_set = np.all(nonzero_peer_mask, axis=0)
+        all_peers_leaf = np.all(leaf_flags, axis=0)
         executable[valid_parent_flags] = has_complete_peer_set & all_peers_leaf
 
     ignored_count = int(np.count_nonzero(~executable))
