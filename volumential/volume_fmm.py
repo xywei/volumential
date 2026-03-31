@@ -108,6 +108,22 @@ def _ensure_interpolation_target_coverage(multiplicity, queue):
         )
 
 
+def _compute_interpolation_lookup_tol(tree, tol=1e-12):
+    coord_dtype = np.dtype(tree.coord_dtype)
+    root_extent = float(abs(getattr(tree, "root_extent", 1.0)))
+    if not np.isfinite(root_extent) or root_extent == 0.0:
+        root_extent = 1.0
+
+    tol = max(float(tol), 64.0 * np.finfo(coord_dtype).eps * root_extent)
+
+    nlevels = int(getattr(tree, "nlevels", 1))
+    leaf_diam_cap = 0.25 * root_extent / (1 << max(nlevels - 1, 0))
+    if leaf_diam_cap > 0:
+        tol = min(tol, leaf_diam_cap)
+
+    return tol
+
+
 def _cast_source_field_dtype(field, dtype):
     if isinstance(field, np.ndarray):
         if field.dtype == object:
@@ -1387,10 +1403,10 @@ def interpolate_volume_potential(
         area_query_builder = AreaQueryBuilder(boxtree_actx)
 
         if target_radii is None:
-            # Set this number small enough so that all points found
-            # are inside the box
+            lookup_tol = _compute_interpolation_lookup_tol(tree)
             target_radii = cl.array.to_device(
-                queue, np.ones(n_points, dtype=coord_dtype) * 1e-12
+                queue,
+                np.full(n_points, lookup_tol, dtype=np.dtype(coord_dtype)),
             )
 
         area_query, evt = area_query_builder(

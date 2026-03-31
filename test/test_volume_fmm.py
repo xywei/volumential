@@ -394,6 +394,34 @@ def test_interpolate_volume_potential_rejects_legacy_interpolator_args():
         )
 
 
+def test_compute_interpolation_lookup_tol_scales_with_tree_extent():
+    from types import SimpleNamespace
+
+    from volumential.volume_fmm import _compute_interpolation_lookup_tol
+
+    tree64 = SimpleNamespace(coord_dtype=np.float64, root_extent=1.0, nlevels=1)
+    assert _compute_interpolation_lookup_tol(tree64, 1.0e-12) == pytest.approx(1.0e-12)
+
+    tree32 = SimpleNamespace(coord_dtype=np.float32, root_extent=1.0e8, nlevels=20)
+    tol = _compute_interpolation_lookup_tol(tree32, 1.0e-12)
+
+    root_scaled = 64.0 * np.finfo(np.float32).eps * 1.0e8
+    leaf_cap = 0.25 * (1.0e8 / (1 << 19))
+    assert tol == pytest.approx(min(root_scaled, leaf_cap))
+
+
+def test_compute_interpolation_lookup_tol_handles_missing_tree_nlevels():
+    from types import SimpleNamespace
+
+    from volumential.volume_fmm import _compute_interpolation_lookup_tol
+
+    tree = SimpleNamespace(coord_dtype=np.float64, root_extent=2.0)
+    tol = _compute_interpolation_lookup_tol(tree, 1.0e-12)
+
+    root_scaled = 64.0 * np.finfo(np.float64).eps * 2.0
+    assert tol == pytest.approx(max(1.0e-12, root_scaled))
+
+
 def test_build_box_mode_to_source_ids_raises_on_unmatched_nodes(monkeypatch):
     import volumential.volume_fmm as volume_fmm
 
