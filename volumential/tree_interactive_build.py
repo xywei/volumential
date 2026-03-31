@@ -139,6 +139,47 @@ def _resize_bool_flags(flags, new_size):
     return resized
 
 
+def _box_keys_from_geometry(tob):
+    centers = np.asarray(tob.box_centers)
+    levels = np.asarray(tob.box_levels, dtype=np.int32)
+
+    root_candidates = np.where(levels == 0)[0]
+    if len(root_candidates) != 1:
+        raise ValueError("expected exactly one root box at level 0")
+
+    root_center = centers[:, int(root_candidates[0])]
+    root_extent = float(tob.root_extent)
+    root_min = root_center - 0.5 * root_extent
+
+    keys = []
+    for ibox in range(tob.nboxes):
+        level = int(levels[ibox])
+        box_size = root_extent / (1 << level)
+        idx = np.rint((centers[:, ibox] - root_min) / box_size - 0.5).astype(np.int64)
+        keys.append((level, tuple(int(v) for v in idx)))
+
+    return keys
+
+
+def _remap_bool_flags_by_box_key(flags, old_tob, new_tob):
+    flags = _resize_bool_flags(flags, old_tob.nboxes)
+    remapped = np.zeros(new_tob.nboxes, dtype=bool)
+
+    if not np.any(flags):
+        return remapped
+
+    old_keys = _box_keys_from_geometry(old_tob)
+    new_keys = _box_keys_from_geometry(new_tob)
+    key_to_new = {key: idx for idx, key in enumerate(new_keys)}
+
+    for old_id in np.flatnonzero(flags):
+        new_id = key_to_new.get(old_keys[int(old_id)])
+        if new_id is not None:
+            remapped[new_id] = True
+
+    return remapped
+
+
 def _coarsen_tree_of_boxes_compat(
     tob,
     coarsen_flags,
@@ -283,12 +324,19 @@ class BoxTree:
         coarsen_flags = _resize_bool_flags(coarsen_flags, self._tree.nboxes)
 
         if np.any(refine_flags):
+            tree_before_refine = self._tree
             self._tree = refine_and_coarsen_tree_of_boxes(
                 self._tree,
                 refine_flags=refine_flags,
                 coarsen_flags=None,
                 error_on_ignored_flags=error_on_ignored_flags,
             )
+            coarsen_flags = _remap_bool_flags_by_box_key(
+                coarsen_flags,
+                tree_before_refine,
+                self._tree,
+            )
+        else:
             coarsen_flags = _resize_bool_flags(coarsen_flags, self._tree.nboxes)
 
         if np.any(coarsen_flags):
