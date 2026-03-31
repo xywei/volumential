@@ -1636,13 +1636,7 @@ def interpolate_volume_potential(
 
     lpknl = loopy.set_options(lpknl, return_dict=True)
     lpknl = loopy.fix_parameters(lpknl, dim=int(dim), q_order=int(q_order))
-    lpknl = loopy.split_iname(
-        lpknl,
-        "target_point_id",
-        128,
-        outer_tag="g.0",
-        inner_tag="l.0",
-    )
+    lpknl = loopy.tag_inames(lpknl, {"target_point_id": "g.0"})
     lpknl = loopy.remove_unused_inames(lpknl)
     lpknl_exec = lpknl.executor(queue.context)
 

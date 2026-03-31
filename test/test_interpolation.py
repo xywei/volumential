@@ -400,6 +400,58 @@ def test_make_constant_array_accepts_queue_less_reference(ctx_factory):
     assert np.allclose(const.get(queue), np.full(ref.shape, 1.25, dtype=ref.dtype))
 
 
+def test_interpolate_to_meshmode_forwards_prebuilt_lookup(ctx_factory, monkeypatch):
+    import volumential.volume_fmm as volume_fmm
+
+    cl_ctx = ctx_factory()
+    queue = cl.CommandQueue(cl_ctx)
+
+    dim = 2
+    degree = 1
+    nel_1d = 4
+    n_levels = 2
+    q_order = 3
+    a = -0.5
+    b = 0.5
+
+    mesh = generate_regular_rect_mesh(
+        a=(a,) * dim, b=(b,) * dim, nelements_per_axis=(nel_1d,) * dim
+    )
+
+    arr_ctx = PyOpenCLArrayContext(queue)
+    group_factory = _group_factory_for_dim(dim, degree)
+    discr = Discretization(arr_ctx, mesh, group_factory)
+
+    bbox_fac = BoundingBoxFactory(dim=dim)
+    boxfmm_fac = BoxFMMGeometryFactory(
+        cl_ctx,
+        dim=dim,
+        order=q_order,
+        nlevels=n_levels,
+        bbox_getter=bbox_fac,
+        expand_to_hold_mesh=mesh,
+        mesh_padding_factor=0.0,
+    )
+    boxgeo = boxfmm_fac(queue)
+    lookup_fac = LeavesToNodesLookupBuilder(cl_ctx, trav=boxgeo.trav, discr=discr)
+    lookup, _ = lookup_fac(arr_ctx)
+
+    captured = {}
+
+    def _fake_interpolate(target_points, traversal, wrangler, potential, **kwargs):
+        captured["leaves_near_ball_starts"] = kwargs.get("leaves_near_ball_starts")
+        captured["leaves_near_ball_lists"] = kwargs.get("leaves_near_ball_lists")
+        return cl.array.zeros(queue, len(target_points[0]), dtype=np.float64)
+
+    monkeypatch.setattr(volume_fmm, "interpolate_volume_potential", _fake_interpolate)
+
+    potential = np.zeros(boxgeo.tree.nsources, dtype=np.float64)
+    _ = interpolate_to_meshmode(arr_ctx, potential, lookup)
+
+    assert captured["leaves_near_ball_starts"] is lookup.leaves_near_ball_starts
+    assert captured["leaves_near_ball_lists"] is lookup.leaves_near_ball_lists
+
+
 # {{{ 2d tests
 
 
