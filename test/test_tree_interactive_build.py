@@ -113,6 +113,27 @@ def test_box_tree_coarsen_rejects_nonleaf_flags(ctx_factory):
         )
 
 
+def test_box_tree_refine_and_coarsen_resizes_short_flags(ctx_factory):
+    ctx = ctx_factory()
+    queue = cl.CommandQueue(ctx)
+
+    tree = BoxTree()
+    tree.generate_uniform_boxtree(
+        queue, root_vertex=np.array([-1.0, -1.0]), root_extent=2.0, nlevels=2
+    )
+
+    refine_flags = np.zeros(0, dtype=bool)
+    coarsen_flags = np.zeros(1, dtype=bool)
+
+    tree.refine_and_coarsen(
+        refine_flags,
+        coarsen_flags,
+        error_on_ignored_flags=True,
+    )
+
+    assert tree.n_active_boxes == 4
+
+
 def test_box_tree_mixed_refine_coarsen_remaps_coarsen_flags(ctx_factory):
     ctx = ctx_factory()
     queue = cl.CommandQueue(ctx)

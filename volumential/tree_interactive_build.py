@@ -315,13 +315,13 @@ class BoxTree:
         refine_flags = np.asarray(refine_flags, dtype=bool)
         coarsen_flags = np.asarray(coarsen_flags, dtype=bool)
 
+        refine_flags = _resize_bool_flags(refine_flags, self._tree.nboxes)
+        coarsen_flags = _resize_bool_flags(coarsen_flags, self._tree.nboxes)
+
         if np.any(refine_flags & coarsen_flags):
             raise ValueError(
                 "some boxes are simultaneously marked to refine and coarsen"
             )
-
-        refine_flags = _resize_bool_flags(refine_flags, self._tree.nboxes)
-        coarsen_flags = _resize_bool_flags(coarsen_flags, self._tree.nboxes)
 
         if np.any(refine_flags):
             tree_before_refine = self._tree
