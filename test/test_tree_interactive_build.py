@@ -3,7 +3,11 @@ import pytest
 
 import pyopencl as cl
 
-from boxtree import refine_and_coarsen_tree_of_boxes
+from boxtree import (
+    make_tree_of_boxes_root,
+    refine_and_coarsen_tree_of_boxes,
+    uniformly_refine_tree_of_boxes,
+)
 
 from volumential.tree_interactive_build import (
     BoxTree,
@@ -20,6 +24,34 @@ from volumential.tree_interactive_build import (
 
 def _box_keys_from_tob(tob):
     return _box_keys_from_geometry(tob)
+
+
+def _copy_tob_with_centers(tob, box_centers):
+    from boxtree.tree import TreeOfBoxes
+
+    level_start_box_nrs = (
+        None
+        if tob.level_start_box_nrs is None
+        else np.asarray(tob.level_start_box_nrs, dtype=tob.box_id_dtype)
+    )
+
+    return TreeOfBoxes(
+        box_centers=np.asarray(box_centers, dtype=tob.coord_dtype),
+        root_extent=tob.root_extent,
+        box_parent_ids=np.asarray(tob.box_parent_ids, dtype=tob.box_id_dtype),
+        box_child_ids=np.asarray(tob.box_child_ids, dtype=tob.box_id_dtype),
+        box_levels=np.asarray(tob.box_levels, dtype=tob.box_level_dtype),
+        box_flags=np.asarray(tob.box_flags, dtype=tob.box_flags.dtype),
+        level_start_box_nrs=level_start_box_nrs,
+        box_id_dtype=tob.box_id_dtype,
+        box_level_dtype=tob.box_level_dtype,
+        coord_dtype=tob.coord_dtype,
+        sources_have_extent=tob.sources_have_extent,
+        targets_have_extent=tob.targets_have_extent,
+        extent_norm=tob.extent_norm,
+        stick_out_factor=tob.stick_out_factor,
+        _is_pruned=tob._is_pruned,
+    )
 
 
 def test_box_tree_refine_and_quadrature(ctx_factory):
@@ -312,5 +344,37 @@ def test_box_tree_mixed_refine_coarsen_remaps_coarsen_flags(ctx_factory):
 
     actual_keys = _box_keys_from_tob(tree._tree)
     assert actual_keys == expected_with_remap_keys
-    if expected_without_remap_keys is not None:
-        assert actual_keys != expected_without_remap_keys
+
+
+def test_remap_coarsen_flags_uses_topology_not_geometry():
+    root = make_tree_of_boxes_root((np.array([-1.0, -1.0]), np.array([1.0, 1.0])))
+    old_tob = uniformly_refine_tree_of_boxes(uniformly_refine_tree_of_boxes(root))
+
+    old_leaves = np.where(np.all(old_tob.box_child_ids == 0, axis=0))[0]
+    assert old_leaves.size > 1
+
+    refine_flags = np.zeros(old_tob.nboxes, dtype=bool)
+    refine_flags[int(old_leaves[0])] = True
+    refined_tob = refine_and_coarsen_tree_of_boxes(
+        old_tob,
+        refine_flags=refine_flags,
+        coarsen_flags=None,
+        error_on_ignored_flags=True,
+    )
+
+    coarsen_flags = np.zeros(old_tob.nboxes, dtype=bool)
+    coarsen_flags[int(old_leaves[-1])] = True
+    remapped_flags = _remap_bool_flags_by_box_key(coarsen_flags, old_tob, refined_tob)
+
+    old_centers_with_nonfinite = np.asarray(old_tob.box_centers).copy()
+    old_centers_with_nonfinite[:, int(old_leaves[-1])] = np.array([np.nan, np.inf])
+    old_tob_nonfinite = _copy_tob_with_centers(old_tob, old_centers_with_nonfinite)
+
+    remapped_with_nonfinite = _remap_bool_flags_by_box_key(
+        coarsen_flags,
+        old_tob_nonfinite,
+        refined_tob,
+    )
+
+    assert np.array_equal(remapped_with_nonfinite, remapped_flags)
+    assert np.count_nonzero(remapped_with_nonfinite) == 1

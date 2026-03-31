@@ -165,6 +165,37 @@ def _box_keys_from_geometry(tob):
     return keys
 
 
+def _box_paths_from_topology(tob):
+    parent_ids = np.asarray(tob.box_parent_ids, dtype=np.int64)
+    child_ids = np.asarray(tob.box_child_ids, dtype=np.int64)
+
+    root_candidates = np.where(parent_ids < 0)[0]
+    if len(root_candidates) != 1:
+        raise ValueError("expected exactly one root box with parent id -1")
+
+    root_id = int(root_candidates[0])
+    box_paths = [None] * int(tob.nboxes)
+    box_paths[root_id] = ()
+
+    stack = [root_id]
+    while stack:
+        parent_id = stack.pop()
+        parent_path = box_paths[parent_id]
+        assert parent_path is not None
+
+        for child_slot, child_id in enumerate(child_ids[:, parent_id]):
+            child_id = int(child_id)
+            if child_id == 0:
+                continue
+            box_paths[child_id] = parent_path + (child_slot,)
+            stack.append(child_id)
+
+    if any(path is None for path in box_paths):
+        raise ValueError("tree-of-boxes contains unreachable boxes")
+
+    return box_paths
+
+
 def _remap_bool_flags_by_box_key(flags, old_tob, new_tob):
     flags = _resize_bool_flags(flags, old_tob.nboxes)
     remapped = np.zeros(new_tob.nboxes, dtype=bool)
@@ -172,12 +203,12 @@ def _remap_bool_flags_by_box_key(flags, old_tob, new_tob):
     if not np.any(flags):
         return remapped
 
-    old_keys = _box_keys_from_geometry(old_tob)
-    new_keys = _box_keys_from_geometry(new_tob)
-    key_to_new = {key: idx for idx, key in enumerate(new_keys)}
+    old_paths = _box_paths_from_topology(old_tob)
+    new_paths = _box_paths_from_topology(new_tob)
+    path_to_new = {path: idx for idx, path in enumerate(new_paths)}
 
     for old_id in np.flatnonzero(flags):
-        new_id = key_to_new.get(old_keys[int(old_id)])
+        new_id = path_to_new.get(old_paths[int(old_id)])
         if new_id is not None:
             remapped[new_id] = True
 
