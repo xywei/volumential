@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import warnings
 
 import numpy as np
 
@@ -15,14 +16,6 @@ from boxtree import (
     refine_and_coarsen_tree_of_boxes,
     uniformly_refine_tree_of_boxes,
 )
-
-
-_COARSENING_DISABLED_WARNING = (
-    "Current upstream boxtree tree-of-boxes coarsening is incompatible with "
-    "volumential's historical adaptive mesh workflow; retrying with refinement "
-    "only."
-)
-
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +127,95 @@ def _enforce_same_level_colleagues(tob):
         tob = refine_and_coarsen_tree_of_boxes(tob, refine_flags=refine_flags)
 
 
+def _resize_bool_flags(flags, new_size):
+    flags = np.asarray(flags, dtype=bool)
+    if flags.size == new_size:
+        return flags
+
+    resized = np.zeros(new_size, dtype=bool)
+    ncopy = min(flags.size, new_size)
+    if ncopy:
+        resized[:ncopy] = flags[:ncopy]
+    return resized
+
+
+def _coarsen_tree_of_boxes_compat(
+    tob,
+    coarsen_flags,
+    *,
+    error_on_ignored_flags=True,
+):
+    coarsen_flags = np.asarray(coarsen_flags, dtype=bool)
+    if coarsen_flags.size != tob.nboxes:
+        raise ValueError("coarsen_flags must match the number of boxes")
+
+    box_is_leaf = np.all(tob.box_child_ids == 0, axis=0)
+    if np.any(coarsen_flags[~box_is_leaf]):
+        raise ValueError("attempting to coarsen non-leaf")
+
+    (coarsen_sources,) = np.where(coarsen_flags)
+    if coarsen_sources.size == 0:
+        return tob
+
+    source_parents = np.asarray(tob.box_parent_ids, dtype=np.int64)[coarsen_sources]
+    valid_parent_flags = source_parents >= 0
+    executable = np.zeros(coarsen_sources.size, dtype=bool)
+
+    if np.any(valid_parent_flags):
+        valid_parents = source_parents[valid_parent_flags]
+        peer_ids = np.asarray(tob.box_child_ids, dtype=np.int64)[:, valid_parents]
+        has_complete_peer_set = np.all(peer_ids != 0, axis=0)
+        all_peers_leaf = np.all(box_is_leaf[peer_ids], axis=0)
+        executable[valid_parent_flags] = has_complete_peer_set & all_peers_leaf
+
+    ignored_count = int(np.count_nonzero(~executable))
+    if ignored_count:
+        msg = (
+            f"{ignored_count} out of {int(np.sum(coarsen_flags))} coarsening "
+            "flags ignored to prevent removing non-leaf boxes"
+        )
+        if error_on_ignored_flags:
+            raise RuntimeError(msg)
+        warnings.warn(msg, stacklevel=3)
+
+    executable_parents = np.unique(source_parents[executable])
+    if executable_parents.size == 0:
+        return tob
+
+    box_parent_ids = np.asarray(tob.box_parent_ids).copy()
+    box_child_ids = np.asarray(tob.box_child_ids).copy()
+
+    for parent_id in executable_parents:
+        peer_ids = box_child_ids[:, parent_id]
+        peer_ids = peer_ids[peer_ids != 0]
+        box_parent_ids[peer_ids] = -1
+        box_child_ids[:, parent_id] = 0
+
+    from boxtree.tree import TreeOfBoxes
+
+    coarsened = TreeOfBoxes(
+        box_centers=tob.box_centers,
+        root_extent=tob.root_extent,
+        box_parent_ids=box_parent_ids,
+        box_child_ids=box_child_ids,
+        box_levels=tob.box_levels,
+        box_flags=np.asarray(
+            _compute_box_flags(box_child_ids), dtype=box_flags_enum.dtype
+        ),
+        level_start_box_nrs=None,
+        box_id_dtype=tob.box_id_dtype,
+        box_level_dtype=tob.box_level_dtype,
+        coord_dtype=tob.coord_dtype,
+        sources_have_extent=tob.sources_have_extent,
+        targets_have_extent=tob.targets_have_extent,
+        extent_norm=tob.extent_norm,
+        stick_out_factor=tob.stick_out_factor,
+        _is_pruned=tob._is_pruned,
+    )
+
+    return _prune_unreachable_boxes(coarsened)
+
+
 class BoxTree:
     """Compatibility wrapper for the old boxtree interactive build API.
 
@@ -187,21 +269,30 @@ class BoxTree:
         refine_flags = np.asarray(refine_flags, dtype=bool)
         coarsen_flags = np.asarray(coarsen_flags, dtype=bool)
 
-        try:
+        if np.any(refine_flags & coarsen_flags):
+            raise ValueError(
+                "some boxes are simultaneously marked to refine and coarsen"
+            )
+
+        refine_flags = _resize_bool_flags(refine_flags, self._tree.nboxes)
+        coarsen_flags = _resize_bool_flags(coarsen_flags, self._tree.nboxes)
+
+        if np.any(refine_flags):
             self._tree = refine_and_coarsen_tree_of_boxes(
                 self._tree,
                 refine_flags=refine_flags,
-                coarsen_flags=coarsen_flags,
+                coarsen_flags=None,
                 error_on_ignored_flags=error_on_ignored_flags,
             )
-        except OverflowError:
-            logger.warning(_COARSENING_DISABLED_WARNING)
-            self._tree = refine_and_coarsen_tree_of_boxes(
+            coarsen_flags = _resize_bool_flags(coarsen_flags, self._tree.nboxes)
+
+        if np.any(coarsen_flags):
+            self._tree = _coarsen_tree_of_boxes_compat(
                 self._tree,
-                refine_flags=refine_flags,
-                coarsen_flags=np.zeros_like(coarsen_flags),
+                coarsen_flags,
                 error_on_ignored_flags=error_on_ignored_flags,
             )
+
         self._tree = _rebuild_tob_from_geometry(self._tree)
         self._sync_device_views()
 
@@ -490,8 +581,13 @@ def _rebuild_tob_from_geometry(tob):
     )
 
     new_levels = levels[new_order]
-    new_centers = centers[:, new_order]
     new_grid_indices = grid_indices[new_order]
+
+    new_box_sizes = root_extent / (1 << new_levels.astype(np.int64))
+    new_centers = (
+        root_min.reshape(dim, 1)
+        + (new_grid_indices.T.astype(tob.coord_dtype) + 0.5) * new_box_sizes
+    )
 
     key_to_new = {old_keys[old_id]: new_id for new_id, old_id in enumerate(new_order)}
 
