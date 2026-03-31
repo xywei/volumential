@@ -87,9 +87,6 @@ def _ensure_interpolation_target_coverage(multiplicity, queue):
         multiplicity_dev = multiplicity.with_queue(queue)
         if int(multiplicity_dev.size) == 0:
             return
-        min_mult = float(cl.array.min(multiplicity_dev).get(queue))
-        if min_mult > 0:
-            return
         multiplicity_host = multiplicity_dev.get(queue)
     elif hasattr(multiplicity, "get"):
         multiplicity_host = multiplicity.get(queue)
