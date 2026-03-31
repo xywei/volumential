@@ -149,11 +149,12 @@ def main():
     from boxtree.array_context import PyOpenCLArrayContext
 
     actx = PyOpenCLArrayContext(queue)
+    tree_particles = obj_array_1d([actx.from_numpy(coord.get()) for coord in q_points])
 
     tb = TreeBuilder(actx)
     tree, _ = tb(
         actx,
-        particles=q_points,
+        particles=tree_particles,
         targets=None,
         max_particles_in_box=q_order**2 * 4 - 1,
         kind="adaptive-level-restricted",
