@@ -230,6 +230,22 @@ def test_box_tree_mixed_refine_coarsen_remaps_coarsen_flags(ctx_factory):
             if wrong_parent_key == parent_key:
                 continue
 
+            candidate_coarsen_flags = np.zeros(old_tob.nboxes, dtype=bool)
+            candidate_coarsen_flags[coarsen_leaf] = True
+            remapped_candidate_flags = _remap_bool_flags_by_box_key(
+                candidate_coarsen_flags,
+                old_tob,
+                refined_tob,
+            )
+            try:
+                _coarsen_tree_of_boxes_compat(
+                    refined_tob,
+                    remapped_candidate_flags,
+                    error_on_ignored_flags=True,
+                )
+            except (RuntimeError, ValueError):
+                continue
+
             scenario = (old_tob, refine_flags, coarsen_leaf)
             break
 
