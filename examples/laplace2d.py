@@ -117,12 +117,12 @@ def main():
     assert len(q_points) == len(q_weights)
     assert q_points.shape[1] == dim
 
-    q_points = np.ascontiguousarray(np.transpose(q_points))
+    q_points_host = np.ascontiguousarray(np.transpose(q_points))
 
     from pytools.obj_array import new_1d as obj_array_1d
 
     q_points = obj_array_1d(
-        [cl.array.to_device(queue, q_points[i]) for i in range(dim)]
+        [cl.array.to_device(queue, q_points_host[i]) for i in range(dim)]
     )
 
     q_weights = cl.array.to_device(queue, q_weights)
@@ -132,9 +132,7 @@ def main():
 
     # {{{ discretize the source field
 
-    source_vals = cl.array.to_device(
-        queue, source_eval(queue, np.array([coords.get() for coords in q_points]))
-    )
+    source_vals = cl.array.to_device(queue, source_eval(queue, q_points_host))
 
     # particle_weigt = source_val * q_weight
 
@@ -149,7 +147,9 @@ def main():
     from boxtree.array_context import PyOpenCLArrayContext
 
     actx = PyOpenCLArrayContext(queue)
-    tree_particles = obj_array_1d([actx.from_numpy(coord.get()) for coord in q_points])
+    tree_particles = obj_array_1d(
+        [actx.from_numpy(q_points_host[i]) for i in range(dim)]
+    )
 
     tb = TreeBuilder(actx)
     tree, _ = tb(
