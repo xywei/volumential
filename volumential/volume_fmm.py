@@ -82,46 +82,6 @@ def _env_flag_enabled(name):
     }
 
 
-def _is_interpolation_capability_failure(err):
-    err_text = str(err).lower()
-
-    has_atomic_signal = any(
-        token in err_text
-        for token in (
-            "atomic",
-            "atom_",
-            "atomadd",
-            "atomcmpxchg",
-            "atomic_add",
-            "atomic_cmpxchg",
-            "cl_khr_global_int32_base_atomics",
-            "cl_khr_local_int32_base_atomics",
-            "cl_khr_int64_base_atomics",
-        )
-    )
-
-    status_code = getattr(err, "code", None)
-    build_failure_code = getattr(cl.status_code, "BUILD_PROGRAM_FAILURE", None)
-    invalid_operation_code = getattr(cl.status_code, "INVALID_OPERATION", None)
-    known_codes = {build_failure_code, invalid_operation_code}
-    known_codes.discard(None)
-
-    has_known_code = status_code in known_codes
-    has_capability_hint = any(
-        token in err_text
-        for token in (
-            "not supported",
-            "unsupported",
-            "requires extension",
-            "undeclared",
-            "extension",
-            "build",
-        )
-    )
-
-    return has_atomic_signal and (has_known_code or has_capability_hint)
-
-
 def _ensure_interpolation_target_coverage(multiplicity, queue):
     if hasattr(multiplicity, "with_queue"):
         multiplicity_dev = multiplicity.with_queue(queue)
@@ -144,7 +104,7 @@ def _ensure_interpolation_target_coverage(multiplicity, queue):
         n_missing = int(np.count_nonzero(missing_mask))
         raise ValueError(
             "interpolation did not cover all targets "
-            f"({n_missing} targets missed by leaves-to-balls lookup)"
+            f"({n_missing} targets missed by interpolation lookup)"
         )
 
 
@@ -799,35 +759,15 @@ def drive_volume_fmm(
         source_result_oa = _as_obj_array(source_result)
         interpolated = []
         for source_result_i in source_result_oa:
-            try:
-                interpolated_i = interpolate_volume_potential(
-                    tree.targets,
-                    source_traversal,
-                    source_wrangler,
-                    source_result_i,
-                    potential_in_tree_order=True,
-                    use_mode_to_source_ids=True,
-                )
-                interpolated.append(interpolated_i)
-            except (cl.LogicError, cl.RuntimeError) as err:
-                if not _is_interpolation_capability_failure(err):
-                    raise
-
-                logger.warning(
-                    "OpenCL interpolation unavailable (%s); "
-                    "falling back to NumPy interpolation",
-                    err,
-                )
-                interpolated_i = interpolate_volume_potential(
-                    tree.targets,
-                    source_traversal,
-                    source_wrangler,
-                    source_result_i,
-                    potential_in_tree_order=True,
-                    use_mode_to_source_ids=True,
-                    use_numpy_interpolation=True,
-                )
-                interpolated.append(interpolated_i)
+            interpolated_i = interpolate_volume_potential(
+                tree.targets,
+                source_traversal,
+                source_wrangler,
+                source_result_i,
+                potential_in_tree_order=True,
+                use_mode_to_source_ids=True,
+            )
+            interpolated.append(interpolated_i)
 
         if len(interpolated) == 1:
             result = obj_array_1d([interpolated[0]])
@@ -1370,7 +1310,6 @@ def interpolate_volume_potential(
     potential,
     potential_in_tree_order=False,
     target_radii=None,
-    lbl_lookup=None,
     **kwargs,
 ):
     """
@@ -1381,10 +1320,8 @@ def interpolate_volume_potential(
         May also be None if the needed information is passed by kwargs.
     :arg potential_in_tree_order: Whether the potential is in tree order (as
         opposed to in user order).
-    :lbl_lookup: a leaves-to-balls lookup object that has the lookup
-        information for target points. Can be None if the lookup lists are
-        provided separately in kwargs. If it is None and no other information is
-        provided, the lookup will be built from scratch.
+    :arg leaves_near_ball_starts/leaves_near_ball_lists: Optional target-major
+        lookup lists. If omitted, lookup lists are built from target points.
     """
     if wrangler is not None:
         dim = next(iter(wrangler.near_field_table.values()))[0].dim
@@ -1413,37 +1350,60 @@ def interpolate_volume_potential(
     assert dim == len(target_points)
     evt = None
 
-    if ("balls_near_box_starts" in kwargs) and ("balls_near_box_lists" in kwargs):
-        balls_near_box_starts = kwargs["balls_near_box_starts"]
-        balls_near_box_lists = kwargs["balls_near_box_lists"]
+    deprecated_kwargs = [
+        name
+        for name in (
+            "lbl_lookup",
+            "balls_near_box_starts",
+            "balls_near_box_lists",
+            "use_numpy_interpolation",
+        )
+        if name in kwargs
+    ]
+    if deprecated_kwargs:
+        raise TypeError(
+            "interpolate_volume_potential no longer accepts legacy "
+            f"interpolation arguments: {', '.join(sorted(deprecated_kwargs))}. "
+            "Use target-major leaves_near_ball_starts/lists or let the "
+            "function build lookup data automatically."
+        )
 
-    else:
-        # Building the lookup takes O(n*log(n))
-        if lbl_lookup is None:
-            from boxtree.area_query import LeavesToBallsLookupBuilder
-            from boxtree.array_context import (
-                PyOpenCLArrayContext as BoxtreePyOpenCLArrayContext,
+    leaves_near_ball_starts = kwargs.get("leaves_near_ball_starts")
+    leaves_near_ball_lists = kwargs.get("leaves_near_ball_lists")
+
+    if (leaves_near_ball_starts is None) != (leaves_near_ball_lists is None):
+        raise ValueError(
+            "leaves_near_ball_starts and leaves_near_ball_lists must be "
+            "provided together"
+        )
+
+    if leaves_near_ball_starts is None:
+        from boxtree.area_query import AreaQueryBuilder
+        from boxtree.array_context import (
+            PyOpenCLArrayContext as BoxtreePyOpenCLArrayContext,
+        )
+
+        boxtree_actx = BoxtreePyOpenCLArrayContext(queue)
+        area_query_builder = AreaQueryBuilder(boxtree_actx)
+
+        if target_radii is None:
+            # Set this number small enough so that all points found
+            # are inside the box
+            target_radii = cl.array.to_device(
+                queue, np.ones(n_points, dtype=coord_dtype) * 1e-12
             )
 
-            boxtree_actx = BoxtreePyOpenCLArrayContext(queue)
-            lookup_builder = LeavesToBallsLookupBuilder(boxtree_actx)
+        area_query, evt = area_query_builder(
+            boxtree_actx,
+            tree,
+            target_points,
+            target_radii,
+        )
+        leaves_near_ball_starts = area_query.leaves_near_ball_starts
+        leaves_near_ball_lists = area_query.leaves_near_ball_lists
 
-            if target_radii is None:
-                # Set this number small enough so that all points found
-                # are inside the box
-                target_radii = cl.array.to_device(
-                    queue, np.ones(n_points, dtype=coord_dtype) * 1e-12
-                )
-
-            lbl_lookup, evt = lookup_builder(
-                boxtree_actx,
-                tree,
-                target_points,
-                target_radii,
-            )
-
-        balls_near_box_starts = lbl_lookup.balls_near_box_starts
-        balls_near_box_lists = lbl_lookup.balls_near_box_lists
+    assert leaves_near_ball_starts is not None
+    assert leaves_near_ball_lists is not None
 
     pout = cl.array.zeros(queue, n_points, dtype=dtype)
     multiplicity = cl.array.zeros(queue, n_points, dtype=dtype)
@@ -1487,110 +1447,6 @@ def interpolate_volume_potential(
         mode_to_source_ids = cl.array.arange(
             queue, len(tree.sources[0]), dtype=np.int32
         )
-
-    use_numpy_interpolation = bool(kwargs.pop("use_numpy_interpolation", False))
-    if use_numpy_interpolation:
-
-        def _to_host(ary):
-            if hasattr(ary, "with_queue"):
-                return ary.with_queue(queue).get()
-            if hasattr(ary, "get"):
-                return ary.get(queue)
-            return np.asarray(ary)
-
-        target_boxes_host = _to_host(traversal.target_boxes)
-        balls_near_box_starts_host = _to_host(balls_near_box_starts)
-        balls_near_box_lists_host = _to_host(balls_near_box_lists)
-        box_levels_host = _to_host(tree.box_levels)
-        box_centers_host = _to_host(tree.box_centers)
-        box_target_starts_host = _to_host(tree.box_target_starts)
-        box_target_counts_host = _to_host(tree.box_target_counts_cumul)
-        mode_to_source_ids_host = _to_host(mode_to_source_ids)
-        blpoints_host = _to_host(blpoints)
-        blweights_host = _to_host(blweights)
-
-        target_points_host = []
-        for iaxis in range(dim):
-            target_points_host.append(_to_host(target_points[iaxis]))
-
-        if potential_in_tree_order:
-            potential_tree_host = _to_host(potential)
-        else:
-            user_mode_ids_host = _to_host(tree.user_source_ids)
-            potential_user_host = _to_host(potential)
-            potential_tree_host = potential_user_host[user_mode_ids_host]
-
-        n_box_modes_expected = q_order**dim
-        pout_host = np.zeros(n_points, dtype=dtype)
-        multiplicity_host = np.zeros(n_points, dtype=np.int32)
-
-        for target_box_id in map(int, target_boxes_host):
-            tpt_begin = int(balls_near_box_starts_host[target_box_id])
-            tpt_end = int(balls_near_box_starts_host[target_box_id + 1])
-            if tpt_begin >= tpt_end:
-                continue
-
-            box_level = int(box_levels_host[target_box_id])
-            box_mode_beg = int(box_target_starts_host[target_box_id])
-            n_box_modes = int(box_target_counts_host[target_box_id])
-            if n_box_modes != n_box_modes_expected:
-                continue
-
-            box_extent = float(tree.root_extent) * (1.0 / (2**box_level))
-            box_center = box_centers_host[:, target_box_id]
-
-            box_mode_ids = mode_to_source_ids_host[
-                box_mode_beg : box_mode_beg + n_box_modes
-            ]
-            mode_coeff = potential_tree_host[box_mode_ids]
-
-            for tpt in range(tpt_begin, tpt_end):
-                target_point_id = int(balls_near_box_lists_host[tpt])
-
-                tplt_coord = np.empty(dim, dtype=coord_dtype)
-                for iaxis in range(dim):
-                    real_coord = target_points_host[iaxis][target_point_id]
-                    tplt_coord[iaxis] = (
-                        real_coord - box_center[iaxis]
-                    ) / box_extent + 0.5
-
-                mode_val_1d = []
-                for iaxis in range(dim):
-                    diff = tplt_coord[iaxis] - blpoints_host
-                    if np.any(diff == 0):
-                        vals = np.zeros(q_order, dtype=dtype)
-                        vals[np.where(diff == 0)[0][0]] = 1
-                    else:
-                        denom = np.sum(blweights_host / diff)
-                        vals = (blweights_host / diff) / denom
-                    mode_val_1d.append(vals)
-
-                if dim == 1:
-                    mode_basis = mode_val_1d[0]
-                elif dim == 2:
-                    mode_basis = np.outer(mode_val_1d[0], mode_val_1d[1]).reshape(-1)
-                elif dim == 3:
-                    mode_basis = np.einsum(
-                        "i,j,k->ijk",
-                        mode_val_1d[0],
-                        mode_val_1d[1],
-                        mode_val_1d[2],
-                    ).reshape(-1)
-                else:
-                    raise NotImplementedError
-
-                pout_host[target_point_id] += np.dot(mode_coeff, mode_basis)
-                multiplicity_host[target_point_id] += 1
-
-        if np.any(multiplicity_host == 0):
-            n_missing = int(np.count_nonzero(multiplicity_host == 0))
-            raise ValueError(
-                "interpolation did not cover all targets "
-                f"({n_missing} targets missed by leaves-to-balls lookup)"
-            )
-
-        pout_host = pout_host / multiplicity_host
-        return cl.array.to_device(queue, pout_host)
 
     # {{{ loopy kernel for interpolation
 
@@ -1636,99 +1492,99 @@ def interpolate_volume_potential(
 
     lpknl = loopy.make_kernel(
         [
-            "{ [ tbox, iaxis ] : 0 <= tbox < n_tgt_boxes and 0 <= iaxis < dim }",
-            "{ [ tpt, mid, mjd, mkd ] : tpt_begin <= tpt < tpt_end "
-            "and 0 <= mid < n_box_modes and 0 <= mjd < q_order "
+            "{ [ target_point_id, iaxis ] : 0 <= target_point_id < n_points "
+            "and 0 <= iaxis < dim }",
+            "{ [ near_box_nr, mid, mjd, mkd ] : "
+            "nearby_leaves_begin <= near_box_nr < nearby_leaves_end "
+            "and 0 <= mid < n_box_modes_expected and 0 <= mjd < q_order "
             "and 0 <= mkd < q_order }",
         ],
         """
-            for tbox
-                <> target_box_id  = target_boxes[tbox]
+            for target_point_id
+                <> nearby_leaves_begin = leaves_near_ball_starts[target_point_id]
+                <> nearby_leaves_end   = leaves_near_ball_starts[target_point_id + 1]
 
-                <> tpt_begin = balls_near_box_starts[target_box_id]
-                <> tpt_end   = balls_near_box_starts[target_box_id+1]
+                    <> p_target = 0 {id=p_target_init}
+                    <> multiplicity_target = 0 {id=mult_target_init}
 
-                <> box_level     = box_levels[target_box_id]
-                <> box_mode_beg  = box_target_starts[target_box_id]
-                <> n_box_modes   = box_target_counts_cumul[target_box_id]
+                    for near_box_nr
+                        <> target_box_id  = leaves_near_ball_lists[near_box_nr]
+                        <> box_level      = box_levels[target_box_id]
+                        <> box_mode_beg   = box_target_starts[target_box_id]
+                        <> n_box_modes    = box_target_counts_cumul[target_box_id]
 
-                <> box_extent   = root_extent * (1.0 / (2**box_level))
+                        if n_box_modes == n_box_modes_expected
+                            <> box_extent = root_extent * (1.0 / (2**box_level))
 
-                for iaxis
-                    <> box_center[iaxis] = box_centers[iaxis, target_box_id] {dup=iaxis}
+                            for iaxis
+                                <> box_center[iaxis] = box_centers[iaxis, target_box_id] {dup=iaxis}
+                                <> real_coord[iaxis] = TARGET_COORDS_ASSIGNMENT {dup=iaxis}
+                            end
+
+                            # Map target point to template box
+                            for iaxis
+                                <> tplt_coord[iaxis] = (real_coord[iaxis] - box_center[iaxis]
+                                    ) / box_extent + 0.5 {dup=iaxis}
+                            end
+
+                            # Precompute denominators
+                            for iaxis
+                                <> denom[iaxis] = 0.0 {id=reinit_denom,dup=iaxis}
+                            end
+
+                            for iaxis, mjd
+                                 <> diff[iaxis, mjd] = ( \
+                                                  1 \
+                                                      if tplt_coord[iaxis] == barycentric_lagrange_points[mjd] \
+                                                      else tplt_coord[iaxis] - barycentric_lagrange_points[mjd]) \
+                                                  {id=diff, dep=reinit_denom, dup=iaxis:mjd}
+                                 denom[iaxis] = denom[iaxis] + \
+                                         barycentric_lagrange_weights[mjd] / diff[iaxis, mjd] \
+                                         {id=denom, dep=diff, dup=iaxis:mjd}
+                            end
+
+                            for mid
+                                # Find the coeff of each mode
+                                <> mode_id      = box_mode_beg + mid
+                                <> source_id    = mode_to_source_ids[mode_id]
+                                <> mode_id_user = user_mode_ids[source_id]
+                                <> mode_coeff   = potential[mode_id_user]
+
+                                # Mode id in each direction
+                                for iaxis
+                                    idx[iaxis] = MODE_INDEX_ASSIGNMENT {id=mode_indices,dup=iaxis}
+                                end
+
+                                # Interpolate mode value in each direction
+                                for iaxis
+                                    <> numerator[iaxis] = (barycentric_lagrange_weights[idx[iaxis]]
+                                                        / diff[iaxis, idx[iaxis]]) {id=numerator,dep=diff:mode_indices,dup=iaxis}
+                                    <> mode_val[iaxis] = numerator[iaxis] / denom[iaxis] {id=mode_val,dep=numerator:denom,dup=iaxis}
+                                end
+
+                                # Fix when target point coincide with a quad point
+                                for mkd, iaxis
+                                    mode_val[iaxis] = (
+                                            (1 if mkd == idx[iaxis] else 0)
+                                                if tplt_coord[iaxis] == barycentric_lagrange_points[mkd]
+                                                else mode_val[iaxis]) {id=fix_mode_val, dep=mode_val:mode_indices, dup=iaxis}
+                                end
+
+                                <> prod_mode_val = product(iaxis,
+                                    mode_val[iaxis]) {id=pmod,dep=fix_mode_val,dup=iaxis}
+
+                            end
+
+                            p_target = p_target + sum(mid,
+                                mode_coeff * prod_mode_val
+                                ) {id=p_target_acc,dep=pmod}
+                            multiplicity_target = multiplicity_target + 1 {id=mult_target_acc,dep=p_target_acc}
+                        end
+                    end
+
+                    p_out[target_point_id] = p_target {id=p_out,dep=p_target_init:p_target_acc}
+                    multiplicity[target_point_id] = multiplicity_target {id=mult_out,dep=mult_target_init:mult_target_acc}
                 end
-
-                for tpt
-                    <> target_point_id = balls_near_box_lists[tpt]
-
-                    for iaxis
-                        <> real_coord[iaxis] = TARGET_COORDS_ASSIGNMENT {dup=iaxis}
-                    end
-
-                    # Count how many times the potential is computed
-                    multiplicity[target_point_id] = multiplicity[target_point_id] + 1  {atomic}
-
-                    # Map target point to template box
-                    for iaxis
-                        <> tplt_coord[iaxis] = (real_coord[iaxis] - box_center[iaxis]
-                            ) / box_extent + 0.5 {dup=iaxis}
-                    end
-
-                    # Precompute denominators
-                    for iaxis
-                        <> denom[iaxis] = 0.0 {id=reinit_denom,dup=iaxis}
-                    end
-
-                    for iaxis, mjd
-                         <> diff[iaxis, mjd] = ( \
-                                          1 \
-                                              if tplt_coord[iaxis] == barycentric_lagrange_points[mjd] \
-                                              else tplt_coord[iaxis] - barycentric_lagrange_points[mjd]) \
-                                          {id=diff, dep=reinit_denom, dup=iaxis:mjd}
-                         denom[iaxis] = denom[iaxis] + \
-                                 barycentric_lagrange_weights[mjd] / diff[iaxis, mjd] \
-                                 {id=denom, dep=diff, dup=iaxis:mjd}
-                    end
-
-                    for mid
-                        # Find the coeff of each mode
-                        <> mode_id      = box_mode_beg + mid
-                        <> source_id    = mode_to_source_ids[mode_id]
-                        <> mode_id_user = user_mode_ids[source_id]
-                        <> mode_coeff   = potential[mode_id_user]
-
-                        # Mode id in each direction
-                        for iaxis
-                            idx[iaxis] = MODE_INDEX_ASSIGNMENT {id=mode_indices,dup=iaxis}
-                        end
-
-                        # Interpolate mode value in each direction
-                        for iaxis
-                            <> numerator[iaxis] = (barycentric_lagrange_weights[idx[iaxis]]
-                                                / diff[iaxis, idx[iaxis]]) {id=numerator,dep=diff:mode_indices,dup=iaxis}
-                            <> mode_val[iaxis] = numerator[iaxis] / denom[iaxis] {id=mode_val,dep=numerator:denom,dup=iaxis}
-                        end
-
-                        # Fix when target point coincide with a quad point
-                        for mkd, iaxis
-                            mode_val[iaxis] = (
-                                    (1 if mkd == idx[iaxis] else 0)
-                                        if tplt_coord[iaxis] == barycentric_lagrange_points[mkd]
-                                        else mode_val[iaxis]) {id=fix_mode_val, dep=mode_val:mode_indices, dup=iaxis}
-                        end
-
-                        <> prod_mode_val = product(iaxis,
-                            mode_val[iaxis]) {id=pmod,dep=fix_mode_val,dup=iaxis}
-
-                    end
-
-                    p_out[target_point_id] = p_out[target_point_id] + sum(mid,
-                        mode_coeff * prod_mode_val
-                        ) {id=p_out,dep=pmod,atomic}
-
-                end
-
-            end
 
             """.replace(  # noqa: E501
             "TARGET_COORDS_ASSIGNMENT", code_target_coords_assignment
@@ -1737,15 +1593,16 @@ def interpolate_volume_potential(
         .replace("Q_ORDER", "q_order"),
         [
             loopy.TemporaryVariable("idx", np.int32, "dim,"),
-            # loopy.TemporaryVariable("denom", dtype, "dim,"),
-            # loopy.TemporaryVariable("diff", dtype, "dim, q_order"),
             loopy.GlobalArg("box_centers", None, "dim, aligned_nboxes"),
-            loopy.GlobalArg("balls_near_box_lists", None, None),
-            loopy.GlobalArg("multiplicity", None, None, for_atomic=True),
-            loopy.GlobalArg("p_out", None, None, for_atomic=True),
+            loopy.GlobalArg("leaves_near_ball_starts", None, None),
+            loopy.GlobalArg("leaves_near_ball_lists", None, None),
+            loopy.GlobalArg("multiplicity", None, None),
+            loopy.GlobalArg("p_out", None, None),
             loopy.ValueArg("aligned_nboxes", np.int32),
             loopy.ValueArg("dim", np.int32),
             loopy.ValueArg("q_order", np.int32),
+            loopy.ValueArg("n_box_modes_expected", np.int32),
+            loopy.ValueArg("n_points", np.int32),
             "...",
         ],
         lang_version=(2018, 2),
@@ -1779,27 +1636,39 @@ def interpolate_volume_potential(
 
     lpknl = loopy.set_options(lpknl, return_dict=True)
     lpknl = loopy.fix_parameters(lpknl, dim=int(dim), q_order=int(q_order))
+    lpknl = loopy.split_iname(
+        lpknl,
+        "target_point_id",
+        128,
+        outer_tag="g.0",
+        inner_tag="l.0",
+    )
     lpknl = loopy.remove_unused_inames(lpknl)
     lpknl_exec = lpknl.executor(queue.context)
+
+    kernel_kwargs = {
+        "box_centers": tree.box_centers,
+        "box_levels": tree.box_levels,
+        "barycentric_lagrange_weights": blweights,
+        "barycentric_lagrange_points": blpoints,
+        "box_target_starts": tree.box_target_starts,
+        "box_target_counts_cumul": tree.box_target_counts_cumul,
+        "potential": potential,
+        "user_mode_ids": user_mode_ids,
+        "mode_to_source_ids": mode_to_source_ids,
+        "leaves_near_ball_starts": leaves_near_ball_starts,
+        "leaves_near_ball_lists": leaves_near_ball_lists,
+        "n_box_modes_expected": int(q_order**dim),
+        "n_points": n_points,
+        "root_extent": tree.root_extent,
+        **target_coords_knl_kwargs,
+    }
+
     evt, res_dict = lpknl_exec(
         queue,
         p_out=pout,
         multiplicity=multiplicity,
-        box_centers=tree.box_centers,
-        box_levels=tree.box_levels,
-        balls_near_box_starts=balls_near_box_starts,
-        balls_near_box_lists=balls_near_box_lists,
-        barycentric_lagrange_weights=blweights,
-        barycentric_lagrange_points=blpoints,
-        box_target_starts=tree.box_target_starts,
-        box_target_counts_cumul=tree.box_target_counts_cumul,
-        potential=potential,
-        user_mode_ids=user_mode_ids,
-        mode_to_source_ids=mode_to_source_ids,
-        target_boxes=traversal.target_boxes,
-        root_extent=tree.root_extent,
-        n_tgt_boxes=len(traversal.target_boxes),
-        **target_coords_knl_kwargs,
+        **kernel_kwargs,
     )
 
     assert pout is res_dict["p_out"]

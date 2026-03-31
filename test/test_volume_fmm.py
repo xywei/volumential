@@ -320,50 +320,10 @@ def test_normalize_source_fields_casts_object_matrix_rows():
     assert np.allclose(normalized[1], np.array([10.0, 20.0, 30.0]))
 
 
-def test_is_interpolation_capability_failure_detects_atom_intrinsics():
-    import volumential.volume_fmm as volume_fmm
-
-    class _FakeClError(RuntimeError):
-        def __init__(self, message, code):
-            super().__init__(message)
-            self._message = message
-            self.code = code
-
-        def __str__(self):
-            return self._message
-
-    err = _FakeClError(
-        "OpenCL build error: use of undeclared identifier 'atom_add'",
-        code=getattr(cl.status_code, "BUILD_PROGRAM_FAILURE", -11),
-    )
-
-    assert volume_fmm._is_interpolation_capability_failure(err)
-
-
-def test_is_interpolation_capability_failure_rejects_generic_runtime_errors():
-    import volumential.volume_fmm as volume_fmm
-
-    class _FakeClError(RuntimeError):
-        def __init__(self, message, code):
-            super().__init__(message)
-            self._message = message
-            self.code = code
-
-        def __str__(self):
-            return self._message
-
-    err = _FakeClError(
-        "clEnqueueNDRangeKernel failed: out of resources",
-        code=getattr(cl.status_code, "OUT_OF_RESOURCES", -5),
-    )
-
-    assert not volume_fmm._is_interpolation_capability_failure(err)
-
-
 def test_ensure_interpolation_target_coverage_rejects_missing_targets():
     from volumential.volume_fmm import _ensure_interpolation_target_coverage
 
-    with pytest.raises(ValueError, match="missed by leaves-to-balls lookup"):
+    with pytest.raises(ValueError, match="missed by interpolation lookup"):
         _ensure_interpolation_target_coverage(
             np.array([1, 0, 2], dtype=np.int32),
             queue=None,
@@ -411,6 +371,27 @@ def test_ensure_interpolation_target_coverage_accepts_empty_device_like_array(
         _EmptyDeviceLike(),
         queue=None,
     )
+
+
+def test_interpolate_volume_potential_rejects_legacy_interpolator_args():
+    from volumential.volume_fmm import interpolate_volume_potential
+
+    class _DummyTree:
+        coord_dtype = np.float64
+
+    with pytest.raises(TypeError, match="legacy interpolation arguments"):
+        interpolate_volume_potential(
+            target_points=[np.array([0.0], dtype=np.float64)],
+            traversal=None,
+            wrangler=None,
+            potential=np.array([0.0], dtype=np.float64),
+            dim=1,
+            tree=_DummyTree(),
+            queue=None,
+            q_order=1,
+            dtype=np.float64,
+            use_numpy_interpolation=True,
+        )
 
 
 def test_build_box_mode_to_source_ids_raises_on_unmatched_nodes(monkeypatch):
@@ -1109,27 +1090,16 @@ def test_volume_fmm_strict_guard_rejects_split_tree_source_nodes(tmp_path, monke
         )
 
 
-def test_volume_fmm_split_tree_auto_interpolation_matches_manual_backends(
-    tmp_path,
-    monkeypatch,
-):
-    import volumential.volume_fmm as volume_fmm
-
+def test_volume_fmm_split_tree_auto_interpolation_matches_manual_backends(tmp_path):
+    from boxtree.area_query import AreaQueryBuilder
+    from boxtree.array_context import PyOpenCLArrayContext
     from pytools.obj_array import new_1d as obj_array_1d
 
     from volumential.volume_fmm import (
         _build_source_only_wrangler,
         drive_volume_fmm,
+        interpolate_volume_potential,
     )
-
-    orig_interpolate = volume_fmm.interpolate_volume_potential
-    auto_interp_flags = []
-
-    def _record_interpolate(*args, **kwargs):
-        auto_interp_flags.append(bool(kwargs.get("use_numpy_interpolation", False)))
-        return orig_interpolate(*args, **kwargs)
-
-    monkeypatch.setattr(volume_fmm, "interpolate_volume_potential", _record_interpolate)
 
     ctx = _create_non_intel_opencl_context_or_skip()
     queue = cl.CommandQueue(ctx)
@@ -1182,25 +1152,38 @@ def test_volume_fmm_split_tree_auto_interpolation_matches_manual_backends(
         "potential_in_tree_order": True,
         "use_mode_to_source_ids": True,
     }
-    interp_tree_cl = None
-    interp_cl_error = None
-    try:
-        interp_tree_cl = orig_interpolate(
-            split_traversal.tree.targets,
-            split_traversal,
-            split_wrangler,
-            source_potential_tree_order,
-            **interp_kwargs,
-        )
-    except (cl.LogicError, cl.RuntimeError) as err:
-        interp_cl_error = err
 
-    interp_tree_numpy = orig_interpolate(
+    interp_tree_default = interpolate_volume_potential(
         split_traversal.tree.targets,
         split_traversal,
         split_wrangler,
         source_potential_tree_order,
-        use_numpy_interpolation=True,
+        **interp_kwargs,
+    )
+
+    boxtree_actx = PyOpenCLArrayContext(queue)
+    aq_builder = AreaQueryBuilder(boxtree_actx)
+    target_radii = cl.array.to_device(
+        queue,
+        np.full(
+            split_traversal.tree.ntargets,
+            1.0e-12,
+            dtype=split_traversal.tree.coord_dtype,
+        ),
+    )
+    area_query, _ = aq_builder(
+        boxtree_actx,
+        split_traversal.tree,
+        split_traversal.tree.targets,
+        target_radii,
+    )
+    interp_tree_prebuilt = interpolate_volume_potential(
+        split_traversal.tree.targets,
+        split_traversal,
+        split_wrangler,
+        source_potential_tree_order,
+        leaves_near_ball_starts=area_query.leaves_near_ball_starts,
+        leaves_near_ball_lists=area_query.leaves_near_ball_lists,
         **interp_kwargs,
     )
 
@@ -1210,26 +1193,18 @@ def test_volume_fmm_split_tree_auto_interpolation_matches_manual_backends(
         return result[0].get(queue)
 
     auto_host = split_tree_case["potentials"].get(queue)
-    interp_numpy_host = _to_user_order_host(interp_tree_numpy)
+    interp_default_host = _to_user_order_host(interp_tree_default)
+    interp_prebuilt_host = _to_user_order_host(interp_tree_prebuilt)
 
-    assert np.all(np.isfinite(interp_numpy_host))
-
-    assert auto_interp_flags
-    assert auto_interp_flags[0] is False
-
-    if interp_tree_cl is None:
-        assert auto_interp_flags[:2] == [False, True], interp_cl_error
-        assert np.allclose(auto_host, interp_numpy_host, rtol=1.0e-11, atol=1.0e-11)
-    else:
-        interp_cl_host = _to_user_order_host(interp_tree_cl)
-        assert np.all(np.isfinite(interp_cl_host))
-        assert np.allclose(
-            interp_cl_host,
-            interp_numpy_host,
-            rtol=1.0e-11,
-            atol=1.0e-11,
-        )
-        assert np.allclose(auto_host, interp_cl_host, rtol=1.0e-11, atol=1.0e-11)
+    assert np.all(np.isfinite(interp_default_host))
+    assert np.all(np.isfinite(interp_prebuilt_host))
+    assert np.allclose(
+        interp_default_host,
+        interp_prebuilt_host,
+        rtol=1.0e-11,
+        atol=1.0e-11,
+    )
+    assert np.allclose(auto_host, interp_default_host, rtol=1.0e-11, atol=1.0e-11)
 
 
 def test_volume_fmm_3d_gaussian_convergence_regression(tmp_path):

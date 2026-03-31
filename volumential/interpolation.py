@@ -1355,9 +1355,6 @@ def interpolate_to_meshmode(actx, potential, leaves_to_nodes_lookup, order="tree
         queue=actx.queue,
         q_order=q_order,
         dtype=potential.dtype,
-        lbl_lookup=None,
-        balls_near_box_starts=leaves_to_nodes_lookup.nodes_in_leaf_starts,
-        balls_near_box_lists=leaves_to_nodes_lookup.nodes_in_leaf_lists,
     )
 
     return interp_p

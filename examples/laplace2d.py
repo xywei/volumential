@@ -142,21 +142,6 @@ def main():
 
     # {{{ build tree and traversals
 
-    from boxtree.tools import AXIS_NAMES
-
-    axis_names = AXIS_NAMES[:dim]
-
-    from pytools import single_valued
-
-    coord_dtype = single_valued(coord.dtype for coord in q_points)
-    from boxtree.bounding_box import make_bounding_box_dtype
-
-    bbox_type, _ = make_bounding_box_dtype(ctx.devices[0], dim, coord_dtype)
-    bbox = np.empty(1, bbox_type)
-    for ax in axis_names:
-        bbox["min_" + ax] = a
-        bbox["max_" + ax] = b
-
     # tune max_particles_in_box to reconstruct the mesh
     # TODO: use points from FieldPlotter are used as target points for better
     # visuals
@@ -169,8 +154,7 @@ def main():
     tree, _ = tb(
         actx,
         particles=q_points,
-        targets=q_points,
-        bbox=bbox,
+        targets=None,
         max_particles_in_box=q_order**2 * 4 - 1,
         kind="adaptive-level-restricted",
     )
