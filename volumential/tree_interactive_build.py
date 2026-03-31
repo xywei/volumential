@@ -128,14 +128,18 @@ def _enforce_same_level_colleagues(tob):
 
 
 def _resize_bool_flags(flags, new_size):
-    flags = np.asarray(flags, dtype=bool)
+    flags = np.asarray(flags, dtype=bool).ravel()
     if flags.size == new_size:
         return flags
 
+    if flags.size > new_size:
+        raise ValueError(
+            "flag arrays longer than the current number of boxes must be remapped"
+        )
+
     resized = np.zeros(new_size, dtype=bool)
-    ncopy = min(flags.size, new_size)
-    if ncopy:
-        resized[:ncopy] = flags[:ncopy]
+    if flags.size:
+        resized[: flags.size] = flags
     return resized
 
 
@@ -636,7 +640,7 @@ def _rebuild_tob_from_geometry(tob):
     new_levels = levels[new_order]
     new_grid_indices = grid_indices[new_order]
 
-    new_box_sizes = root_extent / (1 << new_levels.astype(np.int64))
+    new_box_sizes = root_extent * np.exp2(-new_levels.astype(np.float64))
     new_centers = (
         root_min.reshape(dim, 1)
         + (new_grid_indices.T.astype(tob.coord_dtype) + 0.5) * new_box_sizes

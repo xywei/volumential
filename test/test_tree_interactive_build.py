@@ -8,6 +8,7 @@ from boxtree import refine_and_coarsen_tree_of_boxes
 from volumential.tree_interactive_build import (
     BoxTree,
     QuadratureOnBoxTree,
+    _box_keys_from_geometry,
     _coarsen_tree_of_boxes_compat,
     _enforce_level_restriction,
     _prune_unreachable_boxes,
@@ -18,23 +19,7 @@ from volumential.tree_interactive_build import (
 
 
 def _box_keys_from_tob(tob):
-    centers = np.asarray(tob.box_centers)
-    levels = np.asarray(tob.box_levels, dtype=np.int32)
-
-    root_candidates = np.where(levels == 0)[0]
-    assert len(root_candidates) == 1
-    root_center = centers[:, int(root_candidates[0])]
-    root_extent = float(tob.root_extent)
-    root_min = root_center - 0.5 * root_extent
-
-    keys = []
-    for ibox in range(tob.nboxes):
-        lev = int(levels[ibox])
-        box_size = root_extent / (1 << lev)
-        idx = np.rint((centers[:, ibox] - root_min) / box_size - 0.5).astype(np.int64)
-        keys.append((lev, tuple(int(v) for v in idx)))
-
-    return keys
+    return _box_keys_from_geometry(tob)
 
 
 def test_box_tree_refine_and_quadrature(ctx_factory):
@@ -134,6 +119,29 @@ def test_box_tree_refine_and_coarsen_resizes_short_flags(ctx_factory):
     assert tree.n_active_boxes == 4
 
 
+def test_box_tree_refine_and_coarsen_rejects_oversized_flags(ctx_factory):
+    ctx = ctx_factory()
+    queue = cl.CommandQueue(ctx)
+
+    tree = BoxTree()
+    tree.generate_uniform_boxtree(
+        queue, root_vertex=np.array([-1.0, -1.0]), root_extent=2.0, nlevels=2
+    )
+
+    refine_flags = np.zeros(tree.nboxes + 1, dtype=bool)
+    coarsen_flags = np.zeros(tree.nboxes, dtype=bool)
+
+    with pytest.raises(
+        ValueError,
+        match="flag arrays longer than the current number of boxes must be remapped",
+    ):
+        tree.refine_and_coarsen(
+            refine_flags,
+            coarsen_flags,
+            error_on_ignored_flags=True,
+        )
+
+
 def test_box_tree_mixed_refine_coarsen_remaps_coarsen_flags(ctx_factory):
     ctx = ctx_factory()
     queue = cl.CommandQueue(ctx)
@@ -228,7 +236,10 @@ def test_box_tree_mixed_refine_coarsen_remaps_coarsen_flags(ctx_factory):
         if scenario is not None:
             break
 
-    assert scenario is not None
+    assert scenario is not None, (
+        "failed to find a scenario where coarsen flags require remapping; "
+        "try a different seed or increase iteration limits"
+    )
 
     old_tob, refine_flags, coarsen_leaf = scenario
     coarsen_flags = np.zeros(old_tob.nboxes, dtype=bool)
