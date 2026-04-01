@@ -26,7 +26,14 @@ def _box_keys_from_tob(tob):
     return _box_keys_from_geometry(tob)
 
 
-def _copy_tob_with_centers(tob, box_centers):
+def _copy_tob(
+    tob,
+    *,
+    box_centers=None,
+    box_parent_ids=None,
+    box_child_ids=None,
+    box_levels=None,
+):
     from boxtree.tree import TreeOfBoxes
 
     level_start_box_nrs = (
@@ -36,11 +43,23 @@ def _copy_tob_with_centers(tob, box_centers):
     )
 
     return TreeOfBoxes(
-        box_centers=np.asarray(box_centers, dtype=tob.coord_dtype),
+        box_centers=np.asarray(
+            tob.box_centers if box_centers is None else box_centers,
+            dtype=tob.coord_dtype,
+        ),
         root_extent=tob.root_extent,
-        box_parent_ids=np.asarray(tob.box_parent_ids, dtype=tob.box_id_dtype),
-        box_child_ids=np.asarray(tob.box_child_ids, dtype=tob.box_id_dtype),
-        box_levels=np.asarray(tob.box_levels, dtype=tob.box_level_dtype),
+        box_parent_ids=np.asarray(
+            tob.box_parent_ids if box_parent_ids is None else box_parent_ids,
+            dtype=tob.box_id_dtype,
+        ),
+        box_child_ids=np.asarray(
+            tob.box_child_ids if box_child_ids is None else box_child_ids,
+            dtype=tob.box_id_dtype,
+        ),
+        box_levels=np.asarray(
+            tob.box_levels if box_levels is None else box_levels,
+            dtype=tob.box_level_dtype,
+        ),
         box_flags=np.asarray(tob.box_flags, dtype=tob.box_flags.dtype),
         level_start_box_nrs=level_start_box_nrs,
         box_id_dtype=tob.box_id_dtype,
@@ -368,7 +387,7 @@ def test_remap_coarsen_flags_uses_topology_not_geometry():
 
     old_centers_with_nonfinite = np.asarray(old_tob.box_centers).copy()
     old_centers_with_nonfinite[:, int(old_leaves[-1])] = np.array([np.nan, np.inf])
-    old_tob_nonfinite = _copy_tob_with_centers(old_tob, old_centers_with_nonfinite)
+    old_tob_nonfinite = _copy_tob(old_tob, box_centers=old_centers_with_nonfinite)
 
     remapped_with_nonfinite = _remap_bool_flags_by_box_key(
         coarsen_flags,
@@ -392,7 +411,7 @@ def test_rebuild_tob_from_geometry_ignores_nonroot_center_collisions():
     corrupted_centers = np.asarray(tob.box_centers).copy()
     collapsed_center = np.asarray(corrupted_centers[:, int(nonroot_ids[0])]).copy()
     corrupted_centers[:, nonroot_ids] = collapsed_center[:, None]
-    corrupted_tob = _copy_tob_with_centers(tob, corrupted_centers)
+    corrupted_tob = _copy_tob(tob, box_centers=corrupted_centers)
 
     rebuilt = _rebuild_tob_from_geometry(corrupted_tob)
 
@@ -408,3 +427,15 @@ def test_rebuild_tob_from_geometry_ignores_nonroot_center_collisions():
             child_id = int(child_id)
             if child_id != 0:
                 assert int(rebuilt_levels[child_id]) == parent_level + 1
+
+
+def test_rebuild_tob_from_geometry_rejects_cyclic_child_links():
+    root = make_tree_of_boxes_root((np.array([-1.0, -1.0]), np.array([1.0, 1.0])))
+    tob = uniformly_refine_tree_of_boxes(root)
+
+    cyclic_child_ids = np.asarray(tob.box_child_ids).copy()
+    cyclic_child_ids[0, 1] = 1
+    cyclic_tob = _copy_tob(tob, box_child_ids=cyclic_child_ids)
+
+    with pytest.raises(ValueError, match="cyclic or repeated child links"):
+        _rebuild_tob_from_geometry(cyclic_tob)

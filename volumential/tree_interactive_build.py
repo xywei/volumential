@@ -551,14 +551,44 @@ def _leaf_dfs_order(box_child_ids, ibox=0):
 
 
 def _level_order_boxes(box_child_ids):
+    nboxes = int(box_child_ids.shape[1])
+
     result = []
     current = [0]
+    seen = set()
+
     while current:
-        result.extend(current)
         nxt = []
+        queued = set()
+
         for ibox in current:
-            nxt.extend(int(ch) for ch in box_child_ids[:, ibox] if int(ch) != 0)
+            ibox = int(ibox)
+            if ibox < 0 or ibox >= nboxes:
+                raise ValueError("tree-of-boxes contains invalid box id")
+            if ibox in seen:
+                raise ValueError(
+                    "tree-of-boxes contains cyclic or repeated parent links"
+                )
+
+            seen.add(ibox)
+            result.append(ibox)
+
+            for ch in box_child_ids[:, ibox]:
+                child_id = int(ch)
+                if child_id == 0:
+                    continue
+                if child_id < 0 or child_id >= nboxes:
+                    raise ValueError("tree-of-boxes contains invalid child id")
+                if child_id in seen or child_id in queued:
+                    raise ValueError(
+                        "tree-of-boxes contains cyclic or repeated child links"
+                    )
+
+                queued.add(child_id)
+                nxt.append(child_id)
+
         current = nxt
+
     return result
 
 
