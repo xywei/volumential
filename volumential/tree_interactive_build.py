@@ -188,10 +188,14 @@ def _box_paths_from_topology(tob, *, require_connected=True):
     nboxes = int(tob.nboxes)
 
     root_candidates = np.where(parent_ids < 0)[0]
-    if len(root_candidates) != 1:
-        level_root_candidates = np.where(levels == 0)[0]
-        if len(level_root_candidates) == 1:
+    level_root_candidates = np.where(levels == 0)[0]
+    if len(level_root_candidates) == 1:
+        if len(root_candidates) != 1:
             root_candidates = level_root_candidates
+        else:
+            root_id = int(root_candidates[0])
+            if root_id != int(level_root_candidates[0]):
+                root_candidates = level_root_candidates
 
     if len(root_candidates) != 1:
         raise ValueError("expected exactly one root box (parent id < 0 or level == 0)")
@@ -648,7 +652,7 @@ def _compute_box_flags(box_child_ids):
 def _rebuild_tob_from_geometry(tob):
     from boxtree.tree import TreeOfBoxes
 
-    _box_paths_from_topology(tob, require_connected=False)
+    box_paths = _box_paths_from_topology(tob, require_connected=False)
 
     centers, levels, root_extent, _, grid_indices = _geometry_grid_indices(tob)
 
@@ -679,7 +683,6 @@ def _rebuild_tob_from_geometry(tob):
     use_topology_keys = len(set(geo_keys)) != nboxes or has_missing_parent(geo_keys)
 
     if use_topology_keys:
-        box_paths = _box_paths_from_topology(tob, require_connected=False)
         keys = []
         for ibox, path in enumerate(box_paths):
             if path is None:
