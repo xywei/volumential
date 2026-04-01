@@ -693,9 +693,15 @@ def _rebuild_tob_from_geometry(tob):
     else:
         keys = geo_keys
 
-    if len(set(keys)) != nboxes:
-        raise ValueError("duplicate level/grid-index keys in tree-of-boxes")
-    if has_missing_parent(keys):
+    has_duplicate_keys = len(set(keys)) != nboxes
+    has_parent_gaps = has_missing_parent(keys)
+    if has_duplicate_keys or has_parent_gaps:
+        pruned_tob = _prune_unreachable_boxes(tob)
+        if pruned_tob.nboxes < tob.nboxes:
+            return _rebuild_tob_from_geometry(pruned_tob)
+
+        if has_duplicate_keys:
+            raise ValueError("duplicate level/grid-index keys in tree-of-boxes")
         raise ValueError("missing parent while rebuilding tree-of-boxes")
 
     root_old_ids = [ibox for ibox, (level, _) in enumerate(keys) if level == 0]
