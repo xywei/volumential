@@ -648,6 +648,7 @@ def _compute_box_flags(box_child_ids):
 def _rebuild_tob_from_geometry(tob):
     from boxtree.tree import TreeOfBoxes
 
+    _box_paths_from_topology(tob, require_connected=False)
     tob = _prune_unreachable_boxes(tob)
 
     centers = np.asarray(tob.box_centers)

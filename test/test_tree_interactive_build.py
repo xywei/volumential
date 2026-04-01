@@ -437,5 +437,8 @@ def test_rebuild_tob_from_geometry_rejects_cyclic_child_links():
     cyclic_child_ids[0, 1] = 1
     cyclic_tob = _copy_tob(tob, box_child_ids=cyclic_child_ids)
 
-    with pytest.raises(ValueError, match="cyclic or repeated child links"):
+    with pytest.raises(
+        ValueError,
+        match="(cyclic or repeated child links|multiple parent paths)",
+    ):
         _rebuild_tob_from_geometry(cyclic_tob)
