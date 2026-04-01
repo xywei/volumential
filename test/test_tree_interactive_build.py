@@ -12,6 +12,7 @@ from boxtree import (
 from volumential.tree_interactive_build import (
     BoxTree,
     QuadratureOnBoxTree,
+    _compute_box_flags,
     _box_keys_from_geometry,
     _coarsen_tree_of_boxes_compat,
     _enforce_level_restriction,
@@ -42,6 +43,17 @@ def _copy_tob(
         else np.asarray(tob.level_start_box_nrs, dtype=tob.box_id_dtype)
     )
 
+    copied_child_ids = np.asarray(
+        tob.box_child_ids if box_child_ids is None else box_child_ids,
+        dtype=tob.box_id_dtype,
+    )
+
+    copied_box_flags = (
+        np.asarray(tob.box_flags, dtype=tob.box_flags.dtype)
+        if box_child_ids is None
+        else np.asarray(_compute_box_flags(copied_child_ids), dtype=tob.box_flags.dtype)
+    )
+
     return TreeOfBoxes(
         box_centers=np.asarray(
             tob.box_centers if box_centers is None else box_centers,
@@ -52,15 +64,12 @@ def _copy_tob(
             tob.box_parent_ids if box_parent_ids is None else box_parent_ids,
             dtype=tob.box_id_dtype,
         ),
-        box_child_ids=np.asarray(
-            tob.box_child_ids if box_child_ids is None else box_child_ids,
-            dtype=tob.box_id_dtype,
-        ),
+        box_child_ids=copied_child_ids,
         box_levels=np.asarray(
             tob.box_levels if box_levels is None else box_levels,
             dtype=tob.box_level_dtype,
         ),
-        box_flags=np.asarray(tob.box_flags, dtype=tob.box_flags.dtype),
+        box_flags=copied_box_flags,
         level_start_box_nrs=level_start_box_nrs,
         box_id_dtype=tob.box_id_dtype,
         box_level_dtype=tob.box_level_dtype,
