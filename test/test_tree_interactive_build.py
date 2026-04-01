@@ -378,3 +378,31 @@ def test_remap_coarsen_flags_uses_topology_not_geometry():
 
     assert np.array_equal(remapped_with_nonfinite, remapped_flags)
     assert np.count_nonzero(remapped_with_nonfinite) == 1
+
+
+def test_rebuild_tob_from_geometry_ignores_nonroot_center_collisions():
+    root = make_tree_of_boxes_root((np.array([-1.0, -1.0]), np.array([1.0, 1.0])))
+    tob = uniformly_refine_tree_of_boxes(uniformly_refine_tree_of_boxes(root))
+
+    original_nboxes = tob.nboxes
+    nonroot_ids = np.where(np.asarray(tob.box_parent_ids, dtype=np.int64) >= 0)[0]
+    assert nonroot_ids.size > 0
+
+    corrupted_centers = np.asarray(tob.box_centers).copy()
+    collapsed_center = np.asarray(corrupted_centers[:, int(nonroot_ids[0])]).copy()
+    corrupted_centers[:, nonroot_ids] = collapsed_center[:, None]
+    corrupted_tob = _copy_tob_with_centers(tob, corrupted_centers)
+
+    rebuilt = _rebuild_tob_from_geometry(corrupted_tob)
+
+    assert rebuilt.nboxes == original_nboxes
+    rebuilt_keys = _box_keys_from_tob(rebuilt)
+    assert len(set(rebuilt_keys)) == rebuilt.nboxes
+
+    rebuilt_levels = np.asarray(rebuilt.box_levels, dtype=np.int32)
+    for parent_id in range(rebuilt.nboxes):
+        parent_level = int(rebuilt_levels[parent_id])
+        for child_id in np.asarray(rebuilt.box_child_ids)[:, parent_id]:
+            child_id = int(child_id)
+            if child_id != 0:
+                assert int(rebuilt_levels[child_id]) == parent_level + 1
