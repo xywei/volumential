@@ -184,11 +184,17 @@ def _geometry_grid_indices(tob):
 def _box_paths_from_topology(tob, *, require_connected=True):
     parent_ids = np.asarray(tob.box_parent_ids, dtype=np.int64)
     child_ids = np.asarray(tob.box_child_ids, dtype=np.int64)
+    levels = np.asarray(tob.box_levels, dtype=np.int64)
     nboxes = int(tob.nboxes)
 
     root_candidates = np.where(parent_ids < 0)[0]
     if len(root_candidates) != 1:
-        raise ValueError("expected exactly one root box with parent id -1")
+        level_root_candidates = np.where(levels == 0)[0]
+        if len(level_root_candidates) == 1:
+            root_candidates = level_root_candidates
+
+    if len(root_candidates) != 1:
+        raise ValueError("expected exactly one root box (parent id < 0 or level == 0)")
 
     root_id = int(root_candidates[0])
     box_paths = [None] * nboxes
@@ -612,11 +618,13 @@ def _compute_box_flags(box_child_ids):
 def _rebuild_tob_from_geometry(tob):
     from boxtree.tree import TreeOfBoxes
 
+    tob = _prune_unreachable_boxes(tob)
+
     centers = np.asarray(tob.box_centers)
     root_extent = float(tob.root_extent)
     dim = int(tob.dimensions)
     nchildren = 2**dim
-    box_paths = _box_paths_from_topology(tob, require_connected=False)
+    box_paths = _box_paths_from_topology(tob)
 
     root_old_ids = [ibox for ibox, path in enumerate(box_paths) if path == ()]
     if len(root_old_ids) != 1:
@@ -637,9 +645,6 @@ def _rebuild_tob_from_geometry(tob):
 
     records = []
     for path in box_paths:
-        if path is None:
-            continue
-
         level = len(path)
         grid_idx = np.zeros(dim, dtype=np.int64)
         for child_slot in path:

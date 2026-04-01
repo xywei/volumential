@@ -385,6 +385,7 @@ def test_rebuild_tob_from_geometry_ignores_nonroot_center_collisions():
     tob = uniformly_refine_tree_of_boxes(uniformly_refine_tree_of_boxes(root))
 
     original_nboxes = tob.nboxes
+    original_keys = sorted(_box_keys_from_tob(tob))
     nonroot_ids = np.where(np.asarray(tob.box_parent_ids, dtype=np.int64) >= 0)[0]
     assert nonroot_ids.size > 0
 
@@ -397,6 +398,7 @@ def test_rebuild_tob_from_geometry_ignores_nonroot_center_collisions():
 
     assert rebuilt.nboxes == original_nboxes
     rebuilt_keys = _box_keys_from_tob(rebuilt)
+    assert sorted(rebuilt_keys) == original_keys
     assert len(set(rebuilt_keys)) == rebuilt.nboxes
 
     rebuilt_levels = np.asarray(rebuilt.box_levels, dtype=np.int32)
