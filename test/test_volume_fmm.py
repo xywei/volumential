@@ -57,6 +57,42 @@ class _FakeDeviceArray:
         return self._ary
 
 
+class _FakeQueueAwareArray:
+    def __init__(self, ary):
+        self._ary = np.asarray(ary)
+        self.size = self._ary.size
+
+    def with_queue(self, queue):
+        return self
+
+    def get(self, queue=None):
+        return self._ary
+
+
+def test_interpolation_target_coverage_avoids_pyopencl_reduction(monkeypatch):
+    from volumential.volume_fmm import _ensure_interpolation_target_coverage
+
+    def _fail_min(*args, **kwargs):
+        raise AssertionError("cl.array.min should not be called")
+
+    monkeypatch.setattr(cl.array, "min", _fail_min)
+
+    _ensure_interpolation_target_coverage(_FakeQueueAwareArray([1, 2, 3]), queue=None)
+
+
+def test_interpolation_target_coverage_reports_missing_targets():
+    from volumential.volume_fmm import _ensure_interpolation_target_coverage
+
+    with pytest.raises(
+        ValueError,
+        match=r"interpolation did not cover all targets \(2 targets missed by interpolation lookup\)",
+    ):
+        _ensure_interpolation_target_coverage(
+            _FakeQueueAwareArray([1, 0, -1, 4]),
+            queue=None,
+        )
+
+
 def test_list1_gallery_includes_mixed_source_levels():
     from volumential.list1_gallery import generate_interactions
 

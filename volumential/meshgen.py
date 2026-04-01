@@ -189,7 +189,24 @@ class MeshGenBase:
 
         if coarsen_count:
             coarsen_leaf_boxes = leaf_boxes[order[:coarsen_count]]
-            coarsen_flags[coarsen_leaf_boxes] = True
+            leaf_mask = np.zeros(self.boxtree.nboxes, dtype=bool)
+            leaf_mask[leaf_boxes] = True
+
+            parent_ids = np.asarray(self.boxtree._tree.box_parent_ids, dtype=np.int64)
+            child_ids = np.asarray(self.boxtree._tree.box_child_ids, dtype=np.int64)
+
+            candidate_parents = np.unique(parent_ids[coarsen_leaf_boxes])
+            candidate_parents = candidate_parents[candidate_parents >= 0]
+
+            for parent_id in candidate_parents:
+                siblings = child_ids[:, parent_id]
+                if np.any(siblings == 0):
+                    continue
+                if not np.all(leaf_mask[siblings]):
+                    continue
+                if np.any(refine_flags[siblings]):
+                    continue
+                coarsen_flags[siblings] = True
 
         coarsen_flags[refine_flags] = False
 
