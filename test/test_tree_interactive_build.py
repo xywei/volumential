@@ -434,7 +434,10 @@ def test_rebuild_tob_from_geometry_rejects_cyclic_child_links():
     tob = uniformly_refine_tree_of_boxes(root)
 
     cyclic_child_ids = np.asarray(tob.box_child_ids).copy()
-    cyclic_child_ids[0, 1] = 1
+    reachable_children = [int(ch) for ch in cyclic_child_ids[:, 0] if int(ch) != 0]
+    assert reachable_children
+    cyclic_box = int(reachable_children[0])
+    cyclic_child_ids[0, cyclic_box] = cyclic_box
     cyclic_tob = _copy_tob(tob, box_child_ids=cyclic_child_ids)
 
     with pytest.raises(

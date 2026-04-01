@@ -649,17 +649,58 @@ def _rebuild_tob_from_geometry(tob):
     from boxtree.tree import TreeOfBoxes
 
     _box_paths_from_topology(tob, require_connected=False)
-    tob = _prune_unreachable_boxes(tob)
 
-    centers = np.asarray(tob.box_centers)
-    root_extent = float(tob.root_extent)
+    centers, levels, root_extent, _, grid_indices = _geometry_grid_indices(tob)
+
+    nboxes = int(centers.shape[1])
     dim = int(tob.dimensions)
     nchildren = 2**dim
-    box_paths = _box_paths_from_topology(tob)
 
-    root_old_ids = [ibox for ibox, path in enumerate(box_paths) if path == ()]
+    def has_missing_parent(keys):
+        key_set = set(keys)
+        for level, idx in keys:
+            if level == 0:
+                continue
+            parent_key = (level - 1, tuple(v // 2 for v in idx))
+            if parent_key not in key_set:
+                return True
+        return False
+
+    child_slot_bits = np.empty((nchildren, dim), dtype=np.int64)
+    for child_slot in range(nchildren):
+        child_slot_bits[child_slot, :] = [
+            (child_slot >> (dim - 1 - iaxis)) & 1 for iaxis in range(dim)
+        ]
+
+    geo_keys = [
+        (int(levels[i]), tuple(int(v) for v in grid_indices[i])) for i in range(nboxes)
+    ]
+
+    use_topology_keys = len(set(geo_keys)) != nboxes or has_missing_parent(geo_keys)
+
+    if use_topology_keys:
+        box_paths = _box_paths_from_topology(tob, require_connected=False)
+        keys = []
+        for ibox, path in enumerate(box_paths):
+            if path is None:
+                keys.append(geo_keys[ibox])
+                continue
+
+            grid_idx = np.zeros(dim, dtype=np.int64)
+            for child_slot in path:
+                grid_idx = 2 * grid_idx + child_slot_bits[int(child_slot)]
+            keys.append((len(path), tuple(int(v) for v in grid_idx)))
+    else:
+        keys = geo_keys
+
+    if len(set(keys)) != nboxes:
+        raise ValueError("duplicate level/grid-index keys in tree-of-boxes")
+    if has_missing_parent(keys):
+        raise ValueError("missing parent while rebuilding tree-of-boxes")
+
+    root_old_ids = [ibox for ibox, (level, _) in enumerate(keys) if level == 0]
     if len(root_old_ids) != 1:
-        raise ValueError("expected exactly one reachable root in tree-of-boxes")
+        raise ValueError("expected exactly one root box at level 0")
     root_old_id = int(root_old_ids[0])
 
     root_center = np.asarray(centers[:, root_old_id], dtype=np.float64)
@@ -668,35 +709,9 @@ def _rebuild_tob_from_geometry(tob):
 
     root_min = root_center - 0.5 * root_extent
 
-    child_slot_bits = np.empty((nchildren, dim), dtype=np.int64)
-    for child_slot in range(nchildren):
-        child_slot_bits[child_slot, :] = [
-            (child_slot >> (dim - 1 - iaxis)) & 1 for iaxis in range(dim)
-        ]
-
-    records = []
-    for path in box_paths:
-        level = len(path)
-        grid_idx = np.zeros(dim, dtype=np.int64)
-        for child_slot in path:
-            grid_idx = 2 * grid_idx + child_slot_bits[int(child_slot)]
-
-        records.append((level, tuple(int(v) for v in grid_idx), path))
-
-    if not records:
-        raise ValueError("tree-of-boxes does not contain reachable boxes")
-
-    records.sort(key=lambda rec: (rec[0],) + rec[1])
-    nboxes = len(records)
-
-    new_levels = np.empty(nboxes, dtype=tob.box_level_dtype)
-    new_grid_indices = np.empty((nboxes, dim), dtype=np.int64)
-    new_paths = []
-
-    for new_id, (level, grid_idx, path) in enumerate(records):
-        new_levels[new_id] = level
-        new_grid_indices[new_id, :] = grid_idx
-        new_paths.append(path)
+    new_order = sorted(range(nboxes), key=lambda i: (keys[i][0],) + keys[i][1])
+    new_levels = np.asarray([keys[i][0] for i in new_order], dtype=tob.box_level_dtype)
+    new_grid_indices = np.asarray([keys[i][1] for i in new_order], dtype=np.int64)
 
     new_box_sizes = root_extent * np.exp2(-new_levels.astype(np.float64))
     new_centers = (
@@ -704,20 +719,33 @@ def _rebuild_tob_from_geometry(tob):
         + (new_grid_indices.T.astype(np.float64) + 0.5) * new_box_sizes
     )
 
-    path_to_new = {path: new_id for new_id, path in enumerate(new_paths)}
+    key_to_new = {}
+    for new_id, old_id in enumerate(new_order):
+        key = keys[old_id]
+        if key in key_to_new:
+            raise ValueError("duplicate level/grid-index keys in tree-of-boxes")
+        key_to_new[key] = new_id
 
     new_parent_ids = np.full(nboxes, -1, dtype=tob.box_id_dtype)
     new_child_ids = np.zeros((nchildren, nboxes), dtype=tob.box_id_dtype)
 
-    for new_id, path in enumerate(new_paths):
-        if not path:
-            continue
+    for new_id in range(nboxes):
+        level = int(new_levels[new_id])
+        idx = new_grid_indices[new_id]
 
-        parent_id = path_to_new[path[:-1]]
-        child_slot = int(path[-1])
+        if level > 0:
+            parent_key = (level - 1, tuple((idx // 2).tolist()))
+            parent_id = key_to_new.get(parent_key)
+            if parent_id is None:
+                raise ValueError("missing parent while rebuilding tree-of-boxes")
+            new_parent_ids[new_id] = parent_id
 
-        new_parent_ids[new_id] = parent_id
-        new_child_ids[child_slot, parent_id] = new_id
+        for child_slot in range(nchildren):
+            bits = child_slot_bits[child_slot]
+            child_key = (level + 1, tuple((2 * idx + bits).tolist()))
+            child_id = key_to_new.get(child_key)
+            if child_id is not None:
+                new_child_ids[child_slot, new_id] = child_id
 
     max_level = int(np.max(new_levels))
     level_counts = np.bincount(new_levels, minlength=max_level + 1)
