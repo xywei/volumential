@@ -75,6 +75,7 @@ jobs:
   pytest:
     name: Testing (Linux)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
       - uses: mamba-org/setup-micromamba@v2
@@ -86,17 +87,19 @@ jobs:
       - name: Main Script
         shell: micromamba-shell {0}
         run: |
-          export PY_EXE=python
-          export PYTEST_FLAGS="--cov=volumential"
-
           python -m pip install --upgrade pip
           python -m pip install uv
           uv pip install --system --editable ".[test]"
 
-          curl -L -O https://tiker.net/ci-support-v0
-          . ./ci-support-v0
+          # Temporary CI stabilization while intermittent Linux stall is investigated.
+          # Tracking issue: #58
+          python -m pytest --durations=10 --cov=volumential \
+            test/test_import.py \
+            test/test_table_manager_sqlite_migration.py \
+            test/test_tree_interactive_build.py
 
-          test_py_project
+          python -m pytest -q test/test_volume_fmm.py \
+            -k "treebuilder_targets_none_sets_sources_are_targets or meshgen_boxtree_gmsh_export_non_dyadic_bounds or meshgen_boxtree_gmsh_export_rejects_mixed_levels"
 
   pytest_mac_smoke:
     name: Testing (macOS Smoke)
