@@ -894,19 +894,18 @@ def _create_non_intel_opencl_context_or_skip():
         pytest.skip(f"OpenCL platforms unavailable: {exc}")
 
     gpu_candidates = []
-    fallback_candidates = []
     for platform in platforms:
         if platform.name == "Intel(R) OpenCL":
             continue
         for device in platform.get_devices():
             if device.type & cl.device_type.GPU:
                 gpu_candidates.append(device)
-            else:
-                fallback_candidates.append(device)
 
-    devices = gpu_candidates or fallback_candidates
+    devices = gpu_candidates
     if not devices:
-        pytest.skip("No non-Intel OpenCL device available for convergence regression")
+        pytest.skip(
+            "No non-Intel GPU OpenCL device available for convergence regression"
+        )
 
     return cl.Context(devices=[devices[0]])
 
