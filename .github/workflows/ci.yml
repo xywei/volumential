@@ -89,6 +89,7 @@ jobs:
         run: |
           export PY_EXE=python
           export PYTEST_FLAGS="--cov=volumential -p no:github-actions-annotate-failures"
+          export CISUPPORT_PARALLEL_PYTEST=no
 
           python -m pip install --upgrade pip
           python -m pip install uv
