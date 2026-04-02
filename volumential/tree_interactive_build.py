@@ -181,16 +181,22 @@ def _geometry_grid_indices(tob):
     return centers, levels, root_extent, root_min, grid_indices
 
 
-def _box_paths_from_topology(tob):
+def _box_paths_from_topology(tob, *, require_connected=True):
     parent_ids = np.asarray(tob.box_parent_ids, dtype=np.int64)
     child_ids = np.asarray(tob.box_child_ids, dtype=np.int64)
+    levels = np.asarray(tob.box_levels, dtype=np.int64)
+    nboxes = int(tob.nboxes)
 
     root_candidates = np.where(parent_ids < 0)[0]
+    level_root_candidates = np.where(levels == 0)[0]
+    if len(root_candidates) != 1 and len(level_root_candidates) == 1:
+        root_candidates = level_root_candidates
+
     if len(root_candidates) != 1:
-        raise ValueError("expected exactly one root box with parent id -1")
+        raise ValueError("expected exactly one root box (parent id < 0 or level == 0)")
 
     root_id = int(root_candidates[0])
-    box_paths = [None] * int(tob.nboxes)
+    box_paths = [None] * nboxes
     box_paths[root_id] = ()
 
     stack = [root_id]
@@ -203,10 +209,19 @@ def _box_paths_from_topology(tob):
             child_id = int(child_id)
             if child_id == 0:
                 continue
-            box_paths[child_id] = parent_path + (child_slot,)
-            stack.append(child_id)
+            if child_id < 0 or child_id >= nboxes:
+                raise ValueError("tree-of-boxes contains invalid child id")
 
-    if any(path is None for path in box_paths):
+            child_path = parent_path + (child_slot,)
+            prev_path = box_paths[child_id]
+
+            if prev_path is None:
+                box_paths[child_id] = child_path
+                stack.append(child_id)
+            elif prev_path != child_path:
+                raise ValueError("child box has multiple parent paths")
+
+    if require_connected and any(path is None for path in box_paths):
         raise ValueError("tree-of-boxes contains unreachable boxes")
 
     return box_paths
@@ -534,20 +549,61 @@ def _leaf_dfs_order(box_child_ids, ibox=0):
     return result
 
 
-def _level_order_boxes(box_child_ids):
+def _level_order_boxes(box_child_ids, *, root_id=0):
+    nboxes = int(box_child_ids.shape[1])
+
     result = []
-    current = [0]
+    current = [int(root_id)]
+    seen = set()
+
     while current:
-        result.extend(current)
         nxt = []
+        queued = set()
+
         for ibox in current:
-            nxt.extend(int(ch) for ch in box_child_ids[:, ibox] if int(ch) != 0)
+            ibox = int(ibox)
+            if ibox < 0 or ibox >= nboxes:
+                raise ValueError("tree-of-boxes contains invalid box id")
+            if ibox in seen:
+                raise ValueError(
+                    "tree-of-boxes contains cyclic or repeated parent links"
+                )
+
+            seen.add(ibox)
+            result.append(ibox)
+
+            for ch in box_child_ids[:, ibox]:
+                child_id = int(ch)
+                if child_id == 0:
+                    continue
+                if child_id < 0 or child_id >= nboxes:
+                    raise ValueError("tree-of-boxes contains invalid child id")
+                if child_id in seen or child_id in queued:
+                    raise ValueError(
+                        "tree-of-boxes contains cyclic or repeated child links"
+                    )
+
+                queued.add(child_id)
+                nxt.append(child_id)
+
         current = nxt
+
     return result
 
 
 def _prune_unreachable_boxes(tob):
-    reachable = _level_order_boxes(tob.box_child_ids)
+    parent_ids = np.asarray(tob.box_parent_ids, dtype=np.int64)
+    levels = np.asarray(tob.box_levels, dtype=np.int64)
+
+    root_candidates = np.where(parent_ids < 0)[0]
+    level_root_candidates = np.where(levels == 0)[0]
+    if len(root_candidates) != 1 and len(level_root_candidates) == 1:
+        root_candidates = level_root_candidates
+
+    if len(root_candidates) != 1:
+        raise ValueError("expected exactly one root box (parent id < 0 or level == 0)")
+
+    reachable = _level_order_boxes(tob.box_child_ids, root_id=int(root_candidates[0]))
     if len(reachable) == tob.nboxes:
         return tob
 
@@ -602,81 +658,88 @@ def _compute_box_flags(box_child_ids):
 def _rebuild_tob_from_geometry(tob):
     from boxtree.tree import TreeOfBoxes
 
-    centers, levels, root_extent, root_min, grid_indices = _geometry_grid_indices(tob)
+    box_paths = _box_paths_from_topology(tob, require_connected=False)
+
+    centers, levels, root_extent, _, grid_indices = _geometry_grid_indices(tob)
 
     nboxes = int(centers.shape[1])
     dim = int(tob.dimensions)
     nchildren = 2**dim
 
-    old_keys = [
+    def has_missing_parent(keys):
+        key_set = set(keys)
+        for level, idx in keys:
+            if level == 0:
+                continue
+            parent_key = (level - 1, tuple(v // 2 for v in idx))
+            if parent_key not in key_set:
+                return True
+        return False
+
+    child_slot_bits = np.empty((nchildren, dim), dtype=np.int64)
+    for child_slot in range(nchildren):
+        child_slot_bits[child_slot, :] = [
+            (child_slot >> (dim - 1 - iaxis)) & 1 for iaxis in range(dim)
+        ]
+
+    geo_keys = [
         (int(levels[i]), tuple(int(v) for v in grid_indices[i])) for i in range(nboxes)
     ]
-    if len(set(old_keys)) != nboxes:
-        unique_old_ids = []
-        key_to_pos = {}
-        has_children = np.any(np.asarray(tob.box_child_ids) != 0, axis=0)
 
-        for old_id, key in enumerate(old_keys):
-            prev_pos = key_to_pos.get(key)
-            if prev_pos is None:
-                key_to_pos[key] = len(unique_old_ids)
-                unique_old_ids.append(old_id)
+    use_topology_keys = len(set(geo_keys)) != nboxes or has_missing_parent(geo_keys)
+
+    if use_topology_keys:
+        keys = []
+        for ibox, path in enumerate(box_paths):
+            if path is None:
+                keys.append(geo_keys[ibox])
                 continue
 
-            prev_old_id = unique_old_ids[prev_pos]
-            if has_children[old_id] and not has_children[prev_old_id]:
-                unique_old_ids[prev_pos] = old_id
+            grid_idx = np.zeros(dim, dtype=np.int64)
+            for child_slot in path:
+                grid_idx = 2 * grid_idx + child_slot_bits[int(child_slot)]
+            keys.append((len(path), tuple(int(v) for v in grid_idx)))
+    else:
+        keys = geo_keys
 
-        unique_old_ids = np.asarray(unique_old_ids, dtype=np.int32)
-        levels = levels[unique_old_ids]
-        centers = centers[:, unique_old_ids]
-        grid_indices = grid_indices[unique_old_ids]
-        nboxes = int(len(unique_old_ids))
-        old_keys = [
-            (int(levels[i]), tuple(int(v) for v in grid_indices[i]))
-            for i in range(nboxes)
-        ]
+    has_duplicate_keys = len(set(keys)) != nboxes
+    has_parent_gaps = has_missing_parent(keys)
+    if has_duplicate_keys or has_parent_gaps:
+        pruned_tob = _prune_unreachable_boxes(tob)
+        if pruned_tob.nboxes < tob.nboxes:
+            return _rebuild_tob_from_geometry(pruned_tob)
 
-    key_set = set(old_keys)
-    valid_old_ids = []
-    for old_id, key in enumerate(old_keys):
-        level, idx = key
-        parent_idx = idx
-        valid = True
-        for lev in range(level, 0, -1):
-            parent_idx = tuple(v // 2 for v in parent_idx)
-            if (lev - 1, parent_idx) not in key_set:
-                valid = False
-                break
-        if valid:
-            valid_old_ids.append(old_id)
+        if has_duplicate_keys:
+            raise ValueError("duplicate level/grid-index keys in tree-of-boxes")
+        raise ValueError("missing parent while rebuilding tree-of-boxes")
 
-    if len(valid_old_ids) != nboxes:
-        valid_old_ids = np.asarray(valid_old_ids, dtype=np.int32)
-        levels = levels[valid_old_ids]
-        centers = centers[:, valid_old_ids]
-        grid_indices = grid_indices[valid_old_ids]
-        nboxes = int(len(valid_old_ids))
-        old_keys = [
-            (int(levels[i]), tuple(int(v) for v in grid_indices[i]))
-            for i in range(nboxes)
-        ]
+    root_old_ids = [ibox for ibox, (level, _) in enumerate(keys) if level == 0]
+    if len(root_old_ids) != 1:
+        raise ValueError("expected exactly one root box at level 0")
+    root_old_id = int(root_old_ids[0])
 
-    new_order = sorted(
-        range(nboxes),
-        key=lambda i: (int(levels[i]),) + tuple(int(v) for v in grid_indices[i]),
-    )
+    root_center = np.asarray(centers[:, root_old_id], dtype=np.float64)
+    if not np.all(np.isfinite(root_center)):
+        raise ValueError("non-finite root center while rebuilding tree-of-boxes")
 
-    new_levels = levels[new_order]
-    new_grid_indices = grid_indices[new_order]
+    root_min = root_center - 0.5 * root_extent
+
+    new_order = sorted(range(nboxes), key=lambda i: (keys[i][0],) + keys[i][1])
+    new_levels = np.asarray([keys[i][0] for i in new_order], dtype=tob.box_level_dtype)
+    new_grid_indices = np.asarray([keys[i][1] for i in new_order], dtype=np.int64)
 
     new_box_sizes = root_extent * np.exp2(-new_levels.astype(np.float64))
     new_centers = (
         root_min.reshape(dim, 1)
-        + (new_grid_indices.T.astype(tob.coord_dtype) + 0.5) * new_box_sizes
+        + (new_grid_indices.T.astype(np.float64) + 0.5) * new_box_sizes
     )
 
-    key_to_new = {old_keys[old_id]: new_id for new_id, old_id in enumerate(new_order)}
+    key_to_new = {}
+    for new_id, old_id in enumerate(new_order):
+        key = keys[old_id]
+        if key in key_to_new:
+            raise ValueError("duplicate level/grid-index keys in tree-of-boxes")
+        key_to_new[key] = new_id
 
     new_parent_ids = np.full(nboxes, -1, dtype=tob.box_id_dtype)
     new_child_ids = np.zeros((nchildren, nboxes), dtype=tob.box_id_dtype)
@@ -692,15 +755,12 @@ def _rebuild_tob_from_geometry(tob):
                 raise ValueError("missing parent while rebuilding tree-of-boxes")
             new_parent_ids[new_id] = parent_id
 
-        for morton_nr in range(nchildren):
-            bits = np.array(
-                [(morton_nr >> (dim - 1 - iaxis)) & 1 for iaxis in range(dim)],
-                dtype=np.int64,
-            )
+        for child_slot in range(nchildren):
+            bits = child_slot_bits[child_slot]
             child_key = (level + 1, tuple((2 * idx + bits).tolist()))
             child_id = key_to_new.get(child_key)
             if child_id is not None:
-                new_child_ids[morton_nr, new_id] = child_id
+                new_child_ids[child_slot, new_id] = child_id
 
     max_level = int(np.max(new_levels))
     level_counts = np.bincount(new_levels, minlength=max_level + 1)

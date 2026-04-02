@@ -12,6 +12,8 @@ from boxtree import (
 from volumential.tree_interactive_build import (
     BoxTree,
     QuadratureOnBoxTree,
+    _box_paths_from_topology,
+    _compute_box_flags,
     _box_keys_from_geometry,
     _coarsen_tree_of_boxes_compat,
     _enforce_level_restriction,
@@ -26,7 +28,14 @@ def _box_keys_from_tob(tob):
     return _box_keys_from_geometry(tob)
 
 
-def _copy_tob_with_centers(tob, box_centers):
+def _copy_tob(
+    tob,
+    *,
+    box_centers=None,
+    box_parent_ids=None,
+    box_child_ids=None,
+    box_levels=None,
+):
     from boxtree.tree import TreeOfBoxes
 
     level_start_box_nrs = (
@@ -35,13 +44,33 @@ def _copy_tob_with_centers(tob, box_centers):
         else np.asarray(tob.level_start_box_nrs, dtype=tob.box_id_dtype)
     )
 
+    copied_child_ids = np.asarray(
+        tob.box_child_ids if box_child_ids is None else box_child_ids,
+        dtype=tob.box_id_dtype,
+    )
+
+    copied_box_flags = (
+        np.asarray(tob.box_flags, dtype=tob.box_flags.dtype)
+        if box_child_ids is None
+        else np.asarray(_compute_box_flags(copied_child_ids), dtype=tob.box_flags.dtype)
+    )
+
     return TreeOfBoxes(
-        box_centers=np.asarray(box_centers, dtype=tob.coord_dtype),
+        box_centers=np.asarray(
+            tob.box_centers if box_centers is None else box_centers,
+            dtype=tob.coord_dtype,
+        ),
         root_extent=tob.root_extent,
-        box_parent_ids=np.asarray(tob.box_parent_ids, dtype=tob.box_id_dtype),
-        box_child_ids=np.asarray(tob.box_child_ids, dtype=tob.box_id_dtype),
-        box_levels=np.asarray(tob.box_levels, dtype=tob.box_level_dtype),
-        box_flags=np.asarray(tob.box_flags, dtype=tob.box_flags.dtype),
+        box_parent_ids=np.asarray(
+            tob.box_parent_ids if box_parent_ids is None else box_parent_ids,
+            dtype=tob.box_id_dtype,
+        ),
+        box_child_ids=copied_child_ids,
+        box_levels=np.asarray(
+            tob.box_levels if box_levels is None else box_levels,
+            dtype=tob.box_level_dtype,
+        ),
+        box_flags=copied_box_flags,
         level_start_box_nrs=level_start_box_nrs,
         box_id_dtype=tob.box_id_dtype,
         box_level_dtype=tob.box_level_dtype,
@@ -368,7 +397,7 @@ def test_remap_coarsen_flags_uses_topology_not_geometry():
 
     old_centers_with_nonfinite = np.asarray(old_tob.box_centers).copy()
     old_centers_with_nonfinite[:, int(old_leaves[-1])] = np.array([np.nan, np.inf])
-    old_tob_nonfinite = _copy_tob_with_centers(old_tob, old_centers_with_nonfinite)
+    old_tob_nonfinite = _copy_tob(old_tob, box_centers=old_centers_with_nonfinite)
 
     remapped_with_nonfinite = _remap_bool_flags_by_box_key(
         coarsen_flags,
@@ -378,3 +407,130 @@ def test_remap_coarsen_flags_uses_topology_not_geometry():
 
     assert np.array_equal(remapped_with_nonfinite, remapped_flags)
     assert np.count_nonzero(remapped_with_nonfinite) == 1
+
+
+def test_prune_unreachable_boxes_uses_detected_root_not_box_zero():
+    root = make_tree_of_boxes_root((np.array([-1.0, -1.0]), np.array([1.0, 1.0])))
+    tob = uniformly_refine_tree_of_boxes(uniformly_refine_tree_of_boxes(root))
+
+    nboxes = tob.nboxes
+    perm = np.arange(nboxes - 1, -1, -1, dtype=np.int64)
+    old_to_new = np.empty(nboxes, dtype=np.int64)
+    old_to_new[perm] = np.arange(nboxes, dtype=np.int64)
+
+    reordered_centers = np.asarray(tob.box_centers)[:, perm]
+    reordered_levels = np.asarray(tob.box_levels, dtype=np.int64)[perm]
+
+    reordered_parent_ids = np.asarray(tob.box_parent_ids, dtype=np.int64)[perm]
+    reordered_parent_ids = np.where(
+        reordered_parent_ids < 0,
+        -1,
+        old_to_new[reordered_parent_ids],
+    )
+
+    reordered_child_ids = np.asarray(tob.box_child_ids, dtype=np.int64)[:, perm]
+    reordered_child_ids = np.where(
+        reordered_child_ids == 0,
+        0,
+        old_to_new[reordered_child_ids],
+    )
+
+    assert int(np.where(reordered_parent_ids < 0)[0][0]) != 0
+
+    orphan_id = 0
+    old_parent = int(reordered_parent_ids[orphan_id])
+    assert old_parent >= 0
+    child_slots = np.where(reordered_child_ids[:, old_parent] == orphan_id)[0]
+    assert child_slots.size == 1
+    reordered_child_ids[int(child_slots[0]), old_parent] = 0
+
+    disconnected_tob = _copy_tob(
+        tob,
+        box_centers=reordered_centers,
+        box_parent_ids=reordered_parent_ids,
+        box_child_ids=reordered_child_ids,
+        box_levels=reordered_levels,
+    )
+
+    pruned = _prune_unreachable_boxes(disconnected_tob)
+
+    assert pruned.nboxes == disconnected_tob.nboxes - 1
+    assert (
+        int(np.where(np.asarray(pruned.box_parent_ids, dtype=np.int64) < 0)[0][0]) == 0
+    )
+    assert int(np.asarray(pruned.box_levels, dtype=np.int64)[0]) == 0
+
+
+def test_rebuild_tob_from_geometry_ignores_nonroot_center_collisions():
+    root = make_tree_of_boxes_root((np.array([-1.0, -1.0]), np.array([1.0, 1.0])))
+    tob = uniformly_refine_tree_of_boxes(uniformly_refine_tree_of_boxes(root))
+
+    original_nboxes = tob.nboxes
+    original_keys = sorted(_box_keys_from_tob(tob))
+    nonroot_ids = np.where(np.asarray(tob.box_parent_ids, dtype=np.int64) >= 0)[0]
+    assert nonroot_ids.size > 0
+
+    corrupted_centers = np.asarray(tob.box_centers).copy()
+    collapsed_center = np.asarray(corrupted_centers[:, int(nonroot_ids[0])]).copy()
+    corrupted_centers[:, nonroot_ids] = collapsed_center[:, None]
+    corrupted_tob = _copy_tob(tob, box_centers=corrupted_centers)
+
+    rebuilt = _rebuild_tob_from_geometry(corrupted_tob)
+
+    assert rebuilt.nboxes == original_nboxes
+    rebuilt_keys = _box_keys_from_tob(rebuilt)
+    assert sorted(rebuilt_keys) == original_keys
+    assert len(set(rebuilt_keys)) == rebuilt.nboxes
+
+    rebuilt_levels = np.asarray(rebuilt.box_levels, dtype=np.int32)
+    for parent_id in range(rebuilt.nboxes):
+        parent_level = int(rebuilt_levels[parent_id])
+        for child_id in np.asarray(rebuilt.box_child_ids)[:, parent_id]:
+            child_id = int(child_id)
+            if child_id != 0:
+                assert int(rebuilt_levels[child_id]) == parent_level + 1
+
+
+def test_box_paths_from_topology_prefers_unique_parent_root_when_levels_stale():
+    root = make_tree_of_boxes_root((np.array([-1.0, -1.0]), np.array([1.0, 1.0])))
+    tob = uniformly_refine_tree_of_boxes(uniformly_refine_tree_of_boxes(root))
+
+    levels = np.asarray(tob.box_levels, dtype=np.int64).copy()
+    true_root_candidates = np.where(np.asarray(tob.box_parent_ids, dtype=np.int64) < 0)[
+        0
+    ]
+    assert true_root_candidates.size == 1
+    true_root = int(true_root_candidates[0])
+
+    stale_level_root_candidates = np.where(
+        np.asarray(tob.box_parent_ids, dtype=np.int64) >= 0
+    )[0]
+    assert stale_level_root_candidates.size > 0
+    stale_level_root = int(stale_level_root_candidates[0])
+
+    levels[true_root] = 1
+    levels[stale_level_root] = 0
+
+    stale_levels_tob = _copy_tob(tob, box_levels=levels)
+    box_paths = _box_paths_from_topology(stale_levels_tob)
+
+    assert box_paths[true_root] == ()
+    assert box_paths[stale_level_root] != ()
+
+
+def test_rebuild_tob_from_geometry_rejects_cyclic_child_links():
+    root = make_tree_of_boxes_root((np.array([-1.0, -1.0]), np.array([1.0, 1.0])))
+    tob = uniformly_refine_tree_of_boxes(root)
+
+    cyclic_child_ids = np.asarray(tob.box_child_ids).copy()
+    reachable_children = [int(ch) for ch in cyclic_child_ids[:, 0] if int(ch) != 0]
+    assert reachable_children
+    cyclic_box = int(reachable_children[0])
+    cyclic_child_ids[0, cyclic_box] = cyclic_box
+    cyclic_tob = _copy_tob(tob, box_child_ids=cyclic_child_ids)
+
+    with pytest.raises(
+        ValueError,
+        match="(cyclic or repeated (?:child|parent) links|multiple parent paths)",
+    ):
+        _rebuild_tob_from_geometry(cyclic_tob)

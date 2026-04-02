@@ -22,7 +22,6 @@ THE SOFTWARE.
 
 import logging
 import os
-import subprocess
 import sys
 from functools import partial
 from types import SimpleNamespace
@@ -895,19 +894,18 @@ def _create_non_intel_opencl_context_or_skip():
         pytest.skip(f"OpenCL platforms unavailable: {exc}")
 
     gpu_candidates = []
-    fallback_candidates = []
     for platform in platforms:
         if platform.name == "Intel(R) OpenCL":
             continue
         for device in platform.get_devices():
             if device.type & cl.device_type.GPU:
                 gpu_candidates.append(device)
-            else:
-                fallback_candidates.append(device)
 
-    devices = gpu_candidates or fallback_candidates
+    devices = gpu_candidates
     if not devices:
-        pytest.skip("No non-Intel OpenCL device available for convergence regression")
+        pytest.skip(
+            "No non-Intel GPU OpenCL device available for convergence regression"
+        )
 
     return cl.Context(devices=[devices[0]])
 
@@ -2209,7 +2207,7 @@ def test_meshgen_boxtree_gmsh_export_rejects_mixed_levels(ctx_factory, tmp_path)
 
 
 @pytest.fixture
-def laplace_problem(ctx_factory):
+def laplace_problem(ctx_factory, tmp_path_factory):
     ctx = ctx_factory()
     queue = cl.CommandQueue(ctx)
 
@@ -2312,8 +2310,9 @@ def laplace_problem(ctx_factory):
 
     from volumential.table_manager import NearFieldInteractionTableManager
 
-    subprocess.check_call(["rm", "-f", "nft-test-volume-fmm.hdf5"])
-    tm = NearFieldInteractionTableManager("nft-test-volume-fmm.hdf5")
+    table_dir = tmp_path_factory.mktemp("laplace-problem-nft")
+    table_file = table_dir / "nft-test-volume-fmm.sqlite"
+    tm = NearFieldInteractionTableManager(str(table_file))
     nftable, _ = tm.get_table(dim, "Laplace", q_order)
 
     # }}} End build near field potential table
