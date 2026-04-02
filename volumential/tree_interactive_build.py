@@ -549,11 +549,11 @@ def _leaf_dfs_order(box_child_ids, ibox=0):
     return result
 
 
-def _level_order_boxes(box_child_ids):
+def _level_order_boxes(box_child_ids, *, root_id=0):
     nboxes = int(box_child_ids.shape[1])
 
     result = []
-    current = [0]
+    current = [int(root_id)]
     seen = set()
 
     while current:
@@ -592,7 +592,18 @@ def _level_order_boxes(box_child_ids):
 
 
 def _prune_unreachable_boxes(tob):
-    reachable = _level_order_boxes(tob.box_child_ids)
+    parent_ids = np.asarray(tob.box_parent_ids, dtype=np.int64)
+    levels = np.asarray(tob.box_levels, dtype=np.int64)
+
+    root_candidates = np.where(parent_ids < 0)[0]
+    level_root_candidates = np.where(levels == 0)[0]
+    if len(root_candidates) != 1 and len(level_root_candidates) == 1:
+        root_candidates = level_root_candidates
+
+    if len(root_candidates) != 1:
+        raise ValueError("expected exactly one root box (parent id < 0 or level == 0)")
+
+    reachable = _level_order_boxes(tob.box_child_ids, root_id=int(root_candidates[0]))
     if len(reachable) == tob.nboxes:
         return tob
 

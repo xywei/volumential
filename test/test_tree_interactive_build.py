@@ -409,6 +409,58 @@ def test_remap_coarsen_flags_uses_topology_not_geometry():
     assert np.count_nonzero(remapped_with_nonfinite) == 1
 
 
+def test_prune_unreachable_boxes_uses_detected_root_not_box_zero():
+    root = make_tree_of_boxes_root((np.array([-1.0, -1.0]), np.array([1.0, 1.0])))
+    tob = uniformly_refine_tree_of_boxes(uniformly_refine_tree_of_boxes(root))
+
+    nboxes = tob.nboxes
+    perm = np.arange(nboxes - 1, -1, -1, dtype=np.int64)
+    old_to_new = np.empty(nboxes, dtype=np.int64)
+    old_to_new[perm] = np.arange(nboxes, dtype=np.int64)
+
+    reordered_centers = np.asarray(tob.box_centers)[:, perm]
+    reordered_levels = np.asarray(tob.box_levels, dtype=np.int64)[perm]
+
+    reordered_parent_ids = np.asarray(tob.box_parent_ids, dtype=np.int64)[perm]
+    reordered_parent_ids = np.where(
+        reordered_parent_ids < 0,
+        -1,
+        old_to_new[reordered_parent_ids],
+    )
+
+    reordered_child_ids = np.asarray(tob.box_child_ids, dtype=np.int64)[:, perm]
+    reordered_child_ids = np.where(
+        reordered_child_ids == 0,
+        0,
+        old_to_new[reordered_child_ids],
+    )
+
+    assert int(np.where(reordered_parent_ids < 0)[0][0]) != 0
+
+    orphan_id = 0
+    old_parent = int(reordered_parent_ids[orphan_id])
+    assert old_parent >= 0
+    child_slots = np.where(reordered_child_ids[:, old_parent] == orphan_id)[0]
+    assert child_slots.size == 1
+    reordered_child_ids[int(child_slots[0]), old_parent] = 0
+
+    disconnected_tob = _copy_tob(
+        tob,
+        box_centers=reordered_centers,
+        box_parent_ids=reordered_parent_ids,
+        box_child_ids=reordered_child_ids,
+        box_levels=reordered_levels,
+    )
+
+    pruned = _prune_unreachable_boxes(disconnected_tob)
+
+    assert pruned.nboxes == disconnected_tob.nboxes - 1
+    assert (
+        int(np.where(np.asarray(pruned.box_parent_ids, dtype=np.int64) < 0)[0][0]) == 0
+    )
+    assert int(np.asarray(pruned.box_levels, dtype=np.int64)[0]) == 0
+
+
 def test_rebuild_tob_from_geometry_ignores_nonroot_center_collisions():
     root = make_tree_of_boxes_root((np.array([-1.0, -1.0]), np.array([1.0, 1.0])))
     tob = uniformly_refine_tree_of_boxes(uniformly_refine_tree_of_boxes(root))
