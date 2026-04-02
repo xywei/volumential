@@ -12,6 +12,7 @@ from boxtree import (
 from volumential.tree_interactive_build import (
     BoxTree,
     QuadratureOnBoxTree,
+    _box_paths_from_topology,
     _compute_box_flags,
     _box_keys_from_geometry,
     _coarsen_tree_of_boxes_compat,
@@ -436,6 +437,33 @@ def test_rebuild_tob_from_geometry_ignores_nonroot_center_collisions():
             child_id = int(child_id)
             if child_id != 0:
                 assert int(rebuilt_levels[child_id]) == parent_level + 1
+
+
+def test_box_paths_from_topology_prefers_unique_parent_root_when_levels_stale():
+    root = make_tree_of_boxes_root((np.array([-1.0, -1.0]), np.array([1.0, 1.0])))
+    tob = uniformly_refine_tree_of_boxes(uniformly_refine_tree_of_boxes(root))
+
+    levels = np.asarray(tob.box_levels, dtype=np.int64).copy()
+    true_root_candidates = np.where(np.asarray(tob.box_parent_ids, dtype=np.int64) < 0)[
+        0
+    ]
+    assert true_root_candidates.size == 1
+    true_root = int(true_root_candidates[0])
+
+    stale_level_root_candidates = np.where(
+        np.asarray(tob.box_parent_ids, dtype=np.int64) >= 0
+    )[0]
+    assert stale_level_root_candidates.size > 0
+    stale_level_root = int(stale_level_root_candidates[0])
+
+    levels[true_root] = 1
+    levels[stale_level_root] = 0
+
+    stale_levels_tob = _copy_tob(tob, box_levels=levels)
+    box_paths = _box_paths_from_topology(stale_levels_tob)
+
+    assert box_paths[true_root] == ()
+    assert box_paths[stale_level_root] != ()
 
 
 def test_rebuild_tob_from_geometry_rejects_cyclic_child_links():
