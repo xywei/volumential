@@ -187,49 +187,68 @@ def _box_paths_from_topology(tob, *, require_connected=True):
     levels = np.asarray(tob.box_levels, dtype=np.int64)
     nboxes = int(tob.nboxes)
 
-    root_candidates = np.where(parent_ids < 0)[0]
+    parent_root_candidates = np.where(parent_ids < 0)[0]
     level_root_candidates = np.where(levels == 0)[0]
-    if len(level_root_candidates) == 1:
-        if len(root_candidates) != 1:
-            root_candidates = level_root_candidates
-        else:
-            root_id = int(root_candidates[0])
-            if root_id != int(level_root_candidates[0]):
-                root_candidates = level_root_candidates
 
-    if len(root_candidates) != 1:
+    root_candidates = []
+    if len(parent_root_candidates) == 1:
+        root_candidates.append(int(parent_root_candidates[0]))
+    elif len(level_root_candidates) == 1:
+        root_candidates.append(int(level_root_candidates[0]))
+
+    if len(level_root_candidates) == 1:
+        level_root_id = int(level_root_candidates[0])
+        if level_root_id not in root_candidates:
+            root_candidates.append(level_root_id)
+
+    if not root_candidates:
         raise ValueError("expected exactly one root box (parent id < 0 or level == 0)")
 
-    root_id = int(root_candidates[0])
-    box_paths = [None] * nboxes
-    box_paths[root_id] = ()
+    def build_paths_from_root(root_id):
+        box_paths = [None] * nboxes
+        box_paths[root_id] = ()
 
-    stack = [root_id]
-    while stack:
-        parent_id = stack.pop()
-        parent_path = box_paths[parent_id]
-        assert parent_path is not None
+        stack = [root_id]
+        while stack:
+            parent_id = stack.pop()
+            parent_path = box_paths[parent_id]
+            assert parent_path is not None
 
-        for child_slot, child_id in enumerate(child_ids[:, parent_id]):
-            child_id = int(child_id)
-            if child_id == 0:
-                continue
-            if child_id < 0 or child_id >= nboxes:
-                raise ValueError("tree-of-boxes contains invalid child id")
+            for child_slot, child_id in enumerate(child_ids[:, parent_id]):
+                child_id = int(child_id)
+                if child_id == 0:
+                    continue
+                if child_id < 0 or child_id >= nboxes:
+                    raise ValueError("tree-of-boxes contains invalid child id")
 
-            child_path = parent_path + (child_slot,)
-            prev_path = box_paths[child_id]
+                child_path = parent_path + (child_slot,)
+                prev_path = box_paths[child_id]
 
-            if prev_path is None:
-                box_paths[child_id] = child_path
-                stack.append(child_id)
-            elif prev_path != child_path:
-                raise ValueError("child box has multiple parent paths")
+                if prev_path is None:
+                    box_paths[child_id] = child_path
+                    stack.append(child_id)
+                elif prev_path != child_path:
+                    raise ValueError("child box has multiple parent paths")
 
-    if require_connected and any(path is None for path in box_paths):
+        return box_paths
+
+    best_paths = None
+    best_unreachable = None
+    for root_id in root_candidates:
+        box_paths = build_paths_from_root(root_id)
+        unreachable_count = sum(path is None for path in box_paths)
+
+        if best_paths is None or unreachable_count < best_unreachable:
+            best_paths = box_paths
+            best_unreachable = unreachable_count
+
+    assert best_paths is not None
+    assert best_unreachable is not None
+
+    if require_connected and best_unreachable:
         raise ValueError("tree-of-boxes contains unreachable boxes")
 
-    return box_paths
+    return best_paths
 
 
 def _remap_bool_flags_by_box_key(flags, old_tob, new_tob):

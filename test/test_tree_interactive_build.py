@@ -12,6 +12,7 @@ from boxtree import (
 from volumential.tree_interactive_build import (
     BoxTree,
     QuadratureOnBoxTree,
+    _box_paths_from_topology,
     _compute_box_flags,
     _box_keys_from_geometry,
     _coarsen_tree_of_boxes_compat,
@@ -436,6 +437,56 @@ def test_rebuild_tob_from_geometry_ignores_nonroot_center_collisions():
             child_id = int(child_id)
             if child_id != 0:
                 assert int(rebuilt_levels[child_id]) == parent_level + 1
+
+
+def test_box_paths_from_topology_prefers_unique_parent_root_when_levels_stale():
+    root = make_tree_of_boxes_root((np.array([-1.0, -1.0]), np.array([1.0, 1.0])))
+    tob = uniformly_refine_tree_of_boxes(uniformly_refine_tree_of_boxes(root))
+
+    levels = np.asarray(tob.box_levels, dtype=np.int64).copy()
+    level_zero_ids = np.where(levels == 0)[0]
+    assert level_zero_ids.size == 1
+
+    parent_ids = np.asarray(tob.box_parent_ids, dtype=np.int64)
+    nonroot_ids = np.where(parent_ids >= 0)[0]
+    assert nonroot_ids.size > 0
+
+    true_root = int(level_zero_ids[0])
+    stale_level_root = int(nonroot_ids[0])
+    levels[true_root] = 1
+    levels[stale_level_root] = 0
+
+    stale_levels_tob = _copy_tob(tob, box_levels=levels)
+    box_paths = _box_paths_from_topology(stale_levels_tob)
+
+    assert box_paths[true_root] == ()
+    assert all(path is not None for path in box_paths)
+
+
+def test_box_paths_from_topology_falls_back_to_level_root_on_bad_parent_marker():
+    root = make_tree_of_boxes_root((np.array([-1.0, -1.0]), np.array([1.0, 1.0])))
+    tob = uniformly_refine_tree_of_boxes(root)
+
+    parent_ids = np.asarray(tob.box_parent_ids, dtype=np.int64).copy()
+    levels = np.asarray(tob.box_levels, dtype=np.int64)
+    level_zero_ids = np.where(levels == 0)[0]
+    assert level_zero_ids.size == 1
+    true_root = int(level_zero_ids[0])
+
+    child_ids = [
+        int(ch) for ch in np.asarray(tob.box_child_ids)[:, true_root] if int(ch) != 0
+    ]
+    assert child_ids
+    fake_root = int(child_ids[0])
+
+    parent_ids[true_root] = fake_root
+    parent_ids[fake_root] = -1
+
+    bad_parent_tob = _copy_tob(tob, box_parent_ids=parent_ids)
+    box_paths = _box_paths_from_topology(bad_parent_tob)
+
+    assert box_paths[true_root] == ()
+    assert all(path is not None for path in box_paths)
 
 
 def test_rebuild_tob_from_geometry_rejects_cyclic_child_links():
