@@ -22,7 +22,6 @@ THE SOFTWARE.
 
 import logging
 import os
-import subprocess
 import sys
 from functools import partial
 from types import SimpleNamespace
@@ -2209,7 +2208,7 @@ def test_meshgen_boxtree_gmsh_export_rejects_mixed_levels(ctx_factory, tmp_path)
 
 
 @pytest.fixture
-def laplace_problem(ctx_factory):
+def laplace_problem(ctx_factory, tmp_path_factory):
     ctx = ctx_factory()
     queue = cl.CommandQueue(ctx)
 
@@ -2312,8 +2311,9 @@ def laplace_problem(ctx_factory):
 
     from volumential.table_manager import NearFieldInteractionTableManager
 
-    subprocess.check_call(["rm", "-f", "nft-test-volume-fmm.hdf5"])
-    tm = NearFieldInteractionTableManager("nft-test-volume-fmm.hdf5")
+    table_dir = tmp_path_factory.mktemp("laplace-problem-nft")
+    table_file = table_dir / "nft-test-volume-fmm.sqlite"
+    tm = NearFieldInteractionTableManager(str(table_file))
     nftable, _ = tm.get_table(dim, "Laplace", q_order)
 
     # }}} End build near field potential table
