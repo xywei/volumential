@@ -90,6 +90,7 @@ jobs:
           export PY_EXE=python
           export PYTEST_FLAGS="--cov=volumential -p no:github-actions-annotate-failures"
           export CISUPPORT_PARALLEL_PYTEST=no
+          export CISUPPORT_PYTEST_NO_DOCTEST_MODULES=1
           export PYTEST_ADDOPTS="--ignore=test/test_volume_fmm.py"
 
           python -m pip install --upgrade pip
