@@ -1,6 +1,6 @@
 variables:
   PYOPENCL_CTX: "portable:0"
-  PYOPENCL_TEST: "portable:pthread"
+  PYOPENCL_TEST: "portable:0"
 
 Flake8:
     script:
