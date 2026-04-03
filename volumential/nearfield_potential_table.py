@@ -1903,10 +1903,12 @@ class NearFieldInteractionTable:
             if cl_ctx is not None:
                 queue = cl.CommandQueue(cl_ctx)
             else:
-                if self._auto_build_queue is None:
-                    auto_ctx = cl.create_some_context(interactive=False)
-                    self._auto_build_queue = cl.CommandQueue(auto_ctx)
-                queue = self._auto_build_queue
+                raise ValueError(
+                    "queue (or cl_ctx) is required for DuffyRadial table builds; "
+                    "implicit OpenCL context auto-selection is not supported"
+                )
+        elif cl_ctx is not None and queue.context != cl_ctx:
+            raise ValueError("queue context does not match cl_ctx")
 
         if self.integral_knl is None:
             raise ValueError(

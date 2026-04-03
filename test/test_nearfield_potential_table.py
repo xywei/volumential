@@ -24,6 +24,7 @@ import os
 import sys
 
 import numpy as np
+import pyopencl as cl
 import pytest
 from numpy.polynomial.chebyshev import chebval, chebval2d, chebval3d
 
@@ -41,7 +42,29 @@ import volumential.nearfield_potential_table as npt
 from volumential.table_manager import ConstantKernel
 
 
+def _make_build_queue_or_skip():
+    try:
+        platforms = cl.get_platforms()
+    except cl.LogicError as exc:
+        pytest.skip(f"OpenCL platforms unavailable: {exc}")
+
+    for platform in platforms:
+        if platform.name == "Intel(R) OpenCL":
+            continue
+        devices = platform.get_devices()
+        if devices:
+            return cl.CommandQueue(cl.Context([devices[0]]))
+
+    for platform in platforms:
+        devices = platform.get_devices()
+        if devices:
+            return cl.CommandQueue(cl.Context([devices[0]]))
+
+    pytest.skip("No OpenCL devices available for table builds")
+
+
 def test_const_order_1():
+    queue = _make_build_queue_or_skip()
     table = npt.NearFieldInteractionTable(
         quad_order=1,
         kernel_func=npt.constant_one,
@@ -49,12 +72,13 @@ def test_const_order_1():
         sumpy_kernel=ConstantKernel(2),
         progress_bar=False,
     )
-    table.build_table()
+    table.build_table(queue=queue)
     for ary in table.data:
         assert np.allclose(ary, 1)
 
 
 def test_const_order_2(longrun):
+    queue = _make_build_queue_or_skip()
     table = npt.NearFieldInteractionTable(
         quad_order=2,
         kernel_func=npt.constant_one,
@@ -62,7 +86,7 @@ def test_const_order_2(longrun):
         sumpy_kernel=ConstantKernel(2),
         progress_bar=False,
     )
-    table.build_table()
+    table.build_table(queue=queue)
     for ary in table.data:
         assert np.allclose(ary, 0.25)
 

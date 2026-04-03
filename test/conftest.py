@@ -23,6 +23,7 @@ THE SOFTWARE.
 import glob
 import subprocess
 
+import pyopencl as cl
 import pytest
 from filelock import FileLock
 
@@ -88,6 +89,27 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(pytest.mark.xfail(reason=xfail_reason, run=False))
 
 
+def _create_table_build_queue():
+    try:
+        platforms = cl.get_platforms()
+    except cl.LogicError as exc:
+        pytest.skip(f"OpenCL platforms unavailable: {exc}")
+
+    for platform in platforms:
+        if platform.name == "Intel(R) OpenCL":
+            continue
+        devices = platform.get_devices()
+        if devices:
+            return cl.CommandQueue(cl.Context([devices[0]]))
+
+    for platform in platforms:
+        devices = platform.get_devices()
+        if devices:
+            return cl.CommandQueue(cl.Context([devices[0]]))
+
+    pytest.skip("No OpenCL devices available for table build")
+
+
 @pytest.fixture(scope="session")
 def longrun(request):
     if not request.config.option.longrun:
@@ -109,8 +131,9 @@ def table_2d_order1(tmp_path_factory, request):
     if not worker_id:
         # not executing in with multiple workers, just produce the data and let
         # pytest's fixture caching do its job
+        queue = _create_table_build_queue()
         with NFTManager("nft.hdf5", progress_bar=True) as table_manager:
-            table, _ = table_manager.get_table(2, "Laplace", q_order=1)
+            table, _ = table_manager.get_table(2, "Laplace", q_order=1, queue=queue)
         subprocess.check_call(["rm", "-f", "nft.hdf5"])
         return table
 
@@ -119,8 +142,9 @@ def table_2d_order1(tmp_path_factory, request):
 
     fn = root_tmp_dir / "nft.hdf5"
     with FileLock(str(fn) + ".lock"):
+        queue = _create_table_build_queue()
         with NFTManager(str(fn), progress_bar=True) as table_manager:
-            table, _ = table_manager.get_table(2, "Laplace", q_order=1)
+            table, _ = table_manager.get_table(2, "Laplace", q_order=1, queue=queue)
         return table
     return table
 

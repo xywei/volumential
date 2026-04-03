@@ -2313,7 +2313,7 @@ def laplace_problem(ctx_factory, tmp_path_factory):
     table_dir = tmp_path_factory.mktemp("laplace-problem-nft")
     table_file = table_dir / "nft-test-volume-fmm.sqlite"
     tm = NearFieldInteractionTableManager(str(table_file))
-    nftable, _ = tm.get_table(dim, "Laplace", q_order)
+    nftable, _ = tm.get_table(dim, "Laplace", q_order, queue=queue)
 
     # }}} End build near field potential table
 
@@ -2466,7 +2466,9 @@ def test_volume_fmm_calculus_patch_matches_source_density(
 
     table_file = tmp_path / "nft-calculus-patch.sqlite"
     tm = NearFieldInteractionTableManager(str(table_file), queue=queue)
-    nftable, _ = tm.get_table(dim, "Laplace", q_order, force_recompute=True)
+    nftable, _ = tm.get_table(
+        dim, "Laplace", q_order, force_recompute=True, queue=queue
+    )
 
     tree_indep = FPNDTreeIndependentDataForWrangler(
         ctx,
