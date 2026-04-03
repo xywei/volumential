@@ -42,12 +42,22 @@ XFAIL_OPENCL_PLATFORMS = {
 }
 
 
+_CTX_FACTORY_XFAIL_REASON_CACHE = {}
+
+
 def _get_xfail_reason_for_ctx_factory(ctx_factory):
+    if ctx_factory in _CTX_FACTORY_XFAIL_REASON_CACHE:
+        return _CTX_FACTORY_XFAIL_REASON_CACHE[ctx_factory]
+
     ctx = ctx_factory()
     platform_names = {dev.platform.name for dev in ctx.devices}
     for name in platform_names:
         if name in XFAIL_OPENCL_PLATFORMS:
-            return XFAIL_OPENCL_PLATFORMS[name]
+            reason = XFAIL_OPENCL_PLATFORMS[name]
+            _CTX_FACTORY_XFAIL_REASON_CACHE[ctx_factory] = reason
+            return reason
+
+    _CTX_FACTORY_XFAIL_REASON_CACHE[ctx_factory] = None
     return None
 
 
@@ -66,15 +76,16 @@ def pytest_addoption(parser):
     )
 
 
-def pytest_runtest_setup(item):
-    callspec = getattr(item, "callspec", None)
-    if callspec is None or "ctx_factory" not in callspec.params:
-        return
+def pytest_collection_modifyitems(config, items):
+    for item in items:
+        callspec = getattr(item, "callspec", None)
+        if callspec is None or "ctx_factory" not in callspec.params:
+            continue
 
-    ctx_factory = callspec.params["ctx_factory"]
-    xfail_reason = _get_xfail_reason_for_ctx_factory(ctx_factory)
-    if xfail_reason:
-        pytest.xfail(xfail_reason)
+        ctx_factory = callspec.params["ctx_factory"]
+        xfail_reason = _get_xfail_reason_for_ctx_factory(ctx_factory)
+        if xfail_reason:
+            item.add_marker(pytest.mark.xfail(reason=xfail_reason, run=False))
 
 
 @pytest.fixture(scope="session")
