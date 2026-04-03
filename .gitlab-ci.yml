@@ -32,6 +32,10 @@ Python 3 POCL:
 
 Python 3 Intel:
   rules:
+  - if: '$RUN_INTEL_CI == "1"'
+    when: on_success
+  - if: '$CI_COMMIT_REF_NAME =~ /^test\/.*/'
+    when: on_success
   - when: never
   script:
   - export PY_EXE=python3
