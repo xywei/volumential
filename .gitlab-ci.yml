@@ -1,3 +1,7 @@
+variables:
+  PYOPENCL_CTX: "portable:0"
+  PYOPENCL_TEST: "portable:pthread"
+
 Flake8:
     script:
     - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/master/prepare-and-run-flake8.sh
@@ -27,6 +31,8 @@ Python 3 POCL:
       junit: test/pytest.xml
 
 Python 3 Intel:
+  rules:
+  - when: never
   script:
   - export PY_EXE=python3
   - source /opt/enable-intel-cl.sh
@@ -40,8 +46,6 @@ Python 3 Intel:
   - python3
   - intel-cl-cpu
   - dealii
-  except:
-  - tags
   artifacts:
     reports:
       junit: test/pytest.xml
