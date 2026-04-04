@@ -77,6 +77,7 @@ jobs:
   pytest:
     name: Testing (Linux)
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
       - uses: mamba-org/setup-micromamba@v2
@@ -85,21 +86,42 @@ jobs:
           environment-name: testing
           cache-downloads: true
           generate-run-shell: true
-      - name: Main Script
+      - name: Prepare Test Environment
         shell: micromamba-shell {0}
         run: |
+          set -euxo pipefail
+
           export PY_EXE=python
-          export PYTEST_FLAGS="--cov=volumential"
-          export CISUPPORT_PARALLEL_PYTEST=no
 
           python -m pip install --upgrade pip
           python -m pip install uv
           uv pip install --system --editable ".[test]"
 
-          curl -L -O https://tiker.net/ci-support-v0
-          . ./ci-support-v0
+          python -V
+          python -m pip --version
 
-          test_py_project
+      - name: Run pytest suite (instrumented)
+        shell: micromamba-shell {0}
+        run: |
+          set -euxo pipefail
+
+          export PY_EXE=python
+          export PYTEST_FLAGS="--cov=volumential"
+          export CISUPPORT_PARALLEL_PYTEST=no
+
+          curl -L -O https://tiker.net/ci-support-v0
+
+          (
+            while true; do
+              echo "[heartbeat] $(date -u +%H:%M:%S) testing-linux still running"
+              sleep 60
+            done
+          ) &
+          heartbeat_pid=$!
+          trap 'kill "$heartbeat_pid"' EXIT
+
+          timeout --preserve-status 3000 bash -lc 'source ./ci-support-v0; test_py_project'
+          kill "$heartbeat_pid"
 
   pytest_mac_smoke:
     name: Testing (macOS Smoke)
