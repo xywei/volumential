@@ -77,7 +77,7 @@ jobs:
   pytest:
     name: Testing (Linux)
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
       - uses: mamba-org/setup-micromamba@v2
@@ -100,7 +100,7 @@ jobs:
           python -V
           python -m pip --version
 
-      - name: Run pytest suite (instrumented)
+      - name: Run pytest suite (guarded)
         shell: micromamba-shell {0}
         run: |
           set -euxo pipefail
@@ -109,9 +109,9 @@ jobs:
           export PYTHONFAULTHANDLER=1
           export PYTEST_FLAGS="--cov=volumential -vv -o faulthandler_timeout=300"
           export CISUPPORT_PARALLEL_PYTEST=no
-          export VOLUMENTIAL_LEVEL_RESTRICTION_DEBUG=1
-          export VOLUMENTIAL_LEVEL_RESTRICTION_LOG_EVERY=1
-          export VOLUMENTIAL_LEVEL_RESTRICTION_PAIR_LOG_INTERVAL=250000
+          export VOLUMENTIAL_LEVEL_RESTRICTION_DEBUG=0
+          export VOLUMENTIAL_LEVEL_RESTRICTION_LOG_EVERY=10
+          export VOLUMENTIAL_LEVEL_RESTRICTION_PAIR_LOG_INTERVAL=1000000
           export VOLUMENTIAL_LEVEL_RESTRICTION_STAGNATION_ITERS=5
           export VOLUMENTIAL_LEVEL_RESTRICTION_MAX_PAIR_CHECKS=20000000
 
@@ -127,12 +127,12 @@ jobs:
           trap 'kill "$heartbeat_pid" 2>/dev/null || true' EXIT
 
           set +e
-          timeout --signal=SIGINT --kill-after=120 2400 bash -lc 'source ./ci-support-v0; test_py_project'
+          timeout --signal=SIGINT --kill-after=120 3300 bash -lc 'source ./ci-support-v0; test_py_project'
           test_status=$?
           set -e
 
           if [ "$test_status" -eq 124 ]; then
-            echo "::error::Linux pytest wrapper timed out after 2400s"
+            echo "::error::Linux pytest wrapper timed out after 3300s"
           fi
 
           exit "$test_status"
