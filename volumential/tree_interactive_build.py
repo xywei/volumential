@@ -124,35 +124,40 @@ def _enforce_level_restriction(tob):
         adjacent_imbalanced_pairs = 0
         leaf_pair_total = len(leaves) * (len(leaves) - 1) // 2
 
-        for i, ibox in enumerate(leaves):
-            for jbox in leaves[i + 1 :]:
-                pair_checks += 1
-                if debug and pair_checks % pair_log_interval == 0:
-                    _level_restriction_debug(
-                        "iter="
-                        f"{iteration} leaf_pair_checks={pair_checks}/{leaf_pair_total} "
-                        f"nboxes={tob.nboxes} nleaves={len(leaves)}"
-                    )
-                if max_pair_checks is not None and pair_checks > max_pair_checks:
-                    raise RuntimeError(
-                        "level-restriction pair-check limit exceeded "
-                        f"(iter={iteration}, pair_checks={pair_checks}, "
-                        f"nleaves={len(leaves)}, nboxes={tob.nboxes})"
-                    )
+        leaf_levels = tob.box_levels[leaves].astype(np.int32)
+        unique_leaf_levels = np.unique(leaf_levels)
 
-                li = int(tob.box_levels[ibox])
-                lj = int(tob.box_levels[jbox])
-                if abs(li - lj) <= 1:
-                    continue
-                if not _are_adjacent(
-                    tob.root_extent, tob.box_levels, tob.box_centers, ibox, jbox
-                ):
-                    continue
-                adjacent_imbalanced_pairs += 1
-                if li < lj:
-                    refine_flags[ibox] = True
-                else:
-                    refine_flags[jbox] = True
+        for li in unique_leaf_levels:
+            level_i_boxes = leaves[leaf_levels == li]
+            higher_levels = unique_leaf_levels[unique_leaf_levels >= li + 2]
+
+            for lj in higher_levels:
+                level_j_boxes = leaves[leaf_levels == lj]
+                for ibox in level_i_boxes:
+                    for jbox in level_j_boxes:
+                        pair_checks += 1
+                        if debug and pair_checks % pair_log_interval == 0:
+                            _level_restriction_debug(
+                                "iter="
+                                f"{iteration} leaf_pair_checks={pair_checks}/{leaf_pair_total} "
+                                f"nboxes={tob.nboxes} nleaves={len(leaves)}"
+                            )
+                        if (
+                            max_pair_checks is not None
+                            and pair_checks > max_pair_checks
+                        ):
+                            raise RuntimeError(
+                                "level-restriction pair-check limit exceeded "
+                                f"(iter={iteration}, pair_checks={pair_checks}, "
+                                f"nleaves={len(leaves)}, nboxes={tob.nboxes})"
+                            )
+
+                        if not _are_adjacent(
+                            tob.root_extent, tob.box_levels, tob.box_centers, ibox, jbox
+                        ):
+                            continue
+                        adjacent_imbalanced_pairs += 1
+                        refine_flags[ibox] = True
 
         primary_refines = int(np.count_nonzero(refine_flags))
         secondary_pair_checks = 0
