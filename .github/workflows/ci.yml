@@ -107,7 +107,7 @@ jobs:
 
           export PY_EXE=python
           export PYTHONFAULTHANDLER=1
-          export PYTEST_FLAGS="--cov=volumential -vv --faulthandler-timeout=300"
+          export PYTEST_FLAGS="--cov=volumential -vv -o faulthandler_timeout=300"
           export CISUPPORT_PARALLEL_PYTEST=no
 
           curl -L -O https://tiker.net/ci-support-v0
