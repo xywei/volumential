@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import time
 import warnings
 
 import numpy as np
@@ -18,6 +20,33 @@ from boxtree import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _env_flag(name, default=False):
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+
+    return raw.strip().lower() not in {"", "0", "false", "no", "off"}
+
+
+def _env_int(name, default):
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+
+    try:
+        return int(raw)
+    except ValueError:
+        warnings.warn(
+            f"ignoring invalid integer for {name}: {raw!r}",
+            stacklevel=3,
+        )
+        return default
+
+
+def _level_restriction_debug(msg):
+    print(f"[volumential.level_restriction] {msg}", flush=True)
 
 
 def _leaf_boxes_numpy(tob):
@@ -43,12 +72,74 @@ def _enforce_level_restriction(tob):
     """
     tob = _rebuild_tob_from_geometry(tob)
 
+    debug = _env_flag("VOLUMENTIAL_LEVEL_RESTRICTION_DEBUG")
+
+    max_iters = _env_int("VOLUMENTIAL_LEVEL_RESTRICTION_MAX_ITERS", 0)
+    if max_iters <= 0:
+        max_iters = None
+
+    max_pair_checks = _env_int("VOLUMENTIAL_LEVEL_RESTRICTION_MAX_PAIR_CHECKS", 0)
+    if max_pair_checks <= 0:
+        max_pair_checks = None
+
+    stagnation_limit = _env_int("VOLUMENTIAL_LEVEL_RESTRICTION_STAGNATION_ITERS", 0)
+    if stagnation_limit <= 0:
+        stagnation_limit = None
+
+    pair_log_interval = max(
+        1,
+        _env_int("VOLUMENTIAL_LEVEL_RESTRICTION_PAIR_LOG_INTERVAL", 500_000),
+    )
+    iter_log_every = max(1, _env_int("VOLUMENTIAL_LEVEL_RESTRICTION_LOG_EVERY", 1))
+
+    start_time = time.monotonic()
+    last_state_token = None
+    stagnant_iters = 0
+    iteration = 0
+
     while True:
+        iteration += 1
+        if max_iters is not None and iteration > max_iters:
+            raise RuntimeError(
+                "level-restriction iteration limit exceeded "
+                f"(iters={iteration - 1}, nboxes={tob.nboxes})"
+            )
+
         leaves = _leaf_boxes_numpy(tob)
         refine_flags = np.zeros(tob.nboxes, dtype=bool)
 
+        state_token = (
+            int(tob.nboxes),
+            int(np.sum(tob.box_levels, dtype=np.int64)),
+            int(np.max(tob.box_levels)) if tob.nboxes else 0,
+            int(len(leaves)),
+        )
+        if state_token == last_state_token:
+            stagnant_iters += 1
+        else:
+            stagnant_iters = 0
+        last_state_token = state_token
+
+        pair_checks = 0
+        adjacent_imbalanced_pairs = 0
+        leaf_pair_total = len(leaves) * (len(leaves) - 1) // 2
+
         for i, ibox in enumerate(leaves):
             for jbox in leaves[i + 1 :]:
+                pair_checks += 1
+                if debug and pair_checks % pair_log_interval == 0:
+                    _level_restriction_debug(
+                        "iter="
+                        f"{iteration} leaf_pair_checks={pair_checks}/{leaf_pair_total} "
+                        f"nboxes={tob.nboxes} nleaves={len(leaves)}"
+                    )
+                if max_pair_checks is not None and pair_checks > max_pair_checks:
+                    raise RuntimeError(
+                        "level-restriction pair-check limit exceeded "
+                        f"(iter={iteration}, pair_checks={pair_checks}, "
+                        f"nleaves={len(leaves)}, nboxes={tob.nboxes})"
+                    )
+
                 li = int(tob.box_levels[ibox])
                 lj = int(tob.box_levels[jbox])
                 if abs(li - lj) <= 1:
@@ -57,10 +148,15 @@ def _enforce_level_restriction(tob):
                     tob.root_extent, tob.box_levels, tob.box_centers, ibox, jbox
                 ):
                     continue
+                adjacent_imbalanced_pairs += 1
                 if li < lj:
                     refine_flags[ibox] = True
                 else:
                     refine_flags[jbox] = True
+
+        primary_refines = int(np.count_nonzero(refine_flags))
+        secondary_pair_checks = 0
+        secondary_refines = 0
 
         if not np.any(refine_flags):
             box_levels = tob.box_levels
@@ -76,6 +172,25 @@ def _enforce_level_restriction(tob):
                 leaf_level_boxes = [ibox for ibox in level_boxes if ibox in leaves_set]
                 for ibox in nonleaf_level_boxes:
                     for jbox in leaf_level_boxes:
+                        secondary_pair_checks += 1
+                        total_pair_checks = pair_checks + secondary_pair_checks
+                        if debug and total_pair_checks % pair_log_interval == 0:
+                            _level_restriction_debug(
+                                "iter="
+                                f"{iteration} secondary_pair_checks={secondary_pair_checks} "
+                                f"total_pair_checks={total_pair_checks} "
+                                f"nboxes={tob.nboxes} nleaves={len(leaves)}"
+                            )
+                        if (
+                            max_pair_checks is not None
+                            and total_pair_checks > max_pair_checks
+                        ):
+                            raise RuntimeError(
+                                "level-restriction pair-check limit exceeded "
+                                f"(iter={iteration}, total_pair_checks={total_pair_checks}, "
+                                f"nleaves={len(leaves)}, nboxes={tob.nboxes})"
+                            )
+
                         if ibox == jbox:
                             continue
                         if _are_adjacent(
@@ -83,8 +198,42 @@ def _enforce_level_restriction(tob):
                         ):
                             refine_flags[jbox] = True
 
+            secondary_refines = int(np.count_nonzero(refine_flags))
+
             if not np.any(refine_flags):
+                if debug:
+                    _level_restriction_debug(
+                        "iter="
+                        f"{iteration} done elapsed={time.monotonic() - start_time:.2f}s "
+                        f"nboxes={tob.nboxes} nleaves={len(leaves)} "
+                        f"primary_pairs={pair_checks}/{leaf_pair_total} "
+                        f"adjacent_imbalanced={adjacent_imbalanced_pairs}"
+                    )
                 return tob
+
+        if (
+            stagnation_limit is not None
+            and stagnant_iters >= stagnation_limit
+            and np.any(refine_flags)
+        ):
+            raise RuntimeError(
+                "level-restriction state did not change across iterations "
+                f"(iter={iteration}, stagnant_iters={stagnant_iters}, "
+                f"token={state_token}, primary_refines={primary_refines}, "
+                f"secondary_refines={secondary_refines})"
+            )
+
+        if debug and (iteration == 1 or iteration % iter_log_every == 0):
+            _level_restriction_debug(
+                "iter="
+                f"{iteration} elapsed={time.monotonic() - start_time:.2f}s "
+                f"nboxes={tob.nboxes} nleaves={len(leaves)} "
+                f"primary_pairs={pair_checks}/{leaf_pair_total} "
+                f"adjacent_imbalanced={adjacent_imbalanced_pairs} "
+                f"primary_refines={primary_refines} "
+                f"secondary_pairs={secondary_pair_checks} "
+                f"secondary_refines={secondary_refines}"
+            )
 
         tob = refine_and_coarsen_tree_of_boxes(tob, refine_flags=refine_flags)
         tob = _rebuild_tob_from_geometry(tob)

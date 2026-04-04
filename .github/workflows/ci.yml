@@ -109,6 +109,11 @@ jobs:
           export PYTHONFAULTHANDLER=1
           export PYTEST_FLAGS="--cov=volumential -vv -o faulthandler_timeout=300"
           export CISUPPORT_PARALLEL_PYTEST=no
+          export VOLUMENTIAL_LEVEL_RESTRICTION_DEBUG=1
+          export VOLUMENTIAL_LEVEL_RESTRICTION_LOG_EVERY=1
+          export VOLUMENTIAL_LEVEL_RESTRICTION_PAIR_LOG_INTERVAL=250000
+          export VOLUMENTIAL_LEVEL_RESTRICTION_STAGNATION_ITERS=5
+          export VOLUMENTIAL_LEVEL_RESTRICTION_MAX_PAIR_CHECKS=50000000
 
           curl -L -O https://tiker.net/ci-support-v0
 
