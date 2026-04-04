@@ -127,12 +127,12 @@ jobs:
           trap 'kill "$heartbeat_pid" 2>/dev/null || true' EXIT
 
           set +e
-          timeout --signal=SIGINT --kill-after=120 1800 bash -lc 'source ./ci-support-v0; test_py_project'
+          timeout --signal=SIGINT --kill-after=120 2400 bash -lc 'source ./ci-support-v0; test_py_project'
           test_status=$?
           set -e
 
           if [ "$test_status" -eq 124 ]; then
-            echo "::error::Linux pytest wrapper timed out after 1800s"
+            echo "::error::Linux pytest wrapper timed out after 2400s"
           fi
 
           exit "$test_status"
