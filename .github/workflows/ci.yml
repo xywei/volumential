@@ -122,7 +122,6 @@ jobs:
           trap 'kill "$heartbeat_pid"' EXIT
 
           timeout --preserve-status 3000 bash -lc 'source ./ci-support-v0; test_py_project'
-          kill "$heartbeat_pid"
 
   pytest_mac_smoke:
     name: Testing (macOS Smoke)
