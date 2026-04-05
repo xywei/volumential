@@ -626,22 +626,28 @@ def _remap_bool_flags_by_box_key(
 def _coarsen_parent_paths_from_leaf_flags(tob, coarsen_flags):
     coarsen_flags = _resize_bool_flags(coarsen_flags, tob.nboxes)
     if not np.any(coarsen_flags):
-        return set()
+        return set(), 0
+
+    box_is_leaf = np.all(tob.box_child_ids == 0, axis=0)
+    if np.any(coarsen_flags[~box_is_leaf]):
+        raise ValueError("attempting to coarsen non-leaf")
 
     parent_ids = np.asarray(tob.box_parent_ids, dtype=np.int64)
     box_paths = _box_paths_from_topology(tob)
 
     parent_paths = set()
+    ignored_no_parent = 0
     for leaf_id in np.flatnonzero(coarsen_flags):
         parent_id = int(parent_ids[int(leaf_id)])
         if parent_id < 0:
+            ignored_no_parent += 1
             continue
 
         parent_path = box_paths[parent_id]
         if parent_path is not None:
             parent_paths.add(parent_path)
 
-    return parent_paths
+    return parent_paths, ignored_no_parent
 
 
 def _coarsen_flags_from_parent_paths(tob, parent_paths):
@@ -820,8 +826,12 @@ class BoxTree:
         if np.any(refine_flags):
             tree_before_refine = self._tree
             coarsen_parent_paths = None
+            ignored_parentless_flags = 0
             if not error_on_ignored_flags:
-                coarsen_parent_paths = _coarsen_parent_paths_from_leaf_flags(
+                (
+                    coarsen_parent_paths,
+                    ignored_parentless_flags,
+                ) = _coarsen_parent_paths_from_leaf_flags(
                     tree_before_refine,
                     coarsen_flags,
                 )
@@ -834,6 +844,15 @@ class BoxTree:
             )
 
             if coarsen_parent_paths is not None:
+                if ignored_parentless_flags:
+                    warnings.warn(
+                        (
+                            f"{ignored_parentless_flags} coarsening flags ignored "
+                            "before refinement because they have no parent box"
+                        ),
+                        stacklevel=3,
+                    )
+
                 coarsen_flags, ignored_parent_paths = _coarsen_flags_from_parent_paths(
                     self._tree,
                     coarsen_parent_paths,
