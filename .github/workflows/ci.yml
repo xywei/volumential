@@ -375,8 +375,8 @@ jobs:
 
           set +e
           start_epoch="$(date +%s)"
-          timeout --signal=SIGINT --kill-after=120 1800 \
-            python -m pytest -vv --maxfail=1 --durations=10 \
+          timeout --signal=SIGINT --kill-after=120 900 \
+            python -m pytest -s -vv --maxfail=1 --durations=10 \
             --junitxml=pytest-laplace.xml -o faulthandler_timeout=300 \
             test/test_volume_fmm.py::test_volume_fmm_laplace \
             2>&1 | tee linux-laplace-diagnose.log
@@ -386,11 +386,11 @@ jobs:
 
           elapsed_seconds=$((end_epoch - start_epoch))
           echo "::notice::Linux laplace diagnose elapsed=${elapsed_seconds}s status=${test_status}"
-          printf "job=testing-linux-laplace\nwith_coverage=0\nwrapper_timeout_seconds=1800\nelapsed_seconds=%s\nstatus=%s\nsha=%s\n" \
+          printf "job=testing-linux-laplace\nwith_coverage=0\nwrapper_timeout_seconds=900\nelapsed_seconds=%s\nstatus=%s\nsha=%s\n" \
             "$elapsed_seconds" "$test_status" "${GITHUB_SHA}" > linux-laplace-context.txt
 
           if [ "$test_status" -eq 124 ]; then
-            echo "::error::Linux laplace diagnose timed out after 1800s"
+            echo "::error::Linux laplace diagnose timed out after 900s"
           fi
 
           exit "$test_status"
