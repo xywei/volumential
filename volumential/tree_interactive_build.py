@@ -606,6 +606,57 @@ def _remap_bool_flags_by_box_key(
     return remapped
 
 
+def _coarsen_parent_paths_from_leaf_flags(tob, coarsen_flags):
+    coarsen_flags = _resize_bool_flags(coarsen_flags, tob.nboxes)
+    if not np.any(coarsen_flags):
+        return set()
+
+    parent_ids = np.asarray(tob.box_parent_ids, dtype=np.int64)
+    box_paths = _box_paths_from_topology(tob)
+
+    parent_paths = set()
+    for leaf_id in np.flatnonzero(coarsen_flags):
+        parent_id = int(parent_ids[int(leaf_id)])
+        if parent_id < 0:
+            continue
+
+        parent_path = box_paths[parent_id]
+        if parent_path is not None:
+            parent_paths.add(parent_path)
+
+    return parent_paths
+
+
+def _coarsen_flags_from_parent_paths(tob, parent_paths):
+    coarsen_flags = np.zeros(tob.nboxes, dtype=bool)
+    if not parent_paths:
+        return coarsen_flags, 0
+
+    box_paths = _box_paths_from_topology(tob)
+    path_to_box = {path: idx for idx, path in enumerate(box_paths)}
+    child_ids = np.asarray(tob.box_child_ids, dtype=np.int64)
+    is_leaf = np.all(child_ids == 0, axis=0)
+
+    ignored_paths = 0
+    for parent_path in parent_paths:
+        parent_id = path_to_box.get(parent_path)
+        if parent_id is None:
+            ignored_paths += 1
+            continue
+
+        children = child_ids[:, int(parent_id)]
+        if np.any(children == 0):
+            ignored_paths += 1
+            continue
+        if not np.all(is_leaf[children]):
+            ignored_paths += 1
+            continue
+
+        coarsen_flags[int(children[0])] = True
+
+    return coarsen_flags, ignored_paths
+
+
 def _coarsen_tree_of_boxes_compat(
     tob,
     coarsen_flags,
@@ -751,31 +802,53 @@ class BoxTree:
 
         if np.any(refine_flags):
             tree_before_refine = self._tree
+            coarsen_parent_paths = None
+            if not error_on_ignored_flags:
+                coarsen_parent_paths = _coarsen_parent_paths_from_leaf_flags(
+                    tree_before_refine,
+                    coarsen_flags,
+                )
+
             self._tree = refine_and_coarsen_tree_of_boxes(
                 self._tree,
                 refine_flags=refine_flags,
                 coarsen_flags=None,
                 error_on_ignored_flags=error_on_ignored_flags,
             )
-            coarsen_flags = _remap_bool_flags_by_box_key(
-                coarsen_flags,
-                tree_before_refine,
-                self._tree,
-                prefer_descendant_leaf=True,
-            )
 
-            leaf_mask = np.all(self._tree.box_child_ids == 0, axis=0)
-            remapped_nonleaf = coarsen_flags & ~leaf_mask
-            if np.any(remapped_nonleaf):
-                ignored_count = int(np.count_nonzero(remapped_nonleaf))
-                msg = (
-                    f"{ignored_count} coarsening flags ignored after refinement "
-                    "because they now target non-leaf boxes"
+            if coarsen_parent_paths is not None:
+                coarsen_flags, ignored_parent_paths = _coarsen_flags_from_parent_paths(
+                    self._tree,
+                    coarsen_parent_paths,
                 )
-                coarsen_flags[remapped_nonleaf] = False
-                if error_on_ignored_flags:
-                    raise RuntimeError(msg)
-                warnings.warn(msg, stacklevel=3)
+                if ignored_parent_paths:
+                    warnings.warn(
+                        (
+                            f"{ignored_parent_paths} coarsening parent intents ignored "
+                            "after refinement because sibling leaf groups no longer exist"
+                        ),
+                        stacklevel=3,
+                    )
+            else:
+                coarsen_flags = _remap_bool_flags_by_box_key(
+                    coarsen_flags,
+                    tree_before_refine,
+                    self._tree,
+                    prefer_descendant_leaf=False,
+                )
+
+                leaf_mask = np.all(self._tree.box_child_ids == 0, axis=0)
+                remapped_nonleaf = coarsen_flags & ~leaf_mask
+                if np.any(remapped_nonleaf):
+                    ignored_count = int(np.count_nonzero(remapped_nonleaf))
+                    msg = (
+                        f"{ignored_count} coarsening flags ignored after refinement "
+                        "because they now target non-leaf boxes"
+                    )
+                    coarsen_flags[remapped_nonleaf] = False
+                    if error_on_ignored_flags:
+                        raise RuntimeError(msg)
+                    warnings.warn(msg, stacklevel=3)
         else:
             coarsen_flags = _resize_bool_flags(coarsen_flags, self._tree.nboxes)
 
