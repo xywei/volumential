@@ -358,6 +358,13 @@ def _enforce_level_restriction(tob):
 
         worklist.append((cell_level, cell_index))
 
+        min_colleague_level = leaf_level + 1
+        for offset in neighbor_offsets:
+            neighbor_index = tuple(
+                leaf_index[iaxis] + offset[iaxis] for iaxis in range(dim)
+            )
+            add_requirement(leaf_level, neighbor_index, min_colleague_level)
+
         for new_level, new_index in new_children:
             min_neighbor_level = new_level - 1
             if min_neighbor_level <= 0:
