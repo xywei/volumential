@@ -465,14 +465,19 @@ def test_remap_coarsen_flags_prefers_descendant_leaf_when_requested():
     )
 
     default_idx = int(np.flatnonzero(remapped_default)[0])
-    descendant_idx = int(np.flatnonzero(remapped_descendant)[0])
+    descendant_ids = np.flatnonzero(remapped_descendant)
 
     assert not np.all(refined_tob.box_child_ids[:, default_idx] == 0)
-    assert np.all(refined_tob.box_child_ids[:, descendant_idx] == 0)
+    assert descendant_ids.size > 0
+
+    for descendant_idx in descendant_ids:
+        assert np.all(refined_tob.box_child_ids[:, int(descendant_idx)] == 0)
 
     old_path = _box_paths_from_topology(old_tob)[target_leaf]
-    descendant_path = _box_paths_from_topology(refined_tob)[descendant_idx]
-    assert descendant_path[: len(old_path)] == old_path
+    refined_paths = _box_paths_from_topology(refined_tob)
+    for descendant_idx in descendant_ids:
+        descendant_path = refined_paths[int(descendant_idx)]
+        assert descendant_path[: len(old_path)] == old_path
 
 
 def test_prune_unreachable_boxes_uses_detected_root_not_box_zero():

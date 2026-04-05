@@ -583,18 +583,22 @@ def _remap_bool_flags_by_box_key(
             and new_is_leaf is not None
             and not bool(new_is_leaf[int(new_id)])
         ):
-            cursor = int(new_id)
-            while not bool(new_is_leaf[cursor]):
-                children = new_child_ids[:, cursor]
-                nonzero_children = children[children != 0]
-                if nonzero_children.size == 0:
-                    break
-                cursor = int(nonzero_children[0])
+            stack = [int(new_id)]
+            found_descendant_leaf = False
+            while stack:
+                cursor = stack.pop()
+                if bool(new_is_leaf[cursor]):
+                    remapped[cursor] = True
+                    found_descendant_leaf = True
+                    continue
 
-            if bool(new_is_leaf[cursor]):
-                new_id = cursor
-            else:
-                new_id = None
+                children = new_child_ids[:, cursor]
+                nonzero_children = [int(child) for child in children if int(child) != 0]
+                stack.extend(reversed(nonzero_children))
+
+            if found_descendant_leaf:
+                continue
+            new_id = None
 
         if new_id is not None:
             remapped[new_id] = True
