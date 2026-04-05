@@ -106,6 +106,17 @@ def _enforce_level_restriction(tob):
     if max_pair_checks <= 0:
         max_pair_checks = None
 
+    max_nboxes = _env_int("VOLUMENTIAL_LEVEL_RESTRICTION_MAX_NBOXES", 0)
+    if max_nboxes <= 0:
+        max_nboxes = None
+
+    max_leaf_pair_total = _env_int(
+        "VOLUMENTIAL_LEVEL_RESTRICTION_MAX_LEAF_PAIR_TOTAL",
+        0,
+    )
+    if max_leaf_pair_total <= 0:
+        max_leaf_pair_total = None
+
     stagnation_limit = _env_int("VOLUMENTIAL_LEVEL_RESTRICTION_STAGNATION_ITERS", 0)
     if stagnation_limit <= 0:
         stagnation_limit = None
@@ -132,6 +143,13 @@ def _enforce_level_restriction(tob):
         leaves = _leaf_boxes_numpy(tob)
         refine_flags = np.zeros(tob.nboxes, dtype=bool)
 
+        if max_nboxes is not None and tob.nboxes > max_nboxes:
+            raise RuntimeError(
+                "level-restriction nboxes limit exceeded "
+                f"(iter={iteration}, nboxes={tob.nboxes}, max_nboxes={max_nboxes}, "
+                f"nleaves={len(leaves)})"
+            )
+
         state_token = (
             int(tob.nboxes),
             int(np.sum(tob.box_levels, dtype=np.int64)),
@@ -147,6 +165,14 @@ def _enforce_level_restriction(tob):
         pair_checks = 0
         adjacent_imbalanced_pairs = 0
         leaf_pair_total = len(leaves) * (len(leaves) - 1) // 2
+
+        if max_leaf_pair_total is not None and leaf_pair_total > max_leaf_pair_total:
+            raise RuntimeError(
+                "level-restriction leaf-pair total limit exceeded "
+                f"(iter={iteration}, leaf_pair_total={leaf_pair_total}, "
+                f"max_leaf_pair_total={max_leaf_pair_total}, "
+                f"nleaves={len(leaves)}, nboxes={tob.nboxes})"
+            )
 
         iteration_start = time.monotonic()
         primary_scan_start = time.monotonic()
