@@ -727,6 +727,19 @@ class BoxTree:
                 tree_before_refine,
                 self._tree,
             )
+
+            leaf_mask = np.all(self._tree.box_child_ids == 0, axis=0)
+            remapped_nonleaf = coarsen_flags & ~leaf_mask
+            if np.any(remapped_nonleaf):
+                ignored_count = int(np.count_nonzero(remapped_nonleaf))
+                msg = (
+                    f"{ignored_count} coarsening flags ignored after refinement "
+                    "because they now target non-leaf boxes"
+                )
+                coarsen_flags[remapped_nonleaf] = False
+                if error_on_ignored_flags:
+                    raise RuntimeError(msg)
+                warnings.warn(msg, stacklevel=3)
         else:
             coarsen_flags = _resize_bool_flags(coarsen_flags, self._tree.nboxes)
 

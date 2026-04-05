@@ -600,7 +600,7 @@ def test_enforce_level_restriction_nboxes_guard_is_fail_fast(monkeypatch):
 
     monkeypatch.setenv(
         "VOLUMENTIAL_LEVEL_RESTRICTION_MAX_NBOXES",
-        str(int(tob.nboxes) + 4),
+        str(int(tob.nboxes) - 1),
     )
 
     with pytest.raises(RuntimeError, match="nboxes limit exceeded"):
