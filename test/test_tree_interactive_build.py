@@ -436,6 +436,45 @@ def test_remap_coarsen_flags_uses_topology_not_geometry():
     assert np.count_nonzero(remapped_with_nonfinite) == 1
 
 
+def test_remap_coarsen_flags_prefers_descendant_leaf_when_requested():
+    root = make_tree_of_boxes_root((np.array([-1.0, -1.0]), np.array([1.0, 1.0])))
+    old_tob = uniformly_refine_tree_of_boxes(uniformly_refine_tree_of_boxes(root))
+
+    old_leaves = np.where(np.all(old_tob.box_child_ids == 0, axis=0))[0]
+    assert old_leaves.size > 0
+    target_leaf = int(old_leaves[0])
+
+    refine_flags = np.zeros(old_tob.nboxes, dtype=bool)
+    refine_flags[target_leaf] = True
+    refined_tob = refine_and_coarsen_tree_of_boxes(
+        old_tob,
+        refine_flags=refine_flags,
+        coarsen_flags=None,
+        error_on_ignored_flags=True,
+    )
+
+    coarsen_flags = np.zeros(old_tob.nboxes, dtype=bool)
+    coarsen_flags[target_leaf] = True
+
+    remapped_default = _remap_bool_flags_by_box_key(coarsen_flags, old_tob, refined_tob)
+    remapped_descendant = _remap_bool_flags_by_box_key(
+        coarsen_flags,
+        old_tob,
+        refined_tob,
+        prefer_descendant_leaf=True,
+    )
+
+    default_idx = int(np.flatnonzero(remapped_default)[0])
+    descendant_idx = int(np.flatnonzero(remapped_descendant)[0])
+
+    assert not np.all(refined_tob.box_child_ids[:, default_idx] == 0)
+    assert np.all(refined_tob.box_child_ids[:, descendant_idx] == 0)
+
+    old_path = _box_paths_from_topology(old_tob)[target_leaf]
+    descendant_path = _box_paths_from_topology(refined_tob)[descendant_idx]
+    assert descendant_path[: len(old_path)] == old_path
+
+
 def test_prune_unreachable_boxes_uses_detected_root_not_box_zero():
     root = make_tree_of_boxes_root((np.array([-1.0, -1.0]), np.array([1.0, 1.0])))
     tob = uniformly_refine_tree_of_boxes(uniformly_refine_tree_of_boxes(root))

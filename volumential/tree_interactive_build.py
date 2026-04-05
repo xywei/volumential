@@ -552,7 +552,13 @@ def _box_paths_from_topology(tob, *, require_connected=True):
     return box_paths
 
 
-def _remap_bool_flags_by_box_key(flags, old_tob, new_tob):
+def _remap_bool_flags_by_box_key(
+    flags,
+    old_tob,
+    new_tob,
+    *,
+    prefer_descendant_leaf=False,
+):
     flags = _resize_bool_flags(flags, old_tob.nboxes)
     remapped = np.zeros(new_tob.nboxes, dtype=bool)
 
@@ -563,8 +569,33 @@ def _remap_bool_flags_by_box_key(flags, old_tob, new_tob):
     new_paths = _box_paths_from_topology(new_tob)
     path_to_new = {path: idx for idx, path in enumerate(new_paths)}
 
+    new_is_leaf = None
+    new_child_ids = None
+    if prefer_descendant_leaf:
+        new_is_leaf = np.all(new_tob.box_child_ids == 0, axis=0)
+        new_child_ids = np.asarray(new_tob.box_child_ids, dtype=np.int64)
+
     for old_id in np.flatnonzero(flags):
         new_id = path_to_new.get(old_paths[int(old_id)])
+        if (
+            new_id is not None
+            and prefer_descendant_leaf
+            and new_is_leaf is not None
+            and not bool(new_is_leaf[int(new_id)])
+        ):
+            cursor = int(new_id)
+            while not bool(new_is_leaf[cursor]):
+                children = new_child_ids[:, cursor]
+                nonzero_children = children[children != 0]
+                if nonzero_children.size == 0:
+                    break
+                cursor = int(nonzero_children[0])
+
+            if bool(new_is_leaf[cursor]):
+                new_id = cursor
+            else:
+                new_id = None
+
         if new_id is not None:
             remapped[new_id] = True
 
@@ -726,6 +757,7 @@ class BoxTree:
                 coarsen_flags,
                 tree_before_refine,
                 self._tree,
+                prefer_descendant_leaf=True,
             )
 
             leaf_mask = np.all(self._tree.box_child_ids == 0, axis=0)
