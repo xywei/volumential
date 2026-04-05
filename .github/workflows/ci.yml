@@ -115,6 +115,35 @@ jobs:
           export VOLUMENTIAL_LEVEL_RESTRICTION_STAGNATION_ITERS=5
           export VOLUMENTIAL_LEVEL_RESTRICTION_MAX_PAIR_CHECKS=20000000
 
+          python - <<'PY' > linux-opencl-device.txt || true
+          import pyopencl as cl
+
+          ctx = cl.create_some_context(interactive=False)
+          print(f"selected_context_devices={len(ctx.devices)}")
+          for idev, dev in enumerate(ctx.devices):
+              print(
+                  "selected_device[{}]={} | vendor={} | platform={} | type={}".format(
+                      idev,
+                      dev.name,
+                      dev.vendor,
+                      dev.platform.name,
+                      cl.device_type.to_string(dev.type),
+                  )
+              )
+
+          for iplat, plat in enumerate(cl.get_platforms()):
+              for idev, dev in enumerate(plat.get_devices()):
+                  print(
+                      "available_device[{}:{}]={} | vendor={} | type={}".format(
+                          iplat,
+                          idev,
+                          dev.name,
+                          dev.vendor,
+                          cl.device_type.to_string(dev.type),
+                      )
+                  )
+          PY
+
           curl -L -O https://tiker.net/ci-support-v0
 
           (
@@ -153,6 +182,7 @@ jobs:
           path: |
             linux-pytest.log
             linux-guard-context.txt
+            linux-opencl-device.txt
             pytest.xml
           if-no-files-found: warn
 
@@ -199,6 +229,35 @@ jobs:
           export VOLUMENTIAL_LEVEL_RESTRICTION_STAGNATION_ITERS=5
           export VOLUMENTIAL_LEVEL_RESTRICTION_MAX_PAIR_CHECKS=20000000
 
+          python - <<'PY' > linux-nocov-opencl-device.txt || true
+          import pyopencl as cl
+
+          ctx = cl.create_some_context(interactive=False)
+          print(f"selected_context_devices={len(ctx.devices)}")
+          for idev, dev in enumerate(ctx.devices):
+              print(
+                  "selected_device[{}]={} | vendor={} | platform={} | type={}".format(
+                      idev,
+                      dev.name,
+                      dev.vendor,
+                      dev.platform.name,
+                      cl.device_type.to_string(dev.type),
+                  )
+              )
+
+          for iplat, plat in enumerate(cl.get_platforms()):
+              for idev, dev in enumerate(plat.get_devices()):
+                  print(
+                      "available_device[{}:{}]={} | vendor={} | type={}".format(
+                          iplat,
+                          idev,
+                          dev.name,
+                          dev.vendor,
+                          cl.device_type.to_string(dev.type),
+                      )
+                  )
+          PY
+
           curl -L -O https://tiker.net/ci-support-v0
 
           (
@@ -237,6 +296,7 @@ jobs:
           path: |
             linux-nocov-pytest.log
             linux-nocov-context.txt
+            linux-nocov-opencl-device.txt
             pytest.xml
           if-no-files-found: warn
 
@@ -282,6 +342,36 @@ jobs:
           export VOLUMENTIAL_LEVEL_RESTRICTION_MAX_PAIR_CHECKS=20000000
           export VOLUMENTIAL_LEVEL_RESTRICTION_PROFILE=1
           export VOLUMENTIAL_LEVEL_RESTRICTION_PROFILE_TOPK=10
+          export VOLUMENTIAL_LEVEL_RESTRICTION_PROFILE_LOG_INTERVAL=50000
+
+          python - <<'PY' > linux-laplace-opencl-device.txt || true
+          import pyopencl as cl
+
+          ctx = cl.create_some_context(interactive=False)
+          print(f"selected_context_devices={len(ctx.devices)}")
+          for idev, dev in enumerate(ctx.devices):
+              print(
+                  "selected_device[{}]={} | vendor={} | platform={} | type={}".format(
+                      idev,
+                      dev.name,
+                      dev.vendor,
+                      dev.platform.name,
+                      cl.device_type.to_string(dev.type),
+                  )
+              )
+
+          for iplat, plat in enumerate(cl.get_platforms()):
+              for idev, dev in enumerate(plat.get_devices()):
+                  print(
+                      "available_device[{}:{}]={} | vendor={} | type={}".format(
+                          iplat,
+                          idev,
+                          dev.name,
+                          dev.vendor,
+                          cl.device_type.to_string(dev.type),
+                      )
+                  )
+          PY
 
           set +e
           start_epoch="$(date +%s)"
@@ -313,6 +403,7 @@ jobs:
           path: |
             linux-laplace-diagnose.log
             linux-laplace-context.txt
+            linux-laplace-opencl-device.txt
             pytest-laplace.xml
           if-no-files-found: warn
 

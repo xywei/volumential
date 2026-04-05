@@ -93,6 +93,10 @@ def _enforce_level_restriction(tob):
         1,
         _env_int("VOLUMENTIAL_LEVEL_RESTRICTION_PROFILE_TOPK", 10),
     )
+    profile_log_interval = max(
+        1,
+        _env_int("VOLUMENTIAL_LEVEL_RESTRICTION_PROFILE_LOG_INTERVAL", 250_000),
+    )
 
     max_iters = _env_int("VOLUMENTIAL_LEVEL_RESTRICTION_MAX_ITERS", 0)
     if max_iters <= 0:
@@ -151,6 +155,14 @@ def _enforce_level_restriction(tob):
         primary_pair_stats = {}
         secondary_scan_time = 0.0
 
+        if profile:
+            _level_restriction_debug(
+                "iter="
+                f"{iteration} profile stage=start "
+                f"nboxes={tob.nboxes} nleaves={len(leaves)} "
+                f"leaf_pair_total={leaf_pair_total}"
+            )
+
         leaf_levels = tob.box_levels[leaves].astype(np.int32)
         unique_leaf_levels = np.unique(leaf_levels)
         dim = int(tob.dimensions)
@@ -206,6 +218,32 @@ def _enforce_level_restriction(tob):
                                     "iter="
                                     f"{iteration} leaf_pair_checks={pair_checks}/{leaf_pair_total} "
                                     f"nboxes={tob.nboxes} nleaves={len(leaves)}"
+                                )
+                            if profile and pair_checks % profile_log_interval == 0:
+                                primary_scan_time = (
+                                    time.monotonic() - primary_scan_start
+                                )
+                                primary_other_time = max(
+                                    0.0,
+                                    primary_scan_time
+                                    - primary_bucket_build_time
+                                    - primary_adjacency_time,
+                                )
+                                top_pairs = _format_level_restriction_top_pairs(
+                                    primary_pair_stats,
+                                    profile_topk,
+                                )
+                                _level_restriction_debug(
+                                    "iter="
+                                    f"{iteration} profile stage=pair-progress "
+                                    f"pair_checks={pair_checks}/{leaf_pair_total} "
+                                    f"levels=l{int(li)}->l{int(lj)} "
+                                    f"elapsed={time.monotonic() - iteration_start:.2f}s "
+                                    f"primary_total={primary_scan_time:.2f}s "
+                                    f"primary_bucket_build={primary_bucket_build_time:.2f}s "
+                                    f"primary_adj_check={primary_adjacency_time:.2f}s "
+                                    f"primary_other={primary_other_time:.2f}s "
+                                    f"top_level_pairs={top_pairs}"
                                 )
                             if (
                                 max_pair_checks is not None
