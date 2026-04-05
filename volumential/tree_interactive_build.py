@@ -200,11 +200,7 @@ def _tree_of_boxes_from_leaf_keys(template_tob, leaf_keys):
 
 
 def _enforce_level_restriction(tob):
-    """Enforce only 2:1 leaf-level balancing.
-
-    Two adjacent leaves are allowed to differ by at most one level.
-    No extra same-level colleague balancing is applied.
-    """
+    """Enforce bounded 2:1 balancing plus same-level colleague refinement."""
     tob = _rebuild_tob_from_geometry(tob)
 
     debug = _env_flag("VOLUMENTIAL_LEVEL_RESTRICTION_DEBUG")
@@ -243,6 +239,9 @@ def _enforce_level_restriction(tob):
     leaf_keys = _leaf_keys_from_tob(tob)
     if not leaf_keys:
         return tob
+
+    all_box_keys = set(_box_keys_from_geometry(tob))
+    nonleaf_keys = all_box_keys - set(leaf_keys)
 
     original_leaf_keys = set(leaf_keys)
     max_initial_leaf_level = max(level for level, _ in leaf_keys)
@@ -292,6 +291,17 @@ def _enforce_level_restriction(tob):
                 leaf_index[iaxis] + offset[iaxis] for iaxis in range(dim)
             )
             add_requirement(leaf_level, neighbor_index, min_neighbor_level)
+
+    for box_level, box_index in nonleaf_keys:
+        min_neighbor_level = box_level + 1
+        if min_neighbor_level <= 0:
+            continue
+
+        for offset in neighbor_offsets:
+            neighbor_index = tuple(
+                box_index[iaxis] + offset[iaxis] for iaxis in range(dim)
+            )
+            add_requirement(box_level, neighbor_index, min_neighbor_level)
 
     while worklist:
         work_items += 1
