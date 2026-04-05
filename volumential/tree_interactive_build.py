@@ -4,6 +4,7 @@ import logging
 import os
 import time
 import warnings
+from collections import deque
 from itertools import product
 
 import numpy as np
@@ -50,20 +51,6 @@ def _level_restriction_debug(msg):
     print(f"[volumential.level_restriction] {msg}", flush=True)
 
 
-def _format_level_restriction_top_pairs(pair_stats, topk):
-    if not pair_stats:
-        return "none"
-
-    top_entries = sorted(
-        pair_stats.items(),
-        key=lambda item: item[1][0],
-        reverse=True,
-    )[:topk]
-    return "; ".join(
-        f"l{li}->l{lj}:cand={cand},adj={adj}" for (li, lj), (cand, adj) in top_entries
-    )
-
-
 def _leaf_boxes_numpy(tob):
     return np.where(np.all(tob.box_child_ids == 0, axis=0))[0]
 
@@ -79,6 +66,139 @@ def _are_adjacent(root_extent, levels, centers, ibox, jbox, tol=1.0e-15):
     return dist <= 0.5 * (si + sj) + tol
 
 
+def _child_slot_bits(dim):
+    nchildren = 2**dim
+    bits = np.empty((nchildren, dim), dtype=np.int64)
+    for child_slot in range(nchildren):
+        bits[child_slot, :] = [
+            (child_slot >> (dim - 1 - iaxis)) & 1 for iaxis in range(dim)
+        ]
+    return bits
+
+
+def _in_bounds_grid_index(level, grid_index):
+    upper = 1 << int(level)
+    return all(0 <= int(v) < upper for v in grid_index)
+
+
+def _covering_leaf_key(leaf_keys, query_level, query_index):
+    query_level = int(query_level)
+    query_index = tuple(int(v) for v in query_index)
+
+    for level in range(query_level, -1, -1):
+        shift = query_level - level
+        ancestor_index = tuple(v >> shift for v in query_index)
+        key = (level, ancestor_index)
+        if key in leaf_keys:
+            return key
+
+    return None
+
+
+def _leaf_keys_from_tob(tob):
+    _, levels, _, _, grid_indices = _geometry_grid_indices(tob)
+    leaves = _leaf_boxes_numpy(tob)
+
+    return {
+        (int(levels[ibox]), tuple(int(v) for v in grid_indices[ibox]))
+        for ibox in leaves
+    }
+
+
+def _tree_of_boxes_from_leaf_keys(template_tob, leaf_keys):
+    from boxtree.tree import TreeOfBoxes
+
+    dim = int(template_tob.dimensions)
+    child_slot_bits = _child_slot_bits(dim)
+    nchildren = int(child_slot_bits.shape[0])
+
+    _, _, root_extent, root_min, _ = _geometry_grid_indices(template_tob)
+
+    all_keys = set()
+    for level, idx in leaf_keys:
+        level = int(level)
+        idx = tuple(int(v) for v in idx)
+
+        all_keys.add((level, idx))
+        parent_level = level
+        parent_idx = idx
+        while parent_level > 0:
+            parent_idx = tuple(v // 2 for v in parent_idx)
+            parent_level -= 1
+            all_keys.add((parent_level, parent_idx))
+
+    expected_root = tuple(0 for _ in range(dim))
+    if (0, expected_root) not in all_keys:
+        all_keys.add((0, expected_root))
+
+    ordered_keys = sorted(all_keys, key=lambda key: (key[0],) + key[1])
+    nboxes = len(ordered_keys)
+
+    key_to_box_id = {key: ibox for ibox, key in enumerate(ordered_keys)}
+
+    box_levels = np.asarray(
+        [level for level, _ in ordered_keys],
+        dtype=template_tob.box_level_dtype,
+    )
+    box_grid_indices = np.asarray([idx for _, idx in ordered_keys], dtype=np.int64)
+
+    box_sizes = root_extent * np.exp2(-box_levels.astype(np.float64))
+    box_centers = (
+        root_min.reshape(dim, 1)
+        + (box_grid_indices.T.astype(np.float64) + 0.5) * box_sizes
+    )
+
+    box_parent_ids = np.full(nboxes, -1, dtype=template_tob.box_id_dtype)
+    box_child_ids = np.zeros((nchildren, nboxes), dtype=template_tob.box_id_dtype)
+
+    for ibox, (level, idx) in enumerate(ordered_keys):
+        idx_arr = np.asarray(idx, dtype=np.int64)
+
+        if level > 0:
+            parent_key = (level - 1, tuple((idx_arr // 2).tolist()))
+            parent_id = key_to_box_id.get(parent_key)
+            if parent_id is None:
+                raise ValueError("missing parent while building balanced tree-of-boxes")
+            box_parent_ids[ibox] = parent_id
+
+        for child_slot, bits in enumerate(child_slot_bits):
+            child_key = (level + 1, tuple((2 * idx_arr + bits).tolist()))
+            child_id = key_to_box_id.get(child_key)
+            if child_id is not None:
+                box_child_ids[child_slot, ibox] = child_id
+
+    max_level = int(np.max(box_levels)) if box_levels.size else 0
+    level_counts = np.bincount(
+        box_levels.astype(np.int64),
+        minlength=max_level + 1,
+    )
+    level_start_box_nrs = np.zeros(max_level + 2, dtype=template_tob.box_id_dtype)
+    level_start_box_nrs[1:] = np.cumsum(level_counts).astype(template_tob.box_id_dtype)
+
+    return TreeOfBoxes(
+        box_centers=np.asarray(box_centers, dtype=template_tob.coord_dtype),
+        root_extent=template_tob.root_extent,
+        box_parent_ids=np.asarray(box_parent_ids, dtype=template_tob.box_id_dtype),
+        box_child_ids=np.asarray(box_child_ids, dtype=template_tob.box_id_dtype),
+        box_levels=np.asarray(box_levels, dtype=template_tob.box_level_dtype),
+        box_flags=np.asarray(
+            _compute_box_flags(box_child_ids), dtype=box_flags_enum.dtype
+        ),
+        level_start_box_nrs=np.asarray(
+            level_start_box_nrs,
+            dtype=template_tob.box_id_dtype,
+        ),
+        box_id_dtype=template_tob.box_id_dtype,
+        box_level_dtype=template_tob.box_level_dtype,
+        coord_dtype=template_tob.coord_dtype,
+        sources_have_extent=template_tob.sources_have_extent,
+        targets_have_extent=template_tob.targets_have_extent,
+        extent_norm=template_tob.extent_norm,
+        stick_out_factor=template_tob.stick_out_factor,
+        _is_pruned=template_tob._is_pruned,
+    )
+
+
 def _enforce_level_restriction(tob):
     """Enforce only 2:1 leaf-level balancing.
 
@@ -89,403 +209,210 @@ def _enforce_level_restriction(tob):
 
     debug = _env_flag("VOLUMENTIAL_LEVEL_RESTRICTION_DEBUG")
     profile = _env_flag("VOLUMENTIAL_LEVEL_RESTRICTION_PROFILE")
-    profile_topk = max(
-        1,
-        _env_int("VOLUMENTIAL_LEVEL_RESTRICTION_PROFILE_TOPK", 10),
-    )
     profile_log_interval = max(
         1,
-        _env_int("VOLUMENTIAL_LEVEL_RESTRICTION_PROFILE_LOG_INTERVAL", 250_000),
+        _env_int("VOLUMENTIAL_LEVEL_RESTRICTION_PROFILE_LOG_INTERVAL", 50_000),
     )
+    log_every = max(1, _env_int("VOLUMENTIAL_LEVEL_RESTRICTION_LOG_EVERY", 1))
 
-    max_iters = _env_int("VOLUMENTIAL_LEVEL_RESTRICTION_MAX_ITERS", 0)
-    if max_iters <= 0:
-        max_iters = None
+    max_splits = _env_int("VOLUMENTIAL_LEVEL_RESTRICTION_MAX_ITERS", 0)
+    if max_splits <= 0:
+        max_splits = None
 
-    max_pair_checks = _env_int("VOLUMENTIAL_LEVEL_RESTRICTION_MAX_PAIR_CHECKS", 0)
-    if max_pair_checks <= 0:
-        max_pair_checks = None
+    max_work_items = _env_int("VOLUMENTIAL_LEVEL_RESTRICTION_MAX_PAIR_CHECKS", 0)
+    if max_work_items <= 0:
+        max_work_items = None
 
     max_nboxes = _env_int("VOLUMENTIAL_LEVEL_RESTRICTION_MAX_NBOXES", 0)
     if max_nboxes <= 0:
         max_nboxes = None
 
-    max_leaf_pair_total = _env_int(
+    max_requirement_cells = _env_int(
         "VOLUMENTIAL_LEVEL_RESTRICTION_MAX_LEAF_PAIR_TOTAL",
         0,
     )
-    if max_leaf_pair_total <= 0:
-        max_leaf_pair_total = None
+    if max_requirement_cells <= 0:
+        max_requirement_cells = None
 
-    stagnation_limit = _env_int("VOLUMENTIAL_LEVEL_RESTRICTION_STAGNATION_ITERS", 0)
-    if stagnation_limit <= 0:
-        stagnation_limit = None
+    if max_nboxes is not None and tob.nboxes > max_nboxes:
+        raise RuntimeError(
+            "level-restriction nboxes limit exceeded "
+            f"(nboxes={tob.nboxes}, max_nboxes={max_nboxes})"
+        )
 
-    pair_log_interval = max(
-        1,
-        _env_int("VOLUMENTIAL_LEVEL_RESTRICTION_PAIR_LOG_INTERVAL", 500_000),
+    leaf_keys = _leaf_keys_from_tob(tob)
+    if not leaf_keys:
+        return tob
+
+    original_leaf_keys = set(leaf_keys)
+    max_initial_leaf_level = max(level for level, _ in leaf_keys)
+    max_allowed_level = _env_int(
+        "VOLUMENTIAL_LEVEL_RESTRICTION_MAX_LEVEL",
+        max_initial_leaf_level,
     )
-    iter_log_every = max(1, _env_int("VOLUMENTIAL_LEVEL_RESTRICTION_LOG_EVERY", 1))
+    if max_allowed_level < max_initial_leaf_level:
+        warnings.warn(
+            "VOLUMENTIAL_LEVEL_RESTRICTION_MAX_LEVEL is below the current leaf "
+            "maximum; clamping to the current maximum leaf level",
+            stacklevel=3,
+        )
+        max_allowed_level = max_initial_leaf_level
 
     start_time = time.monotonic()
-    last_state_token = None
-    stagnant_iters = 0
-    iteration = 0
+    dim = int(tob.dimensions)
+    nchildren = 2**dim
+    child_slot_bits = _child_slot_bits(dim)
+    neighbor_offsets = tuple(product((-1, 0, 1), repeat=dim))
 
-    while True:
-        iteration += 1
-        if max_iters is not None and iteration > max_iters:
+    split_count = 0
+    work_items = 0
+
+    worklist = deque()
+    required_level_by_cell = {}
+
+    def add_requirement(cell_level, cell_index, min_level):
+        if min_level <= 0:
+            return
+        if not _in_bounds_grid_index(cell_level, cell_index):
+            return
+
+        key = (int(cell_level), tuple(int(v) for v in cell_index))
+        old = required_level_by_cell.get(key)
+        if old is None or min_level > old:
+            required_level_by_cell[key] = int(min_level)
+            worklist.append(key)
+
+    for leaf_level, leaf_index in leaf_keys:
+        min_neighbor_level = leaf_level - 1
+        if min_neighbor_level <= 0:
+            continue
+
+        for offset in neighbor_offsets:
+            neighbor_index = tuple(
+                leaf_index[iaxis] + offset[iaxis] for iaxis in range(dim)
+            )
+            add_requirement(leaf_level, neighbor_index, min_neighbor_level)
+
+    while worklist:
+        work_items += 1
+        if max_work_items is not None and work_items > max_work_items:
             raise RuntimeError(
-                "level-restriction iteration limit exceeded "
-                f"(iters={iteration - 1}, nboxes={tob.nboxes})"
+                "level-restriction work-item limit exceeded "
+                f"(work_items={work_items}, split_count={split_count})"
             )
 
-        leaves = _leaf_boxes_numpy(tob)
-        refine_flags = np.zeros(tob.nboxes, dtype=bool)
+        cell_level, cell_index = worklist.popleft()
+        required_level = required_level_by_cell[(cell_level, cell_index)]
 
-        if max_nboxes is not None and tob.nboxes > max_nboxes:
+        covering_leaf = _covering_leaf_key(leaf_keys, cell_level, cell_index)
+        if covering_leaf is None:
+            continue
+
+        leaf_level, leaf_index = covering_leaf
+        if leaf_level >= required_level:
+            continue
+
+        if max_splits is not None and split_count >= max_splits:
             raise RuntimeError(
-                "level-restriction nboxes limit exceeded "
-                f"(iter={iteration}, nboxes={tob.nboxes}, max_nboxes={max_nboxes}, "
-                f"nleaves={len(leaves)})"
+                "level-restriction split limit exceeded "
+                f"(splits={split_count}, work_items={work_items})"
             )
 
-        state_token = (
-            int(tob.nboxes),
-            int(np.sum(tob.box_levels, dtype=np.int64)),
-            int(np.max(tob.box_levels)) if tob.nboxes else 0,
-            int(len(leaves)),
-        )
-        if state_token == last_state_token:
-            stagnant_iters += 1
-        else:
-            stagnant_iters = 0
-        last_state_token = state_token
-
-        pair_checks = 0
-        adjacent_imbalanced_pairs = 0
-        leaf_pair_total = len(leaves) * (len(leaves) - 1) // 2
-
-        if max_leaf_pair_total is not None and leaf_pair_total > max_leaf_pair_total:
+        child_level = leaf_level + 1
+        if child_level > max_allowed_level:
             raise RuntimeError(
-                "level-restriction leaf-pair total limit exceeded "
-                f"(iter={iteration}, leaf_pair_total={leaf_pair_total}, "
-                f"max_leaf_pair_total={max_leaf_pair_total}, "
-                f"nleaves={len(leaves)}, nboxes={tob.nboxes})"
+                "level-restriction max-level bound exceeded "
+                f"(requested_level={child_level}, max_allowed_level={max_allowed_level}, "
+                f"cell_level={cell_level}, required_level={required_level})"
             )
 
-        iteration_start = time.monotonic()
-        primary_scan_start = time.monotonic()
-        primary_bucket_build_time = 0.0
-        primary_adjacency_time = 0.0
-        primary_pair_stats = {}
-        secondary_scan_time = 0.0
+        leaf_keys.remove(covering_leaf)
+        leaf_index_arr = np.asarray(leaf_index, dtype=np.int64)
 
-        if profile:
-            _level_restriction_debug(
-                "iter="
-                f"{iteration} profile stage=start "
-                f"nboxes={tob.nboxes} nleaves={len(leaves)} "
-                f"leaf_pair_total={leaf_pair_total}"
-            )
+        new_children = []
+        for child_bits in child_slot_bits:
+            child_index = tuple((2 * leaf_index_arr + child_bits).tolist())
+            child_key = (child_level, child_index)
+            leaf_keys.add(child_key)
+            new_children.append(child_key)
 
-        leaf_levels = tob.box_levels[leaves].astype(np.int32)
-        unique_leaf_levels = np.unique(leaf_levels)
-        dim = int(tob.dimensions)
-        neighbor_offsets = tuple(product((-1, 0, 1), repeat=dim))
+        split_count += 1
+        if max_nboxes is not None:
+            projected_nboxes = tob.nboxes + split_count * nchildren
+            if projected_nboxes > max_nboxes:
+                raise RuntimeError(
+                    "level-restriction nboxes limit exceeded "
+                    f"(projected_nboxes={projected_nboxes}, max_nboxes={max_nboxes}, "
+                    f"split_count={split_count})"
+                )
 
-        for li in unique_leaf_levels:
-            level_i_boxes = leaves[leaf_levels == li]
-            higher_levels = unique_leaf_levels[unique_leaf_levels >= li + 2]
-            inv_level_i_box_size = 1.0 / _box_size(tob.root_extent, li)
+        worklist.append((cell_level, cell_index))
 
-            for lj in higher_levels:
-                level_j_boxes = leaves[leaf_levels == lj]
+        for new_level, new_index in new_children:
+            min_neighbor_level = new_level - 1
+            if min_neighbor_level <= 0:
+                continue
 
-                if profile:
-                    bucket_start = time.monotonic()
-
-                j_cells = np.floor(
-                    tob.box_centers[:, level_j_boxes].T * inv_level_i_box_size
-                ).astype(np.int64)
-                level_j_buckets = {}
-                for jbox, j_cell in zip(level_j_boxes, j_cells, strict=True):
-                    key = tuple(int(v) for v in j_cell)
-                    level_j_buckets.setdefault(key, []).append(int(jbox))
-
-                if profile:
-                    primary_bucket_build_time += time.monotonic() - bucket_start
-                    pair_stats = primary_pair_stats.setdefault(
-                        (int(li), int(lj)),
-                        [0, 0],
-                    )
-                else:
-                    pair_stats = None
-
-                for ibox in level_i_boxes:
-                    i_cell = tuple(
-                        int(v)
-                        for v in np.floor(
-                            tob.box_centers[:, ibox] * inv_level_i_box_size
-                        ).astype(np.int64)
-                    )
-
-                    for offset in neighbor_offsets:
-                        neighbor_cell = tuple(
-                            i_cell[axis] + offset[axis] for axis in range(dim)
-                        )
-
-                        for jbox in level_j_buckets.get(neighbor_cell, ()):
-                            pair_checks += 1
-                            if pair_stats is not None:
-                                pair_stats[0] += 1
-                            if debug and pair_checks % pair_log_interval == 0:
-                                _level_restriction_debug(
-                                    "iter="
-                                    f"{iteration} leaf_pair_checks={pair_checks}/{leaf_pair_total} "
-                                    f"nboxes={tob.nboxes} nleaves={len(leaves)}"
-                                )
-                            if profile and pair_checks % profile_log_interval == 0:
-                                primary_scan_time = (
-                                    time.monotonic() - primary_scan_start
-                                )
-                                primary_other_time = max(
-                                    0.0,
-                                    primary_scan_time
-                                    - primary_bucket_build_time
-                                    - primary_adjacency_time,
-                                )
-                                top_pairs = _format_level_restriction_top_pairs(
-                                    primary_pair_stats,
-                                    profile_topk,
-                                )
-                                _level_restriction_debug(
-                                    "iter="
-                                    f"{iteration} profile stage=pair-progress "
-                                    f"pair_checks={pair_checks}/{leaf_pair_total} "
-                                    f"levels=l{int(li)}->l{int(lj)} "
-                                    f"elapsed={time.monotonic() - iteration_start:.2f}s "
-                                    f"primary_total={primary_scan_time:.2f}s "
-                                    f"primary_bucket_build={primary_bucket_build_time:.2f}s "
-                                    f"primary_adj_check={primary_adjacency_time:.2f}s "
-                                    f"primary_other={primary_other_time:.2f}s "
-                                    f"top_level_pairs={top_pairs}"
-                                )
-                            if (
-                                max_pair_checks is not None
-                                and pair_checks > max_pair_checks
-                            ):
-                                if profile:
-                                    primary_scan_time = (
-                                        time.monotonic() - primary_scan_start
-                                    )
-                                    primary_other_time = max(
-                                        0.0,
-                                        primary_scan_time
-                                        - primary_bucket_build_time
-                                        - primary_adjacency_time,
-                                    )
-                                    top_pairs = _format_level_restriction_top_pairs(
-                                        primary_pair_stats,
-                                        profile_topk,
-                                    )
-                                    _level_restriction_debug(
-                                        "iter="
-                                        f"{iteration} profile stage=pair-limit "
-                                        f"elapsed={time.monotonic() - iteration_start:.2f}s "
-                                        f"primary_total={primary_scan_time:.2f}s "
-                                        f"primary_bucket_build={primary_bucket_build_time:.2f}s "
-                                        f"primary_adj_check={primary_adjacency_time:.2f}s "
-                                        f"primary_other={primary_other_time:.2f}s "
-                                        f"top_level_pairs={top_pairs}"
-                                    )
-                                raise RuntimeError(
-                                    "level-restriction pair-check limit exceeded "
-                                    f"(iter={iteration}, pair_checks={pair_checks}, "
-                                    f"nleaves={len(leaves)}, nboxes={tob.nboxes})"
-                                )
-
-                            if profile:
-                                adjacency_start = time.monotonic()
-                            is_adjacent = _are_adjacent(
-                                tob.root_extent,
-                                tob.box_levels,
-                                tob.box_centers,
-                                ibox,
-                                jbox,
-                            )
-                            if profile:
-                                primary_adjacency_time += (
-                                    time.monotonic() - adjacency_start
-                                )
-
-                            if not is_adjacent:
-                                continue
-
-                            adjacent_imbalanced_pairs += 1
-                            refine_flags[ibox] = True
-                            if pair_stats is not None:
-                                pair_stats[1] += 1
-
-        primary_scan_time = time.monotonic() - primary_scan_start
-        primary_other_time = max(
-            0.0,
-            primary_scan_time - primary_bucket_build_time - primary_adjacency_time,
-        )
-
-        primary_refines = int(np.count_nonzero(refine_flags))
-        secondary_pair_checks = 0
-        secondary_refines = 0
-
-        if not np.any(refine_flags):
-            secondary_scan_start = time.monotonic()
-            box_levels = tob.box_levels
-            box_centers = tob.box_centers
-            has_children = np.any(tob.box_child_ids != 0, axis=0)
-            leaves_set = set(map(int, leaves))
-
-            for ilevel in np.unique(box_levels.astype(np.int32)):
-                level_boxes = np.where(box_levels == ilevel)[0]
-                nonleaf_level_boxes = [
-                    ibox for ibox in level_boxes if has_children[ibox]
-                ]
-                leaf_level_boxes = [ibox for ibox in level_boxes if ibox in leaves_set]
-                for ibox in nonleaf_level_boxes:
-                    for jbox in leaf_level_boxes:
-                        secondary_pair_checks += 1
-                        total_pair_checks = pair_checks + secondary_pair_checks
-                        if debug and total_pair_checks % pair_log_interval == 0:
-                            _level_restriction_debug(
-                                "iter="
-                                f"{iteration} secondary_pair_checks={secondary_pair_checks} "
-                                f"total_pair_checks={total_pair_checks} "
-                                f"nboxes={tob.nboxes} nleaves={len(leaves)}"
-                            )
-                        if (
-                            max_pair_checks is not None
-                            and total_pair_checks > max_pair_checks
-                        ):
-                            if profile:
-                                secondary_scan_time = (
-                                    time.monotonic() - secondary_scan_start
-                                )
-                                top_pairs = _format_level_restriction_top_pairs(
-                                    primary_pair_stats,
-                                    profile_topk,
-                                )
-                                _level_restriction_debug(
-                                    "iter="
-                                    f"{iteration} profile stage=secondary-pair-limit "
-                                    f"elapsed={time.monotonic() - iteration_start:.2f}s "
-                                    f"primary_total={primary_scan_time:.2f}s "
-                                    f"primary_bucket_build={primary_bucket_build_time:.2f}s "
-                                    f"primary_adj_check={primary_adjacency_time:.2f}s "
-                                    f"primary_other={primary_other_time:.2f}s "
-                                    f"secondary_total={secondary_scan_time:.2f}s "
-                                    f"top_level_pairs={top_pairs}"
-                                )
-                            raise RuntimeError(
-                                "level-restriction pair-check limit exceeded "
-                                f"(iter={iteration}, total_pair_checks={total_pair_checks}, "
-                                f"nleaves={len(leaves)}, nboxes={tob.nboxes})"
-                            )
-
-                        if ibox == jbox:
-                            continue
-                        if _are_adjacent(
-                            tob.root_extent, box_levels, box_centers, ibox, jbox
-                        ):
-                            refine_flags[jbox] = True
-
-            secondary_refines = int(np.count_nonzero(refine_flags))
-            secondary_scan_time = time.monotonic() - secondary_scan_start
-
-            if not np.any(refine_flags):
-                if debug:
-                    _level_restriction_debug(
-                        "iter="
-                        f"{iteration} done elapsed={time.monotonic() - start_time:.2f}s "
-                        f"nboxes={tob.nboxes} nleaves={len(leaves)} "
-                        f"primary_pairs={pair_checks}/{leaf_pair_total} "
-                        f"adjacent_imbalanced={adjacent_imbalanced_pairs}"
-                    )
-                if profile:
-                    top_pairs = _format_level_restriction_top_pairs(
-                        primary_pair_stats,
-                        profile_topk,
-                    )
-                    _level_restriction_debug(
-                        "iter="
-                        f"{iteration} profile stage=done "
-                        f"elapsed={time.monotonic() - iteration_start:.2f}s "
-                        f"primary_total={primary_scan_time:.2f}s "
-                        f"primary_bucket_build={primary_bucket_build_time:.2f}s "
-                        f"primary_adj_check={primary_adjacency_time:.2f}s "
-                        f"primary_other={primary_other_time:.2f}s "
-                        f"secondary_total={secondary_scan_time:.2f}s "
-                        f"top_level_pairs={top_pairs}"
-                    )
-                return tob
+            for offset in neighbor_offsets:
+                neighbor_index = tuple(
+                    new_index[iaxis] + offset[iaxis] for iaxis in range(dim)
+                )
+                add_requirement(new_level, neighbor_index, min_neighbor_level)
 
         if (
-            stagnation_limit is not None
-            and stagnant_iters >= stagnation_limit
-            and np.any(refine_flags)
+            max_requirement_cells is not None
+            and len(required_level_by_cell) > max_requirement_cells
         ):
-            if profile:
-                top_pairs = _format_level_restriction_top_pairs(
-                    primary_pair_stats,
-                    profile_topk,
-                )
-                _level_restriction_debug(
-                    "iter="
-                    f"{iteration} profile stage=stagnation "
-                    f"elapsed={time.monotonic() - iteration_start:.2f}s "
-                    f"primary_total={primary_scan_time:.2f}s "
-                    f"primary_bucket_build={primary_bucket_build_time:.2f}s "
-                    f"primary_adj_check={primary_adjacency_time:.2f}s "
-                    f"primary_other={primary_other_time:.2f}s "
-                    f"secondary_total={secondary_scan_time:.2f}s "
-                    f"top_level_pairs={top_pairs}"
-                )
             raise RuntimeError(
-                "level-restriction state did not change across iterations "
-                f"(iter={iteration}, stagnant_iters={stagnant_iters}, "
-                f"token={state_token}, primary_refines={primary_refines}, "
-                f"secondary_refines={secondary_refines})"
+                "level-restriction requirement-map limit exceeded "
+                f"(requirement_cells={len(required_level_by_cell)}, "
+                f"max_requirement_cells={max_requirement_cells}, "
+                f"split_count={split_count})"
             )
 
-        if debug and (iteration == 1 or iteration % iter_log_every == 0):
+        if debug and split_count % log_every == 0:
             _level_restriction_debug(
-                "iter="
-                f"{iteration} elapsed={time.monotonic() - start_time:.2f}s "
-                f"nboxes={tob.nboxes} nleaves={len(leaves)} "
-                f"primary_pairs={pair_checks}/{leaf_pair_total} "
-                f"adjacent_imbalanced={adjacent_imbalanced_pairs} "
-                f"primary_refines={primary_refines} "
-                f"secondary_pairs={secondary_pair_checks} "
-                f"secondary_refines={secondary_refines}"
+                "closure "
+                f"splits={split_count} work_items={work_items} "
+                f"leaf_count={len(leaf_keys)} queue={len(worklist)}"
             )
 
-        if profile and (iteration == 1 or iteration % iter_log_every == 0):
-            top_pairs = _format_level_restriction_top_pairs(
-                primary_pair_stats,
-                profile_topk,
-            )
+        if profile and work_items % profile_log_interval == 0:
             _level_restriction_debug(
-                "iter="
-                f"{iteration} profile stage=iterate "
-                f"elapsed={time.monotonic() - iteration_start:.2f}s "
-                f"primary_total={primary_scan_time:.2f}s "
-                f"primary_bucket_build={primary_bucket_build_time:.2f}s "
-                f"primary_adj_check={primary_adjacency_time:.2f}s "
-                f"primary_other={primary_other_time:.2f}s "
-                f"secondary_total={secondary_scan_time:.2f}s "
-                f"top_level_pairs={top_pairs}"
+                "profile stage=closure-progress "
+                f"elapsed={time.monotonic() - start_time:.2f}s "
+                f"splits={split_count} work_items={work_items} "
+                f"leaf_count={len(leaf_keys)} "
+                f"requirement_cells={len(required_level_by_cell)}"
             )
 
-        tob = refine_and_coarsen_tree_of_boxes(tob, refine_flags=refine_flags)
-        tob = _rebuild_tob_from_geometry(tob)
+    if leaf_keys == original_leaf_keys:
+        if debug or profile:
+            _level_restriction_debug(
+                "done "
+                f"elapsed={time.monotonic() - start_time:.2f}s "
+                f"splits=0 nboxes={tob.nboxes} nleaves={len(leaf_keys)}"
+            )
+        return tob
+
+    balanced_tob = _tree_of_boxes_from_leaf_keys(tob, leaf_keys)
+    balanced_tob = _rebuild_tob_from_geometry(balanced_tob)
+
+    if max_nboxes is not None and balanced_tob.nboxes > max_nboxes:
+        raise RuntimeError(
+            "level-restriction nboxes limit exceeded "
+            f"(nboxes={balanced_tob.nboxes}, max_nboxes={max_nboxes})"
+        )
+
+    if debug or profile:
+        _level_restriction_debug(
+            "done "
+            f"elapsed={time.monotonic() - start_time:.2f}s "
+            f"splits={split_count} nboxes={balanced_tob.nboxes} "
+            f"nleaves={len(leaf_keys)} work_items={work_items}"
+        )
+
+    return balanced_tob
 
 
 def _enforce_same_level_colleagues(tob):

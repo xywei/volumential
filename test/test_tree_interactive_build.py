@@ -12,6 +12,7 @@ from boxtree import (
 from volumential.tree_interactive_build import (
     BoxTree,
     QuadratureOnBoxTree,
+    _are_adjacent,
     _box_paths_from_topology,
     _compute_box_flags,
     _box_keys_from_geometry,
@@ -81,6 +82,32 @@ def _copy_tob(
         stick_out_factor=tob.stick_out_factor,
         _is_pruned=tob._is_pruned,
     )
+
+
+def _refine_corner_leaf_chain(tob, steps):
+    for _ in range(steps):
+        leaves = np.where(np.all(tob.box_child_ids == 0, axis=0))[0]
+        keys = _box_keys_from_tob(tob)
+
+        target_leaf = max(
+            leaves,
+            key=lambda ibox: (
+                keys[int(ibox)][0],
+                keys[int(ibox)][1][0],
+                keys[int(ibox)][1][1],
+            ),
+        )
+
+        refine_flags = np.zeros(tob.nboxes, dtype=bool)
+        refine_flags[int(target_leaf)] = True
+        tob = refine_and_coarsen_tree_of_boxes(
+            tob,
+            refine_flags=refine_flags,
+            coarsen_flags=None,
+            error_on_ignored_flags=True,
+        )
+
+    return tob
 
 
 def test_box_tree_refine_and_quadrature(ctx_factory):
@@ -534,3 +561,47 @@ def test_rebuild_tob_from_geometry_rejects_cyclic_child_links():
         match="(cyclic or repeated (?:child|parent) links|multiple parent paths)",
     ):
         _rebuild_tob_from_geometry(cyclic_tob)
+
+
+def test_enforce_level_restriction_balances_adjacent_leaf_levels():
+    root = make_tree_of_boxes_root((np.array([-1.0, -1.0]), np.array([1.0, 1.0])))
+    tob = uniformly_refine_tree_of_boxes(root)
+    tob = _refine_corner_leaf_chain(tob, 6)
+    tob = _rebuild_tob_from_geometry(tob)
+
+    initial_max_level = int(np.max(np.asarray(tob.box_levels, dtype=np.int32)))
+    balanced = _enforce_level_restriction(tob)
+
+    leaf_ids = np.where(np.all(balanced.box_child_ids == 0, axis=0))[0]
+    levels = np.asarray(balanced.box_levels, dtype=np.int32)
+    centers = np.asarray(balanced.box_centers)
+
+    for i, ibox in enumerate(leaf_ids):
+        for jbox in leaf_ids[i + 1 :]:
+            if not _are_adjacent(
+                balanced.root_extent,
+                levels,
+                centers,
+                int(ibox),
+                int(jbox),
+            ):
+                continue
+
+            assert abs(int(levels[int(ibox)]) - int(levels[int(jbox)])) <= 1
+
+    assert int(np.max(levels)) <= initial_max_level
+
+
+def test_enforce_level_restriction_nboxes_guard_is_fail_fast(monkeypatch):
+    root = make_tree_of_boxes_root((np.array([-1.0, -1.0]), np.array([1.0, 1.0])))
+    tob = uniformly_refine_tree_of_boxes(root)
+    tob = _refine_corner_leaf_chain(tob, 6)
+    tob = _rebuild_tob_from_geometry(tob)
+
+    monkeypatch.setenv(
+        "VOLUMENTIAL_LEVEL_RESTRICTION_MAX_NBOXES",
+        str(int(tob.nboxes) + 4),
+    )
+
+    with pytest.raises(RuntimeError, match="nboxes limit exceeded"):
+        _enforce_level_restriction(tob)
