@@ -77,7 +77,7 @@ jobs:
   pytest:
     name: Testing (Linux)
     runs-on: ubuntu-latest
-    timeout-minutes: 70
+    timeout-minutes: 80
     steps:
       - uses: actions/checkout@v5
       - uses: mamba-org/setup-micromamba@v2
@@ -116,7 +116,7 @@ jobs:
           curl -L -O https://tiker.net/ci-support-v0
 
           set +e
-          timeout --signal=SIGINT --kill-after=120 3900 bash -lc 'source ./ci-support-v0; test_py_project' \
+          timeout --signal=SIGINT --kill-after=120 3900 bash -c 'source ./ci-support-v0; test_py_project' \
             2>&1 | tee linux-pytest.log
           test_status=${PIPESTATUS[0]}
           set -e
@@ -141,7 +141,7 @@ jobs:
     name: Testing (Linux No-Cov Diagnose)
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 70
+    timeout-minutes: 80
     continue-on-error: true
     steps:
       - uses: actions/checkout@v5
@@ -181,7 +181,7 @@ jobs:
           curl -L -O https://tiker.net/ci-support-v0
 
           set +e
-          timeout --signal=SIGINT --kill-after=120 3900 bash -lc 'source ./ci-support-v0; test_py_project' \
+          timeout --signal=SIGINT --kill-after=120 3900 bash -c 'source ./ci-support-v0; test_py_project' \
             2>&1 | tee linux-nocov-pytest.log
           test_status=${PIPESTATUS[0]}
           set -e
