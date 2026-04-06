@@ -12,6 +12,7 @@ from boxtree import (
 from volumential.tree_interactive_build import (
     BoxTree,
     QuadratureOnBoxTree,
+    _are_adjacent,
     _box_paths_from_topology,
     _compute_box_flags,
     _box_keys_from_geometry,
@@ -81,6 +82,32 @@ def _copy_tob(
         stick_out_factor=tob.stick_out_factor,
         _is_pruned=tob._is_pruned,
     )
+
+
+def _refine_corner_leaf_chain(tob, steps):
+    for _ in range(steps):
+        leaves = np.where(np.all(tob.box_child_ids == 0, axis=0))[0]
+        keys = _box_keys_from_tob(tob)
+
+        target_leaf = max(
+            leaves,
+            key=lambda ibox: (
+                keys[int(ibox)][0],
+                keys[int(ibox)][1][0],
+                keys[int(ibox)][1][1],
+            ),
+        )
+
+        refine_flags = np.zeros(tob.nboxes, dtype=bool)
+        refine_flags[int(target_leaf)] = True
+        tob = refine_and_coarsen_tree_of_boxes(
+            tob,
+            refine_flags=refine_flags,
+            coarsen_flags=None,
+            error_on_ignored_flags=True,
+        )
+
+    return tob
 
 
 def test_box_tree_refine_and_quadrature(ctx_factory):
@@ -409,6 +436,50 @@ def test_remap_coarsen_flags_uses_topology_not_geometry():
     assert np.count_nonzero(remapped_with_nonfinite) == 1
 
 
+def test_remap_coarsen_flags_prefers_descendant_leaf_when_requested():
+    root = make_tree_of_boxes_root((np.array([-1.0, -1.0]), np.array([1.0, 1.0])))
+    old_tob = uniformly_refine_tree_of_boxes(uniformly_refine_tree_of_boxes(root))
+
+    old_leaves = np.where(np.all(old_tob.box_child_ids == 0, axis=0))[0]
+    assert old_leaves.size > 0
+    target_leaf = int(old_leaves[0])
+
+    refine_flags = np.zeros(old_tob.nboxes, dtype=bool)
+    refine_flags[target_leaf] = True
+    refined_tob = refine_and_coarsen_tree_of_boxes(
+        old_tob,
+        refine_flags=refine_flags,
+        coarsen_flags=None,
+        error_on_ignored_flags=True,
+    )
+
+    coarsen_flags = np.zeros(old_tob.nboxes, dtype=bool)
+    coarsen_flags[target_leaf] = True
+
+    remapped_default = _remap_bool_flags_by_box_key(coarsen_flags, old_tob, refined_tob)
+    remapped_descendant = _remap_bool_flags_by_box_key(
+        coarsen_flags,
+        old_tob,
+        refined_tob,
+        prefer_descendant_leaf=True,
+    )
+
+    default_idx = int(np.flatnonzero(remapped_default)[0])
+    descendant_ids = np.flatnonzero(remapped_descendant)
+
+    assert not np.all(refined_tob.box_child_ids[:, default_idx] == 0)
+    assert descendant_ids.size > 0
+
+    for descendant_idx in descendant_ids:
+        assert np.all(refined_tob.box_child_ids[:, int(descendant_idx)] == 0)
+
+    old_path = _box_paths_from_topology(old_tob)[target_leaf]
+    refined_paths = _box_paths_from_topology(refined_tob)
+    for descendant_idx in descendant_ids:
+        descendant_path = refined_paths[int(descendant_idx)]
+        assert descendant_path[: len(old_path)] == old_path
+
+
 def test_prune_unreachable_boxes_uses_detected_root_not_box_zero():
     root = make_tree_of_boxes_root((np.array([-1.0, -1.0]), np.array([1.0, 1.0])))
     tob = uniformly_refine_tree_of_boxes(uniformly_refine_tree_of_boxes(root))
@@ -534,3 +605,47 @@ def test_rebuild_tob_from_geometry_rejects_cyclic_child_links():
         match="(cyclic or repeated (?:child|parent) links|multiple parent paths)",
     ):
         _rebuild_tob_from_geometry(cyclic_tob)
+
+
+def test_enforce_level_restriction_balances_adjacent_leaf_levels():
+    root = make_tree_of_boxes_root((np.array([-1.0, -1.0]), np.array([1.0, 1.0])))
+    tob = uniformly_refine_tree_of_boxes(root)
+    tob = _refine_corner_leaf_chain(tob, 6)
+    tob = _rebuild_tob_from_geometry(tob)
+
+    initial_max_level = int(np.max(np.asarray(tob.box_levels, dtype=np.int32)))
+    balanced = _enforce_level_restriction(tob)
+
+    leaf_ids = np.where(np.all(balanced.box_child_ids == 0, axis=0))[0]
+    levels = np.asarray(balanced.box_levels, dtype=np.int32)
+    centers = np.asarray(balanced.box_centers)
+
+    for i, ibox in enumerate(leaf_ids):
+        for jbox in leaf_ids[i + 1 :]:
+            if not _are_adjacent(
+                balanced.root_extent,
+                levels,
+                centers,
+                int(ibox),
+                int(jbox),
+            ):
+                continue
+
+            assert abs(int(levels[int(ibox)]) - int(levels[int(jbox)])) <= 1
+
+    assert int(np.max(levels)) <= initial_max_level
+
+
+def test_enforce_level_restriction_nboxes_guard_is_fail_fast(monkeypatch):
+    root = make_tree_of_boxes_root((np.array([-1.0, -1.0]), np.array([1.0, 1.0])))
+    tob = uniformly_refine_tree_of_boxes(root)
+    tob = _refine_corner_leaf_chain(tob, 6)
+    tob = _rebuild_tob_from_geometry(tob)
+
+    monkeypatch.setenv(
+        "VOLUMENTIAL_LEVEL_RESTRICTION_MAX_NBOXES",
+        str(int(tob.nboxes) - 1),
+    )
+
+    with pytest.raises(RuntimeError, match="nboxes limit exceeded"):
+        _enforce_level_restriction(tob)

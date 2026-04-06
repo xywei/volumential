@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import logging
+import os
+import time
 import warnings
+from collections import deque
+from itertools import product
 
 import numpy as np
 
@@ -20,6 +24,33 @@ from boxtree import (
 logger = logging.getLogger(__name__)
 
 
+def _env_flag(name, default=False):
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+
+    return raw.strip().lower() not in {"", "0", "false", "no", "off"}
+
+
+def _env_int(name, default):
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+
+    try:
+        return int(raw)
+    except ValueError:
+        warnings.warn(
+            f"ignoring invalid integer for {name}: {raw!r}",
+            stacklevel=3,
+        )
+        return default
+
+
+def _level_restriction_debug(msg):
+    print(f"[volumential.level_restriction] {msg}", flush=True)
+
+
 def _leaf_boxes_numpy(tob):
     return np.where(np.all(tob.box_child_ids == 0, axis=0))[0]
 
@@ -35,59 +66,370 @@ def _are_adjacent(root_extent, levels, centers, ibox, jbox, tol=1.0e-15):
     return dist <= 0.5 * (si + sj) + tol
 
 
-def _enforce_level_restriction(tob):
-    """Enforce only 2:1 leaf-level balancing.
+def _child_slot_bits(dim):
+    nchildren = 2**dim
+    bits = np.empty((nchildren, dim), dtype=np.int64)
+    for child_slot in range(nchildren):
+        bits[child_slot, :] = [
+            (child_slot >> (dim - 1 - iaxis)) & 1 for iaxis in range(dim)
+        ]
+    return bits
 
-    Two adjacent leaves are allowed to differ by at most one level.
-    No extra same-level colleague balancing is applied.
-    """
+
+def _in_bounds_grid_index(level, grid_index):
+    upper = 1 << int(level)
+    return all(0 <= int(v) < upper for v in grid_index)
+
+
+def _covering_leaf_key(leaf_keys, query_level, query_index):
+    query_level = int(query_level)
+    query_index = tuple(int(v) for v in query_index)
+
+    for level in range(query_level, -1, -1):
+        shift = query_level - level
+        ancestor_index = tuple(v >> shift for v in query_index)
+        key = (level, ancestor_index)
+        if key in leaf_keys:
+            return key
+
+    return None
+
+
+def _leaf_keys_from_tob(tob):
+    _, levels, _, _, grid_indices = _geometry_grid_indices(tob)
+    leaves = _leaf_boxes_numpy(tob)
+
+    return {
+        (int(levels[ibox]), tuple(int(v) for v in grid_indices[ibox]))
+        for ibox in leaves
+    }
+
+
+def _tree_of_boxes_from_leaf_keys(template_tob, leaf_keys):
+    from boxtree.tree import TreeOfBoxes
+
+    dim = int(template_tob.dimensions)
+    child_slot_bits = _child_slot_bits(dim)
+    nchildren = int(child_slot_bits.shape[0])
+
+    _, _, root_extent, root_min, _ = _geometry_grid_indices(template_tob)
+
+    all_keys = set()
+    for level, idx in leaf_keys:
+        level = int(level)
+        idx = tuple(int(v) for v in idx)
+
+        all_keys.add((level, idx))
+        parent_level = level
+        parent_idx = idx
+        while parent_level > 0:
+            parent_idx = tuple(v // 2 for v in parent_idx)
+            parent_level -= 1
+            all_keys.add((parent_level, parent_idx))
+
+    expected_root = tuple(0 for _ in range(dim))
+    if (0, expected_root) not in all_keys:
+        all_keys.add((0, expected_root))
+
+    ordered_keys = sorted(all_keys, key=lambda key: (key[0],) + key[1])
+    nboxes = len(ordered_keys)
+
+    key_to_box_id = {key: ibox for ibox, key in enumerate(ordered_keys)}
+
+    box_levels = np.asarray(
+        [level for level, _ in ordered_keys],
+        dtype=template_tob.box_level_dtype,
+    )
+    box_grid_indices = np.asarray([idx for _, idx in ordered_keys], dtype=np.int64)
+
+    box_sizes = root_extent * np.exp2(-box_levels.astype(np.float64))
+    box_centers = (
+        root_min.reshape(dim, 1)
+        + (box_grid_indices.T.astype(np.float64) + 0.5) * box_sizes
+    )
+
+    box_parent_ids = np.full(nboxes, -1, dtype=template_tob.box_id_dtype)
+    box_child_ids = np.zeros((nchildren, nboxes), dtype=template_tob.box_id_dtype)
+
+    for ibox, (level, idx) in enumerate(ordered_keys):
+        idx_arr = np.asarray(idx, dtype=np.int64)
+
+        if level > 0:
+            parent_key = (level - 1, tuple((idx_arr // 2).tolist()))
+            parent_id = key_to_box_id.get(parent_key)
+            if parent_id is None:
+                raise ValueError("missing parent while building balanced tree-of-boxes")
+            box_parent_ids[ibox] = parent_id
+
+        for child_slot, bits in enumerate(child_slot_bits):
+            child_key = (level + 1, tuple((2 * idx_arr + bits).tolist()))
+            child_id = key_to_box_id.get(child_key)
+            if child_id is not None:
+                box_child_ids[child_slot, ibox] = child_id
+
+    max_level = int(np.max(box_levels)) if box_levels.size else 0
+    level_counts = np.bincount(
+        box_levels.astype(np.int64),
+        minlength=max_level + 1,
+    )
+    level_start_box_nrs = np.zeros(max_level + 2, dtype=template_tob.box_id_dtype)
+    level_start_box_nrs[1:] = np.cumsum(level_counts).astype(template_tob.box_id_dtype)
+
+    return TreeOfBoxes(
+        box_centers=np.asarray(box_centers, dtype=template_tob.coord_dtype),
+        root_extent=template_tob.root_extent,
+        box_parent_ids=np.asarray(box_parent_ids, dtype=template_tob.box_id_dtype),
+        box_child_ids=np.asarray(box_child_ids, dtype=template_tob.box_id_dtype),
+        box_levels=np.asarray(box_levels, dtype=template_tob.box_level_dtype),
+        box_flags=np.asarray(
+            _compute_box_flags(box_child_ids), dtype=box_flags_enum.dtype
+        ),
+        level_start_box_nrs=np.asarray(
+            level_start_box_nrs,
+            dtype=template_tob.box_id_dtype,
+        ),
+        box_id_dtype=template_tob.box_id_dtype,
+        box_level_dtype=template_tob.box_level_dtype,
+        coord_dtype=template_tob.coord_dtype,
+        sources_have_extent=template_tob.sources_have_extent,
+        targets_have_extent=template_tob.targets_have_extent,
+        extent_norm=template_tob.extent_norm,
+        stick_out_factor=template_tob.stick_out_factor,
+        _is_pruned=template_tob._is_pruned,
+    )
+
+
+def _enforce_level_restriction(tob):
+    """Enforce bounded 2:1 balancing plus same-level colleague refinement."""
     tob = _rebuild_tob_from_geometry(tob)
 
-    while True:
-        leaves = _leaf_boxes_numpy(tob)
-        refine_flags = np.zeros(tob.nboxes, dtype=bool)
+    debug = _env_flag("VOLUMENTIAL_LEVEL_RESTRICTION_DEBUG")
+    profile = _env_flag("VOLUMENTIAL_LEVEL_RESTRICTION_PROFILE")
+    profile_log_interval = max(
+        1,
+        _env_int("VOLUMENTIAL_LEVEL_RESTRICTION_PROFILE_LOG_INTERVAL", 50_000),
+    )
+    log_every = max(1, _env_int("VOLUMENTIAL_LEVEL_RESTRICTION_LOG_EVERY", 1))
 
-        for i, ibox in enumerate(leaves):
-            for jbox in leaves[i + 1 :]:
-                li = int(tob.box_levels[ibox])
-                lj = int(tob.box_levels[jbox])
-                if abs(li - lj) <= 1:
-                    continue
-                if not _are_adjacent(
-                    tob.root_extent, tob.box_levels, tob.box_centers, ibox, jbox
-                ):
-                    continue
-                if li < lj:
-                    refine_flags[ibox] = True
-                else:
-                    refine_flags[jbox] = True
+    max_splits = _env_int("VOLUMENTIAL_LEVEL_RESTRICTION_MAX_ITERS", 0)
+    if max_splits <= 0:
+        max_splits = None
 
-        if not np.any(refine_flags):
-            box_levels = tob.box_levels
-            box_centers = tob.box_centers
-            has_children = np.any(tob.box_child_ids != 0, axis=0)
-            leaves_set = set(map(int, leaves))
+    max_work_items = _env_int("VOLUMENTIAL_LEVEL_RESTRICTION_MAX_PAIR_CHECKS", 0)
+    if max_work_items <= 0:
+        max_work_items = None
 
-            for ilevel in np.unique(box_levels.astype(np.int32)):
-                level_boxes = np.where(box_levels == ilevel)[0]
-                nonleaf_level_boxes = [
-                    ibox for ibox in level_boxes if has_children[ibox]
-                ]
-                leaf_level_boxes = [ibox for ibox in level_boxes if ibox in leaves_set]
-                for ibox in nonleaf_level_boxes:
-                    for jbox in leaf_level_boxes:
-                        if ibox == jbox:
-                            continue
-                        if _are_adjacent(
-                            tob.root_extent, box_levels, box_centers, ibox, jbox
-                        ):
-                            refine_flags[jbox] = True
+    max_nboxes = _env_int("VOLUMENTIAL_LEVEL_RESTRICTION_MAX_NBOXES", 0)
+    if max_nboxes <= 0:
+        max_nboxes = None
 
-            if not np.any(refine_flags):
-                return tob
+    max_requirement_cells = _env_int(
+        "VOLUMENTIAL_LEVEL_RESTRICTION_MAX_LEAF_PAIR_TOTAL",
+        0,
+    )
+    if max_requirement_cells <= 0:
+        max_requirement_cells = None
 
-        tob = refine_and_coarsen_tree_of_boxes(tob, refine_flags=refine_flags)
-        tob = _rebuild_tob_from_geometry(tob)
+    if max_nboxes is not None and tob.nboxes > max_nboxes:
+        raise RuntimeError(
+            "level-restriction nboxes limit exceeded "
+            f"(nboxes={tob.nboxes}, max_nboxes={max_nboxes})"
+        )
+
+    leaf_keys = _leaf_keys_from_tob(tob)
+    if not leaf_keys:
+        return tob
+
+    all_box_keys = set(_box_keys_from_geometry(tob))
+    nonleaf_keys = all_box_keys - set(leaf_keys)
+
+    original_leaf_keys = set(leaf_keys)
+    max_initial_leaf_level = max(level for level, _ in leaf_keys)
+    max_allowed_level = _env_int(
+        "VOLUMENTIAL_LEVEL_RESTRICTION_MAX_LEVEL",
+        max_initial_leaf_level,
+    )
+    if max_allowed_level < max_initial_leaf_level:
+        warnings.warn(
+            "VOLUMENTIAL_LEVEL_RESTRICTION_MAX_LEVEL is below the current leaf "
+            "maximum; clamping to the current maximum leaf level",
+            stacklevel=3,
+        )
+        max_allowed_level = max_initial_leaf_level
+
+    start_time = time.monotonic()
+    dim = int(tob.dimensions)
+    nchildren = 2**dim
+    child_slot_bits = _child_slot_bits(dim)
+    neighbor_offsets = tuple(product((-1, 0, 1), repeat=dim))
+
+    split_count = 0
+    work_items = 0
+
+    worklist = deque()
+    required_level_by_cell = {}
+
+    def add_requirement(cell_level, cell_index, min_level):
+        if min_level <= 0:
+            return
+        if not _in_bounds_grid_index(cell_level, cell_index):
+            return
+
+        key = (int(cell_level), tuple(int(v) for v in cell_index))
+        old = required_level_by_cell.get(key)
+        if old is None or min_level > old:
+            required_level_by_cell[key] = int(min_level)
+            worklist.append(key)
+
+    for leaf_level, leaf_index in leaf_keys:
+        min_neighbor_level = leaf_level - 1
+        if min_neighbor_level <= 0:
+            continue
+
+        for offset in neighbor_offsets:
+            neighbor_index = tuple(
+                leaf_index[iaxis] + offset[iaxis] for iaxis in range(dim)
+            )
+            add_requirement(leaf_level, neighbor_index, min_neighbor_level)
+
+    for box_level, box_index in nonleaf_keys:
+        min_neighbor_level = box_level + 1
+        if min_neighbor_level <= 0:
+            continue
+
+        for offset in neighbor_offsets:
+            neighbor_index = tuple(
+                box_index[iaxis] + offset[iaxis] for iaxis in range(dim)
+            )
+            add_requirement(box_level, neighbor_index, min_neighbor_level)
+
+    while worklist:
+        work_items += 1
+        if max_work_items is not None and work_items > max_work_items:
+            raise RuntimeError(
+                "level-restriction work-item limit exceeded "
+                f"(work_items={work_items}, split_count={split_count})"
+            )
+
+        cell_level, cell_index = worklist.popleft()
+        required_level = required_level_by_cell[(cell_level, cell_index)]
+
+        covering_leaf = _covering_leaf_key(leaf_keys, cell_level, cell_index)
+        if covering_leaf is None:
+            continue
+
+        leaf_level, leaf_index = covering_leaf
+        if leaf_level >= required_level:
+            continue
+
+        if max_splits is not None and split_count >= max_splits:
+            raise RuntimeError(
+                "level-restriction split limit exceeded "
+                f"(splits={split_count}, work_items={work_items})"
+            )
+
+        child_level = leaf_level + 1
+        if child_level > max_allowed_level:
+            raise RuntimeError(
+                "level-restriction max-level bound exceeded "
+                f"(requested_level={child_level}, max_allowed_level={max_allowed_level}, "
+                f"cell_level={cell_level}, required_level={required_level})"
+            )
+
+        leaf_keys.remove(covering_leaf)
+        leaf_index_arr = np.asarray(leaf_index, dtype=np.int64)
+
+        new_children = []
+        for child_bits in child_slot_bits:
+            child_index = tuple((2 * leaf_index_arr + child_bits).tolist())
+            child_key = (child_level, child_index)
+            leaf_keys.add(child_key)
+            new_children.append(child_key)
+
+        split_count += 1
+        if max_nboxes is not None:
+            projected_nboxes = tob.nboxes + split_count * nchildren
+            if projected_nboxes > max_nboxes:
+                raise RuntimeError(
+                    "level-restriction nboxes limit exceeded "
+                    f"(projected_nboxes={projected_nboxes}, max_nboxes={max_nboxes}, "
+                    f"split_count={split_count})"
+                )
+
+        worklist.append((cell_level, cell_index))
+
+        min_colleague_level = leaf_level + 1
+        for offset in neighbor_offsets:
+            neighbor_index = tuple(
+                leaf_index[iaxis] + offset[iaxis] for iaxis in range(dim)
+            )
+            add_requirement(leaf_level, neighbor_index, min_colleague_level)
+
+        for new_level, new_index in new_children:
+            min_neighbor_level = new_level - 1
+            if min_neighbor_level <= 0:
+                continue
+
+            for offset in neighbor_offsets:
+                neighbor_index = tuple(
+                    new_index[iaxis] + offset[iaxis] for iaxis in range(dim)
+                )
+                add_requirement(new_level, neighbor_index, min_neighbor_level)
+
+        if (
+            max_requirement_cells is not None
+            and len(required_level_by_cell) > max_requirement_cells
+        ):
+            raise RuntimeError(
+                "level-restriction requirement-map limit exceeded "
+                f"(requirement_cells={len(required_level_by_cell)}, "
+                f"max_requirement_cells={max_requirement_cells}, "
+                f"split_count={split_count})"
+            )
+
+        if debug and split_count % log_every == 0:
+            _level_restriction_debug(
+                "closure "
+                f"splits={split_count} work_items={work_items} "
+                f"leaf_count={len(leaf_keys)} queue={len(worklist)}"
+            )
+
+        if profile and work_items % profile_log_interval == 0:
+            _level_restriction_debug(
+                "profile stage=closure-progress "
+                f"elapsed={time.monotonic() - start_time:.2f}s "
+                f"splits={split_count} work_items={work_items} "
+                f"leaf_count={len(leaf_keys)} "
+                f"requirement_cells={len(required_level_by_cell)}"
+            )
+
+    if leaf_keys == original_leaf_keys:
+        if debug or profile:
+            _level_restriction_debug(
+                "done "
+                f"elapsed={time.monotonic() - start_time:.2f}s "
+                f"splits=0 nboxes={tob.nboxes} nleaves={len(leaf_keys)}"
+            )
+        return tob
+
+    balanced_tob = _tree_of_boxes_from_leaf_keys(tob, leaf_keys)
+    balanced_tob = _rebuild_tob_from_geometry(balanced_tob)
+
+    if max_nboxes is not None and balanced_tob.nboxes > max_nboxes:
+        raise RuntimeError(
+            "level-restriction nboxes limit exceeded "
+            f"(nboxes={balanced_tob.nboxes}, max_nboxes={max_nboxes})"
+        )
+
+    if debug or profile:
+        _level_restriction_debug(
+            "done "
+            f"elapsed={time.monotonic() - start_time:.2f}s "
+            f"splits={split_count} nboxes={balanced_tob.nboxes} "
+            f"nleaves={len(leaf_keys)} work_items={work_items}"
+        )
+
+    return balanced_tob
 
 
 def _enforce_same_level_colleagues(tob):
@@ -227,7 +569,13 @@ def _box_paths_from_topology(tob, *, require_connected=True):
     return box_paths
 
 
-def _remap_bool_flags_by_box_key(flags, old_tob, new_tob):
+def _remap_bool_flags_by_box_key(
+    flags,
+    old_tob,
+    new_tob,
+    *,
+    prefer_descendant_leaf=False,
+):
     flags = _resize_bool_flags(flags, old_tob.nboxes)
     remapped = np.zeros(new_tob.nboxes, dtype=bool)
 
@@ -238,12 +586,98 @@ def _remap_bool_flags_by_box_key(flags, old_tob, new_tob):
     new_paths = _box_paths_from_topology(new_tob)
     path_to_new = {path: idx for idx, path in enumerate(new_paths)}
 
+    new_is_leaf = None
+    new_child_ids = None
+    if prefer_descendant_leaf:
+        new_is_leaf = np.all(new_tob.box_child_ids == 0, axis=0)
+        new_child_ids = np.asarray(new_tob.box_child_ids, dtype=np.int64)
+
     for old_id in np.flatnonzero(flags):
         new_id = path_to_new.get(old_paths[int(old_id)])
+        if (
+            new_id is not None
+            and prefer_descendant_leaf
+            and new_is_leaf is not None
+            and not bool(new_is_leaf[int(new_id)])
+        ):
+            stack = [int(new_id)]
+            found_descendant_leaf = False
+            while stack:
+                cursor = stack.pop()
+                if bool(new_is_leaf[cursor]):
+                    remapped[cursor] = True
+                    found_descendant_leaf = True
+                    continue
+
+                children = new_child_ids[:, cursor]
+                nonzero_children = [int(child) for child in children if int(child) != 0]
+                stack.extend(reversed(nonzero_children))
+
+            if found_descendant_leaf:
+                continue
+            new_id = None
+
         if new_id is not None:
             remapped[new_id] = True
 
     return remapped
+
+
+def _coarsen_parent_paths_from_leaf_flags(tob, coarsen_flags):
+    coarsen_flags = _resize_bool_flags(coarsen_flags, tob.nboxes)
+    if not np.any(coarsen_flags):
+        return set(), 0
+
+    box_is_leaf = np.all(tob.box_child_ids == 0, axis=0)
+    if np.any(coarsen_flags[~box_is_leaf]):
+        raise ValueError("attempting to coarsen non-leaf")
+
+    parent_ids = np.asarray(tob.box_parent_ids, dtype=np.int64)
+    box_paths = _box_paths_from_topology(tob)
+
+    parent_paths = set()
+    ignored_no_parent = 0
+    for leaf_id in np.flatnonzero(coarsen_flags):
+        parent_id = int(parent_ids[int(leaf_id)])
+        if parent_id < 0:
+            ignored_no_parent += 1
+            continue
+
+        parent_path = box_paths[parent_id]
+        if parent_path is not None:
+            parent_paths.add(parent_path)
+
+    return parent_paths, ignored_no_parent
+
+
+def _coarsen_flags_from_parent_paths(tob, parent_paths):
+    coarsen_flags = np.zeros(tob.nboxes, dtype=bool)
+    if not parent_paths:
+        return coarsen_flags, 0
+
+    box_paths = _box_paths_from_topology(tob)
+    path_to_box = {path: idx for idx, path in enumerate(box_paths)}
+    child_ids = np.asarray(tob.box_child_ids, dtype=np.int64)
+    is_leaf = np.all(child_ids == 0, axis=0)
+
+    ignored_paths = 0
+    for parent_path in parent_paths:
+        parent_id = path_to_box.get(parent_path)
+        if parent_id is None:
+            ignored_paths += 1
+            continue
+
+        children = child_ids[:, int(parent_id)]
+        if np.any(children == 0):
+            ignored_paths += 1
+            continue
+        if not np.all(is_leaf[children]):
+            ignored_paths += 1
+            continue
+
+        coarsen_flags[int(children[0])] = True
+
+    return coarsen_flags, ignored_paths
 
 
 def _coarsen_tree_of_boxes_compat(
@@ -391,17 +825,66 @@ class BoxTree:
 
         if np.any(refine_flags):
             tree_before_refine = self._tree
+            coarsen_parent_paths = None
+            ignored_parentless_flags = 0
+            if not error_on_ignored_flags:
+                (
+                    coarsen_parent_paths,
+                    ignored_parentless_flags,
+                ) = _coarsen_parent_paths_from_leaf_flags(
+                    tree_before_refine,
+                    coarsen_flags,
+                )
+
             self._tree = refine_and_coarsen_tree_of_boxes(
                 self._tree,
                 refine_flags=refine_flags,
                 coarsen_flags=None,
                 error_on_ignored_flags=error_on_ignored_flags,
             )
-            coarsen_flags = _remap_bool_flags_by_box_key(
-                coarsen_flags,
-                tree_before_refine,
-                self._tree,
-            )
+
+            if coarsen_parent_paths is not None:
+                if ignored_parentless_flags:
+                    warnings.warn(
+                        (
+                            f"{ignored_parentless_flags} coarsening flags ignored "
+                            "before refinement because they have no parent box"
+                        ),
+                        stacklevel=3,
+                    )
+
+                coarsen_flags, ignored_parent_paths = _coarsen_flags_from_parent_paths(
+                    self._tree,
+                    coarsen_parent_paths,
+                )
+                if ignored_parent_paths:
+                    warnings.warn(
+                        (
+                            f"{ignored_parent_paths} coarsening parent intents ignored "
+                            "after refinement because sibling leaf groups no longer exist"
+                        ),
+                        stacklevel=3,
+                    )
+            else:
+                coarsen_flags = _remap_bool_flags_by_box_key(
+                    coarsen_flags,
+                    tree_before_refine,
+                    self._tree,
+                    prefer_descendant_leaf=False,
+                )
+
+                leaf_mask = np.all(self._tree.box_child_ids == 0, axis=0)
+                remapped_nonleaf = coarsen_flags & ~leaf_mask
+                if np.any(remapped_nonleaf):
+                    ignored_count = int(np.count_nonzero(remapped_nonleaf))
+                    msg = (
+                        f"{ignored_count} coarsening flags ignored after refinement "
+                        "because they now target non-leaf boxes"
+                    )
+                    coarsen_flags[remapped_nonleaf] = False
+                    if error_on_ignored_flags:
+                        raise RuntimeError(msg)
+                    warnings.warn(msg, stacklevel=3)
         else:
             coarsen_flags = _resize_bool_flags(coarsen_flags, self._tree.nboxes)
 
