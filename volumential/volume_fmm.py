@@ -214,19 +214,30 @@ def _as_obj_array(potentials):
     return obj_array_1d([potentials])
 
 
+def _is_obj_array(values):
+    return isinstance(values, np.ndarray) and values.dtype == object
+
+
 def _add_obj_arrays(lhs, rhs):
+    lhs_is_obj = _is_obj_array(lhs)
+    rhs_is_obj = _is_obj_array(rhs)
+
     lhs_oa = _as_obj_array(lhs)
     rhs_oa = _as_obj_array(rhs)
 
     if len(lhs_oa) != len(rhs_oa):
         raise ValueError("incompatible potential vector lengths")
 
-    return obj_array_1d(
-        [lhs_i + rhs_i for lhs_i, rhs_i in zip(lhs_oa, rhs_oa, strict=True)]
-    )
+    added = [lhs_i + rhs_i for lhs_i, rhs_i in zip(lhs_oa, rhs_oa, strict=True)]
+    if len(added) == 1 and not (lhs_is_obj or rhs_is_obj):
+        return added[0]
+
+    return obj_array_1d(added)
 
 
 def _coerce_obj_array_like(values, like, queue):
+    like_is_obj = _is_obj_array(like)
+
     values_oa = _as_obj_array(values)
     like_oa = _as_obj_array(like)
 
@@ -258,6 +269,9 @@ def _coerce_obj_array_like(values, like, queue):
             coerced.append(value_i.get(queue))
         else:
             coerced.append(value_i)
+
+    if len(coerced) == 1 and not like_is_obj:
+        return coerced[0]
 
     return obj_array_1d(coerced)
 
@@ -976,7 +990,17 @@ def drive_volume_fmm(
             if correction_timing_future is not None:
                 direct_timing_futures.append(correction_timing_future)
             correction = _coerce_obj_array_like(correction, field_potentials, queue)
+            if _contains_nonfinite(correction):
+                raise RuntimeError(
+                    "Helmholtz split list1 correction produced non-finite values "
+                    f"for field {idx_s}"
+                )
             field_potentials = _add_obj_arrays(field_potentials, correction)
+            if _contains_nonfinite(field_potentials):
+                raise RuntimeError(
+                    "combined list1 potential produced non-finite values after "
+                    f"Helmholtz split correction for field {idx_s}"
+                )
 
         if potentials is None:
             potentials = field_potentials
@@ -1048,7 +1072,7 @@ def drive_volume_fmm(
     recorder.add("eval_multipoles", timing_future)
 
     potentials = _add_obj_arrays(potentials, mpole_result)
-    _debug_nan_status("potentials_after_mpole_eval", potentials[0])
+    _debug_nan_status("potentials_after_mpole_eval", _as_obj_array(potentials)[0])
 
     # these potentials are called beta in [1]
 
@@ -1123,7 +1147,7 @@ def drive_volume_fmm(
     recorder.add("eval_locals", timing_future)
 
     potentials = _add_obj_arrays(potentials, local_result)
-    _debug_nan_status("potentials_after_local_eval", potentials[0])
+    _debug_nan_status("potentials_after_local_eval", _as_obj_array(potentials)[0])
 
     # }}}
 

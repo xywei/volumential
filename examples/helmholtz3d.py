@@ -41,7 +41,6 @@ import volumential.meshgen as mg
 
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
 
 
 def _is_smoke_mode():
@@ -306,6 +305,8 @@ def run_convergence_study(smoke_mode=None):
 
 
 def main():
+    logging.basicConfig(level=logging.INFO)
+
     results = run_convergence_study(smoke_mode=None)
     print("q_order  n_points  rel_pde_residual  fmm_s  pde_check_s")
     for case in results:

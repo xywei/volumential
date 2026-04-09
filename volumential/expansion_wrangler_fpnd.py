@@ -1089,7 +1089,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
                 )
                 list1_extra_kwargs.setdefault(
                     "kernel_displacement_code",
-                    "-0.5 / 3.141592653589793 * scaling * "
+                    f"-0.5 / {np.pi!r} * scaling * "
                     "log(BOX_extent / table_root_extent) * "
                     "mode_nmlz[table_lev, sid]",
                 )
@@ -2461,19 +2461,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
 
         target_to_source = shared_kwargs.get("target_to_source")
 
-        if (
-            hasattr(src_weights, "shape")
-            and hasattr(like, "shape")
-            and tuple(src_weights.shape) == tuple(like.shape)
-        ):
-            diag_strength = src_weights
-        elif target_to_source is None:
-            if not self.tree.sources_are_targets:
-                return None
-            if self.tree.ntargets != self.tree.nsources:
-                return None
-            diag_strength = src_weights
-        else:
+        if target_to_source is not None:
             if isinstance(src_weights, cl.array.Array):
                 if not isinstance(target_to_source, cl.array.Array):
                     target_to_source = cl.array.to_device(
@@ -2484,6 +2472,18 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
                 if isinstance(target_to_source, cl.array.Array):
                     target_to_source = target_to_source.get(self.queue)
                 diag_strength = np.asarray(src_weights)[np.asarray(target_to_source)]
+        elif (
+            hasattr(src_weights, "shape")
+            and hasattr(like, "shape")
+            and tuple(src_weights.shape) == tuple(like.shape)
+        ):
+            diag_strength = src_weights
+        else:
+            if not self.tree.sources_are_targets:
+                return None
+            if self.tree.ntargets != self.tree.nsources:
+                return None
+            diag_strength = src_weights
 
         if isinstance(diag_strength, cl.array.Array):
             scalar = np.array(limit, dtype=diag_strength.dtype)

@@ -60,7 +60,6 @@ import numpy as np
 
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
 
 
 def _is_smoke_mode() -> bool:
@@ -181,6 +180,12 @@ def run_split_p_convergence(
     laplace_table = _get_laplace_table(queue, table_cache, q_order)
 
     def make_wrangler(split_order):
+        self_extra_kwargs = {}
+        if tree.sources_are_targets:
+            self_extra_kwargs["target_to_source"] = np.arange(
+                tree.ntargets, dtype=np.int32
+            )
+
         return FPNDExpansionWrangler(
             tree_indep=tree_indep,
             queue=queue,
@@ -190,9 +195,7 @@ def run_split_p_convergence(
             fmm_level_to_order=lambda kernel, kernel_args, tree, lev: fmm_order,
             quad_order=q_order,
             kernel_extra_kwargs={knl.helmholtz_k_name: wave_number},
-            self_extra_kwargs={
-                "target_to_source": np.arange(tree.ntargets, dtype=np.int32)
-            },
+            self_extra_kwargs=self_extra_kwargs,
             helmholtz_split=True,
             helmholtz_split_order=split_order,
             helmholtz_split_smooth_quad_order=q_order,
@@ -408,6 +411,8 @@ def _parse_args():
 
 
 def main():
+    logging.basicConfig(level=logging.INFO)
+
     args = _parse_args()
     split_orders = _parse_split_orders(args.split_orders)
 

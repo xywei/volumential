@@ -427,9 +427,10 @@ class NearFieldInteractionTable:
     # }}} End constructor
 
     def _get_geom_dtype(self):
-        if np.issubdtype(np.dtype(self.dtype), np.complexfloating):
+        value_dtype = np.dtype(self.dtype)
+        if np.issubdtype(value_dtype, np.complexfloating):
             return np.float64
-        return self.dtype
+        return value_dtype.type
 
     # {{{ encode to table index
 

@@ -44,6 +44,22 @@ logger = logging.getLogger(__name__)
 CASE_ENCODING_BIAS_DEFAULT = 1.0e-10
 
 
+def _array_layout_cache_token(ary, queue):
+    if isinstance(ary, cl.array.Array):
+        base_data = getattr(ary, "base_data", None)
+        int_ptr = getattr(base_data, "int_ptr", None)
+        if int_ptr is not None:
+            return (
+                "cl",
+                int(id(queue)),
+                int(int_ptr),
+                int(getattr(ary, "offset", 0)),
+                int(ary.size),
+                ary.dtype.str,
+            )
+    return ("py", id(ary))
+
+
 # {{{ near field eval base class
 
 
@@ -139,6 +155,8 @@ class NearFieldEvalBase(KernelCacheWrapper):
             assert ("kernel_scaling_code" in self.extra_kwargs) and (
                 "kernel_displacement_code" in self.extra_kwargs
             )
+
+        self._single_table_level_check_cache_key = None
 
     def get_cache_key(self):
         return (
@@ -711,36 +729,45 @@ class NearFieldFromCSR(NearFieldEvalBase):
             and not self.extra_kwargs.get("infer_kernel_scaling", False)
             and "kernel_scaling_code" not in self.extra_kwargs
         ):
-            if hasattr(neighbor_source_boxes_lists, "get"):
-                source_boxes_h = neighbor_source_boxes_lists.get(queue)
-            else:
-                source_boxes_h = np.asarray(neighbor_source_boxes_lists)
+            level_check_cache_key = (
+                _array_layout_cache_token(neighbor_source_boxes_lists, queue),
+                _array_layout_cache_token(box_levels, queue),
+                int(table_starting_level),
+            )
 
-            if source_boxes_h.size:
-                if hasattr(box_levels, "get"):
-                    box_levels_h = box_levels.get(queue)
+            if level_check_cache_key != self._single_table_level_check_cache_key:
+                if hasattr(neighbor_source_boxes_lists, "get"):
+                    source_boxes_h = neighbor_source_boxes_lists.get(queue)
                 else:
-                    box_levels_h = np.asarray(box_levels)
+                    source_boxes_h = np.asarray(neighbor_source_boxes_lists)
 
-                source_levels = box_levels_h[source_boxes_h]
-                min_source_level = int(np.min(source_levels))
-                max_source_level = int(np.max(source_levels))
+                if source_boxes_h.size:
+                    if hasattr(box_levels, "get"):
+                        box_levels_h = box_levels.get(queue)
+                    else:
+                        box_levels_h = np.asarray(box_levels)
 
-                if min_source_level != max_source_level:
-                    raise RuntimeError(
-                        "Single near-field table without scaling cannot be used "
-                        "with source boxes on multiple levels "
-                        f"({min_source_level}..{max_source_level}); build per-level "
-                        "tables or provide explicit scaling rules."
-                    )
+                    source_levels = box_levels_h[source_boxes_h]
+                    min_source_level = int(np.min(source_levels))
+                    max_source_level = int(np.max(source_levels))
 
-                if min_source_level != int(table_starting_level):
-                    raise RuntimeError(
-                        "Single near-field table level mismatch: source level "
-                        f"{min_source_level} but table_starting_level is "
-                        f"{int(table_starting_level)}. Build the table at the active "
-                        "source level or provide scaling rules."
-                    )
+                    if min_source_level != max_source_level:
+                        raise RuntimeError(
+                            "Single near-field table without scaling cannot be used "
+                            "with source boxes on multiple levels "
+                            f"({min_source_level}..{max_source_level}); build per-level "
+                            "tables or provide explicit scaling rules."
+                        )
+
+                    if min_source_level != int(table_starting_level):
+                        raise RuntimeError(
+                            "Single near-field table level mismatch: source level "
+                            f"{min_source_level} but table_starting_level is "
+                            f"{int(table_starting_level)}. Build the table at the active "
+                            "source level or provide scaling rules."
+                        )
+
+                self._single_table_level_check_cache_key = level_check_cache_key
 
         integral_kernel_init_kargs = {
             field.name: getattr(self.integral_kernel, field.name)

@@ -995,7 +995,7 @@ def _make_radial_power_kernel(dim, power):
 
 def _make_radial_power_log_kernel(dim, power):
     from pymbolic import var
-    from pymbolic.primitives import make_sym_vector
+    from pymbolic.primitives import Comparison, If, make_sym_vector
     from sumpy.kernel import ExpressionKernel
     from sumpy.symbolic import pymbolic_real_norm_2
 
@@ -1008,7 +1008,11 @@ def _make_radial_power_log_kernel(dim, power):
             if self.power <= 0:
                 raise ValueError("power must be positive for r**power * log(r)")
             r = pymbolic_real_norm_2(make_sym_vector("d", dim))
-            expr = (r**self.power) * var("log")(r)
+            expr = If(
+                Comparison(r, "<=", np.float64(1.0e-300)),
+                np.float64(0.0),
+                (r**self.power) * var("log")(r),
+            )
             super().__init__(dim, expression=expr, global_scaling_const=1)
 
         @property
