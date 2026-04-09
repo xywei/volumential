@@ -201,6 +201,7 @@ def run_split_p_convergence(
     from sumpy.kernel import HelmholtzKernel
 
     import pyopencl as cl
+    import pyopencl.array  # noqa: F401
 
     import volumential.meshgen as mg
 

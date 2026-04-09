@@ -36,6 +36,7 @@ from functools import partial
 
 import numpy as np
 import pyopencl as cl
+import pyopencl.array  # noqa: F401
 
 import volumential.meshgen as mg
 
@@ -47,6 +48,25 @@ def _device_supports_fp64(device):
     has_khr_fp64 = "cl_khr_fp64" in getattr(device, "extensions", "").split()
     has_double_config = bool(getattr(device, "double_fp_config", 0))
     return has_khr_fp64 or has_double_config
+
+
+def _select_opencl_device(cl_module):
+    try:
+        platforms = cl_module.get_platforms()
+    except cl_module.LogicError as exc:
+        raise RuntimeError(f"OpenCL platforms unavailable: {exc}") from exc
+
+    for platform in platforms:
+        for dev in platform.get_devices():
+            if dev.type & cl_module.device_type.GPU and _device_supports_fp64(dev):
+                return dev
+
+    for platform in platforms:
+        for dev in platform.get_devices():
+            if dev.type & cl_module.device_type.CPU and _device_supports_fp64(dev):
+                return dev
+
+    raise RuntimeError("No OpenCL GPU/CPU device with fp64 support found")
 
 
 def _is_smoke_mode():
@@ -244,14 +264,9 @@ def run_convergence_study(smoke_mode=None):
     )
     logger.info("Using table cache: %s", table_filename)
 
-    ctx = cl.create_some_context()
+    device = _select_opencl_device(cl)
+    ctx = cl.Context([device])
     queue = cl.CommandQueue(ctx)
-    device = queue.device
-    if not _device_supports_fp64(device):
-        raise RuntimeError(
-            f"{device.name} does not support OpenCL double precision; "
-            "examples/helmholtz2d.py requires float64/complex128 support."
-        )
 
     results = []
     for q_order in q_orders:

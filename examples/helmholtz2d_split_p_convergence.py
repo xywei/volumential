@@ -134,6 +134,7 @@ def run_split_p_convergence(
     from sumpy.kernel import HelmholtzKernel
 
     import pyopencl as cl
+    import pyopencl.array  # noqa: F401
 
     import volumential.meshgen as mg
 
@@ -263,7 +264,9 @@ def run_split_p_convergence(
         else:
             prev = rows[i - 1]["rel_l2"]
             cur = row["rel_l2"]
-            row["pct_improve_vs_prev"] = float((prev - cur) / prev * 100.0)
+            row["pct_improve_vs_prev"] = (
+                None if prev == 0.0 else float((prev - cur) / prev * 100.0)
+            )
 
     return {
         "device": {

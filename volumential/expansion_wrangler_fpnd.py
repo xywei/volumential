@@ -203,39 +203,42 @@ class _HelmholtzSplitSeriesRemainderKernel(ExpressionKernel):
         expr = 0
 
         if dim == 2:
-            expr = expr + np.complex128(
-                0.25j
-                - (1.0 / (2.0 * np.pi))
-                * (np.log(0.5 * k) + np.complex128(np.euler_gamma))
-            )
-
-            log_k_half = np.log(0.5 * k)
-            euler_gamma = np.complex128(np.euler_gamma)
-            for n in range(1, self.series_nmax + 1):
-                series_scale = (
-                    ((-1) ** n) * (k * k / 4.0) ** n / (factorial(n) * factorial(n))
-                )
-                harmonic_n = np.sum(1.0 / np.arange(1, n + 1, dtype=np.float64))
-                common = np.complex128(series_scale)
-
-                coeff_log = np.complex128(-common / (2.0 * np.pi))
-                coeff_power = np.complex128(
-                    common
-                    * (
-                        (harmonic_n - (log_k_half + euler_gamma)) / (2.0 * np.pi)
-                        + 0.25j
-                    )
+            if np.abs(k) == 0.0:
+                expr = np.complex128(0.0)
+            else:
+                expr = expr + np.complex128(
+                    0.25j
+                    - (1.0 / (2.0 * np.pi))
+                    * (np.log(0.5 * k) + np.complex128(np.euler_gamma))
                 )
 
-                power = 2 * n
-                if n >= self.split_order:
-                    log_term = If(
-                        Comparison(r, "<=", np.float64(1.0e-300)),
-                        np.float64(0.0),
-                        (r**power) * var("log")(r),
+                log_k_half = np.log(0.5 * k)
+                euler_gamma = np.complex128(np.euler_gamma)
+                for n in range(1, self.series_nmax + 1):
+                    series_scale = (
+                        ((-1) ** n) * (k * k / 4.0) ** n / (factorial(n) * factorial(n))
                     )
-                    expr = expr + coeff_log * log_term
-                expr = expr + coeff_power * (r**power)
+                    harmonic_n = np.sum(1.0 / np.arange(1, n + 1, dtype=np.float64))
+                    common = np.complex128(series_scale)
+
+                    coeff_log = np.complex128(-common / (2.0 * np.pi))
+                    coeff_power = np.complex128(
+                        common
+                        * (
+                            (harmonic_n - (log_k_half + euler_gamma)) / (2.0 * np.pi)
+                            + 0.25j
+                        )
+                    )
+
+                    power = 2 * n
+                    if n >= self.split_order:
+                        log_term = If(
+                            Comparison(r, "<=", np.float64(1.0e-300)),
+                            np.float64(0.0),
+                            (r**power) * var("log")(r),
+                        )
+                        expr = expr + coeff_log * log_term
+                    expr = expr + coeff_power * (r**power)
         else:
             max_extracted_n = 2 * max(0, self.split_order - 1)
             for n in range(1, self.series_nmax + 1):
@@ -939,6 +942,8 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         self._helmholtz_split_term_p2p_include_self = {}
         self._helmholtz_split_remainder_p2p = None
         self._helmholtz_split_remainder_p2p_include_self = None
+        self._helmholtz_split_remainder_p2p_cache_key = None
+        self._helmholtz_split_remainder_p2p_include_self_cache_key = None
         self._helmholtz_split_remainder_kernel_cache = {}
         self._helmholtz_split_kernels = None
         self._helmholtz_split_constant_kernel = None
@@ -1744,7 +1749,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
 
         return min(max_n, n + 2)
 
-    def _get_helmholtz_split_remainder_kernel(self):
+    def _get_helmholtz_split_remainder_kernel(self, *, return_cache_key=False):
         helm_knl, _ = self._helmholtz_split_kernels
         dim = int(helm_knl.dim)
         split_order = int(self.helmholtz_split_order)
@@ -1773,28 +1778,41 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
                 )
             )
 
-        return self._helmholtz_split_remainder_kernel_cache[cache_key]
+        remainder_kernel = self._helmholtz_split_remainder_kernel_cache[cache_key]
+        if return_cache_key:
+            return cache_key, remainder_kernel
+        return remainder_kernel
 
     def _get_helmholtz_split_remainder_p2p(self, *, exclude_self):
         from sumpy import P2PFromCSR
 
-        remainder_kernel = self._get_helmholtz_split_remainder_kernel()
+        cache_key, remainder_kernel = self._get_helmholtz_split_remainder_kernel(
+            return_cache_key=True
+        )
 
         if exclude_self:
-            if self._helmholtz_split_remainder_p2p is None:
+            if (
+                self._helmholtz_split_remainder_p2p is None
+                or self._helmholtz_split_remainder_p2p_cache_key != cache_key
+            ):
                 self._helmholtz_split_remainder_p2p = P2PFromCSR(
                     [remainder_kernel],
                     True,
                     value_dtypes=[self.dtype],
                 )
+                self._helmholtz_split_remainder_p2p_cache_key = cache_key
             return self._helmholtz_split_remainder_p2p
 
-        if self._helmholtz_split_remainder_p2p_include_self is None:
+        if (
+            self._helmholtz_split_remainder_p2p_include_self is None
+            or self._helmholtz_split_remainder_p2p_include_self_cache_key != cache_key
+        ):
             self._helmholtz_split_remainder_p2p_include_self = P2PFromCSR(
                 [remainder_kernel],
                 False,
                 value_dtypes=[self.dtype],
             )
+            self._helmholtz_split_remainder_p2p_include_self_cache_key = cache_key
         return self._helmholtz_split_remainder_p2p_include_self
 
     def _get_helmholtz_split_term_tables(self, term_key):
@@ -2468,6 +2486,8 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             return np.complex128(1j * k / (4.0 * np.pi))
 
         if helm_knl.dim == 2:
+            if np.abs(k) == 0.0:
+                return np.complex128(0.0)
             return np.complex128(
                 0.25j
                 - (1.0 / (2.0 * np.pi))
