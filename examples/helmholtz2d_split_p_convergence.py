@@ -68,6 +68,25 @@ def _device_supports_fp64(device):
     return has_khr_fp64 or has_double_config
 
 
+def _select_opencl_device(cl_module):
+    try:
+        platforms = cl_module.get_platforms()
+    except cl_module.LogicError as exc:
+        raise RuntimeError(f"OpenCL platforms unavailable: {exc}") from exc
+
+    for platform in platforms:
+        for dev in platform.get_devices():
+            if dev.type & cl_module.device_type.GPU and _device_supports_fp64(dev):
+                return dev
+
+    for platform in platforms:
+        for dev in platform.get_devices():
+            if dev.type & cl_module.device_type.CPU and _device_supports_fp64(dev):
+                return dev
+
+    raise RuntimeError("No OpenCL GPU/CPU device with fp64 support found")
+
+
 def _is_smoke_mode() -> bool:
     return os.environ.get("VOLUMENTIAL_EXAMPLE_SMOKE", "").lower() in {
         "1",
@@ -144,15 +163,9 @@ def run_split_p_convergence(
     )
     from volumential.volume_fmm import drive_volume_fmm
 
-    ctx = cl.create_some_context()
+    device = _select_opencl_device(cl)
+    ctx = cl.Context([device])
     queue = cl.CommandQueue(ctx)
-    device = queue.device
-    if not _device_supports_fp64(device):
-        raise RuntimeError(
-            f"{device.name} does not support OpenCL double precision; "
-            "examples/helmholtz2d_split_p_convergence.py requires "
-            "float64/complex128 support."
-        )
 
     mesh = mg.MeshGen2D(q_order, nlevels, -0.5, 0.5, queue=queue)
     q_points, source_weights, tree, traversal = mg.build_geometry_info(

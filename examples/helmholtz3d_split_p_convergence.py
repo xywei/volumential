@@ -337,8 +337,10 @@ def run_split_p_convergence(
             row["pct_improve_vs_prev"] = None
         else:
             prev_l2 = rows[i - 1]["rel_l2"]
-            row["pct_improve_vs_prev"] = float(
-                (prev_l2 - row["rel_l2"]) / prev_l2 * 100.0
+            row["pct_improve_vs_prev"] = (
+                None
+                if np.isclose(prev_l2, 0.0)
+                else float((prev_l2 - row["rel_l2"]) / prev_l2 * 100.0)
             )
 
     return {

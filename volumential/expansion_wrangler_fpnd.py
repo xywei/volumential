@@ -2110,6 +2110,18 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
 
         def _eval_term_table(term_src_weights):
             out_pot = self.output_zeros()[0]
+            if not getattr(term_kernel, "is_complex_valued", False):
+                out_dtype = np.empty((), dtype=self.dtype).real.dtype
+                if out_pot.dtype != out_dtype:
+                    if isinstance(out_pot, cl.array.Array):
+                        out_pot = cl.array.zeros(
+                            self.queue,
+                            out_pot.shape,
+                            dtype=out_dtype,
+                        )
+                    else:
+                        out_pot = np.zeros_like(np.asarray(out_pot), dtype=out_dtype)
+
             out_pot, _ = self.eval_direct_single_out_kernel(
                 out_pot,
                 term_kernel,
