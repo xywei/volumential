@@ -11,6 +11,7 @@ Welcome to Volumential's Documentation!
    :caption: Contents:
 
    intro
+   helmholtz_split
    install
    development
    api/modules

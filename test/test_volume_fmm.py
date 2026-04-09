@@ -898,13 +898,22 @@ def _create_non_intel_opencl_context_or_skip():
         if platform.name == "Intel(R) OpenCL":
             continue
         for device in platform.get_devices():
-            if device.type & cl.device_type.GPU:
-                gpu_candidates.append(device)
+            if not (device.type & cl.device_type.GPU):
+                continue
+
+            extensions = getattr(device, "extensions", "")
+            has_khr_fp64 = "cl_khr_fp64" in extensions.split()
+            has_double_config = bool(getattr(device, "double_fp_config", 0))
+            if not (has_khr_fp64 or has_double_config):
+                continue
+
+            gpu_candidates.append(device)
 
     devices = gpu_candidates
     if not devices:
         pytest.skip(
-            "No non-Intel GPU OpenCL device available for convergence regression"
+            "No non-Intel GPU OpenCL device with fp64 support available for "
+            "convergence regression"
         )
 
     return cl.Context(devices=[devices[0]])
@@ -939,6 +948,560 @@ def _get_laplace_3d_table(queue, table_path, q_order):
         )
 
     return table
+
+
+def _get_laplace_2d_table(queue, table_path, q_order):
+    from volumential.nearfield_potential_table import DuffyBuildConfig
+    from volumential.table_manager import NearFieldInteractionTableManager
+
+    regular_quad_order = max(8, 4 * q_order)
+    radial_quad_order = max(21, 10 * q_order)
+
+    with NearFieldInteractionTableManager(
+        str(table_path), root_extent=2.0, queue=queue
+    ) as tm:
+        build_config = DuffyBuildConfig(
+            radial_rule="tanh-sinh-fast",
+            regular_quad_order=regular_quad_order,
+            radial_quad_order=radial_quad_order,
+        )
+        table, _ = tm.get_table(
+            2,
+            "Laplace",
+            q_order,
+            force_recompute=False,
+            queue=queue,
+            build_config=build_config,
+        )
+
+    return table
+
+
+def _make_radial_power_kernel(dim, power):
+    from pymbolic.primitives import make_sym_vector
+    from sumpy.kernel import ExpressionKernel
+    from sumpy.symbolic import pymbolic_real_norm_2
+
+    class _FixedRadialPowerKernel(ExpressionKernel):
+        init_arg_names = ("power",)
+        mapper_method = "map_expression_kernel"
+
+        def __init__(self, p):
+            self.power = int(p)
+            r = pymbolic_real_norm_2(make_sym_vector("d", dim))
+            expr = 1 if self.power == 0 else r**self.power
+            super().__init__(dim, expression=expr, global_scaling_const=1)
+
+        @property
+        def is_complex_valued(self):
+            return False
+
+        def __getinitargs__(self):
+            return (self.power,)
+
+    return _FixedRadialPowerKernel(power)
+
+
+def _make_radial_power_log_kernel(dim, power):
+    from pymbolic import var
+    from pymbolic.primitives import Comparison, If, make_sym_vector
+    from sumpy.kernel import ExpressionKernel
+    from sumpy.symbolic import pymbolic_real_norm_2
+
+    class _FixedRadialPowerLogKernel(ExpressionKernel):
+        init_arg_names = ("power",)
+        mapper_method = "map_expression_kernel"
+
+        def __init__(self, p):
+            self.power = int(p)
+            if self.power <= 0:
+                raise ValueError("power must be positive for r**power * log(r)")
+            r = pymbolic_real_norm_2(make_sym_vector("d", dim))
+            expr = If(
+                Comparison(r, "<=", np.float64(1.0e-300)),
+                np.float64(0.0),
+                (r**self.power) * var("log")(r),
+            )
+            super().__init__(dim, expression=expr, global_scaling_const=1)
+
+        @property
+        def is_complex_valued(self):
+            return False
+
+        def __getinitargs__(self):
+            return (self.power,)
+
+    return _FixedRadialPowerLogKernel(power)
+
+
+def _get_helmholtz_split_term_tables(
+    queue,
+    table_path,
+    dim,
+    q_order,
+    split_order,
+    *,
+    max_source_box_level=0,
+):
+    from volumential.nearfield_potential_table import DuffyBuildConfig
+    from volumential.table_manager import NearFieldInteractionTableManager
+
+    if split_order <= 1:
+        return {}
+
+    if dim == 2:
+        regular_quad_order = max(8, 4 * q_order)
+        radial_quad_order = max(21, 10 * q_order)
+    elif dim == 3:
+        if q_order <= 2:
+            regular_quad_order = 6
+            radial_quad_order = 21
+        else:
+            regular_quad_order = 8
+            radial_quad_order = 31
+    else:
+        raise NotImplementedError("split term tables currently support 2D/3D")
+
+    build_config = DuffyBuildConfig(
+        radial_rule="tanh-sinh-fast",
+        regular_quad_order=regular_quad_order,
+        radial_quad_order=radial_quad_order,
+    )
+
+    if dim == 2:
+        term_specs = [("power_log", 2 * n) for n in range(1, split_order)]
+    elif dim == 3:
+        term_specs = [("power", 2 * n - 1) for n in range(1, split_order)]
+    else:
+        raise NotImplementedError("split term tables currently support 2D/3D")
+
+    term_tables = {}
+    with NearFieldInteractionTableManager(
+        str(table_path),
+        root_extent=2.0,
+        queue=queue,
+    ) as tm:
+        for term_kind, power in term_specs:
+            power_tables = []
+            for source_box_level in range(max_source_box_level + 1):
+                if term_kind == "power" and power == 0:
+                    table, _ = tm.get_table(
+                        dim,
+                        "Constant",
+                        q_order,
+                        source_box_level=source_box_level,
+                        force_recompute=False,
+                        queue=queue,
+                        build_config=build_config,
+                    )
+                elif term_kind == "power":
+                    table, _ = tm.get_table(
+                        dim,
+                        f"SplitPower{power}",
+                        q_order,
+                        source_box_level=source_box_level,
+                        force_recompute=False,
+                        queue=queue,
+                        build_config=build_config,
+                        sumpy_knl=_make_radial_power_kernel(dim, power),
+                    )
+                elif term_kind == "power_log":
+                    table, _ = tm.get_table(
+                        dim,
+                        f"SplitPowerLog{power}",
+                        q_order,
+                        source_box_level=source_box_level,
+                        force_recompute=False,
+                        queue=queue,
+                        build_config=build_config,
+                        sumpy_knl=_make_radial_power_log_kernel(dim, power),
+                    )
+                else:
+                    raise ValueError(f"unknown term kind '{term_kind}'")
+                power_tables.append(table)
+
+            term_tables[(term_kind, power)] = power_tables
+
+    return term_tables
+
+
+def _make_fixed_helmholtz_3d_kernel(k):
+    from pymbolic import var
+    from pymbolic.primitives import make_sym_vector
+    from sumpy.kernel import ExpressionKernel
+    from sumpy.symbolic import pymbolic_real_norm_2
+
+    class _FixedHelmholtz3DKernel(ExpressionKernel):
+        init_arg_names = ("k",)
+
+        def __init__(self, wave_number):
+            self.k = float(wave_number)
+            r = pymbolic_real_norm_2(make_sym_vector("d", 3))
+            expr = var("exp")(var("I") * self.k * r) / r
+            scaling = 1 / (4 * var("pi"))
+            super().__init__(3, expression=expr, global_scaling_const=scaling)
+
+        @property
+        def is_complex_valued(self):
+            return True
+
+        def __getinitargs__(self):
+            return (self.k,)
+
+        mapper_method = "map_expression_kernel"
+
+    return _FixedHelmholtz3DKernel(k)
+
+
+def _helmholtz_complex_source_profile_2d(x, y):
+    amp = np.exp(-35.0 * ((x + 0.11) ** 2 + (y - 0.07) ** 2))
+    phase = 0.9 * x - 0.3 * y
+    return amp * (1.0 + 0.35j * np.cos(phase))
+
+
+def _helmholtz_complex_source_profile_3d(x, y, z):
+    amp = np.exp(-14.0 * ((x + 0.1) ** 2 + (y - 0.08) ** 2 + (z + 0.06) ** 2))
+    phase = 0.9 * x - 0.5 * y + 0.3 * z
+    return amp * (1.0 + 0.35j * np.cos(phase))
+
+
+def _get_helmholtz_3d_tables(
+    queue,
+    table_path,
+    q_order,
+    wave_number,
+    *,
+    max_source_box_level,
+):
+    from volumential.nearfield_potential_table import DuffyBuildConfig
+    from volumential.table_manager import NearFieldInteractionTableManager
+
+    if q_order <= 1:
+        regular_quad_order = 6
+        radial_quad_order = 21
+    else:
+        regular_quad_order = 8
+        radial_quad_order = 31
+
+    with NearFieldInteractionTableManager(
+        str(table_path),
+        root_extent=1.0,
+        dtype=np.complex128,
+        queue=queue,
+    ) as tm:
+        kernel_tag = f"Helmholtz(k={wave_number:.6g})"
+        build_config = DuffyBuildConfig(
+            radial_rule="tanh-sinh-fast",
+            regular_quad_order=regular_quad_order,
+            radial_quad_order=radial_quad_order,
+        )
+        tables = []
+        for source_box_level in range(max_source_box_level + 1):
+            table, _ = tm.get_table(
+                3,
+                kernel_tag,
+                q_order,
+                source_box_level=source_box_level,
+                force_recompute=False,
+                queue=queue,
+                build_config=build_config,
+                sumpy_knl=_make_fixed_helmholtz_3d_kernel(wave_number),
+            )
+            tables.append(table)
+
+    return tables
+
+
+def _make_patch_targets(queue, *coords):
+    patch_targets = np.empty(len(coords), dtype=object)
+    for iaxis, coord in enumerate(coords):
+        patch_targets[iaxis] = cl.array.to_device(queue, np.ascontiguousarray(coord))
+    return patch_targets
+
+
+def _compute_helmholtz_patch_rel_residual(
+    queue,
+    traversal,
+    wrangler,
+    potentials,
+    *,
+    wave_number,
+    patch,
+    patch_coords,
+    source_profile,
+):
+    from volumential.volume_fmm import interpolate_volume_potential
+
+    patch_targets = _make_patch_targets(queue, *patch_coords)
+    u_patch = interpolate_volume_potential(
+        patch_targets,
+        traversal,
+        wrangler,
+        potentials,
+    ).get(queue)
+
+    rho_patch = source_profile(*patch_coords)
+    residual = (
+        -patch.laplace(u_patch) - (wave_number * wave_number) * u_patch - rho_patch
+    )
+    return float(np.linalg.norm(residual) / np.linalg.norm(rho_patch))
+
+
+def _run_3d_helmholtz_pde_case(
+    ctx,
+    queue,
+    near_field_tables,
+    *,
+    q_order,
+    nlevels,
+    fmm_order,
+    wave_number,
+    helmholtz_split=False,
+    helmholtz_split_order=1,
+    helmholtz_split_smooth_quad_order=None,
+    helmholtz_split_term_tables=None,
+    helmholtz_split_order1_legacy_subtraction=False,
+    compute_pde_residual=True,
+    patch_h=0.28,
+    patch_order=5,
+    return_state=False,
+):
+    from sumpy.expansion import DefaultExpansionFactory
+    from sumpy.kernel import HelmholtzKernel
+    from sumpy.point_calculus import CalculusPatch
+
+    from volumential.expansion_wrangler_fpnd import (
+        FPNDExpansionWrangler,
+        FPNDTreeIndependentDataForWrangler,
+    )
+    from volumential.volume_fmm import drive_volume_fmm
+
+    dim = 3
+    mesh = mg.MeshGen3D(q_order, nlevels, -0.5, 0.5, queue=queue)
+    q_points, source_weights, tree, traversal = mg.build_geometry_info(
+        ctx,
+        queue,
+        dim,
+        q_order,
+        mesh,
+        bbox=np.array([[-0.5, 0.5]] * dim, dtype=np.float64),
+    )
+
+    source_coords_host = np.array([coords.get(queue) for coords in q_points])
+    x = source_coords_host[0]
+    y = source_coords_host[1]
+    z = source_coords_host[2]
+
+    source_vals_host = _helmholtz_complex_source_profile_3d(x, y, z)
+    source_vals = cl.array.to_device(
+        queue,
+        np.ascontiguousarray(source_vals_host.astype(np.complex128)),
+    )
+
+    knl = HelmholtzKernel(dim)
+    expn_factory = DefaultExpansionFactory()
+    local_expn_class = expn_factory.get_local_expansion_class(knl)
+    mpole_expn_class = expn_factory.get_multipole_expansion_class(knl)
+
+    tree_indep = FPNDTreeIndependentDataForWrangler(
+        ctx,
+        partial(mpole_expn_class, knl),
+        partial(local_expn_class, knl),
+        [knl],
+        exclude_self=True,
+    )
+
+    self_extra_kwargs = {}
+    if tree.sources_are_targets:
+        self_extra_kwargs = {
+            "target_to_source": np.arange(tree.ntargets, dtype=np.int32)
+        }
+
+    wrangler = FPNDExpansionWrangler(
+        tree_indep=tree_indep,
+        queue=queue,
+        traversal=traversal,
+        near_field_table=near_field_tables,
+        dtype=np.complex128,
+        fmm_level_to_order=lambda kernel, kernel_args, tree, lev: fmm_order,
+        quad_order=q_order,
+        kernel_extra_kwargs={knl.helmholtz_k_name: wave_number},
+        self_extra_kwargs=self_extra_kwargs,
+        helmholtz_split=helmholtz_split,
+        helmholtz_split_order=helmholtz_split_order,
+        helmholtz_split_smooth_quad_order=helmholtz_split_smooth_quad_order,
+        helmholtz_split_term_tables=helmholtz_split_term_tables,
+        helmholtz_split_order1_legacy_subtraction=(
+            helmholtz_split_order1_legacy_subtraction
+        ),
+    )
+
+    weighted_sources = source_vals * source_weights
+    (fmm_potentials,) = drive_volume_fmm(
+        traversal,
+        wrangler,
+        weighted_sources,
+        source_vals,
+        direct_evaluation=False,
+        list1_only=False,
+    )
+    result = {
+        "tree_sources_are_targets": bool(tree.sources_are_targets),
+        "n_points": int(source_vals_host.size),
+    }
+
+    if compute_pde_residual:
+        patch = CalculusPatch(
+            center=[0.0, 0.0, 0.0], h=float(patch_h), order=patch_order
+        )
+        result["rel_pde_residual"] = _compute_helmholtz_patch_rel_residual(
+            queue,
+            traversal,
+            wrangler,
+            fmm_potentials,
+            wave_number=float(wave_number),
+            patch=patch,
+            patch_coords=(patch.x, patch.y, patch.z),
+            source_profile=_helmholtz_complex_source_profile_3d,
+        )
+
+    if return_state:
+        result.update(
+            {
+                "traversal": traversal,
+                "wrangler": wrangler,
+                "potentials": fmm_potentials,
+                "wave_number": float(wave_number),
+            }
+        )
+
+    return result
+
+
+def _run_2d_helmholtz_pde_case(
+    ctx,
+    queue,
+    near_field_table,
+    *,
+    q_order,
+    nlevels,
+    fmm_order,
+    wave_number,
+    helmholtz_split=False,
+    helmholtz_split_order=1,
+    helmholtz_split_smooth_quad_order=None,
+    helmholtz_split_term_tables=None,
+    helmholtz_split_order1_legacy_subtraction=False,
+    compute_pde_residual=True,
+    patch_h=0.36,
+    patch_order=7,
+    return_state=False,
+):
+    from sumpy.expansion import DefaultExpansionFactory
+    from sumpy.kernel import HelmholtzKernel
+    from sumpy.point_calculus import CalculusPatch
+
+    from volumential.expansion_wrangler_fpnd import (
+        FPNDExpansionWrangler,
+        FPNDTreeIndependentDataForWrangler,
+    )
+    from volumential.volume_fmm import drive_volume_fmm
+
+    dim = 2
+    mesh = mg.MeshGen2D(q_order, nlevels, -0.5, 0.5, queue=queue)
+    q_points, source_weights, tree, traversal = mg.build_geometry_info(
+        ctx,
+        queue,
+        dim,
+        q_order,
+        mesh,
+        bbox=np.array([[-0.5, 0.5]] * dim, dtype=np.float64),
+    )
+
+    source_coords_host = np.array([coords.get(queue) for coords in q_points])
+    x = source_coords_host[0]
+    y = source_coords_host[1]
+
+    source_vals_host = _helmholtz_complex_source_profile_2d(x, y)
+    source_vals = cl.array.to_device(
+        queue,
+        np.ascontiguousarray(source_vals_host.astype(np.complex128)),
+    )
+
+    knl = HelmholtzKernel(dim)
+    expn_factory = DefaultExpansionFactory()
+    local_expn_class = expn_factory.get_local_expansion_class(knl)
+    mpole_expn_class = expn_factory.get_multipole_expansion_class(knl)
+
+    tree_indep = FPNDTreeIndependentDataForWrangler(
+        ctx,
+        partial(mpole_expn_class, knl),
+        partial(local_expn_class, knl),
+        [knl],
+        exclude_self=True,
+    )
+
+    self_extra_kwargs = {}
+    if tree.sources_are_targets:
+        self_extra_kwargs = {
+            "target_to_source": np.arange(tree.ntargets, dtype=np.int32)
+        }
+
+    wrangler = FPNDExpansionWrangler(
+        tree_indep=tree_indep,
+        queue=queue,
+        traversal=traversal,
+        near_field_table=near_field_table,
+        dtype=np.complex128,
+        fmm_level_to_order=lambda kernel, kernel_args, tree, lev: fmm_order,
+        quad_order=q_order,
+        kernel_extra_kwargs={knl.helmholtz_k_name: wave_number},
+        self_extra_kwargs=self_extra_kwargs,
+        helmholtz_split=helmholtz_split,
+        helmholtz_split_order=helmholtz_split_order,
+        helmholtz_split_smooth_quad_order=helmholtz_split_smooth_quad_order,
+        helmholtz_split_term_tables=helmholtz_split_term_tables,
+        helmholtz_split_order1_legacy_subtraction=(
+            helmholtz_split_order1_legacy_subtraction
+        ),
+    )
+
+    weighted_sources = source_vals * source_weights
+    (fmm_potentials,) = drive_volume_fmm(
+        traversal,
+        wrangler,
+        weighted_sources,
+        source_vals,
+        direct_evaluation=False,
+        list1_only=False,
+    )
+
+    result = {"n_points": int(source_vals_host.size)}
+
+    if compute_pde_residual:
+        patch = CalculusPatch(center=[0.0, 0.0], h=float(patch_h), order=patch_order)
+        result["rel_pde_residual"] = _compute_helmholtz_patch_rel_residual(
+            queue,
+            traversal,
+            wrangler,
+            fmm_potentials,
+            wave_number=float(wave_number),
+            patch=patch,
+            patch_coords=(patch.x, patch.y),
+            source_profile=_helmholtz_complex_source_profile_2d,
+        )
+
+    if return_state:
+        result.update(
+            {
+                "traversal": traversal,
+                "wrangler": wrangler,
+                "potentials": fmm_potentials,
+                "wave_number": float(wave_number),
+            }
+        )
+
+    return result
 
 
 def _run_3d_gaussian_case(
@@ -1318,6 +1881,828 @@ def test_volume_fmm_3d_gaussian_convergence_regression(tmp_path):
         f"(order={observed_order:.3f}, coarse={coarse['rel_l2']:.3e}, "
         f"fine={fine['rel_l2']:.3e}, points={coarse['n_points']}->{fine['n_points']})"
     )
+
+
+@pytest.mark.parametrize(
+    ("q_order", "max_rel_pde_residual"),
+    [
+        (2, 4.5),
+        (3, 8.0e-1),
+    ],
+)
+def test_volume_fmm_3d_helmholtz_pde_residual_is_bounded(
+    tmp_path,
+    q_order,
+    max_rel_pde_residual,
+):
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    wave_number = 6.0
+    nlevels = 3
+    tables = _get_helmholtz_3d_tables(
+        queue,
+        tmp_path / f"nft-helmholtz3d-q{q_order}.sqlite",
+        q_order,
+        wave_number,
+        max_source_box_level=nlevels,
+    )
+    result = _run_3d_helmholtz_pde_case(
+        ctx,
+        queue,
+        tables,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=14,
+        wave_number=wave_number,
+    )
+
+    assert result["tree_sources_are_targets"]
+    assert np.isfinite(result["rel_pde_residual"])
+    assert result["rel_pde_residual"] < max_rel_pde_residual, (
+        "3D Helmholtz PDE regression: relative residual is too large "
+        f"(q_order={q_order}, rel_res={result['rel_pde_residual']:.3e}, "
+        f"threshold={max_rel_pde_residual:.3e}, n_points={result['n_points']})"
+    )
+
+
+def test_volume_fmm_3d_helmholtz_q_order_improves_pde_residual(tmp_path):
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    wave_number = 6.0
+    nlevels = 3
+    coarse_tables = _get_helmholtz_3d_tables(
+        queue,
+        tmp_path / "nft-helmholtz3d-q2.sqlite",
+        2,
+        wave_number,
+        max_source_box_level=nlevels,
+    )
+    fine_tables = _get_helmholtz_3d_tables(
+        queue,
+        tmp_path / "nft-helmholtz3d-q3.sqlite",
+        3,
+        wave_number,
+        max_source_box_level=nlevels,
+    )
+
+    coarse = _run_3d_helmholtz_pde_case(
+        ctx,
+        queue,
+        coarse_tables,
+        q_order=2,
+        nlevels=nlevels,
+        fmm_order=14,
+        wave_number=wave_number,
+    )
+    fine = _run_3d_helmholtz_pde_case(
+        ctx,
+        queue,
+        fine_tables,
+        q_order=3,
+        nlevels=nlevels,
+        fmm_order=14,
+        wave_number=wave_number,
+    )
+
+    assert fine["rel_pde_residual"] < 0.2 * coarse["rel_pde_residual"], (
+        "3D Helmholtz PDE regression: increasing q_order did not improve residual "
+        f"(q2={coarse['rel_pde_residual']:.3e}, "
+        f"q3={fine['rel_pde_residual']:.3e})"
+    )
+
+
+def test_volume_fmm_3d_helmholtz_calculus_patch_residual_regression(tmp_path):
+    from pytools.obj_array import new_1d as obj_array_1d
+    from sumpy.point_calculus import CalculusPatch
+
+    from volumential.volume_fmm import interpolate_volume_potential
+
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 3
+    wave_number = 6.0
+
+    coarse_nlevels = 3
+    fine_nlevels = 4
+
+    coarse_tables = _get_helmholtz_3d_tables(
+        queue,
+        tmp_path / "nft-helmholtz3d-calculus-coarse.sqlite",
+        q_order,
+        wave_number,
+        max_source_box_level=coarse_nlevels,
+    )
+    fine_tables = _get_helmholtz_3d_tables(
+        queue,
+        tmp_path / "nft-helmholtz3d-calculus-fine.sqlite",
+        q_order,
+        wave_number,
+        max_source_box_level=fine_nlevels,
+    )
+
+    coarse = _run_3d_helmholtz_pde_case(
+        ctx,
+        queue,
+        coarse_tables,
+        q_order=q_order,
+        nlevels=coarse_nlevels,
+        fmm_order=12,
+        wave_number=wave_number,
+        compute_pde_residual=False,
+        return_state=True,
+    )
+    fine = _run_3d_helmholtz_pde_case(
+        ctx,
+        queue,
+        fine_tables,
+        q_order=q_order,
+        nlevels=fine_nlevels,
+        fmm_order=12,
+        wave_number=wave_number,
+        compute_pde_residual=False,
+        return_state=True,
+    )
+
+    patch = CalculusPatch(center=[0.0, 0.0, 0.0], h=0.28, order=5)
+    patch_targets = obj_array_1d(
+        [
+            cl.array.to_device(queue, np.ascontiguousarray(patch.x)),
+            cl.array.to_device(queue, np.ascontiguousarray(patch.y)),
+            cl.array.to_device(queue, np.ascontiguousarray(patch.z)),
+        ]
+    )
+
+    u_patch_coarse = interpolate_volume_potential(
+        patch_targets,
+        coarse["traversal"],
+        coarse["wrangler"],
+        coarse["potentials"],
+    ).get(queue)
+    u_patch_fine = interpolate_volume_potential(
+        patch_targets,
+        fine["traversal"],
+        fine["wrangler"],
+        fine["potentials"],
+    ).get(queue)
+
+    rho_patch = _helmholtz_complex_source_profile_3d(patch.x, patch.y, patch.z)
+    helmholtz_sq = wave_number * wave_number
+    rel_residual_coarse = np.linalg.norm(
+        -patch.laplace(u_patch_coarse) - helmholtz_sq * u_patch_coarse - rho_patch
+    ) / np.linalg.norm(rho_patch)
+    rel_residual_fine = np.linalg.norm(
+        -patch.laplace(u_patch_fine) - helmholtz_sq * u_patch_fine - rho_patch
+    ) / np.linalg.norm(rho_patch)
+
+    assert rel_residual_fine < rel_residual_coarse, (
+        "3D Helmholtz calculus-patch residual did not improve under refinement "
+        f"(coarse={rel_residual_coarse:.3e}, fine={rel_residual_fine:.3e})"
+    )
+    assert rel_residual_fine < 0.6 * rel_residual_coarse, (
+        "3D Helmholtz calculus-patch residual improvement is too weak under "
+        f"refinement (coarse={rel_residual_coarse:.3e}, "
+        f"fine={rel_residual_fine:.3e})"
+    )
+    assert rel_residual_fine < 2.5e-1, (
+        "3D Helmholtz calculus-patch residual remains too large after refinement "
+        f"(fine={rel_residual_fine:.3e}, coarse={rel_residual_coarse:.3e})"
+    )
+
+
+def test_volume_fmm_3d_helmholtz_multilevel_matches_active_single_level(tmp_path):
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 2
+    nlevels = 2
+    wave_number = 6.0
+
+    tables = _get_helmholtz_3d_tables(
+        queue,
+        tmp_path / "nft-helmholtz3d-selector.sqlite",
+        q_order,
+        wave_number,
+        max_source_box_level=nlevels,
+    )
+    active_level_single_table = tables[nlevels - 1]
+
+    multilevel = _run_3d_helmholtz_pde_case(
+        ctx,
+        queue,
+        tables,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=10,
+        wave_number=wave_number,
+        compute_pde_residual=False,
+        return_state=True,
+    )
+    single_level = _run_3d_helmholtz_pde_case(
+        ctx,
+        queue,
+        active_level_single_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=10,
+        wave_number=wave_number,
+        compute_pde_residual=False,
+        return_state=True,
+    )
+
+    pot_multilevel = multilevel["potentials"].get(queue)
+    pot_single = single_level["potentials"].get(queue)
+    rel_l2 = np.linalg.norm(pot_multilevel - pot_single) / np.linalg.norm(pot_single)
+
+    assert rel_l2 < 1.0e-13, (
+        "3D Helmholtz multilevel selector mismatch: multilevel and active-level "
+        f"single-table results diverged (rel_l2={rel_l2:.3e})"
+    )
+
+
+def test_volume_fmm_3d_helmholtz_single_table_level_mismatch_raises(tmp_path):
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 2
+    nlevels = 2
+    wave_number = 6.0
+
+    mismatched_table = _get_helmholtz_3d_tables(
+        queue,
+        tmp_path / "nft-helmholtz3d-mismatch.sqlite",
+        q_order,
+        wave_number,
+        max_source_box_level=0,
+    )[0]
+
+    with pytest.raises(RuntimeError, match="Single near-field table level mismatch"):
+        _run_3d_helmholtz_pde_case(
+            ctx,
+            queue,
+            mismatched_table,
+            q_order=q_order,
+            nlevels=nlevels,
+            fmm_order=10,
+            wave_number=wave_number,
+            compute_pde_residual=False,
+            return_state=False,
+        )
+
+
+def test_list1_helmholtz_infer_scaling_rejected():
+    from sumpy.kernel import HelmholtzKernel
+
+    from volumential.list1 import NearFieldFromCSR
+
+    with pytest.raises(RuntimeError, match="infer_kernel_scaling is unsupported"):
+        NearFieldFromCSR(
+            HelmholtzKernel(3),
+            {
+                "n_tables": 1,
+                "n_q_points": 1,
+                "n_cases": 1,
+                "n_table_entries": 1,
+            },
+            potential_kind=1,
+            infer_kernel_scaling=True,
+        )
+
+
+@pytest.mark.parametrize(
+    ("q_order", "max_rel_pde_residual"),
+    [
+        (2, 4.5),
+        (3, 8.0e-1),
+    ],
+)
+def test_volume_fmm_3d_helmholtz_laplace_split_pde_residual_is_bounded(
+    tmp_path,
+    q_order,
+    max_rel_pde_residual,
+):
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    wave_number = 6.0
+    table = _get_laplace_3d_table(
+        queue,
+        tmp_path / f"nft-laplace3d-split-q{q_order}.sqlite",
+        q_order,
+    )
+    result = _run_3d_helmholtz_pde_case(
+        ctx,
+        queue,
+        table,
+        q_order=q_order,
+        nlevels=3,
+        fmm_order=14,
+        wave_number=wave_number,
+        helmholtz_split=True,
+    )
+
+    assert np.isfinite(result["rel_pde_residual"])
+    assert result["rel_pde_residual"] < max_rel_pde_residual, (
+        "3D Helmholtz split PDE regression: relative residual is too large "
+        f"(q_order={q_order}, rel_res={result['rel_pde_residual']:.3e}, "
+        f"threshold={max_rel_pde_residual:.3e}, n_points={result['n_points']})"
+    )
+
+
+def test_volume_fmm_3d_helmholtz_laplace_split_q_order_improves_pde_residual(tmp_path):
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    wave_number = 6.0
+    q2_table = _get_laplace_3d_table(
+        queue,
+        tmp_path / "nft-laplace3d-split-q2.sqlite",
+        2,
+    )
+    q3_table = _get_laplace_3d_table(
+        queue,
+        tmp_path / "nft-laplace3d-split-q3.sqlite",
+        3,
+    )
+
+    coarse = _run_3d_helmholtz_pde_case(
+        ctx,
+        queue,
+        q2_table,
+        q_order=2,
+        nlevels=3,
+        fmm_order=14,
+        wave_number=wave_number,
+        helmholtz_split=True,
+    )
+    fine = _run_3d_helmholtz_pde_case(
+        ctx,
+        queue,
+        q3_table,
+        q_order=3,
+        nlevels=3,
+        fmm_order=14,
+        wave_number=wave_number,
+        helmholtz_split=True,
+    )
+
+    assert fine["rel_pde_residual"] < 0.2 * coarse["rel_pde_residual"], (
+        "3D Helmholtz split PDE regression: increasing q_order did not improve "
+        f"residual (q2={coarse['rel_pde_residual']:.3e}, "
+        f"q3={fine['rel_pde_residual']:.3e})"
+    )
+
+
+@pytest.mark.parametrize(
+    ("q_order", "max_rel_pde_residual"),
+    [
+        (3, 1.4),
+        (5, 8.0e-1),
+    ],
+)
+def test_volume_fmm_2d_helmholtz_laplace_split_pde_residual_is_bounded(
+    tmp_path,
+    q_order,
+    max_rel_pde_residual,
+):
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    wave_number = 8.0
+    table = _get_laplace_2d_table(
+        queue,
+        tmp_path / f"nft-laplace2d-split-q{q_order}.sqlite",
+        q_order,
+    )
+    result = _run_2d_helmholtz_pde_case(
+        ctx,
+        queue,
+        table,
+        q_order=q_order,
+        nlevels=3,
+        fmm_order=16,
+        wave_number=wave_number,
+        helmholtz_split=True,
+    )
+
+    assert np.isfinite(result["rel_pde_residual"])
+    assert result["rel_pde_residual"] < max_rel_pde_residual, (
+        "2D Helmholtz split PDE regression: relative residual is too large "
+        f"(q_order={q_order}, rel_res={result['rel_pde_residual']:.3e}, "
+        f"threshold={max_rel_pde_residual:.3e}, n_points={result['n_points']})"
+    )
+
+
+def test_volume_fmm_2d_helmholtz_laplace_split_q_order_improves_pde_residual(tmp_path):
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    wave_number = 8.0
+    q3_table = _get_laplace_2d_table(
+        queue,
+        tmp_path / "nft-laplace2d-split-q3.sqlite",
+        3,
+    )
+    q5_table = _get_laplace_2d_table(
+        queue,
+        tmp_path / "nft-laplace2d-split-q5.sqlite",
+        5,
+    )
+
+    coarse = _run_2d_helmholtz_pde_case(
+        ctx,
+        queue,
+        q3_table,
+        q_order=3,
+        nlevels=3,
+        fmm_order=16,
+        wave_number=wave_number,
+        helmholtz_split=True,
+    )
+    fine = _run_2d_helmholtz_pde_case(
+        ctx,
+        queue,
+        q5_table,
+        q_order=5,
+        nlevels=3,
+        fmm_order=16,
+        wave_number=wave_number,
+        helmholtz_split=True,
+    )
+
+    assert fine["rel_pde_residual"] < 0.6 * coarse["rel_pde_residual"], (
+        "2D Helmholtz split PDE regression: increasing q_order did not improve "
+        f"residual (q3={coarse['rel_pde_residual']:.3e}, "
+        f"q5={fine['rel_pde_residual']:.3e})"
+    )
+
+
+def test_volume_fmm_2d_helmholtz_split_order2_runs(tmp_path):
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 5
+    wave_number = 8.0
+    table_cache_path = tmp_path / "nft-helmholtz2d-split-order2-q5.sqlite"
+    table = _get_laplace_2d_table(
+        queue,
+        table_cache_path,
+        q_order,
+    )
+    term_tables = _get_helmholtz_split_term_tables(
+        queue,
+        table_cache_path,
+        2,
+        q_order,
+        2,
+        max_source_box_level=3,
+    )
+    result = _run_2d_helmholtz_pde_case(
+        ctx,
+        queue,
+        table,
+        q_order=q_order,
+        nlevels=3,
+        fmm_order=16,
+        wave_number=wave_number,
+        helmholtz_split=True,
+        helmholtz_split_order=2,
+        helmholtz_split_term_tables=term_tables,
+    )
+
+    assert np.isfinite(result["rel_pde_residual"])
+    assert result["rel_pde_residual"] < 1.0
+
+
+def test_volume_fmm_2d_helmholtz_split_order1_remainder_matches_legacy(tmp_path):
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 5
+    wave_number = 8.0
+    table = _get_laplace_2d_table(
+        queue,
+        tmp_path / "nft-helmholtz2d-split-order1-remainder-vs-legacy-q5.sqlite",
+        q_order,
+    )
+
+    default_remainder = _run_2d_helmholtz_pde_case(
+        ctx,
+        queue,
+        table,
+        q_order=q_order,
+        nlevels=3,
+        fmm_order=16,
+        wave_number=wave_number,
+        helmholtz_split=True,
+        helmholtz_split_order=1,
+        helmholtz_split_smooth_quad_order=q_order,
+        compute_pde_residual=False,
+        return_state=True,
+    )
+
+    legacy_subtract = _run_2d_helmholtz_pde_case(
+        ctx,
+        queue,
+        table,
+        q_order=q_order,
+        nlevels=3,
+        fmm_order=16,
+        wave_number=wave_number,
+        helmholtz_split=True,
+        helmholtz_split_order=1,
+        helmholtz_split_smooth_quad_order=q_order,
+        helmholtz_split_order1_legacy_subtraction=True,
+        compute_pde_residual=False,
+        return_state=True,
+    )
+
+    pot_default = default_remainder["potentials"].get(queue)
+    pot_legacy = legacy_subtract["potentials"].get(queue)
+    rel_diff = np.linalg.norm(pot_default - pot_legacy) / np.linalg.norm(pot_legacy)
+    assert rel_diff < 1.0e-11
+
+
+def test_volume_fmm_2d_helmholtz_split_order1_overlap_allowed_for_remainder(tmp_path):
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 5
+    smooth_quad_order = 7
+    wave_number = 8.0
+    table = _get_laplace_2d_table(
+        queue,
+        tmp_path / "nft-helmholtz2d-split-order1-overlap-q5.sqlite",
+        q_order,
+    )
+
+    # Default order-1 path uses the non-singular series remainder, so overlap
+    # between source and smooth quadrature nodes is allowed.
+    default_remainder = _run_2d_helmholtz_pde_case(
+        ctx,
+        queue,
+        table,
+        q_order=q_order,
+        nlevels=2,
+        fmm_order=16,
+        wave_number=wave_number,
+        helmholtz_split=True,
+        helmholtz_split_order=1,
+        helmholtz_split_smooth_quad_order=smooth_quad_order,
+        compute_pde_residual=False,
+        return_state=True,
+    )
+    pot = default_remainder["potentials"].get(queue)
+    assert np.all(np.isfinite(pot))
+
+    # Legacy subtraction path should raise the same overlap error.
+    with pytest.raises(ValueError, match="shares nodes with source quadrature"):
+        _run_2d_helmholtz_pde_case(
+            ctx,
+            queue,
+            table,
+            q_order=q_order,
+            nlevels=2,
+            fmm_order=16,
+            wave_number=wave_number,
+            helmholtz_split=True,
+            helmholtz_split_order=1,
+            helmholtz_split_smooth_quad_order=smooth_quad_order,
+            helmholtz_split_order1_legacy_subtraction=True,
+            compute_pde_residual=False,
+        )
+
+
+def test_volume_fmm_2d_helmholtz_split_power_log_single_table_matches_multilevel(
+    tmp_path,
+):
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 5
+    wave_number = 8.0
+    split_order = 3
+    table_cache_path = tmp_path / "nft-helmholtz2d-split-powerlog-single-q5.sqlite"
+
+    table = _get_laplace_2d_table(
+        queue,
+        table_cache_path,
+        q_order,
+    )
+
+    single_level_term_tables = _get_helmholtz_split_term_tables(
+        queue,
+        table_cache_path,
+        2,
+        q_order,
+        split_order,
+        max_source_box_level=0,
+    )
+    multilevel_term_tables = _get_helmholtz_split_term_tables(
+        queue,
+        table_cache_path,
+        2,
+        q_order,
+        split_order,
+        max_source_box_level=3,
+    )
+
+    single = _run_2d_helmholtz_pde_case(
+        ctx,
+        queue,
+        table,
+        q_order=q_order,
+        nlevels=3,
+        fmm_order=16,
+        wave_number=wave_number,
+        helmholtz_split=True,
+        helmholtz_split_order=split_order,
+        helmholtz_split_term_tables=single_level_term_tables,
+        compute_pde_residual=False,
+        return_state=True,
+    )
+    multi = _run_2d_helmholtz_pde_case(
+        ctx,
+        queue,
+        table,
+        q_order=q_order,
+        nlevels=3,
+        fmm_order=16,
+        wave_number=wave_number,
+        helmholtz_split=True,
+        helmholtz_split_order=split_order,
+        helmholtz_split_term_tables=multilevel_term_tables,
+        compute_pde_residual=False,
+        return_state=True,
+    )
+
+    pot_single = single["potentials"].get(queue)
+    pot_multi = multi["potentials"].get(queue)
+
+    rel_diff = np.linalg.norm(pot_single - pot_multi) / np.linalg.norm(pot_multi)
+    assert rel_diff < 5.0e-11
+
+
+def test_volume_fmm_2d_helmholtz_split_order2_auto_builds_term_tables(tmp_path):
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 5
+    wave_number = 8.0
+    table = _get_laplace_2d_table(
+        queue,
+        tmp_path / "nft-laplace2d-split-order2-missing-terms-q5.sqlite",
+        q_order,
+    )
+
+    result = _run_2d_helmholtz_pde_case(
+        ctx,
+        queue,
+        table,
+        q_order=q_order,
+        nlevels=3,
+        fmm_order=16,
+        wave_number=wave_number,
+        helmholtz_split=True,
+        helmholtz_split_order=2,
+    )
+
+    assert np.isfinite(result["rel_pde_residual"])
+    assert result["rel_pde_residual"] < 1.0
+
+
+def test_volume_fmm_2d_helmholtz_split_rejects_term_tables_from_other_cache(tmp_path):
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 5
+    wave_number = 8.0
+    laplace_cache_path = tmp_path / "nft-helmholtz2d-laplace-q5.sqlite"
+    split_cache_path = tmp_path / "nft-helmholtz2d-split-terms-q5.sqlite"
+
+    table = _get_laplace_2d_table(
+        queue,
+        laplace_cache_path,
+        q_order,
+    )
+    term_tables = _get_helmholtz_split_term_tables(
+        queue,
+        split_cache_path,
+        2,
+        q_order,
+        2,
+        max_source_box_level=3,
+    )
+
+    with pytest.raises(RuntimeError, match="same NearFieldInteractionTableManager"):
+        _run_2d_helmholtz_pde_case(
+            ctx,
+            queue,
+            table,
+            q_order=q_order,
+            nlevels=3,
+            fmm_order=16,
+            wave_number=wave_number,
+            helmholtz_split=True,
+            helmholtz_split_order=2,
+            helmholtz_split_term_tables=term_tables,
+        )
+
+
+def test_volume_fmm_2d_helmholtz_split_order4_auto_builds_term_tables(tmp_path):
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 4
+    wave_number = 8.0
+    table = _get_laplace_2d_table(
+        queue,
+        tmp_path / "nft-laplace2d-split-order4-auto-q4.sqlite",
+        q_order,
+    )
+
+    result = _run_2d_helmholtz_pde_case(
+        ctx,
+        queue,
+        table,
+        q_order=q_order,
+        nlevels=3,
+        fmm_order=16,
+        wave_number=wave_number,
+        helmholtz_split=True,
+        helmholtz_split_order=4,
+    )
+
+    assert np.isfinite(result["rel_pde_residual"])
+    assert result["rel_pde_residual"] < 2.0
+
+
+def test_volume_fmm_2d_helmholtz_split_order3_smooth_equals_q_runs(tmp_path):
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 5
+    wave_number = 8.0
+    table = _get_laplace_2d_table(
+        queue,
+        tmp_path / "nft-laplace2d-split-order3-smoothq-q5.sqlite",
+        q_order,
+    )
+
+    result = _run_2d_helmholtz_pde_case(
+        ctx,
+        queue,
+        table,
+        q_order=q_order,
+        nlevels=3,
+        fmm_order=16,
+        wave_number=wave_number,
+        helmholtz_split=True,
+        helmholtz_split_order=3,
+        helmholtz_split_smooth_quad_order=q_order,
+    )
+
+    assert np.isfinite(result["rel_pde_residual"])
+    assert result["rel_pde_residual"] < 1.0
+
+
+def test_volume_fmm_3d_helmholtz_split_order3_runs(tmp_path):
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 3
+    wave_number = 6.0
+    table_cache_path = tmp_path / "nft-helmholtz3d-split-order3-q3.sqlite"
+    table = _get_laplace_3d_table(
+        queue,
+        table_cache_path,
+        q_order,
+    )
+    term_tables = _get_helmholtz_split_term_tables(
+        queue,
+        table_cache_path,
+        3,
+        q_order,
+        3,
+        max_source_box_level=3,
+    )
+    result = _run_3d_helmholtz_pde_case(
+        ctx,
+        queue,
+        table,
+        q_order=q_order,
+        nlevels=3,
+        fmm_order=14,
+        wave_number=wave_number,
+        helmholtz_split=True,
+        helmholtz_split_order=3,
+        helmholtz_split_term_tables=term_tables,
+    )
+
+    assert np.isfinite(result["rel_pde_residual"])
+    assert result["rel_pde_residual"] < 2.0
 
 
 def test_volume_fmm_3d_calculus_patch_residual_regression(tmp_path):

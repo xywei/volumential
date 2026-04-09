@@ -214,16 +214,66 @@ def _as_obj_array(potentials):
     return obj_array_1d([potentials])
 
 
+def _is_obj_array(values):
+    return isinstance(values, np.ndarray) and values.dtype == object
+
+
 def _add_obj_arrays(lhs, rhs):
+    lhs_is_obj = _is_obj_array(lhs)
+    rhs_is_obj = _is_obj_array(rhs)
+
     lhs_oa = _as_obj_array(lhs)
     rhs_oa = _as_obj_array(rhs)
 
     if len(lhs_oa) != len(rhs_oa):
         raise ValueError("incompatible potential vector lengths")
 
-    return obj_array_1d(
-        [lhs_i + rhs_i for lhs_i, rhs_i in zip(lhs_oa, rhs_oa, strict=True)]
-    )
+    added = [lhs_i + rhs_i for lhs_i, rhs_i in zip(lhs_oa, rhs_oa, strict=True)]
+    if len(added) == 1 and not (lhs_is_obj or rhs_is_obj):
+        return added[0]
+
+    return obj_array_1d(added)
+
+
+def _coerce_obj_array_like(values, like, queue):
+    like_is_obj = _is_obj_array(like)
+
+    values_oa = _as_obj_array(values)
+    like_oa = _as_obj_array(like)
+
+    if len(values_oa) != len(like_oa):
+        raise ValueError("incompatible potential vector lengths")
+
+    coerced = []
+    for value_i, like_i in zip(values_oa, like_oa, strict=True):
+        if isinstance(like_i, cl.array.Array) and not isinstance(
+            value_i, cl.array.Array
+        ):
+            if (
+                isinstance(value_i, np.ndarray)
+                and value_i.dtype == object
+                and value_i.size
+                and hasattr(value_i.flat[0], "get")
+            ):
+                host_value = np.asarray(
+                    [entry.get(queue) for entry in value_i],
+                    dtype=like_i.dtype,
+                )
+                coerced.append(cl.array.to_device(queue, host_value))
+                continue
+
+            coerced.append(
+                cl.array.to_device(queue, np.asarray(value_i, dtype=like_i.dtype))
+            )
+        elif isinstance(value_i, cl.array.Array) and isinstance(like_i, np.ndarray):
+            coerced.append(value_i.get(queue))
+        else:
+            coerced.append(value_i)
+
+    if len(coerced) == 1 and not like_is_obj:
+        return coerced[0]
+
+    return obj_array_1d(coerced)
 
 
 class _CombinedTimingFuture:
@@ -594,7 +644,15 @@ def _build_source_only_wrangler(traversal, wrangler, queue):
             else:
                 ctor_param_names.add(param_name)
 
-    for attr_name in ("translation_classes_data", "preprocessed_mpole_dtype"):
+    for attr_name in (
+        "translation_classes_data",
+        "preprocessed_mpole_dtype",
+        "helmholtz_split",
+        "helmholtz_split_order",
+        "helmholtz_split_smooth_quad_order",
+        "helmholtz_split_term_tables",
+        "helmholtz_split_order1_legacy_subtraction",
+    ):
         attr_value = getattr(wrangler, attr_name, None)
         if attr_value is None:
             continue
@@ -922,6 +980,36 @@ def drive_volume_fmm(
             )
 
         direct_timing_futures.append(timing_future)
+
+        if (
+            hasattr(wrangler, "helmholtz_split")
+            and getattr(wrangler, "helmholtz_split")
+            and hasattr(wrangler, "eval_direct_helmholtz_split_correction")
+        ):
+            correction, correction_timing_future = (
+                wrangler.eval_direct_helmholtz_split_correction(
+                    traversal.target_boxes,
+                    traversal.neighbor_source_boxes_starts,
+                    traversal.neighbor_source_boxes_lists,
+                    src_weights[idx_s],
+                    src_func=field,
+                )
+            )
+            if correction_timing_future is not None:
+                direct_timing_futures.append(correction_timing_future)
+            correction = _coerce_obj_array_like(correction, field_potentials, queue)
+            if _contains_nonfinite(correction):
+                raise RuntimeError(
+                    "Helmholtz split list1 correction produced non-finite values "
+                    f"for field {idx_s}"
+                )
+            field_potentials = _add_obj_arrays(field_potentials, correction)
+            if _contains_nonfinite(field_potentials):
+                raise RuntimeError(
+                    "combined list1 potential produced non-finite values after "
+                    f"Helmholtz split correction for field {idx_s}"
+                )
+
         if potentials is None:
             potentials = field_potentials
         else:
@@ -991,8 +1079,8 @@ def drive_volume_fmm(
     _debug_nan_status("mpole_result", mpole_result[0])
     recorder.add("eval_multipoles", timing_future)
 
-    potentials = potentials + mpole_result
-    _debug_nan_status("potentials_after_mpole_eval", potentials[0])
+    potentials = _add_obj_arrays(potentials, mpole_result)
+    _debug_nan_status("potentials_after_mpole_eval", _as_obj_array(potentials)[0])
 
     # these potentials are called beta in [1]
 
@@ -1066,8 +1154,8 @@ def drive_volume_fmm(
 
     recorder.add("eval_locals", timing_future)
 
-    potentials = potentials + local_result
-    _debug_nan_status("potentials_after_local_eval", potentials[0])
+    potentials = _add_obj_arrays(potentials, local_result)
+    _debug_nan_status("potentials_after_local_eval", _as_obj_array(potentials)[0])
 
     # }}}
 
