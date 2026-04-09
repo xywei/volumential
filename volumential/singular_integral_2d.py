@@ -147,10 +147,15 @@ def _tensor_product_fixed_quad(
         x_grid, y_grid = np.meshgrid(x_mapped, y_mapped, indexing="xy")
         values = np.asarray(func(x_grid, y_grid, *args))
     else:
-        values = np.empty((order_o, order_i), dtype=np.complex128)
+        values = np.empty((order_o, order_i), dtype=np.float64)
         for iy, y_val in enumerate(y_mapped):
             for ix, x_val in enumerate(x_mapped):
-                values[iy, ix] = _to_float_or_array(func(x_val, y_val, *args))
+                value = _to_float_or_array(func(x_val, y_val, *args))
+                if np.iscomplexobj(value) and not np.issubdtype(
+                    values.dtype, np.complexfloating
+                ):
+                    values = values.astype(np.complex128)
+                values[iy, ix] = value
 
     weights = np.outer(y_weights, x_weights)
     return 0.25 * (b - a) * (d - c) * np.sum(weights * values, axis=(-2, -1))
