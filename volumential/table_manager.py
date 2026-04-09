@@ -1014,18 +1014,27 @@ class NearFieldInteractionTableManager:
             return None
 
     def _attach_runtime_table_metadata(self, table, table_request, request_kwargs):
-        table._table_cache_filename = self.filename
-        table._table_cache_root_extent = float(self.root_extent)
-        table._table_cache_request_dim = int(table_request.dim)
-        table._table_cache_request_kernel_type = str(table_request.kernel_type)
-        table._table_cache_request_q_order = int(table_request.q_order)
-        table._table_cache_request_source_box_level = int(
-            table_request.source_box_level
+        def attach_attr(attr_name, value):
+            try:
+                setattr(table, attr_name, value)
+            except (AttributeError, TypeError):
+                return False
+            else:
+                return True
+
+        attach_attr("_table_cache_filename", self.filename)
+        attach_attr("_table_cache_root_extent", float(self.root_extent))
+        attach_attr("_table_cache_request_dim", int(table_request.dim))
+        attach_attr("_table_cache_request_kernel_type", str(table_request.kernel_type))
+        attach_attr("_table_cache_request_q_order", int(table_request.q_order))
+        attach_attr(
+            "_table_cache_request_source_box_level",
+            int(table_request.source_box_level),
         )
 
         build_config = self._runtime_build_config_for_table(table, request_kwargs)
         if build_config is not None:
-            table._table_cache_build_config = build_config
+            attach_attr("_table_cache_build_config", build_config)
 
     def _resolve_kernel_bundle(self, table_request, kwargs, require_sumpy_kernel):
         self._reject_removed_knl_func_kwarg(kwargs, "_resolve_kernel_bundle")
