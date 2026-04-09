@@ -898,13 +898,22 @@ def _create_non_intel_opencl_context_or_skip():
         if platform.name == "Intel(R) OpenCL":
             continue
         for device in platform.get_devices():
-            if device.type & cl.device_type.GPU:
-                gpu_candidates.append(device)
+            if not (device.type & cl.device_type.GPU):
+                continue
+
+            extensions = getattr(device, "extensions", "")
+            has_khr_fp64 = "cl_khr_fp64" in extensions.split()
+            has_double_config = bool(getattr(device, "double_fp_config", 0))
+            if not (has_khr_fp64 or has_double_config):
+                continue
+
+            gpu_candidates.append(device)
 
     devices = gpu_candidates
     if not devices:
         pytest.skip(
-            "No non-Intel GPU OpenCL device available for convergence regression"
+            "No non-Intel GPU OpenCL device with fp64 support available for "
+            "convergence regression"
         )
 
     return cl.Context(devices=[devices[0]])
