@@ -850,13 +850,16 @@ class NearFieldInteractionTable:
 
     def _get_barycentric_data(self):
         geom_dtype = self._get_geom_dtype()
-        xi = np.array([p[self.dim - 1] for p in self.q_points[: self.quad_order]])
+        xi = np.asarray(
+            [p[self.dim - 1] for p in self.q_points[: self.quad_order]],
+            dtype=geom_dtype,
+        )
         bw = np.ones(self.quad_order, dtype=geom_dtype)
         for i in range(self.quad_order):
             for j in range(self.quad_order):
                 if i != j:
                     bw[i] /= xi[i] - xi[j]
-        return xi.astype(geom_dtype), bw.astype(geom_dtype)
+        return xi, bw.astype(geom_dtype)
 
     @memoize_method
     def _get_invariant_entry_info(self):

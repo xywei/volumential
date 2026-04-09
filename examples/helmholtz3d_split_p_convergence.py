@@ -111,6 +111,11 @@ def _parse_split_orders(raw: str) -> list[int]:
     return vals
 
 
+def _device_supports_fp64(dev) -> bool:
+    extensions = set(getattr(dev, "extensions", "").split())
+    return "cl_khr_fp64" in extensions or bool(getattr(dev, "double_fp_config", 0))
+
+
 def _select_opencl_device(cl, backend: str):
     backend = backend.lower()
     platforms = cl.get_platforms()
@@ -119,32 +124,32 @@ def _select_opencl_device(cl, backend: str):
         for platform in platforms:
             if "portable computing language" in platform.name.lower():
                 for dev in platform.get_devices():
-                    if dev.type & cl.device_type.CPU:
+                    if dev.type & cl.device_type.CPU and _device_supports_fp64(dev):
                         return dev
-        raise RuntimeError("PoCL CPU device not found")
+        raise RuntimeError("PoCL CPU device with fp64 support not found")
 
     if backend == "cuda-gpu":
         for platform in platforms:
             if "nvidia cuda" in platform.name.lower():
                 for dev in platform.get_devices():
-                    if dev.type & cl.device_type.GPU:
+                    if dev.type & cl.device_type.GPU and _device_supports_fp64(dev):
                         return dev
-        raise RuntimeError("NVIDIA CUDA GPU device not found")
+        raise RuntimeError("NVIDIA CUDA GPU device with fp64 support not found")
 
     if backend != "auto":
         raise ValueError("backend must be one of: auto, pocl-cpu, cuda-gpu")
 
     for platform in platforms:
         for dev in platform.get_devices():
-            if dev.type & cl.device_type.GPU:
+            if dev.type & cl.device_type.GPU and _device_supports_fp64(dev):
                 return dev
 
     for platform in platforms:
         for dev in platform.get_devices():
-            if dev.type & cl.device_type.CPU:
+            if dev.type & cl.device_type.CPU and _device_supports_fp64(dev):
                 return dev
 
-    raise RuntimeError("No OpenCL GPU/CPU device found")
+    raise RuntimeError("No OpenCL GPU/CPU device with fp64 support found")
 
 
 def _get_laplace_table(

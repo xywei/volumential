@@ -644,7 +644,15 @@ def _build_source_only_wrangler(traversal, wrangler, queue):
             else:
                 ctor_param_names.add(param_name)
 
-    for attr_name in ("translation_classes_data", "preprocessed_mpole_dtype"):
+    for attr_name in (
+        "translation_classes_data",
+        "preprocessed_mpole_dtype",
+        "helmholtz_split",
+        "helmholtz_split_order",
+        "helmholtz_split_smooth_quad_order",
+        "helmholtz_split_term_tables",
+        "helmholtz_split_order1_legacy_subtraction",
+    ):
         attr_value = getattr(wrangler, attr_name, None)
         if attr_value is None:
             continue

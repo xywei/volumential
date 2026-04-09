@@ -2090,19 +2090,41 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
                 "kernel_displacement_code": "0.0",
             }
 
-        out_pot = self.output_zeros()[0]
-        out_pot, _ = self.eval_direct_single_out_kernel(
-            out_pot,
-            term_kernel,
-            target_boxes,
-            neighbor_source_boxes_starts,
-            neighbor_source_boxes_lists,
-            src_weights,
-            near_field_tables=term_tables,
-            list1_extra_kwargs=list1_kwargs,
-        )
+        def _eval_term_table(term_src_weights):
+            out_pot = self.output_zeros()[0]
+            out_pot, _ = self.eval_direct_single_out_kernel(
+                out_pot,
+                term_kernel,
+                target_boxes,
+                neighbor_source_boxes_starts,
+                neighbor_source_boxes_lists,
+                term_src_weights,
+                near_field_tables=term_tables,
+                list1_extra_kwargs=list1_kwargs,
+            )
+            return out_pot
 
-        return obj_array_1d([out_pot])
+        src_dtype = getattr(src_weights, "dtype", None)
+        if src_dtype is None:
+            is_complex_strength = np.iscomplexobj(src_weights)
+        else:
+            is_complex_strength = np.issubdtype(np.dtype(src_dtype), np.complexfloating)
+
+        if not is_complex_strength:
+            return obj_array_1d([_eval_term_table(src_weights)])
+
+        if isinstance(src_weights, cl.array.Array):
+            src_weights_real = src_weights.real
+            src_weights_imag = src_weights.imag
+        else:
+            src_weights_host = np.asarray(src_weights)
+            src_weights_real = np.ascontiguousarray(np.real(src_weights_host))
+            src_weights_imag = np.ascontiguousarray(np.imag(src_weights_host))
+
+        out_real = _eval_term_table(src_weights_real)
+        out_imag = _eval_term_table(src_weights_imag)
+        imag_scale = np.array(1j, dtype=self.dtype)
+        return obj_array_1d([out_real + out_imag * imag_scale])
 
     def _get_helmholtz_split_log_alpha_per_source(self, table_root_extent):
         table_root_extent = float(table_root_extent)
@@ -2492,9 +2514,6 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         if isinstance(like, cl.array.Array):
             diag_strength = cl.array.to_device(self.queue, np.asarray(diag_strength))
             return diag_strength * np.array(limit, dtype=like.dtype)
-
-        if isinstance(diag_strength, cl.array.Array):
-            diag_strength = diag_strength.get(self.queue)
 
         return np.asarray(diag_strength) * np.array(limit, dtype=np.asarray(like).dtype)
 

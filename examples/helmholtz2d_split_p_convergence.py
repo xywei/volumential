@@ -62,6 +62,12 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
+def _device_supports_fp64(device):
+    has_khr_fp64 = "cl_khr_fp64" in getattr(device, "extensions", "").split()
+    has_double_config = bool(getattr(device, "double_fp_config", 0))
+    return has_khr_fp64 or has_double_config
+
+
 def _is_smoke_mode() -> bool:
     return os.environ.get("VOLUMENTIAL_EXAMPLE_SMOKE", "").lower() in {
         "1",
@@ -139,6 +145,13 @@ def run_split_p_convergence(
 
     ctx = cl.create_some_context()
     queue = cl.CommandQueue(ctx)
+    device = queue.device
+    if not _device_supports_fp64(device):
+        raise RuntimeError(
+            f"{device.name} does not support OpenCL double precision; "
+            "examples/helmholtz2d_split_p_convergence.py requires "
+            "float64/complex128 support."
+        )
 
     mesh = mg.MeshGen2D(q_order, nlevels, -0.5, 0.5, queue=queue)
     q_points, source_weights, tree, traversal = mg.build_geometry_info(
