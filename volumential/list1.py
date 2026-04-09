@@ -52,6 +52,9 @@ class NearFieldEvalBase(KernelCacheWrapper):
 
     default_name = "near_field_eval_base"
 
+    def _supports_inferred_scaling(self):
+        return False
+
     def __init__(
         self,
         integral_kernel,
@@ -92,6 +95,8 @@ class NearFieldEvalBase(KernelCacheWrapper):
         self.name = name or self.default_name
         self.device = device
         self.extra_kwargs = kwargs
+        self.kname = self.integral_kernel.__repr__()
+        self.dim = self.integral_kernel.dim
 
         if "case_encoding_bias" not in self.extra_kwargs:
             self.extra_kwargs["case_encoding_bias"] = CASE_ENCODING_BIAS_DEFAULT
@@ -107,7 +112,23 @@ class NearFieldEvalBase(KernelCacheWrapper):
         # Allow user to pass more tables to force using multiple tables
         # instead of performing kernel scaling
         if "infer_kernel_scaling" not in self.extra_kwargs:
-            self.extra_kwargs["infer_kernel_scaling"] = self.n_tables == 1
+            self.extra_kwargs["infer_kernel_scaling"] = (
+                self.n_tables == 1 and self._supports_inferred_scaling()
+            )
+
+        if (
+            self.extra_kwargs.get("infer_kernel_scaling", False)
+            and not self._supports_inferred_scaling()
+            and "kernel_scaling_code" not in self.extra_kwargs
+        ):
+            raise RuntimeError(
+                "infer_kernel_scaling is unsupported for kernel "
+                f"{self.integral_kernel!r}. For Helmholtz, "
+                "K_k(h r) = h^{-1} K_{k h}(r): exact table scaling requires "
+                "changing the effective wave number with box size, which a "
+                "single fixed-k table cannot represent. Use multi-level tables "
+                "or provide explicit custom scaling/displacement code."
+            )
 
         # Do not infer scaling rules when user defined rules are present
         if ("kernel_scaling_code" in self.extra_kwargs) or (
@@ -118,9 +139,6 @@ class NearFieldEvalBase(KernelCacheWrapper):
             assert ("kernel_scaling_code" in self.extra_kwargs) and (
                 "kernel_displacement_code" in self.extra_kwargs
             )
-
-        self.kname = self.integral_kernel.__repr__()
-        self.dim = self.integral_kernel.dim
 
     def get_cache_key(self):
         return (
@@ -166,6 +184,29 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 self.integral_kernel.inner_kernel.get_base_kernel(), LaplaceKernel
             )
             and self.dim == dim
+        )
+
+    def _is_axis_source_derivative_of_laplace(self, dim):
+        from sumpy.kernel import AxisSourceDerivative, LaplaceKernel
+
+        return (
+            isinstance(self.integral_kernel, AxisSourceDerivative)
+            and isinstance(
+                self.integral_kernel.inner_kernel.get_base_kernel(), LaplaceKernel
+            )
+            and self.dim == dim
+        )
+
+    def _supports_inferred_scaling(self):
+        return (
+            self._is_laplace_kernel(2)
+            or self._is_laplace_kernel(3)
+            or self._is_constant_kernel(2)
+            or self._is_constant_kernel(3)
+            or self._is_axis_target_derivative_of_laplace(2)
+            or self._is_axis_target_derivative_of_laplace(3)
+            or self._is_axis_source_derivative_of_laplace(2)
+            or self._is_axis_source_derivative_of_laplace(3)
         )
 
     def codegen_vec_component(self, d=None):
@@ -300,6 +341,14 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 logger.info("scaling for Grad(LapKnl3D)")
                 code = "BOX_extent / table_root_extent"
 
+            elif self._is_axis_source_derivative_of_laplace(2):
+                logger.info("scaling for SourceGrad(LapKnl2D)")
+                code = "BOX_extent / table_root_extent"
+
+            elif self._is_axis_source_derivative_of_laplace(3):
+                logger.info("scaling for SourceGrad(LapKnl3D)")
+                code = "BOX_extent / table_root_extent"
+
             # Constant 3D
             elif self._is_constant_kernel(3):
                 logger.info("scaling for CstKnl3D")
@@ -324,7 +373,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 self.extra_kwargs["kernel_scaling_code"],
                 self.kname,
             )
-            return self.extra_kwargs["kernel_scaling_code"]
+            return self.extra_kwargs["kernel_scaling_code"].replace("BOX", box_name)
         else:
             logger.info("not scaling for " + self.kname)
             logger.info("(using multiple tables)")
@@ -356,6 +405,22 @@ class NearFieldFromCSR(NearFieldEvalBase):
             elif self._is_constant_kernel(3):
                 logger.info("no displacement for CstKnl3D")
                 code = "0.0"
+
+            elif self._is_axis_target_derivative_of_laplace(2):
+                logger.info("no displacement for Grad(LapKnl2D)")
+                code = "0.0"
+
+            elif self._is_axis_target_derivative_of_laplace(3):
+                logger.info("no displacement for Grad(LapKnl3D)")
+                code = "0.0"
+
+            elif self._is_axis_source_derivative_of_laplace(2):
+                logger.info("no displacement for SourceGrad(LapKnl2D)")
+                code = "0.0"
+
+            elif self._is_axis_source_derivative_of_laplace(3):
+                logger.info("no displacement for SourceGrad(LapKnl3D)")
+                code = "0.0"
             else:
                 logger.warning(
                     "Kernel not scalable and not using multiple tables, "
@@ -372,7 +437,9 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 self.extra_kwargs["kernel_displacement_code"],
                 self.kname,
             )
-            code = self.extra_kwargs["kernel_displacement_code"]
+            code = self.extra_kwargs["kernel_displacement_code"].replace(
+                "BOX", box_name
+            )
         else:
             logger.info("no displacement for " + self.kname)
             logger.info("(using multiple tables)")
@@ -389,6 +456,10 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 or self._is_laplace_kernel(3)
                 or self._is_constant_kernel(2)
                 or self._is_constant_kernel(3)
+                or self._is_axis_target_derivative_of_laplace(2)
+                or self._is_axis_target_derivative_of_laplace(3)
+                or self._is_axis_source_derivative_of_laplace(2)
+                or self._is_axis_source_derivative_of_laplace(3)
             ):
                 logger.info("scaling from table[0] for " + self.kname)
                 code = "0.0"
@@ -405,7 +476,12 @@ class NearFieldFromCSR(NearFieldEvalBase):
         else:
             logger.info("computing table level from box size")
             logger.info("(using multiple tables)")
-            code = "log(table_root_extent / BOX_extent) / log(2.0)"
+            code = (
+                "(0 if BOX_level < table_starting_level "
+                "else (BOX_level - table_starting_level "
+                "if BOX_level - table_starting_level < n_tables "
+                "else n_tables - 1))"
+            )
 
         return code.replace("BOX", box_name)
 
@@ -565,6 +641,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 loopy.GlobalArg("target_point_ids", np.int32, "n_target_particles"),
                 loopy.ValueArg("aligned_nboxes", np.int32),
                 loopy.ValueArg("table_root_extent", np.float64),
+                loopy.ValueArg("table_starting_level", np.int32),
                 loopy.ValueArg(
                     "dim, n_source_boxes, n_tables, n_q_points, n_cases, n_table_entries, n_source_particles, n_target_particles",
                     np.int32,
@@ -583,7 +660,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
     def get_cache_key(self):
         return (
             type(self).__name__,
-            "kernel-v8",
+            "kernel-v9",
             self.name,
             self.kname,
             "complex_kernel=" + str(self.integral_kernel.is_complex_valued),
@@ -592,6 +669,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
             "case_encoding_bias=" + repr(self.extra_kwargs["case_encoding_bias"]),
             "scaling_policy=" + self.codegen_compute_scaling(),
             "displacement_policy=" + self.codegen_compute_displacement(),
+            "table_level_policy=" + self.codegen_get_table_level(),
         )
 
     def get_optimized_kernel(self, ncpus=None):
@@ -619,6 +697,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
         table_entry_ids = kwargs.pop("table_entry_ids")
         root_extent = kwargs.pop("root_extent")
         table_root_extent = kwargs.pop("table_root_extent")
+        table_starting_level = kwargs.pop("table_starting_level")
         neighbor_source_boxes_starts = kwargs.pop("neighbor_source_boxes_starts")
         neighbor_source_boxes_lists = kwargs.pop("neighbor_source_boxes_lists")
         mode_coefs = kwargs.pop("mode_coefs")
@@ -626,6 +705,42 @@ class NearFieldFromCSR(NearFieldEvalBase):
         target_boxes = kwargs.pop("target_boxes")
         source_mode_ids = kwargs.pop("source_mode_ids")
         target_point_ids = kwargs.pop("target_point_ids")
+
+        if (
+            self.n_tables == 1
+            and not self.extra_kwargs.get("infer_kernel_scaling", False)
+            and "kernel_scaling_code" not in self.extra_kwargs
+        ):
+            if hasattr(neighbor_source_boxes_lists, "get"):
+                source_boxes_h = neighbor_source_boxes_lists.get(queue)
+            else:
+                source_boxes_h = np.asarray(neighbor_source_boxes_lists)
+
+            if source_boxes_h.size:
+                if hasattr(box_levels, "get"):
+                    box_levels_h = box_levels.get(queue)
+                else:
+                    box_levels_h = np.asarray(box_levels)
+
+                source_levels = box_levels_h[source_boxes_h]
+                min_source_level = int(np.min(source_levels))
+                max_source_level = int(np.max(source_levels))
+
+                if min_source_level != max_source_level:
+                    raise RuntimeError(
+                        "Single near-field table without scaling cannot be used "
+                        "with source boxes on multiple levels "
+                        f"({min_source_level}..{max_source_level}); build per-level "
+                        "tables or provide explicit scaling rules."
+                    )
+
+                if min_source_level != int(table_starting_level):
+                    raise RuntimeError(
+                        "Single near-field table level mismatch: source level "
+                        f"{min_source_level} but table_starting_level is "
+                        f"{int(table_starting_level)}. Build the table at the active "
+                        "source level or provide scaling rules."
+                    )
 
         integral_kernel_init_kargs = {
             field.name: getattr(self.integral_kernel, field.name)
@@ -698,6 +813,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
             target_point_ids=target_point_ids,
             n_target_particles=len(target_point_ids),
             table_root_extent=table_root_extent,
+            table_starting_level=table_starting_level,
             **extra_knl_args_from_init,
         )
 

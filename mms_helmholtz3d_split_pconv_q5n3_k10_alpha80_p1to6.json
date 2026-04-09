@@ -1,0 +1,70 @@
+{
+  "device": {
+    "name": "cpu-znver5-AMD EPYC 9335 32-Core Processor",
+    "platform": "Portable Computing Language"
+  },
+  "case": {
+    "q_order": 5,
+    "nlevels": 3,
+    "fmm_order": 20,
+    "k": 10.0,
+    "alpha": 80.0,
+    "n_points": 8000
+  },
+  "rows": [
+    {
+      "split_order": 1,
+      "rel_l2_exact": 0.006320560779358594,
+      "rel_linf_exact": 0.0045639985025508695,
+      "warm_solve_seconds": 7.320068806409836,
+      "rel_l2_vs_pmax": 0.001989739763221869,
+      "pct_improve_exact_vs_prev": null,
+      "pct_improve_vs_pmax_prev": null
+    },
+    {
+      "split_order": 2,
+      "rel_l2_exact": 0.0052542570774341425,
+      "rel_linf_exact": 0.0032351104740013206,
+      "warm_solve_seconds": 7.397689968347549,
+      "rel_l2_vs_pmax": 9.025888958866729e-05,
+      "pct_improve_exact_vs_prev": 16.870397092086183,
+      "pct_improve_vs_pmax_prev": 95.4637841964561
+    },
+    {
+      "split_order": 3,
+      "rel_l2_exact": 0.005240008729466541,
+      "rel_linf_exact": 0.0032085966954606086,
+      "warm_solve_seconds": 7.590962903574109,
+      "rel_l2_vs_pmax": 7.366975287055395e-05,
+      "pct_improve_exact_vs_prev": 0.27117721416401447,
+      "pct_improve_vs_pmax_prev": 18.37950454931836
+    },
+    {
+      "split_order": 4,
+      "rel_l2_exact": 0.005236272795791278,
+      "rel_linf_exact": 0.0032110130287307964,
+      "warm_solve_seconds": 7.431590034626424,
+      "rel_l2_vs_pmax": 6.4860547216493e-05,
+      "pct_improve_exact_vs_prev": 0.07129632540981813,
+      "pct_improve_vs_pmax_prev": 11.957696762658776
+    },
+    {
+      "split_order": 5,
+      "rel_l2_exact": 0.0052456943174154025,
+      "rel_linf_exact": 0.0032019432245559915,
+      "warm_solve_seconds": 7.527081620879471,
+      "rel_l2_vs_pmax": 0.00015579687703656472,
+      "pct_improve_exact_vs_prev": -0.1799280135232364,
+      "pct_improve_vs_pmax_prev": -140.2028408988632
+    },
+    {
+      "split_order": 6,
+      "rel_l2_exact": 0.0052424474829832,
+      "rel_linf_exact": 0.003206105147982559,
+      "warm_solve_seconds": 7.6921767285093665,
+      "rel_l2_vs_pmax": 0.0,
+      "pct_improve_exact_vs_prev": 0.06189522750921652,
+      "pct_improve_vs_pmax_prev": 100.0
+    }
+  ]
+}

@@ -226,6 +226,42 @@ def _add_obj_arrays(lhs, rhs):
     )
 
 
+def _coerce_obj_array_like(values, like, queue):
+    values_oa = _as_obj_array(values)
+    like_oa = _as_obj_array(like)
+
+    if len(values_oa) != len(like_oa):
+        raise ValueError("incompatible potential vector lengths")
+
+    coerced = []
+    for value_i, like_i in zip(values_oa, like_oa, strict=True):
+        if isinstance(like_i, cl.array.Array) and not isinstance(
+            value_i, cl.array.Array
+        ):
+            if (
+                isinstance(value_i, np.ndarray)
+                and value_i.dtype == object
+                and value_i.size
+                and hasattr(value_i.flat[0], "get")
+            ):
+                host_value = np.asarray(
+                    [entry.get(queue) for entry in value_i],
+                    dtype=like_i.dtype,
+                )
+                coerced.append(cl.array.to_device(queue, host_value))
+                continue
+
+            coerced.append(
+                cl.array.to_device(queue, np.asarray(value_i, dtype=like_i.dtype))
+            )
+        elif isinstance(value_i, cl.array.Array) and isinstance(like_i, np.ndarray):
+            coerced.append(value_i.get(queue))
+        else:
+            coerced.append(value_i)
+
+    return obj_array_1d(coerced)
+
+
 class _CombinedTimingFuture:
     def __init__(self, futures):
         self.futures = [future for future in futures if future is not None]
@@ -922,6 +958,26 @@ def drive_volume_fmm(
             )
 
         direct_timing_futures.append(timing_future)
+
+        if (
+            hasattr(wrangler, "helmholtz_split")
+            and getattr(wrangler, "helmholtz_split")
+            and hasattr(wrangler, "eval_direct_helmholtz_split_correction")
+        ):
+            correction, correction_timing_future = (
+                wrangler.eval_direct_helmholtz_split_correction(
+                    traversal.target_boxes,
+                    traversal.neighbor_source_boxes_starts,
+                    traversal.neighbor_source_boxes_lists,
+                    src_weights[idx_s],
+                    src_func=field,
+                )
+            )
+            if correction_timing_future is not None:
+                direct_timing_futures.append(correction_timing_future)
+            correction = _coerce_obj_array_like(correction, field_potentials, queue)
+            field_potentials = _add_obj_arrays(field_potentials, correction)
+
         if potentials is None:
             potentials = field_potentials
         else:
@@ -991,7 +1047,7 @@ def drive_volume_fmm(
     _debug_nan_status("mpole_result", mpole_result[0])
     recorder.add("eval_multipoles", timing_future)
 
-    potentials = potentials + mpole_result
+    potentials = _add_obj_arrays(potentials, mpole_result)
     _debug_nan_status("potentials_after_mpole_eval", potentials[0])
 
     # these potentials are called beta in [1]
@@ -1066,7 +1122,7 @@ def drive_volume_fmm(
 
     recorder.add("eval_locals", timing_future)
 
-    potentials = potentials + local_result
+    potentials = _add_obj_arrays(potentials, local_result)
     _debug_nan_status("potentials_after_local_eval", potentials[0])
 
     # }}}

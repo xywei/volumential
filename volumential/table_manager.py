@@ -996,6 +996,37 @@ class NearFieldInteractionTableManager:
         updated_kwargs["build_config"] = cached_build_config
         return updated_kwargs
 
+    def _runtime_build_config_for_table(self, table, request_kwargs):
+        if (
+            "build_config" in request_kwargs
+            and request_kwargs["build_config"] is not None
+        ):
+            return request_kwargs["build_config"]
+
+        build_config_json = getattr(table, "build_config_json", None)
+        if not isinstance(build_config_json, str):
+            return None
+
+        try:
+            return self._deserialize_build_config(build_config_json)
+        except Exception:
+            logger.warning("Ignoring malformed runtime build_config_json")
+            return None
+
+    def _attach_runtime_table_metadata(self, table, table_request, request_kwargs):
+        table._table_cache_filename = self.filename
+        table._table_cache_root_extent = float(self.root_extent)
+        table._table_cache_request_dim = int(table_request.dim)
+        table._table_cache_request_kernel_type = str(table_request.kernel_type)
+        table._table_cache_request_q_order = int(table_request.q_order)
+        table._table_cache_request_source_box_level = int(
+            table_request.source_box_level
+        )
+
+        build_config = self._runtime_build_config_for_table(table, request_kwargs)
+        if build_config is not None:
+            table._table_cache_build_config = build_config
+
     def _resolve_kernel_bundle(self, table_request, kwargs, require_sumpy_kernel):
         self._reject_removed_knl_func_kwarg(kwargs, "_resolve_kernel_bundle")
 
@@ -1223,6 +1254,8 @@ class NearFieldInteractionTableManager:
             "compute": self.last_compute_timings if is_recomputed else None,
             "load": self.last_load_timings if not is_recomputed else None,
         }
+
+        self._attach_runtime_table_metadata(table, table_request, request_kwargs)
 
         return table, is_recomputed
 
@@ -1765,6 +1798,9 @@ class NearFieldInteractionTableManager:
             "total_s": t_db_write_end - t_compute_start,
             "payload_bytes": len(payload_blob),
         }
+
+        table.source_box_level = table_request.source_box_level
+        table.kernel_type_cached = kernel_bundle.kernel_scale_type
 
         return table
 

@@ -45,11 +45,16 @@ quad_weights = np.array([])
 
 def _to_float_or_array(value):
     if isinstance(value, Number):
+        if np.iscomplexobj(value):
+            return complex(value)
         return float(value)
 
     arr = np.asarray(value)
     if arr.ndim == 0 or arr.size == 1:
-        return float(arr.reshape(-1)[0])
+        scalar = arr.reshape(-1)[0]
+        if np.iscomplexobj(scalar):
+            return complex(scalar)
+        return float(scalar)
 
     return arr
 
@@ -142,7 +147,7 @@ def _tensor_product_fixed_quad(
         x_grid, y_grid = np.meshgrid(x_mapped, y_mapped, indexing="xy")
         values = np.asarray(func(x_grid, y_grid, *args))
     else:
-        values = np.empty((order_o, order_i), dtype=np.float64)
+        values = np.empty((order_o, order_i), dtype=np.complex128)
         for iy, y_val in enumerate(y_mapped):
             for ix, x_val in enumerate(x_mapped):
                 values[iy, ix] = _to_float_or_array(func(x_val, y_val, *args))
@@ -910,7 +915,7 @@ def box_quad_duffy_radial_nd(
                     [rs[i] ** (dim - 1 - i) for i in range(dim - 1)]
                 )
                 val = np.asarray(func(*x, *args))
-                val = float(val.reshape(-1)[0])
+                val = _to_float_or_array(val.reshape(-1)[0])
                 prior = val * jac
                 if not np.isfinite(prior):
                     if radial_r < 1.0e-14:
@@ -930,13 +935,10 @@ def box_quad_duffy_radial_nd(
                         vec_func=False,
                         miniter=3,
                     )
-                    total += w_tail * float(radial_val)
+                    total += w_tail * radial_val
             else:
                 for tail_rs, w_tail in zip(regular_nodes, regular_weights):
-                    vals = np.array(
-                        [eval_at_r(rho, tail_rs) for rho in radial_nodes],
-                        dtype=np.float64,
-                    )
+                    vals = np.array([eval_at_r(rho, tail_rs) for rho in radial_nodes])
                     total += w_tail * np.dot(radial_weights, vals)
 
     return total, 0.0

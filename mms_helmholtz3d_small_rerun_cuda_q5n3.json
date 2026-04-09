@@ -1,0 +1,73 @@
+{
+  "backend": "nvidia-cuda-gpu",
+  "device": {
+    "name": "NVIDIA H200 NVL",
+    "platform": "NVIDIA CUDA"
+  },
+  "reduced_rerun_cases": [
+    {
+      "q_order": 5,
+      "nlevels": 3,
+      "n_points": 8000,
+      "fmm_order": 16,
+      "k": 14.0,
+      "alpha": 80.0,
+      "smooth_q": 7,
+      "monotone_nonincreasing": false,
+      "rows": [
+        {
+          "split_order": 1,
+          "rel_l2": 0.007054020306335109,
+          "warm_solve_seconds": 14.88750708848238
+        },
+        {
+          "split_order": 2,
+          "rel_l2": 0.007042597413690019,
+          "warm_solve_seconds": 24.161856850609183
+        },
+        {
+          "split_order": 3,
+          "rel_l2": 0.0070418454387994045,
+          "warm_solve_seconds": 33.51113537698984
+        },
+        {
+          "split_order": 4,
+          "rel_l2": 0.0070422495367536515,
+          "warm_solve_seconds": 43.63796297367662
+        }
+      ]
+    },
+    {
+      "q_order": 5,
+      "nlevels": 3,
+      "n_points": 8000,
+      "fmm_order": 16,
+      "k": 22.0,
+      "alpha": 80.0,
+      "smooth_q": 7,
+      "monotone_nonincreasing": false,
+      "rows": [
+        {
+          "split_order": 1,
+          "rel_l2": 0.009149227077687108,
+          "warm_solve_seconds": 14.81950087286532
+        },
+        {
+          "split_order": 2,
+          "rel_l2": 0.008879878841804122,
+          "warm_solve_seconds": 24.239518465474248
+        },
+        {
+          "split_order": 3,
+          "rel_l2": 0.008867050273452864,
+          "warm_solve_seconds": 33.62261073477566
+        },
+        {
+          "split_order": 4,
+          "rel_l2": 0.00886966408502756,
+          "warm_solve_seconds": 43.57228217087686
+        }
+      ]
+    }
+  ]
+}

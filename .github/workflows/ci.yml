@@ -350,5 +350,7 @@ jobs:
           uv pip install --system --editable ".[test]"
 
           python examples/laplace2d.py
+          python examples/helmholtz2d.py
+          python examples/helmholtz3d.py
 
 # vim: sw=2

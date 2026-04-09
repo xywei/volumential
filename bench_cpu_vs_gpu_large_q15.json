@@ -1,0 +1,18 @@
+[
+  {
+    "device_kind": "gpu",
+    "device_name": "NVIDIA H200 NVL",
+    "platform": "Portable Computing Language",
+    "n_points": 230400,
+    "solve_seconds": 509.3393913656473,
+    "rel_l2": 4.426559229862587e-08
+  },
+  {
+    "device_kind": "cpu",
+    "device_name": "cpu-znver5-AMD EPYC 9335 32-Core Processor",
+    "platform": "Portable Computing Language",
+    "n_points": 230400,
+    "solve_seconds": 13.064117196016014,
+    "rel_l2": 4.4265592225632494e-08
+  }
+]

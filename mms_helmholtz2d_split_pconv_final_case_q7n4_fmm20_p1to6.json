@@ -1,0 +1,59 @@
+{
+  "device": {
+    "name": "NVIDIA H200 NVL",
+    "platform": "Portable Computing Language"
+  },
+  "case": {
+    "q_order": 7,
+    "nlevels": 4,
+    "fmm_order": 20,
+    "k": 20.0,
+    "alpha": 120.0,
+    "n_points": 3136,
+    "smooth_quad_order": 7
+  },
+  "rows": [
+    {
+      "split_order": 1,
+      "rel_l2": 9.725554189459256e-05,
+      "rel_linf": 0.00011799714666578592,
+      "warm_solve_seconds": 0.5109117859974504,
+      "pct_improve_vs_prev": null
+    },
+    {
+      "split_order": 2,
+      "rel_l2": 1.09358448375958e-06,
+      "rel_linf": 1.6196557772052989e-06,
+      "warm_solve_seconds": 0.6333017591387033,
+      "pct_improve_vs_prev": 98.87555561106757
+    },
+    {
+      "split_order": 3,
+      "rel_l2": 7.819491579698283e-07,
+      "rel_linf": 8.686526613755083e-07,
+      "warm_solve_seconds": 0.7615547329187393,
+      "pct_improve_vs_prev": 28.496685022303538
+    },
+    {
+      "split_order": 4,
+      "rel_l2": 7.784374803734858e-07,
+      "rel_linf": 8.637838406083975e-07,
+      "warm_solve_seconds": 0.8889866396784782,
+      "pct_improve_vs_prev": 0.4490928291885169
+    },
+    {
+      "split_order": 5,
+      "rel_l2": 7.786645325077203e-07,
+      "rel_linf": 8.652430812555596e-07,
+      "warm_solve_seconds": 1.0140513768419623,
+      "pct_improve_vs_prev": -0.029167677553958236
+    },
+    {
+      "split_order": 6,
+      "rel_l2": 7.783663394524313e-07,
+      "rel_linf": 8.639786190257585e-07,
+      "warm_solve_seconds": 1.6253207474946976,
+      "pct_improve_vs_prev": 0.038295445964207524
+    }
+  ]
+}

@@ -426,6 +426,11 @@ class NearFieldInteractionTable:
 
     # }}} End constructor
 
+    def _get_geom_dtype(self):
+        if np.issubdtype(np.dtype(self.dtype), np.complexfloating):
+            return np.float64
+        return self.dtype
+
     # {{{ encode to table index
 
     def get_entry_index(self, source_mode_index, target_point_index, case_id):
@@ -843,13 +848,14 @@ class NearFieldInteractionTable:
         return (entry_id, integral)
 
     def _get_barycentric_data(self):
+        geom_dtype = self._get_geom_dtype()
         xi = np.array([p[self.dim - 1] for p in self.q_points[: self.quad_order]])
-        bw = np.ones(self.quad_order, dtype=self.dtype)
+        bw = np.ones(self.quad_order, dtype=geom_dtype)
         for i in range(self.quad_order):
             for j in range(self.quad_order):
                 if i != j:
                     bw[i] /= xi[i] - xi[j]
-        return xi.astype(self.dtype), bw.astype(self.dtype)
+        return xi.astype(geom_dtype), bw.astype(geom_dtype)
 
     @memoize_method
     def _get_invariant_entry_info(self):
@@ -934,25 +940,29 @@ class NearFieldInteractionTable:
 
     @memoize_method
     def _get_case_target_points(self):
+        geom_dtype = self._get_geom_dtype()
         target_points = np.empty(
-            (self.dim, self.n_cases, self.n_q_points), dtype=self.dtype
+            (self.dim, self.n_cases, self.n_q_points), dtype=geom_dtype
         )
 
-        q_offsets = (self.q_points - self.center).T
+        q_offsets = (
+            np.asarray(self.q_points, dtype=geom_dtype)
+            - np.asarray(self.center, dtype=geom_dtype)
+        ).T
         for case_index in range(self.n_cases):
             case_vec = np.asarray(
-                self.interaction_case_vecs[case_index], dtype=self.dtype
+                self.interaction_case_vecs[case_index], dtype=geom_dtype
             )
             vec = case_vec / 4.0 * self.source_box_extent
             new_cntr = (
-                np.ones(self.dim, dtype=self.dtype) * (0.5 * self.source_box_extent)
+                np.ones(self.dim, dtype=geom_dtype) * (0.5 * self.source_box_extent)
                 + vec
             )
 
             if int(np.max(np.abs(case_vec))) == 0:
-                new_size = self.dtype(1)
+                new_size = geom_dtype(1)
             else:
-                new_size = self.dtype(np.max(np.abs(case_vec) - 2.0) / 2.0)
+                new_size = geom_dtype(np.max(np.abs(case_vec) - 2.0) / 2.0)
 
             target_points[:, case_index, :] = (
                 new_cntr.reshape(self.dim, 1) + new_size * q_offsets
@@ -1013,6 +1023,8 @@ class NearFieldInteractionTable:
         from sumpy.codegen import to_loopy_insns
         from sumpy.symbolic import SympyToPymbolicMapper, make_sym_vector
 
+        geom_dtype = self._get_geom_dtype()
+
         dvec = make_sym_vector("d", self.dim)
         sac = SymbolicAssignmentCollection()
         result_name = sac.assign_unique(
@@ -1055,7 +1067,7 @@ class NearFieldInteractionTable:
         len_terms = []
         dist_terms = []
         basis_terms = []
-        interp_eps = 8 * np.finfo(self.dtype).eps
+        interp_eps = 8 * np.finfo(np.dtype(geom_dtype)).eps
         for iaxis in range(self.dim):
             len_name = f"len{iaxis}"
             q_name = f"q{iaxis}"
@@ -1128,14 +1140,14 @@ class NearFieldInteractionTable:
             ],
             [
                 lp.ValueArg("dim,n_entries,n_nodes,q_order", np.int32),
-                lp.ValueArg("source_box_extent", self.dtype),
-                lp.GlobalArg("target_points", self.dtype, "dim,n_entries"),
-                lp.GlobalArg("decomposition_targets", self.dtype, "dim,n_entries"),
-                lp.GlobalArg("node_u", self.dtype, "dim,n_nodes"),
-                lp.GlobalArg("node_sign", self.dtype, "dim,n_nodes"),
-                lp.GlobalArg("node_jac_base", self.dtype, "n_nodes"),
-                lp.GlobalArg("interp_nodes", self.dtype, "q_order"),
-                lp.GlobalArg("bary_w", self.dtype, "q_order"),
+                lp.ValueArg("source_box_extent", geom_dtype),
+                lp.GlobalArg("target_points", geom_dtype, "dim,n_entries"),
+                lp.GlobalArg("decomposition_targets", geom_dtype, "dim,n_entries"),
+                lp.GlobalArg("node_u", geom_dtype, "dim,n_nodes"),
+                lp.GlobalArg("node_sign", geom_dtype, "dim,n_nodes"),
+                lp.GlobalArg("node_jac_base", geom_dtype, "n_nodes"),
+                lp.GlobalArg("interp_nodes", geom_dtype, "q_order"),
+                lp.GlobalArg("bary_w", geom_dtype, "q_order"),
                 lp.GlobalArg("mode_i", np.int32, "dim,n_entries"),
                 lp.GlobalArg("result", self.dtype, "n_entries", is_output=True),
                 lp.TemporaryVariable("knl_scaling", self.dtype),
@@ -1174,21 +1186,23 @@ class NearFieldInteractionTable:
     ):
         from itertools import permutations, product
 
+        geom_dtype = self._get_geom_dtype()
+
         if self.dim == 1:
-            regular_nodes = np.zeros((1, 0), dtype=self.dtype)
-            regular_weights = np.ones(1, dtype=self.dtype)
+            regular_nodes = np.zeros((1, 0), dtype=geom_dtype)
+            regular_weights = np.ones(1, dtype=geom_dtype)
         else:
             regular_nodes, regular_weights = squad._duffy_regular_nodes_weights(
                 self.dim - 1, regular_quad_order
             )
-            regular_nodes = np.asarray(regular_nodes, dtype=self.dtype)
-            regular_weights = np.asarray(regular_weights, dtype=self.dtype)
+            regular_nodes = np.asarray(regular_nodes, dtype=geom_dtype)
+            regular_weights = np.asarray(regular_weights, dtype=geom_dtype)
 
         rho_nodes, rho_weights = squad._duffy_radial_nodes_weights(
             radial_rule, radial_quad_order, mp_dps
         )
-        rho_nodes = np.asarray(rho_nodes, dtype=self.dtype)
-        rho_weights = np.asarray(rho_weights, dtype=self.dtype)
+        rho_nodes = np.asarray(rho_nodes, dtype=geom_dtype)
+        rho_weights = np.asarray(rho_weights, dtype=geom_dtype)
 
         sign_vectors = list(product([-1.0, 1.0], repeat=self.dim))
         axis_permutations = list(permutations(range(self.dim)))
@@ -1200,23 +1214,23 @@ class NearFieldInteractionTable:
             * len(rho_weights)
         )
 
-        node_u = np.empty((self.dim, n_nodes), dtype=self.dtype)
-        node_sign = np.empty((self.dim, n_nodes), dtype=self.dtype)
-        node_jac_base = np.empty(n_nodes, dtype=self.dtype)
+        node_u = np.empty((self.dim, n_nodes), dtype=geom_dtype)
+        node_sign = np.empty((self.dim, n_nodes), dtype=geom_dtype)
+        node_jac_base = np.empty(n_nodes, dtype=geom_dtype)
 
         inode = 0
         for signs in sign_vectors:
-            sign_arr = np.asarray(signs, dtype=self.dtype)
+            sign_arr = np.asarray(signs, dtype=geom_dtype)
             for perm in axis_permutations:
                 for ireg, w_tail in enumerate(regular_weights):
                     tail_rs = regular_nodes[ireg] if self.dim > 1 else np.array([])
                     for rho, w_rho in zip(rho_nodes, rho_weights):
-                        rs = np.empty(self.dim, dtype=self.dtype)
+                        rs = np.empty(self.dim, dtype=geom_dtype)
                         rs[0] = rho
                         if self.dim > 1:
                             rs[1:] = tail_rs
 
-                        u = np.empty(self.dim, dtype=self.dtype)
+                        u = np.empty(self.dim, dtype=geom_dtype)
                         cumulative = 1.0
                         for i, axis in enumerate(perm):
                             cumulative *= rs[i]
@@ -1287,6 +1301,7 @@ class NearFieldInteractionTable:
             radial_quad_order,
             mp_dps,
         )
+        geom_dtype = self._get_geom_dtype()
         n_nodes = node_data["n_nodes"]
 
         all_target_points = self._get_case_target_points()
@@ -1300,10 +1315,10 @@ class NearFieldInteractionTable:
         ]
 
         target_points = np.ascontiguousarray(
-            all_target_points[:, case_indices, target_point_indices], dtype=self.dtype
+            all_target_points[:, case_indices, target_point_indices], dtype=geom_dtype
         )
         decomposition_targets = np.ascontiguousarray(
-            np.clip(target_points, 0.0, self.source_box_extent), dtype=self.dtype
+            np.clip(target_points, 0.0, self.source_box_extent), dtype=geom_dtype
         )
 
         xi, bw = self._get_barycentric_data()
@@ -1322,42 +1337,42 @@ class NearFieldInteractionTable:
             import pyopencl.array as cla
 
             target_points_arg = cla.to_device(
-                queue, np.ascontiguousarray(target_points, dtype=self.dtype)
+                queue, np.ascontiguousarray(target_points, dtype=geom_dtype)
             )
             decomposition_targets_arg = cla.to_device(
-                queue, np.ascontiguousarray(decomposition_targets, dtype=self.dtype)
+                queue, np.ascontiguousarray(decomposition_targets, dtype=geom_dtype)
             )
             node_u_arg = cla.to_device(
-                queue, np.ascontiguousarray(node_data["node_u"], dtype=self.dtype)
+                queue, np.ascontiguousarray(node_data["node_u"], dtype=geom_dtype)
             )
             node_sign_arg = cla.to_device(
-                queue, np.ascontiguousarray(node_data["node_sign"], dtype=self.dtype)
+                queue, np.ascontiguousarray(node_data["node_sign"], dtype=geom_dtype)
             )
             node_jac_base_arg = cla.to_device(
                 queue,
-                np.ascontiguousarray(node_data["node_jac_base"], dtype=self.dtype),
+                np.ascontiguousarray(node_data["node_jac_base"], dtype=geom_dtype),
             )
-            xi_arg = cla.to_device(queue, np.ascontiguousarray(xi, dtype=self.dtype))
-            bw_arg = cla.to_device(queue, np.ascontiguousarray(bw, dtype=self.dtype))
+            xi_arg = cla.to_device(queue, np.ascontiguousarray(xi, dtype=geom_dtype))
+            bw_arg = cla.to_device(queue, np.ascontiguousarray(bw, dtype=geom_dtype))
             mode_i_arg = cla.to_device(queue, mode_i)
         else:
-            target_points_arg = np.ascontiguousarray(target_points, dtype=self.dtype)
+            target_points_arg = np.ascontiguousarray(target_points, dtype=geom_dtype)
             decomposition_targets_arg = np.ascontiguousarray(
-                decomposition_targets, dtype=self.dtype
+                decomposition_targets, dtype=geom_dtype
             )
-            node_u_arg = np.ascontiguousarray(node_data["node_u"], dtype=self.dtype)
+            node_u_arg = np.ascontiguousarray(node_data["node_u"], dtype=geom_dtype)
             node_sign_arg = np.ascontiguousarray(
-                node_data["node_sign"], dtype=self.dtype
+                node_data["node_sign"], dtype=geom_dtype
             )
             node_jac_base_arg = np.ascontiguousarray(
-                node_data["node_jac_base"], dtype=self.dtype
+                node_data["node_jac_base"], dtype=geom_dtype
             )
-            xi_arg = np.ascontiguousarray(xi, dtype=self.dtype)
-            bw_arg = np.ascontiguousarray(bw, dtype=self.dtype)
+            xi_arg = np.ascontiguousarray(xi, dtype=geom_dtype)
+            bw_arg = np.ascontiguousarray(bw, dtype=geom_dtype)
             mode_i_arg = mode_i
 
         common_kwargs = dict(
-            source_box_extent=self.dtype(self.source_box_extent),
+            source_box_extent=geom_dtype(self.source_box_extent),
             target_points=target_points_arg,
             decomposition_targets=decomposition_targets_arg,
             node_u=node_u_arg,

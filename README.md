@@ -11,8 +11,9 @@ efficiently via Fast Multipole Method.
 - `volumential/`: library source
 - `test/`: pytest suite
 - `examples/`: maintained end-to-end examples (`laplace2d.py`, `laplace3d.py`,
-  `poisson3d.py`, `poisson3d_volumential.ipynb`,
-  `poisson2d_pytential_volumential.ipynb`)
+  `helmholtz2d.py`, `helmholtz3d.py`, `poisson3d.py`,
+  `poisson3d_volumential.ipynb`, `poisson2d_pytential_volumential.ipynb`,
+  `helmholtz3d_volumential.ipynb`)
 - `doc/`: Sphinx documentation
 - `DEVELOPMENT.md`: local/remote development environment guide
 
@@ -27,6 +28,8 @@ Install an OpenCL runtime first (for example, in conda:
 ```bash
 uv sync --active --extra test
 uv run python examples/laplace2d.py
+uv run python examples/helmholtz2d.py
+uv run python examples/helmholtz3d.py
 uv run python examples/poisson3d.py
 ```
 

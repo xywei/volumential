@@ -1,0 +1,121 @@
+{
+  "device": {
+    "name": "cpu-znver5-AMD EPYC 9335 32-Core Processor",
+    "platform": "Portable Computing Language"
+  },
+  "fixed": {
+    "q_order": 5,
+    "nlevels": 4,
+    "fmm_order": 20
+  },
+  "results": [
+    {
+      "k": 6.0,
+      "alpha": 80.0,
+      "n_points": 64000,
+      "rows": [
+        {
+          "split_order": 1,
+          "rel_l2": 5.88348680944501e-05,
+          "rel_linf": 7.156508946154845e-05,
+          "warm_solve_seconds": 59.312744717113674
+        },
+        {
+          "split_order": 2,
+          "rel_l2": 2.8371935658225266e-05,
+          "rel_linf": 3.449479834882995e-05,
+          "warm_solve_seconds": 59.80970815103501
+        },
+        {
+          "split_order": 3,
+          "rel_l2": 2.8386988268646946e-05,
+          "rel_linf": 3.453417066630311e-05,
+          "warm_solve_seconds": 59.73576607648283
+        }
+      ],
+      "pct_improve_p1_to_p2": 51.77700473012262,
+      "pct_improve_p2_to_p3": -0.053054576899539026
+    },
+    {
+      "k": 10.0,
+      "alpha": 80.0,
+      "n_points": 64000,
+      "rows": [
+        {
+          "split_order": 1,
+          "rel_l2": 0.00014302568198345438,
+          "rel_linf": 0.00021359781598177262,
+          "warm_solve_seconds": 58.737908280454576
+        },
+        {
+          "split_order": 2,
+          "rel_l2": 2.871423267842553e-05,
+          "rel_linf": 3.351973381992054e-05,
+          "warm_solve_seconds": 58.817588083446026
+        },
+        {
+          "split_order": 3,
+          "rel_l2": 2.8803190302269208e-05,
+          "rel_linf": 3.378474271176763e-05,
+          "warm_solve_seconds": 59.6009340910241
+        }
+      ],
+      "pct_improve_p1_to_p2": 79.92372259287862,
+      "pct_improve_p2_to_p3": -0.30980324231514295
+    },
+    {
+      "k": 10.0,
+      "alpha": 120.0,
+      "n_points": 64000,
+      "rows": [
+        {
+          "split_order": 1,
+          "rel_l2": 0.00022918615189608285,
+          "rel_linf": 0.0003089546114003721,
+          "warm_solve_seconds": 57.80279301479459
+        },
+        {
+          "split_order": 2,
+          "rel_l2": 0.00011515415680700765,
+          "rel_linf": 0.0001275855027598117,
+          "warm_solve_seconds": 58.076560092158616
+        },
+        {
+          "split_order": 3,
+          "rel_l2": 0.0001151086041925374,
+          "rel_linf": 0.0001273728347841582,
+          "warm_solve_seconds": 57.716480642557144
+        }
+      ],
+      "pct_improve_p1_to_p2": 49.75518553179399,
+      "pct_improve_p2_to_p3": 0.03955794192179319
+    },
+    {
+      "k": 14.0,
+      "alpha": 80.0,
+      "n_points": 64000,
+      "rows": [
+        {
+          "split_order": 1,
+          "rel_l2": 0.00024079455992655237,
+          "rel_linf": 0.0003136023919364793,
+          "warm_solve_seconds": 58.66051914449781
+        },
+        {
+          "split_order": 2,
+          "rel_l2": 3.023975621643517e-05,
+          "rel_linf": 3.117550619850791e-05,
+          "warm_solve_seconds": 57.52040235698223
+        },
+        {
+          "split_order": 3,
+          "rel_l2": 3.0449981510321036e-05,
+          "rel_linf": 3.196780556096354e-05,
+          "warm_solve_seconds": 57.18238411471248
+        }
+      ],
+      "pct_improve_p1_to_p2": 87.44167799070753,
+      "pct_improve_p2_to_p3": -0.6951950683107986
+    }
+  ]
+}

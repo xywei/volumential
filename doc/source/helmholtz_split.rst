@@ -1,0 +1,216 @@
+Helmholtz Split Formulation
+===========================
+
+This page documents the Helmholtz near-field split used in
+:mod:`volumential.expansion_wrangler_fpnd`.
+
+The split applies to list1 (neighbor-box) interactions only.
+Far-field FMM interactions continue to use the Helmholtz kernel directly.
+
+Decomposition
+-------------
+
+For neighbor interactions, we write
+
+.. math::
+
+    G_k(r) = G_0(r) + S_p(r) + R_p(r),
+
+where:
+
+- :math:`G_0` is the Laplace kernel term, handled by standard Laplace
+  near-field tables.
+- :math:`S_p` is a finite sum of *non-smooth* split terms, handled by
+  additional prebuilt near-field term tables.
+- :math:`R_p` is the analytic remainder, evaluated online with P2P.
+
+Hence the neighbor potential contribution is
+
+.. math::
+
+    \mathcal{N}_k[\rho]
+    = \mathcal{N}_{0,\mathrm{table}}[\rho]
+    + \mathcal{N}_{S_p,\mathrm{table}}[\rho]
+    + \mathcal{N}_{R_p,\mathrm{p2p}}[\rho].
+
+2D Expansion
+------------
+
+With
+
+.. math::
+
+    G_k(r) = \frac{i}{4} H_0^{(1)}(k r),
+    \qquad
+    G_0(r) = -\frac{1}{2\pi}\log r,
+
+the difference has the local expansion
+
+.. math::
+
+    G_k(r) - G_0(r)
+    = c_0(k)
+    + \sum_{n=1}^{\infty}\left[a_n(k) r^{2n}\log r + b_n(k) r^{2n}\right],
+
+with
+
+.. math::
+
+    c_0(k) = \frac{i}{4} - \frac{\log(k/2)+\gamma}{2\pi},
+
+.. math::
+
+    a_n(k)
+    = -\frac{1}{2\pi}
+      \frac{(-1)^n}{(n!)^2}\left(\frac{k^2}{4}\right)^n,
+
+.. math::
+
+    b_n(k)
+    = \frac{(-1)^n}{(n!)^2}\left(\frac{k^2}{4}\right)^n
+      \left[
+        \frac{H_n - (\log(k/2)+\gamma)}{2\pi} + \frac{i}{4}
+      \right].
+
+Split order :math:`p` means:
+
+- pretabulate non-smooth terms :math:`a_n r^{2n}\log r`,
+  :math:`n=1,\dots,p-1`;
+- keep all smooth polynomial terms :math:`c_0 + \sum b_n r^{2n}` in the online
+  remainder;
+- keep higher non-smooth terms :math:`a_n r^{2n}\log r` for :math:`n\ge p`
+  in the online remainder.
+
+So for 2D:
+
+- ``split_order=1`` extracts no non-smooth extra terms;
+- ``split_order=2`` extracts :math:`r^2\log r`;
+- ``split_order=3`` extracts :math:`r^2\log r` and :math:`r^4\log r`, etc.
+
+2D Empirical Notes
+------------------
+
+Manufactured-solution sweeps (Gaussian exact solution) in 2D show:
+
+- ``p=2`` usually gives the dominant gain over ``p=1``;
+- ``p=3`` and ``p=4`` can provide additional reduction, but the benefit can be
+  small once other error sources dominate;
+- for tuned cases, ``m=q`` works with higher split orders and reaches high
+  accuracy without requiring ``m=q+1``.
+
+Representative tuned run (PoCL GPU, ``q=7``, ``nlevels=4``, ``fmm=20``,
+``k=20``, ``alpha=120``, ``m=q=7``):
+
+=================  ========================
+split order ``p``  relative L2 error
+=================  ========================
+1                  ``9.725554e-05``
+2                  ``1.093584e-06``
+3                  ``7.819492e-07``
+4                  ``7.784375e-07``
+5                  ``7.786645e-07``
+6                  ``7.783663e-07``
+=================  ========================
+
+High-accuracy run (PoCL CPU, ``q=15``, ``nlevels=6``, ``fmm=21``, ``k=8``,
+``alpha=120``, ``m=q=15``):
+
+=================  ========================
+split order ``p``  relative L2 error
+=================  ========================
+1                  ``3.235351e-09``
+2                  ``1.135107e-11``
+3                  ``1.135099e-11``
+4                  ``1.135099e-11``
+5                  ``1.135099e-11``
+=================  ========================
+
+In this regime, ``p=2`` captures most of the split truncation benefit and
+``p>=3`` is near saturation for total error.
+
+3D Expansion
+------------
+
+With
+
+.. math::
+
+    G_k(r) = \frac{e^{ikr}}{4\pi r},
+    \qquad
+    G_0(r) = \frac{1}{4\pi r},
+
+we have
+
+.. math::
+
+    G_k(r)-G_0(r)
+    = \sum_{n=1}^{\infty} c_n(k) r^{n-1},
+    \qquad
+    c_n(k)=\frac{(ik)^n}{4\pi\,n!}.
+
+Terms :math:`r^{2j-1}` are the non-smooth radial powers at the origin.
+Split order :math:`p` extracts
+
+.. math::
+
+    \sum_{j=1}^{p-1} \frac{(ik)^{2j}}{4\pi\,(2j)!} r^{2j-1}
+
+into prebuilt split tables, while the online remainder keeps the constant,
+even powers, and higher odd powers.
+
+Implementation Notes
+--------------------
+
+- ``helmholtz_split_smooth_quad_order`` defaults to ``m=q``.
+- split-order-1 now defaults to the analytic series-remainder kernel path,
+  avoiding runtime Helmholtz-minus-Laplace singular subtraction.
+- the historical split-order-1 subtraction path is still available for
+  internal checks via
+  ``helmholtz_split_order1_legacy_subtraction=True``.
+- smooth-node overlap checks (``m>q`` with shared Gauss nodes) are enforced for
+  the legacy subtraction path. The default series-remainder path allows overlap.
+- in 2D, removable :math:`r^{2n}\log r` singularities in the remainder are
+  guarded in-kernel at very small :math:`r`.
+- split-term tables are managed under the same
+  :class:`volumential.table_manager.NearFieldInteractionTableManager` umbrella
+  cache as the Laplace near-field tables.
+- for 2D :math:`r^{2n}\log r` split terms, a single reference table is
+  scaled across levels. The non-homogeneous scaling remainder
+
+  .. math::
+
+      (\log \alpha_\ell) r^{2n}
+
+  is added online by folding :math:`\log \alpha_\ell` into source strengths,
+  where :math:`\alpha_\ell = h_\ell / h_{\mathrm{ref}}` and :math:`h_\ell` is
+  the source-box extent.
+- when self interactions are excluded in correction P2P, the finite
+  :math:`r\to0` diagonal limit of :math:`G_k-G_0` is added back analytically.
+
+3D Empirical Notes
+------------------
+
+Manufactured-solution sweeps (Gaussian exact solution) in 3D show a consistent
+pattern:
+
+- increasing split order from ``p=1`` to ``p=2`` yields a strong reduction in
+  total error;
+- improvements from ``p>=3`` are usually much smaller and can be masked by
+  non-split errors (FMM/truncation/interpolation/table-accuracy floors);
+- with tighter table build settings, small ``p=2 -> p=3 -> p=4`` improvements
+  become visible in total error.
+
+Representative run (PoCL CPU, ``q=7``, ``nlevels=4``, ``fmm=20``,
+``k=14``, ``alpha=80``, ``smooth_q=11``):
+
+=================  ========================
+split order ``p``  relative L2 error
+=================  ========================
+1                  ``5.545779e-06``
+2                  ``2.424334e-06``
+3                  ``2.423980e-06``
+4                  ``2.423978e-06``
+=================  ========================
+
+To reproduce and plot 3D split-order convergence, use
+``examples/helmholtz3d_split_p_convergence.py``.
