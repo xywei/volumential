@@ -1101,7 +1101,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         if auto_mode and self.helmholtz_split:
             max_rho_imag = float(auto_cfg.get("rho_imag_split_max", 8.0))
             disable_outside = bool(
-                auto_cfg.get("disable_split_if_outside_coverage", True)
+                auto_cfg.get("disable_split_if_outside_coverage", False)
             )
             if (
                 disable_outside
@@ -1114,6 +1114,13 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
                     max_rho_imag,
                 )
                 self.helmholtz_split = False
+            elif getattr(self, "_split_auto_rho_imag", 0.0) > max_rho_imag:
+                logger.warning(
+                    "Imaginary rho %.3g exceeds configured split coverage %.3g; "
+                    "continuing with split at configured max order",
+                    self._split_auto_rho_imag,
+                    max_rho_imag,
+                )
 
         self.helmholtz_split_order1_legacy_subtraction = bool(
             helmholtz_split_order1_legacy_subtraction

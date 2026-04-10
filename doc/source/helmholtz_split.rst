@@ -223,6 +223,10 @@ Supported planner config keys:
 - ``disable_split_if_outside_coverage``: if true, auto mode falls back to
   direct (non-split) near-field evaluation when :math:`|\Im(k)|h` exceeds
   ``rho_imag_split_max``
+
+By default, ``disable_split_if_outside_coverage`` is ``False``. In that mode,
+auto selection keeps split enabled, clamps to the highest configured split
+order, and emits warnings when :math:`|\Im(k)|h` exceeds configured coverage.
 - ``smooth_quad_order_min``: floor for smooth quadrature order
 - ``smooth_quad_order_per_order``: increment per additional split order above 1
 
