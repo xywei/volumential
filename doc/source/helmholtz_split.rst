@@ -192,17 +192,13 @@ For Yukawa split mode, the planner uses the internal mapping
 
 Default planner policy:
 
-- thresholds: ``(0.5, 1.5, 3.0)``
-- split orders: ``(1, 2, 3, 4)``
+- ``order_min=1``
+- ``order_max=8``
+- geometric rho ladder with ``rho_base=0.5``
 
-meaning:
-
-- :math:`\rho_{\max} \le 0.5 \Rightarrow p=1`
-- :math:`0.5 < \rho_{\max} \le 1.5 \Rightarrow p=2`
-- :math:`1.5 < \rho_{\max} \le 3.0 \Rightarrow p=3`
-- :math:`\rho_{\max} > 3.0 \Rightarrow p=4`
-
-These defaults are intentionally conservative and can be tuned per workload.
+This yields thresholds like ``(0.5, 1, 2, 4, 8, 16, 32)`` and candidate
+orders ``1..8``. This default is meant to cover wider :math:`k h` regimes than
+a short fixed threshold list.
 
 Runtime Configuration Knobs
 ---------------------------
@@ -217,6 +213,7 @@ Supported planner config keys:
 - ``rho_thresholds``: sequence of increasing boundaries
 - ``orders``: sequence of selected orders (length = ``len(rho_thresholds)+1``)
 - ``order_min`` / ``order_max``: optional clamps
+- ``rho_base``: base value for the default geometric threshold ladder
 - ``smooth_quad_order_min``: floor for smooth quadrature order
 - ``smooth_quad_order_per_order``: increment per additional split order above 1
 

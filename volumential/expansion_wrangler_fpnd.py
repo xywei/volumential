@@ -1941,14 +1941,37 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         return k_abs * h_max
 
     def _choose_auto_helmholtz_split_order(self, auto_cfg):
-        thresholds = auto_cfg.get("rho_thresholds", (0.5, 1.5, 3.0))
-        orders = auto_cfg.get("orders", (1, 2, 3, 4))
+        order_min = int(auto_cfg.get("order_min", 1))
+        order_max = int(auto_cfg.get("order_max", 8))
+        if order_max < order_min:
+            raise ValueError("order_max must be >= order_min")
+
+        if "rho_thresholds" in auto_cfg or "orders" in auto_cfg:
+            thresholds = auto_cfg.get("rho_thresholds", (0.5, 1.5, 3.0))
+            orders = auto_cfg.get("orders", (1, 2, 3, 4))
+        else:
+            # Default to a geometric ladder in rho to cover wide k*h ranges.
+            # Example with order_max=8: thresholds = (0.5, 1, 2, 4, 8, 16, 32).
+            rho0 = float(auto_cfg.get("rho_base", 0.5))
+            if rho0 <= 0.0:
+                raise ValueError("rho_base must be positive")
+            count = max(0, order_max - order_min)
+            thresholds = tuple(rho0 * (2.0**j) for j in range(count))
+            orders = tuple(range(order_min, order_max + 1))
+
         rho_max = self._compute_split_rho_max()
         selected = _select_split_order_from_rho(rho_max, thresholds, orders)
-
-        order_min = int(auto_cfg.get("order_min", 1))
-        order_max = int(auto_cfg.get("order_max", selected))
         selected = max(order_min, min(order_max, selected))
+
+        if len(thresholds) > 0 and rho_max > float(thresholds[-1]):
+            logger.warning(
+                "rho_max=%.3g exceeds planner threshold coverage (max %.3g); "
+                "clamping split order to %d",
+                rho_max,
+                float(thresholds[-1]),
+                selected,
+            )
+
         logger.info(
             "Auto-selected helmholtz_split_order=%d (rho_max=%.3g)",
             selected,
