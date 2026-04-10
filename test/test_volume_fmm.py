@@ -2560,6 +2560,19 @@ def test_volume_fmm_2d_yukawa_complex_lambda_rejected(tmp_path):
         )
 
 
+def test_select_split_order_from_rho_default_boundaries():
+    from volumential.expansion_wrangler_fpnd import _select_split_order_from_rho
+
+    thresholds = (0.5, 1.5, 3.0)
+    orders = (1, 2, 3, 4)
+
+    assert _select_split_order_from_rho(0.1, thresholds, orders) == 1
+    assert _select_split_order_from_rho(0.5, thresholds, orders) == 1
+    assert _select_split_order_from_rho(0.7, thresholds, orders) == 2
+    assert _select_split_order_from_rho(2.0, thresholds, orders) == 3
+    assert _select_split_order_from_rho(9.0, thresholds, orders) == 4
+
+
 def test_volume_fmm_2d_helmholtz_split_order1_remainder_matches_legacy(tmp_path):
     ctx = _create_non_intel_opencl_context_or_skip()
     queue = cl.CommandQueue(ctx)

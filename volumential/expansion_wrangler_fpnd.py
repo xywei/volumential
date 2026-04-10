@@ -343,6 +343,17 @@ def _format_helmholtz_split_term_key(term_key):
     return f"power_log:{power}"
 
 
+def _select_split_order_from_rho(rho_max, thresholds, orders):
+    if len(orders) != len(thresholds) + 1:
+        raise ValueError("orders must have one more element than thresholds")
+
+    rho = float(rho_max)
+    for idx, threshold in enumerate(thresholds):
+        if rho <= float(threshold):
+            return int(orders[idx])
+    return int(orders[-1])
+
+
 def _compute_box_local_ids(queue, tree, n_q_points):
     if not getattr(tree, "sources_are_targets", False):
         raise ValueError(
@@ -828,6 +839,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         helmholtz_split=False,
         helmholtz_split_order=1,
         helmholtz_split_smooth_quad_order=None,
+        helmholtz_split_auto_config=None,
         helmholtz_split_term_tables=None,
         helmholtz_split_order1_legacy_subtraction=False,
         translation_classes_data=None,
@@ -1032,7 +1044,20 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             list1_extra_kwargs = {}
 
         self.helmholtz_split = bool(helmholtz_split)
-        self.helmholtz_split_order = int(helmholtz_split_order)
+        auto_cfg = dict(helmholtz_split_auto_config or {})
+        auto_enabled = bool(auto_cfg.get("enabled", False))
+        auto_mode = auto_enabled or (
+            isinstance(helmholtz_split_order, str)
+            and helmholtz_split_order.strip().lower() == "auto"
+        )
+
+        if auto_mode and self.helmholtz_split:
+            self.helmholtz_split_order = self._choose_auto_helmholtz_split_order(
+                auto_cfg
+            )
+        else:
+            self.helmholtz_split_order = int(helmholtz_split_order)
+
         if self.helmholtz_split_order < 1:
             raise ValueError("helmholtz_split_order must be >= 1")
 
@@ -1110,7 +1135,16 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             self.helmholtz_split_term_tables[normalized_term_key] = tables
 
         if helmholtz_split_smooth_quad_order is None and self.helmholtz_split:
-            helmholtz_split_smooth_quad_order = self.quad_order
+            if auto_mode:
+                min_smooth = int(auto_cfg.get("smooth_quad_order_min", self.quad_order))
+                add_per_order = int(auto_cfg.get("smooth_quad_order_per_order", 1))
+                helmholtz_split_smooth_quad_order = max(
+                    min_smooth,
+                    self.quad_order
+                    + max(0, self.helmholtz_split_order - 1) * add_per_order,
+                )
+            else:
+                helmholtz_split_smooth_quad_order = self.quad_order
 
         if helmholtz_split_smooth_quad_order is None:
             self.helmholtz_split_smooth_quad_order = None
@@ -1886,6 +1920,41 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             return np.complex128(1j * param)
 
         raise RuntimeError("split mode supports only Helmholtz/Yukawa kernels")
+
+    def _compute_split_rho_max(self):
+        if len(self.tree_indep.target_kernels) != 1:
+            raise RuntimeError("split rho estimation expects one target kernel")
+
+        out_knl = self.tree_indep.target_kernels[0]
+        base_knl = out_knl.get_base_kernel()
+        k = self._split_wave_number(base_knl, what="split auto planning")
+        k_abs = float(abs(k))
+
+        box_source_counts = self.tree.box_source_counts_nonchild.get(self.queue)
+        box_levels = self.tree.box_levels.get(self.queue)
+        active = np.where(box_source_counts > 0)[0]
+        if active.size == 0:
+            return 0.0
+
+        min_level = int(np.min(box_levels[active]))
+        h_max = float(self.tree.root_extent) * (0.5**min_level)
+        return k_abs * h_max
+
+    def _choose_auto_helmholtz_split_order(self, auto_cfg):
+        thresholds = auto_cfg.get("rho_thresholds", (0.5, 1.5, 3.0))
+        orders = auto_cfg.get("orders", (1, 2, 3, 4))
+        rho_max = self._compute_split_rho_max()
+        selected = _select_split_order_from_rho(rho_max, thresholds, orders)
+
+        order_min = int(auto_cfg.get("order_min", 1))
+        order_max = int(auto_cfg.get("order_max", selected))
+        selected = max(order_min, min(order_max, selected))
+        logger.info(
+            "Auto-selected helmholtz_split_order=%d (rho_max=%.3g)",
+            selected,
+            rho_max,
+        )
+        return selected
 
     def _helmholtz_split_max_neighbor_distance(self):
         box_source_counts = self.tree.box_source_counts_nonchild.get(self.queue)
