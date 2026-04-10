@@ -1105,8 +1105,9 @@ class NearFieldInteractionTable:
         n_q_points_i64 = np.int64(self.n_q_points)
         n_pairs_i64 = np.int64(self.n_pairs)
 
-        canonical_entry_ids = np.arange(n_entries, dtype=np.int64)
-        canonical_signs = np.ones(n_entries, dtype=np.int8)
+        parent = np.arange(n_entries, dtype=np.int64)
+        rank = np.zeros(n_entries, dtype=np.int8)
+        rel = np.ones(n_entries, dtype=np.int8)
 
         from itertools import permutations, product
 
@@ -1168,38 +1169,62 @@ class NearFieldInteractionTable:
                 case_maps.append(self.case_indices[encoded].astype(np.int32))
                 transform_signs.append(int(kernel_sign_eval(sign_tuple, perm_tuple)))
 
-        case_ids = np.arange(self.n_cases, dtype=np.int64)
-        target_ids = np.arange(self.n_q_points, dtype=np.int64)
-
         for mode_map, case_map, transform_sign in zip(
             mode_maps, case_maps, transform_signs
         ):
-            case_map_i64 = case_map.astype(np.int64, copy=False)
-            mode_map_i64 = mode_map.astype(np.int64, copy=False)
-            for source_mode_id in range(self.n_q_points):
-                src = np.int64(source_mode_id)
-                src_sym = mode_map_i64[source_mode_id]
+            for case_id in range(self.n_cases):
+                case_id_sym = int(case_map[case_id])
+                base = np.int64(case_id) * n_pairs_i64
+                base_sym = np.int64(case_id_sym) * n_pairs_i64
+                for source_mode_id in range(self.n_q_points):
+                    source_mode_id_sym = int(mode_map[source_mode_id])
+                    row = base + np.int64(source_mode_id) * n_q_points_i64
+                    row_sym = base_sym + np.int64(source_mode_id_sym) * n_q_points_i64
+                    for target_mode_id in range(self.n_q_points):
+                        target_mode_id_sym = int(mode_map[target_mode_id])
+                        ia = int(row + np.int64(target_mode_id))
+                        ib = int(row_sym + np.int64(target_mode_id_sym))
+                        self._signed_uf_union(
+                            parent,
+                            rank,
+                            rel,
+                            ia,
+                            ib,
+                            transform_sign,
+                        )
 
-                full_ids = (
-                    case_ids[:, np.newaxis] * n_pairs_i64
-                    + src * n_q_points_i64
-                    + target_ids[np.newaxis, :]
-                ).reshape(-1)
+        canonical_entry_ids = np.empty(n_entries, dtype=np.int64)
+        weights_to_root = np.empty(n_entries, dtype=np.int8)
+        for entry_id in range(n_entries):
+            root, w = self._signed_uf_find(parent, rel, entry_id)
+            canonical_entry_ids[entry_id] = root
+            weights_to_root[entry_id] = np.int8(w)
 
-                transformed_ids = (
-                    case_map_i64[:, np.newaxis] * n_pairs_i64
-                    + src_sym * n_q_points_i64
-                    + mode_map_i64[np.newaxis, :]
-                ).reshape(-1)
+        roots = np.unique(canonical_entry_ids)
+        invariant_entry_ids = np.empty(len(roots), dtype=np.int64)
+        rep_weights = np.empty(len(roots), dtype=np.int8)
+        root_to_rep = {}
+        root_to_rep_weight = {}
+        for iroot, root in enumerate(roots):
+            member_ids = np.flatnonzero(canonical_entry_ids == root)
+            rep = int(np.min(member_ids))
+            invariant_entry_ids[iroot] = rep
+            rep_w = int(weights_to_root[rep])
+            rep_weights[iroot] = np.int8(rep_w)
+            root_to_rep[int(root)] = rep
+            root_to_rep_weight[int(root)] = rep_w
 
-                better = transformed_ids < canonical_entry_ids[full_ids]
-                if np.any(better):
-                    better_ids = full_ids[better]
-                    canonical_entry_ids[better_ids] = transformed_ids[better]
-                    canonical_signs[better_ids] = np.int8(transform_sign)
+        canonical_scales = np.empty(n_entries, dtype=self.dtype)
+        for entry_id in range(n_entries):
+            root = int(canonical_entry_ids[entry_id])
+            rep = root_to_rep[root]
+            rep_w = root_to_rep_weight[root]
+            canonical_entry_ids[entry_id] = rep
+            canonical_scales[entry_id] = self.dtype(
+                int(weights_to_root[entry_id]) / int(rep_w)
+            )
 
         invariant_entry_ids = np.unique(canonical_entry_ids)
-        canonical_scales = canonical_signs.astype(self.dtype)
 
         source_mode_indices = (
             (invariant_entry_ids % n_pairs_i64) // n_q_points_i64
