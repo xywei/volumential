@@ -1221,6 +1221,8 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             mode_nmlz_combined = mode_nmlz_combined.astype(self.dtype)
         if exterior_mode_nmlz_combined.dtype != self.dtype:
             exterior_mode_nmlz_combined = exterior_mode_nmlz_combined.astype(self.dtype)
+        if table_entry_scales.dtype != self.dtype:
+            table_entry_scales = table_entry_scales.astype(self.dtype)
 
         table_data_shapes = {
             "n_tables": len(near_field_tables),
@@ -3276,6 +3278,9 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
             table_entry_ids,
             table_entry_scales,
         ) = _prepare_table_data_and_entry_map(self.near_field_table[kname])
+
+        if table_entry_scales.dtype != self.dtype:
+            table_entry_scales = table_entry_scales.astype(self.dtype)
 
         logger.info("Table data for kernel " + out_kernel.__repr__() + " congregated")
 
