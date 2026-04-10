@@ -22,6 +22,7 @@ THE SOFTWARE.
 
 import json
 import logging
+import hashlib
 
 import numpy as np
 
@@ -50,6 +51,22 @@ from volumential.nearfield_potential_table import NearFieldInteractionTable
 
 
 logger = logging.getLogger(__name__)
+
+
+def _table_data_fingerprint(arr, sample_bytes=4096):
+    narr = np.asarray(arr)
+    nbytes = int(narr.nbytes)
+    if nbytes == 0:
+        return (str(narr.dtype), tuple(int(s) for s in narr.shape), 0, "")
+
+    raw = narr.view(np.uint8).reshape(-1)
+    if nbytes <= 2 * sample_bytes:
+        sample = bytes(raw)
+    else:
+        sample = bytes(raw[:sample_bytes]) + bytes(raw[-sample_bytes:])
+
+    digest = hashlib.sha256(sample).hexdigest()
+    return (str(narr.dtype), tuple(int(s) for s in narr.shape), nbytes, digest)
 
 
 def _gauss_legendre_nodes_and_weights(order):
@@ -1376,6 +1393,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             kname,
             tuple(int(np.asarray(tbl.data).ctypes.data) for tbl in near_field_tables),
             tuple(int(np.asarray(tbl.data).size) for tbl in near_field_tables),
+            tuple(_table_data_fingerprint(tbl.data) for tbl in near_field_tables),
             np.dtype(self.dtype).str,
             None
             if symmetry_source_direction is None
