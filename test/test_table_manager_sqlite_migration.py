@@ -18,44 +18,149 @@ from volumential.table_manager import (
 
 
 def _insert_dummy_cache_row(db, payload_blob=None, build_method="DuffyRadial"):
+    columns = {
+        row["name"] if isinstance(row, sqlite3.Row) else row[1]
+        for row in db.execute("PRAGMA table_info(nearfield_cache)")
+    }
+
+    if "q_points" in columns:
+        db.execute(
+            """
+            INSERT INTO nearfield_cache (
+                dim, kernel_type, q_order, source_box_level,
+                n_q_points, quad_order, n_pairs,
+                source_box_extent, source_box_level_stored,
+                case_encoding_base, case_encoding_shift,
+                build_method, kernel_type_cached,
+                q_points, data, mode_normalizers,
+                kernel_exterior_normalizers, interaction_case_vecs,
+                case_indices, payload
+            ) VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            )
+            """,
+            (
+                1,
+                "Constant",
+                1,
+                0,
+                1,
+                1,
+                1,
+                1.0,
+                0,
+                1,
+                0,
+                build_method,
+                "const",
+                b"",
+                b"",
+                None,
+                None,
+                None,
+                None,
+                payload_blob,
+            ),
+        )
+    else:
+        db.execute(
+            """
+            INSERT INTO nearfield_cache (
+                dim, kernel_type, q_order, source_box_level,
+                n_q_points, quad_order, n_pairs,
+                source_box_extent, source_box_level_stored,
+                case_encoding_base, case_encoding_shift,
+                build_method, kernel_type_cached, payload
+            ) VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            )
+            """,
+            (
+                1,
+                "Constant",
+                1,
+                0,
+                1,
+                1,
+                1,
+                1.0,
+                0,
+                1,
+                0,
+                build_method,
+                "const",
+                payload_blob,
+            ),
+        )
+
+
+def test_manager_rebuilds_legacy_blob_columns_cache_with_backup(tmp_path):
+    filename = tmp_path / "cache.sqlite"
+
+    db = sqlite3.connect(str(filename))
     db.execute(
         """
-        INSERT INTO nearfield_cache (
-            dim, kernel_type, q_order, source_box_level,
-            n_q_points, quad_order, n_pairs,
-            source_box_extent, source_box_level_stored,
-            case_encoding_base, case_encoding_shift,
-            build_method, kernel_type_cached,
-            q_points, data, mode_normalizers,
-            kernel_exterior_normalizers, interaction_case_vecs,
-            case_indices, payload
-        ) VALUES (
-            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        CREATE TABLE nearfield_cache (
+            dim INTEGER NOT NULL,
+            kernel_type TEXT NOT NULL,
+            q_order INTEGER NOT NULL,
+            source_box_level INTEGER NOT NULL,
+            n_q_points INTEGER NOT NULL,
+            quad_order INTEGER NOT NULL,
+            n_pairs INTEGER NOT NULL,
+            source_box_extent REAL NOT NULL,
+            source_box_level_stored INTEGER NOT NULL,
+            case_encoding_base INTEGER,
+            case_encoding_shift INTEGER,
+            build_method TEXT,
+            kernel_type_cached TEXT,
+            q_points BLOB NOT NULL,
+            data BLOB NOT NULL,
+            mode_normalizers BLOB,
+            kernel_exterior_normalizers BLOB,
+            interaction_case_vecs BLOB,
+            case_indices BLOB,
+            payload BLOB,
+            PRIMARY KEY (dim, kernel_type, q_order, source_box_level)
         )
-        """,
-        (
-            1,
-            "Constant",
-            1,
-            0,
-            1,
-            1,
-            1,
-            1.0,
-            0,
-            1,
-            0,
-            build_method,
-            "const",
-            b"",
-            b"",
-            None,
-            None,
-            None,
-            None,
-            payload_blob,
-        ),
+        """
     )
+    db.execute(
+        """
+        CREATE TABLE nearfield_cache_kwargs (
+            dim INTEGER NOT NULL,
+            kernel_type TEXT NOT NULL,
+            q_order INTEGER NOT NULL,
+            source_box_level INTEGER NOT NULL,
+            key TEXT NOT NULL,
+            value_type TEXT NOT NULL,
+            value_text TEXT NOT NULL,
+            PRIMARY KEY (dim, kernel_type, q_order, source_box_level, key)
+        )
+        """
+    )
+    db.execute(
+        """
+        CREATE TABLE nearfield_cache_meta (
+            key TEXT PRIMARY KEY,
+            value_type TEXT NOT NULL,
+            value_text TEXT NOT NULL
+        )
+        """
+    )
+    db.execute(
+        "INSERT INTO nearfield_cache_meta (key, value_type, value_text) VALUES (?, ?, ?)",
+        ("schema_version", "str", "2.0.0"),
+    )
+    _insert_dummy_cache_row(db, payload_blob=b"x")
+    db.commit()
+    db.close()
+
+    with NFTable(str(filename), progress_bar=False):
+        pass
+
+    assert filename.exists()
+    assert (tmp_path / "cache.sqlite.bak").exists()
 
 
 def test_table_request_is_composed_from_stable_specs():
@@ -304,13 +409,15 @@ def test_get_kernel_function_rejects_partial_cahn_hilliard_coefficients(tmp_path
             )
 
 
-def test_legacy_hdf5_cache_error(tmp_path):
+def test_legacy_hdf5_cache_rebuilt_with_backup(tmp_path):
     filename = tmp_path / "legacy-cache.hdf5"
     filename.write_bytes(b"\x89HDF\r\n\x1a\nlegacy")
 
-    with pytest.raises(RuntimeError, match="legacy HDF5 format"):
-        with NFTable(str(filename), progress_bar=False):
-            pass
+    with NFTable(str(filename), progress_bar=False):
+        pass
+
+    assert filename.exists()
+    assert (tmp_path / "legacy-cache.hdf5.bak").exists()
 
 
 @pytest.mark.parametrize(
@@ -720,7 +827,7 @@ def test_get_table_recomputes_on_payload_decode_failure(tmp_path, monkeypatch):
         assert seen["called"]
 
 
-def test_unversioned_cache_rows_reset_in_write_mode(tmp_path):
+def test_unversioned_cache_rows_rebuilt_in_write_mode(tmp_path):
     filename = tmp_path / "cache.sqlite"
 
     with NFTable(str(filename), progress_bar=False):
@@ -734,14 +841,8 @@ def test_unversioned_cache_rows_reset_in_write_mode(tmp_path):
     with NFTable(str(filename), progress_bar=False):
         pass
 
-    with sqlite3.connect(str(filename)) as db:
-        row = db.execute("SELECT COUNT(*) FROM nearfield_cache").fetchone()
-        assert row[0] == 0
-        schema_row = db.execute(
-            "SELECT value_type, value_text FROM nearfield_cache_meta "
-            "WHERE key='schema_version'"
-        ).fetchone()
-        assert schema_row == ("str", TABLE_CACHE_SCHEMA_VERSION)
+    assert filename.exists()
+    assert (tmp_path / "cache.sqlite.bak").exists()
 
 
 def test_unversioned_cache_rows_rejected_in_read_only_mode(tmp_path):

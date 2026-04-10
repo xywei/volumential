@@ -36,6 +36,7 @@ THE SOFTWARE.
 
 import logging
 import json
+import os
 import re
 import sqlite3
 import time
@@ -58,8 +59,16 @@ logger = logging.getLogger(__name__)
 _HDF5_SIGNATURE = b"\x89HDF\r\n\x1a\n"
 
 
-TABLE_CACHE_SCHEMA_VERSION = "2.0.0"
-TABLE_CACHE_MIN_READABLE_SCHEMA_VERSION = "2.0.0"
+TABLE_CACHE_SCHEMA_VERSION = "2.1.0"
+TABLE_CACHE_MIN_READABLE_SCHEMA_VERSION = TABLE_CACHE_SCHEMA_VERSION
+_LEGACY_CACHE_BLOB_COLUMNS = {
+    "q_points",
+    "data",
+    "mode_normalizers",
+    "kernel_exterior_normalizers",
+    "interaction_case_vecs",
+    "case_indices",
+}
 _LEGACY_UNVERSIONED_SCHEMA_VERSION = "1.0.0"
 _TABLE_BUILD_METHOD = "DuffyRadial"
 
@@ -188,6 +197,12 @@ def _serialize_table_payload(table):
         ),
     }
 
+    symmetry_source_direction = getattr(table, "symmetry_source_direction", None)
+    if symmetry_source_direction is not None:
+        payload["symmetry_source_direction"] = np.array(
+            symmetry_source_direction, dtype=np.float64
+        )
+
     if table_data_is_symmetry_reduced:
         reduced_entry_ids = np.flatnonzero(np.isfinite(data)).astype(np.int64)
         payload["reduced_entry_ids"] = reduced_entry_ids
@@ -231,6 +246,16 @@ def _to_stable_jsonable(value):
         }
 
     raise TypeError(f"unsupported value type for stable serialization: {type(value)!r}")
+
+
+def _normalize_symmetry_source_direction(value):
+    if value is None:
+        return None
+
+    arr = np.asarray(value, dtype=np.float64).ravel()
+    if arr.size == 0:
+        return None
+    return tuple(float(v) for v in arr.tolist())
 
 
 def _serialize_scalar(value):
@@ -300,6 +325,26 @@ def _looks_like_hdf5_file(path):
             return f.read(len(_HDF5_SIGNATURE)) == _HDF5_SIGNATURE
     except OSError:
         return False
+
+
+def _backup_cache_file(path):
+    if not os.path.exists(path):
+        return None
+
+    backup_path = f"{path}.bak"
+    suffix = 1
+    while os.path.exists(backup_path):
+        backup_path = f"{path}.bak.{suffix}"
+        suffix += 1
+
+    os.replace(path, backup_path)
+
+    for sidecar_suffix in ("-wal", "-shm"):
+        sidecar = f"{path}{sidecar_suffix}"
+        if os.path.exists(sidecar):
+            os.replace(sidecar, f"{backup_path}{sidecar_suffix}")
+
+    return backup_path
 
 
 # {{{ constant sumpy kernel
@@ -505,23 +550,63 @@ class NearFieldInteractionTableManager:
 
         self.datafile = conn
         self.datafile.row_factory = sqlite3.Row
-
-        self.datafile.execute("PRAGMA foreign_keys = ON")
-        try:
-            self.datafile.execute("PRAGMA temp_store = MEMORY")
-            self.datafile.execute("PRAGMA cache_size = -200000")
-            if not self._read_only:
-                self.datafile.execute("PRAGMA journal_mode = WAL")
-                self.datafile.execute("PRAGMA synchronous = NORMAL")
-        except sqlite3.DatabaseError:
-            logger.warning("Failed to apply one or more SQLite tuning pragmas")
+        self._configure_connection(self.datafile)
 
         try:
+            self._init_schema()
+            self._initialize_root_extent()
+        except RuntimeError as exc:
+            self.datafile.close()
+            if self._read_only or not self._should_rebuild_from_init_error(exc):
+                raise
+
+            backup_path = _backup_cache_file(self.filename)
+            logger.warning(
+                "Invalid table cache detected at %s; moved to %s and rebuilding.",
+                self.filename,
+                backup_path,
+            )
+
+            conn = sqlite3.connect(_sqlite_uri(self.filename, "rwc"), uri=True)
+            self.datafile = conn
+            self.datafile.row_factory = sqlite3.Row
+            self._configure_connection(self.datafile)
             self._init_schema()
             self._initialize_root_extent()
         except sqlite3.DatabaseError as exc:
             self.datafile.close()
             if _looks_like_hdf5_file(self.filename):
+                if not self._read_only:
+                    backup_path = _backup_cache_file(self.filename)
+                    logger.warning(
+                        "Legacy HDF5 cache detected at %s; moved to %s and rebuilding.",
+                        self.filename,
+                        backup_path,
+                    )
+                    conn = sqlite3.connect(_sqlite_uri(self.filename, "rwc"), uri=True)
+                    self.datafile = conn
+                    self.datafile.row_factory = sqlite3.Row
+                    self._configure_connection(self.datafile)
+                    self._init_schema()
+                    self._initialize_root_extent()
+                    self.table_extra_kwargs = kwargs
+                    self.supported_kernels = [
+                        "Laplace",
+                        "Laplace-Dx",
+                        "Laplace-Dy",
+                        "Laplace-Dz",
+                        "Constant",
+                        "Yukawa",
+                        "Yukawa-Dx",
+                        "Yukawa-Dy",
+                        "Cahn-Hilliard",
+                        "Cahn-Hilliard-Laplacian",
+                        "Cahn-Hilliard-Dx",
+                        "Cahn-Hilliard-Dy",
+                        "Cahn-Hilliard-Laplacian-Dx",
+                        "Cahn-Hilliard-Laplacian-Dy",
+                    ]
+                    return
                 raise RuntimeError(
                     "The table cache file "
                     + self.filename
@@ -550,6 +635,26 @@ class NearFieldInteractionTableManager:
             "Cahn-Hilliard-Laplacian-Dy",
         ]
 
+    def _configure_connection(self, conn):
+        conn.execute("PRAGMA foreign_keys = ON")
+        try:
+            conn.execute("PRAGMA temp_store = MEMORY")
+            conn.execute("PRAGMA cache_size = -200000")
+            if not self._read_only:
+                conn.execute("PRAGMA journal_mode = WAL")
+                conn.execute("PRAGMA synchronous = NORMAL")
+        except sqlite3.DatabaseError:
+            logger.warning("Failed to apply one or more SQLite tuning pragmas")
+
+    @staticmethod
+    def _should_rebuild_from_init_error(exc):
+        msg = str(exc)
+        return (
+            "unsupported legacy schema" in msg
+            or "missing schema_version" in msg
+            or "invalid schema_version" in msg
+        )
+
     def _init_schema(self):
         """Create missing tables for a new cache file."""
 
@@ -571,13 +676,6 @@ class NearFieldInteractionTableManager:
 
                 build_method TEXT,
                 kernel_type_cached TEXT,
-
-                q_points BLOB NOT NULL,
-                data BLOB NOT NULL,
-                mode_normalizers BLOB,
-                kernel_exterior_normalizers BLOB,
-                interaction_case_vecs BLOB,
-                case_indices BLOB,
                 payload BLOB,
 
                 PRIMARY KEY (dim, kernel_type, q_order, source_box_level)
@@ -622,18 +720,15 @@ class NearFieldInteractionTableManager:
             row["name"]
             for row in self.datafile.execute("PRAGMA table_info(nearfield_cache)")
         }
-        if "payload" not in columns:
-            if self._read_only:
-                logger.warning(
-                    "Table cache file %s uses legacy schema without payload column; "
-                    "read-only mode cannot apply migrations.",
-                    self.filename,
-                )
-            else:
-                self.datafile.execute(
-                    "ALTER TABLE nearfield_cache ADD COLUMN payload BLOB"
-                )
-                columns.add("payload")
+        if "payload" not in columns or self._has_legacy_blob_columns(columns):
+            raise RuntimeError(
+                "The table cache file "
+                + self.filename
+                + " uses an unsupported legacy schema. "
+                + "Rebuild the cache with schema "
+                + TABLE_CACHE_SCHEMA_VERSION
+                + "."
+            )
 
         self._initialize_schema_version(columns)
 
@@ -659,9 +754,67 @@ class NearFieldInteractionTableManager:
         )
 
     def _infer_schema_version_from_columns(self, cache_columns):
-        if "payload" in cache_columns:
+        if "payload" in cache_columns and not self._has_legacy_blob_columns(
+            cache_columns
+        ):
             return TABLE_CACHE_SCHEMA_VERSION
+        if "payload" in cache_columns:
+            return "2.0.0"
         return _LEGACY_UNVERSIONED_SCHEMA_VERSION
+
+    def _has_legacy_blob_columns(self, cache_columns):
+        return any(col in cache_columns for col in _LEGACY_CACHE_BLOB_COLUMNS)
+
+    def _migrate_drop_legacy_blob_columns(self):
+        logger.info(
+            "Migrating table cache schema in %s to drop legacy blob columns",
+            self.filename,
+        )
+        self.datafile.execute("PRAGMA foreign_keys=OFF")
+        self.datafile.execute(
+            """
+            CREATE TABLE nearfield_cache_new (
+                dim INTEGER NOT NULL,
+                kernel_type TEXT NOT NULL,
+                q_order INTEGER NOT NULL,
+                source_box_level INTEGER NOT NULL,
+                n_q_points INTEGER NOT NULL,
+                quad_order INTEGER NOT NULL,
+                n_pairs INTEGER NOT NULL,
+                source_box_extent REAL NOT NULL,
+                source_box_level_stored INTEGER NOT NULL,
+                case_encoding_base INTEGER,
+                case_encoding_shift INTEGER,
+                build_method TEXT,
+                kernel_type_cached TEXT,
+                payload BLOB,
+                PRIMARY KEY (dim, kernel_type, q_order, source_box_level)
+            )
+            """
+        )
+        self.datafile.execute(
+            """
+            INSERT INTO nearfield_cache_new (
+                dim, kernel_type, q_order, source_box_level,
+                n_q_points, quad_order, n_pairs,
+                source_box_extent, source_box_level_stored,
+                case_encoding_base, case_encoding_shift,
+                build_method, kernel_type_cached, payload
+            )
+            SELECT
+                dim, kernel_type, q_order, source_box_level,
+                n_q_points, quad_order, n_pairs,
+                source_box_extent, source_box_level_stored,
+                case_encoding_base, case_encoding_shift,
+                build_method, kernel_type_cached, payload
+            FROM nearfield_cache
+            """
+        )
+        self.datafile.execute("DROP TABLE nearfield_cache")
+        self.datafile.execute(
+            "ALTER TABLE nearfield_cache_new RENAME TO nearfield_cache"
+        )
+        self.datafile.execute("PRAGMA foreign_keys=ON")
 
     def _initialize_schema_version(self, cache_columns):
         current_version_tuple = _parse_semver(
@@ -682,27 +835,20 @@ class NearFieldInteractionTableManager:
         )
 
         if not has_stored_schema_version:
-            if self._read_only and has_cache_rows:
-                raise RuntimeError(
-                    "The table cache file "
-                    + self.filename
-                    + " is missing schema_version metadata and is treated as "
-                    + "incompatible legacy cache."
-                )
+            if not has_cache_rows:
+                if not self._read_only:
+                    self._store_meta_value("schema_version", TABLE_CACHE_SCHEMA_VERSION)
+                self.cache_schema_version = TABLE_CACHE_SCHEMA_VERSION
+                return
 
-            if not self._read_only and has_cache_rows:
-                logger.warning(
-                    "Resetting legacy unversioned table cache data in %s.",
-                    self.filename,
-                )
-                self.datafile.execute("DELETE FROM nearfield_cache_kwargs")
-                self.datafile.execute("DELETE FROM nearfield_cache")
-
-            if not self._read_only:
-                self._store_meta_value("schema_version", TABLE_CACHE_SCHEMA_VERSION)
-
-            self.cache_schema_version = TABLE_CACHE_SCHEMA_VERSION
-            return
+            raise RuntimeError(
+                "The table cache file "
+                + self.filename
+                + " is missing schema_version metadata and is unsupported. "
+                + "Rebuild the cache with schema "
+                + TABLE_CACHE_SCHEMA_VERSION
+                + "."
+            )
 
         if not isinstance(stored_schema_version, str):
             raise RuntimeError(
@@ -740,27 +886,15 @@ class NearFieldInteractionTableManager:
             )
 
         if schema_version_tuple < min_readable_version_tuple:
-            if self._read_only:
-                raise RuntimeError(
-                    "The table cache file "
-                    + self.filename
-                    + " uses unsupported legacy schema version "
-                    + schema_version
-                    + "."
-                )
-
-            logger.warning(
-                "Resetting legacy table cache schema %s in %s.",
-                schema_version,
-                self.filename,
+            raise RuntimeError(
+                "The table cache file "
+                + self.filename
+                + " uses unsupported legacy schema version "
+                + schema_version
+                + ". Rebuild with schema "
+                + TABLE_CACHE_SCHEMA_VERSION
+                + "."
             )
-            self.datafile.execute("DELETE FROM nearfield_cache_kwargs")
-            self.datafile.execute("DELETE FROM nearfield_cache")
-
-            schema_version = TABLE_CACHE_SCHEMA_VERSION
-            self._store_meta_value("schema_version", schema_version)
-            self.cache_schema_version = schema_version
-            return
 
         self.cache_schema_version = schema_version
 
@@ -958,6 +1092,12 @@ class NearFieldInteractionTableManager:
 
     def _kwargs_for_cache_storage(self, kwargs):
         cache_kwargs = dict(kwargs)
+        symmetry_dir = _normalize_symmetry_source_direction(
+            cache_kwargs.pop("symmetry_source_direction", None)
+        )
+        if symmetry_dir is not None:
+            cache_kwargs["symmetry_source_direction_json"] = json.dumps(symmetry_dir)
+
         build_config_fingerprint = self._build_config_fingerprint(kwargs)
         if build_config_fingerprint is not None:
             cache_kwargs["build_config_fingerprint"] = build_config_fingerprint
@@ -1390,6 +1530,12 @@ class NearFieldInteractionTableManager:
             table.interaction_case_vecs = [list(vec) for vec in tmp_case_vecs]
 
             table.case_indices[:] = payload["case_indices"]
+            if "symmetry_source_direction" in payload:
+                table.symmetry_source_direction = np.asarray(
+                    payload["symmetry_source_direction"], dtype=np.float64
+                )
+            else:
+                table.symmetry_source_direction = None
             if "table_data_is_symmetry_reduced" in payload:
                 table.table_data_is_symmetry_reduced = bool(
                     payload["table_data_is_symmetry_reduced"][0]
@@ -1433,6 +1579,22 @@ class NearFieldInteractionTableManager:
 
         t_kwargs_load_start = time.perf_counter()
         loaded_kwargs = self._load_record_kwargs(table_request)
+
+        requested_symmetry_dir = _normalize_symmetry_source_direction(
+            kwargs.get("symmetry_source_direction", None)
+        )
+        loaded_symmetry_dir_json = loaded_kwargs.get("symmetry_source_direction_json")
+        loaded_symmetry_dir = None
+        if loaded_symmetry_dir_json is not None:
+            try:
+                loaded_symmetry_dir = _normalize_symmetry_source_direction(
+                    json.loads(loaded_symmetry_dir_json)
+                )
+            except Exception:
+                raise KeyError("cached symmetry_source_direction metadata is malformed")
+        if requested_symmetry_dir != loaded_symmetry_dir:
+            raise KeyError("cached symmetry_source_direction mismatch")
+
         requested_build_config_fingerprint = self._build_config_fingerprint(kwargs)
         if requested_build_config_fingerprint is not None:
             loaded_build_config_fingerprint = loaded_kwargs.get(
@@ -1691,6 +1853,12 @@ class NearFieldInteractionTableManager:
         )
 
         logger.debug("Start computing interaction table.")
+        table_init_kwargs = dict(self.table_extra_kwargs)
+        build_kwargs = dict(kwargs)
+        symmetry_source_direction = build_kwargs.pop("symmetry_source_direction", None)
+        if symmetry_source_direction is not None:
+            table_init_kwargs["symmetry_source_direction"] = symmetry_source_direction
+
         table = NearFieldInteractionTable(
             dim=table_request.dim,
             quad_order=table_request.q_order,
@@ -1703,7 +1871,7 @@ class NearFieldInteractionTableManager:
             source_box_extent=self._source_box_extent_for_level(
                 table_request.source_box_level
             ),
-            **self.table_extra_kwargs,
+            **table_init_kwargs,
         )
 
         if 0:
@@ -1712,7 +1880,7 @@ class NearFieldInteractionTableManager:
                 kwargs["delta"] = delta
 
         t_compute_start = time.perf_counter()
-        table.build_table(cl_ctx=cl_ctx, queue=queue, **kwargs)
+        table.build_table(cl_ctx=cl_ctx, queue=queue, **build_kwargs)
         t_compute_end = time.perf_counter()
         assert table.is_built
 
@@ -1723,7 +1891,6 @@ class NearFieldInteractionTableManager:
         )
         t_payload_serialize_start = time.perf_counter()
         payload_blob = _serialize_table_payload(table)
-        empty_float_blob = _serialize_array(np.array([], dtype=self.dtype))
         t_payload_serialize_end = time.perf_counter()
 
         distinct_numbers = set()
@@ -1747,12 +1914,6 @@ class NearFieldInteractionTableManager:
             shift,
             _TABLE_BUILD_METHOD,
             kernel_bundle.kernel_scale_type,
-            empty_float_blob,
-            empty_float_blob,
-            None,
-            None,
-            None,
-            None,
             payload_blob,
         )
 
@@ -1764,12 +1925,9 @@ class NearFieldInteractionTableManager:
                 n_q_points, quad_order, n_pairs,
                 source_box_extent, source_box_level_stored,
                 case_encoding_base, case_encoding_shift,
-                build_method, kernel_type_cached,
-                q_points, data, mode_normalizers,
-                kernel_exterior_normalizers, interaction_case_vecs,
-                case_indices, payload
+                build_method, kernel_type_cached, payload
             ) VALUES (
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
             )
             ON CONFLICT(dim, kernel_type, q_order, source_box_level) DO UPDATE SET
                 n_q_points=excluded.n_q_points,
@@ -1781,12 +1939,6 @@ class NearFieldInteractionTableManager:
                 case_encoding_shift=excluded.case_encoding_shift,
                 build_method=excluded.build_method,
                 kernel_type_cached=excluded.kernel_type_cached,
-                q_points=excluded.q_points,
-                data=excluded.data,
-                mode_normalizers=excluded.mode_normalizers,
-                kernel_exterior_normalizers=excluded.kernel_exterior_normalizers,
-                interaction_case_vecs=excluded.interaction_case_vecs,
-                case_indices=excluded.case_indices,
                 payload=excluded.payload
             """,
             record_values,

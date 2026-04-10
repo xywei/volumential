@@ -620,18 +620,24 @@ def test_enforce_level_restriction_balances_adjacent_leaf_levels():
     levels = np.asarray(balanced.box_levels, dtype=np.int32)
     centers = np.asarray(balanced.box_centers)
 
-    for i, ibox in enumerate(leaf_ids):
-        for jbox in leaf_ids[i + 1 :]:
-            if not _are_adjacent(
-                balanced.root_extent,
-                levels,
-                centers,
-                int(ibox),
-                int(jbox),
-            ):
-                continue
+    leaf_levels = levels[leaf_ids]
+    leaf_sizes = balanced.root_extent * np.exp2(-leaf_levels.astype(np.float64))
+    leaf_centers = centers[:, leaf_ids].T
 
-            assert abs(int(levels[int(ibox)]) - int(levels[int(jbox)])) <= 1
+    for i in range(len(leaf_ids) - 1):
+        center_i = leaf_centers[i]
+        size_i = leaf_sizes[i]
+        level_i = int(leaf_levels[i])
+
+        delta = np.abs(leaf_centers[i + 1 :] - center_i)
+        chebyshev_dist = np.max(delta, axis=1)
+        adjacency_threshold = 0.5 * (size_i + leaf_sizes[i + 1 :]) + 1.0e-15
+        adjacent = chebyshev_dist <= adjacency_threshold
+        if not np.any(adjacent):
+            continue
+
+        neighbor_levels = leaf_levels[i + 1 :][adjacent]
+        assert np.all(np.abs(neighbor_levels - level_i) <= 1)
 
     assert int(np.max(levels)) <= initial_max_level
 
