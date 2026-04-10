@@ -193,7 +193,7 @@ For Yukawa split mode, the planner uses the internal mapping
 Default planner policy:
 
 - ``order_min=1``
-- ``order_max=8``
+- ``order_max=12``
 - geometric rho ladders with ``rho_base_real=0.75`` and ``rho_base_imag=0.5``
 
 This yields thresholds like ``(0.5, 1, 2, 4, 8, 16, 32)`` and candidate
@@ -219,6 +219,9 @@ Supported planner config keys:
   threshold ladders for :math:`|\Re(k)|h` and :math:`|\Im(k)|h`
 - ``exp_tail_guardrail_enabled``: enable exponential-tail order guardrail
 - ``exp_tail_rel_tol``: relative tail tolerance for the exponential guardrail
+  (default ``2e-1``)
+- ``rho_imag_hard_trigger``: when :math:`|\Im(k)|h` exceeds this value,
+  auto mode promotes split order to ``order_max``
 - ``rho_imag_split_max``: maximum :math:`|\Im(k)|h` for default split mode
 - ``disable_split_if_outside_coverage``: if true, auto mode falls back to
   direct (non-split) near-field evaluation when :math:`|\Im(k)|h` exceeds

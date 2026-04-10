@@ -2023,7 +2023,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
 
     def _choose_auto_helmholtz_split_order(self, auto_cfg):
         order_min = int(auto_cfg.get("order_min", 1))
-        order_max = int(auto_cfg.get("order_max", 8))
+        order_max = int(auto_cfg.get("order_max", 12))
         if order_max < order_min:
             raise ValueError("order_max must be >= order_min")
 
@@ -2060,7 +2060,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         )
 
         if bool(auto_cfg.get("exp_tail_guardrail_enabled", True)):
-            exp_tail_rel_tol = float(auto_cfg.get("exp_tail_rel_tol", 1.0e-2))
+            exp_tail_rel_tol = float(auto_cfg.get("exp_tail_rel_tol", 2.0e-1))
             p_exp = _select_split_order_from_exp_tail(
                 rho_imag,
                 rel_tol=exp_tail_rel_tol,
@@ -2068,6 +2068,10 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
                 order_max=order_max,
             )
             selected = max(selected, p_exp)
+
+        hard_rho_imag = float(auto_cfg.get("rho_imag_hard_trigger", 4.0))
+        if rho_imag >= hard_rho_imag:
+            selected = order_max
 
         selected = max(order_min, min(order_max, selected))
 
