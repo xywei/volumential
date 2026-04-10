@@ -94,7 +94,7 @@ def _insert_dummy_cache_row(db, payload_blob=None, build_method="DuffyRadial"):
         )
 
 
-def test_manager_migrates_legacy_blob_columns_from_cache(tmp_path):
+def test_manager_rejects_legacy_blob_columns_from_cache(tmp_path):
     filename = tmp_path / "cache.sqlite"
 
     db = sqlite3.connect(str(filename))
@@ -156,17 +156,9 @@ def test_manager_migrates_legacy_blob_columns_from_cache(tmp_path):
     db.commit()
     db.close()
 
-    with NFTable(str(filename), progress_bar=False):
-        pass
-
-    db = sqlite3.connect(str(filename))
-    columns = {row[1] for row in db.execute("PRAGMA table_info(nearfield_cache)")}
-    db.close()
-
-    assert "payload" in columns
-    assert "q_points" not in columns
-    assert "data" not in columns
-    assert "mode_normalizers" not in columns
+    with pytest.raises(RuntimeError, match="unsupported legacy schema"):
+        with NFTable(str(filename), progress_bar=False):
+            pass
 
 
 def test_table_request_is_composed_from_stable_specs():
@@ -831,7 +823,7 @@ def test_get_table_recomputes_on_payload_decode_failure(tmp_path, monkeypatch):
         assert seen["called"]
 
 
-def test_unversioned_cache_rows_reset_in_write_mode(tmp_path):
+def test_unversioned_cache_rows_rejected_in_write_mode(tmp_path):
     filename = tmp_path / "cache.sqlite"
 
     with NFTable(str(filename), progress_bar=False):
@@ -842,17 +834,9 @@ def test_unversioned_cache_rows_reset_in_write_mode(tmp_path):
         db.execute("DELETE FROM nearfield_cache_meta WHERE key='schema_version'")
         db.commit()
 
-    with NFTable(str(filename), progress_bar=False):
-        pass
-
-    with sqlite3.connect(str(filename)) as db:
-        row = db.execute("SELECT COUNT(*) FROM nearfield_cache").fetchone()
-        assert row[0] == 0
-        schema_row = db.execute(
-            "SELECT value_type, value_text FROM nearfield_cache_meta "
-            "WHERE key='schema_version'"
-        ).fetchone()
-        assert schema_row == ("str", TABLE_CACHE_SCHEMA_VERSION)
+    with pytest.raises(RuntimeError, match="missing schema_version"):
+        with NFTable(str(filename), progress_bar=False):
+            pass
 
 
 def test_unversioned_cache_rows_rejected_in_read_only_mode(tmp_path):

@@ -59,7 +59,7 @@ _HDF5_SIGNATURE = b"\x89HDF\r\n\x1a\n"
 
 
 TABLE_CACHE_SCHEMA_VERSION = "2.1.0"
-TABLE_CACHE_MIN_READABLE_SCHEMA_VERSION = "2.0.0"
+TABLE_CACHE_MIN_READABLE_SCHEMA_VERSION = TABLE_CACHE_SCHEMA_VERSION
 _LEGACY_CACHE_BLOB_COLUMNS = {
     "q_points",
     "data",
@@ -629,25 +629,15 @@ class NearFieldInteractionTableManager:
             row["name"]
             for row in self.datafile.execute("PRAGMA table_info(nearfield_cache)")
         }
-        if "payload" not in columns:
-            if self._read_only:
-                logger.warning(
-                    "Table cache file %s uses legacy schema without payload column; "
-                    "read-only mode cannot apply migrations.",
-                    self.filename,
-                )
-            else:
-                self.datafile.execute(
-                    "ALTER TABLE nearfield_cache ADD COLUMN payload BLOB"
-                )
-                columns.add("payload")
-
-        if not self._read_only and self._has_legacy_blob_columns(columns):
-            self._migrate_drop_legacy_blob_columns()
-            columns = {
-                row["name"]
-                for row in self.datafile.execute("PRAGMA table_info(nearfield_cache)")
-            }
+        if "payload" not in columns or self._has_legacy_blob_columns(columns):
+            raise RuntimeError(
+                "The table cache file "
+                + self.filename
+                + " uses an unsupported legacy schema. "
+                + "Rebuild the cache with schema "
+                + TABLE_CACHE_SCHEMA_VERSION
+                + "."
+            )
 
         self._initialize_schema_version(columns)
 
@@ -754,27 +744,14 @@ class NearFieldInteractionTableManager:
         )
 
         if not has_stored_schema_version:
-            if self._read_only and has_cache_rows:
-                raise RuntimeError(
-                    "The table cache file "
-                    + self.filename
-                    + " is missing schema_version metadata and is treated as "
-                    + "incompatible legacy cache."
-                )
-
-            if not self._read_only and has_cache_rows:
-                logger.warning(
-                    "Resetting legacy unversioned table cache data in %s.",
-                    self.filename,
-                )
-                self.datafile.execute("DELETE FROM nearfield_cache_kwargs")
-                self.datafile.execute("DELETE FROM nearfield_cache")
-
-            if not self._read_only:
-                self._store_meta_value("schema_version", TABLE_CACHE_SCHEMA_VERSION)
-
-            self.cache_schema_version = TABLE_CACHE_SCHEMA_VERSION
-            return
+            raise RuntimeError(
+                "The table cache file "
+                + self.filename
+                + " is missing schema_version metadata and is unsupported. "
+                + "Rebuild the cache with schema "
+                + TABLE_CACHE_SCHEMA_VERSION
+                + "."
+            )
 
         if not isinstance(stored_schema_version, str):
             raise RuntimeError(
@@ -812,27 +789,15 @@ class NearFieldInteractionTableManager:
             )
 
         if schema_version_tuple < min_readable_version_tuple:
-            if self._read_only:
-                raise RuntimeError(
-                    "The table cache file "
-                    + self.filename
-                    + " uses unsupported legacy schema version "
-                    + schema_version
-                    + "."
-                )
-
-            logger.warning(
-                "Resetting legacy table cache schema %s in %s.",
-                schema_version,
-                self.filename,
+            raise RuntimeError(
+                "The table cache file "
+                + self.filename
+                + " uses unsupported legacy schema version "
+                + schema_version
+                + ". Rebuild with schema "
+                + TABLE_CACHE_SCHEMA_VERSION
+                + "."
             )
-            self.datafile.execute("DELETE FROM nearfield_cache_kwargs")
-            self.datafile.execute("DELETE FROM nearfield_cache")
-
-            schema_version = TABLE_CACHE_SCHEMA_VERSION
-            self._store_meta_value("schema_version", schema_version)
-            self.cache_schema_version = schema_version
-            return
 
         self.cache_schema_version = schema_version
 
