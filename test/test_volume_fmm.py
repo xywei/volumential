@@ -2561,7 +2561,10 @@ def test_volume_fmm_2d_yukawa_complex_lambda_rejected(tmp_path):
 
 
 def test_select_split_order_from_rho_default_boundaries():
-    from volumential.expansion_wrangler_fpnd import _select_split_order_from_rho
+    from volumential.expansion_wrangler_fpnd import (
+        _select_split_order_from_rho,
+        _select_split_order_from_rho_components,
+    )
 
     thresholds = (0.5, 1.5, 3.0)
     orders = (1, 2, 3, 4)
@@ -2571,6 +2574,16 @@ def test_select_split_order_from_rho_default_boundaries():
     assert _select_split_order_from_rho(0.7, thresholds, orders) == 2
     assert _select_split_order_from_rho(2.0, thresholds, orders) == 3
     assert _select_split_order_from_rho(9.0, thresholds, orders) == 4
+
+    # Imaginary-part ladder can be stricter than real-part ladder.
+    order = _select_split_order_from_rho_components(
+        rho_real=0.6,
+        rho_imag=0.6,
+        thresholds_real=(1.0, 2.0, 4.0),
+        thresholds_imag=(0.5, 1.0, 2.0),
+        orders=(1, 2, 3, 4),
+    )
+    assert order == 2
 
 
 def test_volume_fmm_2d_helmholtz_split_order1_remainder_matches_legacy(tmp_path):

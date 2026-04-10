@@ -194,7 +194,7 @@ Default planner policy:
 
 - ``order_min=1``
 - ``order_max=8``
-- geometric rho ladder with ``rho_base=0.5``
+- geometric rho ladders with ``rho_base_real=0.75`` and ``rho_base_imag=0.5``
 
 This yields thresholds like ``(0.5, 1, 2, 4, 8, 16, 32)`` and candidate
 orders ``1..8``. This default is meant to cover wider :math:`k h` regimes than
@@ -211,9 +211,12 @@ You may enable auto selection by either:
 Supported planner config keys:
 
 - ``rho_thresholds``: sequence of increasing boundaries
+- ``rho_thresholds_real`` / ``rho_thresholds_imag``: optional per-component
+  threshold ladders (override defaults)
 - ``orders``: sequence of selected orders (length = ``len(rho_thresholds)+1``)
 - ``order_min`` / ``order_max``: optional clamps
-- ``rho_base``: base value for the default geometric threshold ladder
+- ``rho_base_real`` / ``rho_base_imag``: base values for default geometric
+  threshold ladders for :math:`|\Re(k)|h` and :math:`|\Im(k)|h`
 - ``smooth_quad_order_min``: floor for smooth quadrature order
 - ``smooth_quad_order_per_order``: increment per additional split order above 1
 

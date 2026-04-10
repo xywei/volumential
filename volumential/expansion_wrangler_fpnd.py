@@ -354,6 +354,18 @@ def _select_split_order_from_rho(rho_max, thresholds, orders):
     return int(orders[-1])
 
 
+def _select_split_order_from_rho_components(
+    rho_real,
+    rho_imag,
+    thresholds_real,
+    thresholds_imag,
+    orders,
+):
+    order_real = _select_split_order_from_rho(rho_real, thresholds_real, orders)
+    order_imag = _select_split_order_from_rho(rho_imag, thresholds_imag, orders)
+    return max(order_real, order_imag)
+
+
 def _compute_box_local_ids(queue, tree, n_q_points):
     if not getattr(tree, "sources_are_targets", False):
         raise ValueError(
@@ -1940,6 +1952,26 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         h_max = float(self.tree.root_extent) * (0.5**min_level)
         return k_abs * h_max
 
+    def _compute_split_rho_components(self):
+        if len(self.tree_indep.target_kernels) != 1:
+            raise RuntimeError("split rho estimation expects one target kernel")
+
+        out_knl = self.tree_indep.target_kernels[0]
+        base_knl = out_knl.get_base_kernel()
+        k = self._split_wave_number(base_knl, what="split auto planning")
+
+        box_source_counts = self.tree.box_source_counts_nonchild.get(self.queue)
+        box_levels = self.tree.box_levels.get(self.queue)
+        active = np.where(box_source_counts > 0)[0]
+        if active.size == 0:
+            return 0.0, 0.0
+
+        min_level = int(np.min(box_levels[active]))
+        h_max = float(self.tree.root_extent) * (0.5**min_level)
+        rho_real = abs(float(np.real(k))) * h_max
+        rho_imag = abs(float(np.imag(k))) * h_max
+        return rho_real, rho_imag
+
     def _choose_auto_helmholtz_split_order(self, auto_cfg):
         order_min = int(auto_cfg.get("order_min", 1))
         order_max = int(auto_cfg.get("order_max", 8))
@@ -1947,35 +1979,54 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             raise ValueError("order_max must be >= order_min")
 
         if "rho_thresholds" in auto_cfg or "orders" in auto_cfg:
-            thresholds = auto_cfg.get("rho_thresholds", (0.5, 1.5, 3.0))
+            thresholds_real = auto_cfg.get("rho_thresholds", (0.5, 1.5, 3.0))
+            thresholds_imag = thresholds_real
             orders = auto_cfg.get("orders", (1, 2, 3, 4))
         else:
-            # Default to a geometric ladder in rho to cover wide k*h ranges.
-            # Example with order_max=8: thresholds = (0.5, 1, 2, 4, 8, 16, 32).
-            rho0 = float(auto_cfg.get("rho_base", 0.5))
-            if rho0 <= 0.0:
-                raise ValueError("rho_base must be positive")
+            # Default to geometric ladders for real/imag parts separately.
+            rho0_real = float(auto_cfg.get("rho_base_real", 0.75))
+            rho0_imag = float(auto_cfg.get("rho_base_imag", 0.5))
+            if rho0_real <= 0.0 or rho0_imag <= 0.0:
+                raise ValueError("rho_base_real and rho_base_imag must be positive")
             count = max(0, order_max - order_min)
-            thresholds = tuple(rho0 * (2.0**j) for j in range(count))
+            thresholds_real = tuple(rho0_real * (2.0**j) for j in range(count))
+            thresholds_imag = tuple(rho0_imag * (2.0**j) for j in range(count))
             orders = tuple(range(order_min, order_max + 1))
 
-        rho_max = self._compute_split_rho_max()
-        selected = _select_split_order_from_rho(rho_max, thresholds, orders)
+        if "rho_thresholds_real" in auto_cfg:
+            thresholds_real = tuple(auto_cfg["rho_thresholds_real"])
+        if "rho_thresholds_imag" in auto_cfg:
+            thresholds_imag = tuple(auto_cfg["rho_thresholds_imag"])
+
+        rho_real, rho_imag = self._compute_split_rho_components()
+        rho_max = max(rho_real, rho_imag)
+        selected = _select_split_order_from_rho_components(
+            rho_real,
+            rho_imag,
+            thresholds_real,
+            thresholds_imag,
+            orders,
+        )
         selected = max(order_min, min(order_max, selected))
 
-        if len(thresholds) > 0 and rho_max > float(thresholds[-1]):
+        coverage_max = max(
+            float(thresholds_real[-1]) if len(thresholds_real) else 0.0,
+            float(thresholds_imag[-1]) if len(thresholds_imag) else 0.0,
+        )
+        if coverage_max > 0.0 and rho_max > coverage_max:
             logger.warning(
                 "rho_max=%.3g exceeds planner threshold coverage (max %.3g); "
                 "clamping split order to %d",
                 rho_max,
-                float(thresholds[-1]),
+                coverage_max,
                 selected,
             )
 
         logger.info(
-            "Auto-selected helmholtz_split_order=%d (rho_max=%.3g)",
+            "Auto-selected helmholtz_split_order=%d (rho_real=%.3g, rho_imag=%.3g)",
             selected,
-            rho_max,
+            rho_real,
+            rho_imag,
         )
         return selected
 
