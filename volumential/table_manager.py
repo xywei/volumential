@@ -1769,6 +1769,12 @@ class NearFieldInteractionTableManager:
         )
 
         logger.debug("Start computing interaction table.")
+        table_init_kwargs = dict(self.table_extra_kwargs)
+        build_kwargs = dict(kwargs)
+        symmetry_source_direction = build_kwargs.pop("symmetry_source_direction", None)
+        if symmetry_source_direction is not None:
+            table_init_kwargs["symmetry_source_direction"] = symmetry_source_direction
+
         table = NearFieldInteractionTable(
             dim=table_request.dim,
             quad_order=table_request.q_order,
@@ -1781,7 +1787,7 @@ class NearFieldInteractionTableManager:
             source_box_extent=self._source_box_extent_for_level(
                 table_request.source_box_level
             ),
-            **self.table_extra_kwargs,
+            **table_init_kwargs,
         )
 
         if 0:
@@ -1790,7 +1796,7 @@ class NearFieldInteractionTableManager:
                 kwargs["delta"] = delta
 
         t_compute_start = time.perf_counter()
-        table.build_table(cl_ctx=cl_ctx, queue=queue, **kwargs)
+        table.build_table(cl_ctx=cl_ctx, queue=queue, **build_kwargs)
         t_compute_end = time.perf_counter()
         assert table.is_built
 

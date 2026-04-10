@@ -70,6 +70,18 @@ def _kernel_symmetry_meta(kernel):
 
         return constraint, sign_eval
 
+    if cls_name == "AxisSourceDerivative" and hasattr(kernel, "inner_kernel"):
+        axis = int(kernel.axis)
+        inner_constraint, inner_sign = _kernel_symmetry_meta(kernel.inner_kernel)
+
+        def constraint(sign_tuple, perm_tuple):
+            return perm_tuple[axis] == axis and inner_constraint(sign_tuple, perm_tuple)
+
+        def sign_eval(sign_tuple, perm_tuple):
+            return int(sign_tuple[axis]) * int(inner_sign(sign_tuple, perm_tuple))
+
+        return constraint, sign_eval
+
     if cls_name == "DirectionalSourceDerivative":
         source_direction = getattr(kernel, "_volumential_source_direction", None)
         dim = int(getattr(kernel.inner_kernel, "dim", 0) or 0)
@@ -1119,20 +1131,11 @@ class NearFieldInteractionTable:
         case_maps = []
         transform_signs = []
         kernel = self.integral_knl
-        if (
-            kernel is not None
-            and kernel.__class__.__name__ == "DirectionalSourceDerivative"
-            and self.symmetry_source_direction is not None
-        ):
-            # Attach direction metadata for symmetry evaluation.
-            try:
-                setattr(
-                    kernel,
-                    "_volumential_source_direction",
-                    self.symmetry_source_direction,
-                )
-            except Exception:
-                pass
+        if self.symmetry_source_direction is not None:
+            self._attach_directional_symmetry_metadata(
+                kernel,
+                self.symmetry_source_direction,
+            )
 
         kernel_constraint, kernel_sign_eval = _kernel_symmetry_meta(kernel)
 
@@ -1247,6 +1250,30 @@ class NearFieldInteractionTable:
         _ORBIT_CANONICAL_CACHE[cache_key] = result
         self._orbit_info_cache[cache_key] = result
         return result
+
+    @staticmethod
+    def _attach_directional_symmetry_metadata(kernel, source_direction):
+        seen = set()
+        stack = [kernel]
+        while stack:
+            knl = stack.pop()
+            if knl is None:
+                continue
+            obj_id = id(knl)
+            if obj_id in seen:
+                continue
+            seen.add(obj_id)
+
+            if knl.__class__.__name__ == "DirectionalSourceDerivative":
+                try:
+                    setattr(knl, "_volumential_source_direction", source_direction)
+                except Exception:
+                    pass
+
+            for attr in ("inner_kernel", "kernel", "_kernel", "__wrapped__"):
+                child = getattr(knl, attr, None)
+                if child is not None:
+                    stack.append(child)
 
     @memoize_method
     def _get_fused_invariant_duffy_table_tunit(self):
@@ -2030,7 +2057,7 @@ class NearFieldInteractionTable:
 
         t_invariant_start = time.perf_counter()
         invariant_entry_ids = [
-            i for i in range(len(self.data)) if self.lookup_by_symmetry(i) == (i, i)
+            int(entry_id) for entry_id in self._get_invariant_entry_info()["entry_ids"]
         ]
         t_invariant_end = time.perf_counter()
         self._progress_step()
@@ -2067,6 +2094,17 @@ class NearFieldInteractionTable:
             "total_s": t_total_end - t_total_start,
             "n_entries": int(len(invariant_entry_ids)),
         }
+
+    def _populate_full_table_from_orbit_mapping(self):
+        orbit_info = self._get_orbit_canonical_info()
+        canonical_entry_ids = np.asarray(
+            orbit_info["canonical_entry_ids"], dtype=np.int64
+        )
+        canonical_scales = np.asarray(orbit_info["canonical_scales"], dtype=self.dtype)
+
+        representative_vals = self.data[canonical_entry_ids]
+        self.data[:] = canonical_scales * representative_vals
+        self.table_data_is_symmetry_reduced = False
 
     def build_table_via_duffy_radial(
         self,
@@ -2198,6 +2236,10 @@ class NearFieldInteractionTable:
             build_config=build_config,
             **kwargs,
         )
+        # Preserve historical behavior for the default build path: all entries are
+        # directly readable from table.data (no NaN sentinels for non-invariants).
+        if bool(getattr(self, "table_data_is_symmetry_reduced", False)):
+            self._populate_full_table_from_orbit_mapping()
 
     # }}} End build table (driver)
 
