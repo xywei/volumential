@@ -18,44 +18,155 @@ from volumential.table_manager import (
 
 
 def _insert_dummy_cache_row(db, payload_blob=None, build_method="DuffyRadial"):
+    columns = {
+        row["name"] if isinstance(row, sqlite3.Row) else row[1]
+        for row in db.execute("PRAGMA table_info(nearfield_cache)")
+    }
+
+    if "q_points" in columns:
+        db.execute(
+            """
+            INSERT INTO nearfield_cache (
+                dim, kernel_type, q_order, source_box_level,
+                n_q_points, quad_order, n_pairs,
+                source_box_extent, source_box_level_stored,
+                case_encoding_base, case_encoding_shift,
+                build_method, kernel_type_cached,
+                q_points, data, mode_normalizers,
+                kernel_exterior_normalizers, interaction_case_vecs,
+                case_indices, payload
+            ) VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            )
+            """,
+            (
+                1,
+                "Constant",
+                1,
+                0,
+                1,
+                1,
+                1,
+                1.0,
+                0,
+                1,
+                0,
+                build_method,
+                "const",
+                b"",
+                b"",
+                None,
+                None,
+                None,
+                None,
+                payload_blob,
+            ),
+        )
+    else:
+        db.execute(
+            """
+            INSERT INTO nearfield_cache (
+                dim, kernel_type, q_order, source_box_level,
+                n_q_points, quad_order, n_pairs,
+                source_box_extent, source_box_level_stored,
+                case_encoding_base, case_encoding_shift,
+                build_method, kernel_type_cached, payload
+            ) VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            )
+            """,
+            (
+                1,
+                "Constant",
+                1,
+                0,
+                1,
+                1,
+                1,
+                1.0,
+                0,
+                1,
+                0,
+                build_method,
+                "const",
+                payload_blob,
+            ),
+        )
+
+
+def test_manager_migrates_legacy_blob_columns_from_cache(tmp_path):
+    filename = tmp_path / "cache.sqlite"
+
+    db = sqlite3.connect(str(filename))
     db.execute(
         """
-        INSERT INTO nearfield_cache (
-            dim, kernel_type, q_order, source_box_level,
-            n_q_points, quad_order, n_pairs,
-            source_box_extent, source_box_level_stored,
-            case_encoding_base, case_encoding_shift,
-            build_method, kernel_type_cached,
-            q_points, data, mode_normalizers,
-            kernel_exterior_normalizers, interaction_case_vecs,
-            case_indices, payload
-        ) VALUES (
-            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        CREATE TABLE nearfield_cache (
+            dim INTEGER NOT NULL,
+            kernel_type TEXT NOT NULL,
+            q_order INTEGER NOT NULL,
+            source_box_level INTEGER NOT NULL,
+            n_q_points INTEGER NOT NULL,
+            quad_order INTEGER NOT NULL,
+            n_pairs INTEGER NOT NULL,
+            source_box_extent REAL NOT NULL,
+            source_box_level_stored INTEGER NOT NULL,
+            case_encoding_base INTEGER,
+            case_encoding_shift INTEGER,
+            build_method TEXT,
+            kernel_type_cached TEXT,
+            q_points BLOB NOT NULL,
+            data BLOB NOT NULL,
+            mode_normalizers BLOB,
+            kernel_exterior_normalizers BLOB,
+            interaction_case_vecs BLOB,
+            case_indices BLOB,
+            payload BLOB,
+            PRIMARY KEY (dim, kernel_type, q_order, source_box_level)
         )
-        """,
-        (
-            1,
-            "Constant",
-            1,
-            0,
-            1,
-            1,
-            1,
-            1.0,
-            0,
-            1,
-            0,
-            build_method,
-            "const",
-            b"",
-            b"",
-            None,
-            None,
-            None,
-            None,
-            payload_blob,
-        ),
+        """
     )
+    db.execute(
+        """
+        CREATE TABLE nearfield_cache_kwargs (
+            dim INTEGER NOT NULL,
+            kernel_type TEXT NOT NULL,
+            q_order INTEGER NOT NULL,
+            source_box_level INTEGER NOT NULL,
+            key TEXT NOT NULL,
+            value_type TEXT NOT NULL,
+            value_text TEXT NOT NULL,
+            PRIMARY KEY (dim, kernel_type, q_order, source_box_level, key)
+        )
+        """
+    )
+    db.execute(
+        """
+        CREATE TABLE nearfield_cache_meta (
+            key TEXT PRIMARY KEY,
+            value_type TEXT NOT NULL,
+            value_text TEXT NOT NULL
+        )
+        """
+    )
+    db.execute(
+        "INSERT INTO nearfield_cache_meta (key, value_type, value_text) VALUES (?, ?, ?)",
+        ("schema_version", "str", "2.0.0"),
+    )
+    _insert_dummy_cache_row(db, payload_blob=b"x")
+    db.commit()
+    db.close()
+
+    with NFTable(str(filename), progress_bar=False):
+        pass
+
+    db = sqlite3.connect(str(filename))
+    columns = {row[1] for row in db.execute("PRAGMA table_info(nearfield_cache)")}
+    db.close()
+
+    assert "payload" in columns
+    assert "q_points" not in columns
+    assert "data" not in columns
+    assert "mode_normalizers" not in columns
 
 
 def test_table_request_is_composed_from_stable_specs():

@@ -229,7 +229,7 @@ def test_build_normalizer_table_matches_gauss_legendre_weights(monkeypatch, q_or
         (3, 3),
     ],
 )
-def test_invariant_entry_info_matches_lookup_by_symmetry(dim, q_order):
+def test_invariant_entry_info_matches_orbit_decode_metadata(dim, q_order):
     from volumential.table_manager import ConstantKernel
 
     table = npt.NearFieldInteractionTable(
@@ -244,17 +244,12 @@ def test_invariant_entry_info_matches_lookup_by_symmetry(dim, q_order):
 
     invariant_info = table._get_invariant_entry_info()
     invariant_entry_ids = np.array(invariant_info["entry_ids"], dtype=np.int64)
-
-    expected_entry_ids = np.array(
-        [
-            entry_id
-            for entry_id in range(len(table.data))
-            if table.lookup_by_symmetry(entry_id) == (entry_id, entry_id)
-        ],
-        dtype=np.int64,
+    canonical_entry_ids = np.array(
+        invariant_info["canonical_entry_ids"], dtype=np.int64
     )
 
-    assert np.array_equal(np.sort(invariant_entry_ids), expected_entry_ids)
+    assert canonical_entry_ids.shape == (len(table.data),)
+    assert np.array_equal(np.unique(canonical_entry_ids), invariant_entry_ids)
 
     decoded_case_ids = np.array(
         [
@@ -287,6 +282,122 @@ def test_invariant_entry_info_matches_lookup_by_symmetry(dim, q_order):
         dtype=np.int32,
     )
     assert np.array_equal(invariant_info["mode_axes"], expected_mode_axes)
+
+
+def test_orbit_canonicalization_preserves_value_lookup_equivalence():
+    from volumential.table_manager import ConstantKernel
+
+    table = npt.NearFieldInteractionTable(
+        quad_order=3,
+        dim=2,
+        build_method="DuffyRadial",
+        kernel_func=npt.constant_one,
+        kernel_type="const",
+        sumpy_kernel=ConstantKernel(2),
+        progress_bar=False,
+    )
+
+    info = table._get_invariant_entry_info()
+    canonical_entry_ids = np.array(info["canonical_entry_ids"], dtype=np.int64)
+
+    rng = np.random.default_rng(seed=11)
+    table.data = np.asarray(rng.normal(size=len(table.data)), dtype=table.dtype)
+    table.table_data_is_symmetry_reduced = False
+
+    # populate canonical entries with deterministic values and mirror all entries
+    # from canonical orbit representatives.
+    canonical_vals = np.asarray(
+        rng.normal(size=len(info["entry_ids"])), dtype=table.dtype
+    )
+    for irep, entry_id in enumerate(info["entry_ids"]):
+        table.data[int(entry_id)] = canonical_vals[irep]
+    table.data[:] = table.data[canonical_entry_ids]
+    table.table_data_is_symmetry_reduced = True
+
+    for _ in range(32):
+        source_mode_id = int(rng.integers(0, table.n_q_points))
+        target_point_id = int(rng.integers(0, table.n_q_points))
+        case_id = int(rng.integers(0, table.n_cases))
+
+        full_entry_id = (
+            case_id * table.n_pairs
+            + source_mode_id * table.n_q_points
+            + target_point_id
+        )
+        mapped_entry_id = table.get_entry_index(
+            source_mode_id, target_point_id, case_id
+        )
+        expected_entry_id = int(canonical_entry_ids[full_entry_id])
+        assert mapped_entry_id == expected_entry_id
+        assert table.data[mapped_entry_id] == table.data[expected_entry_id]
+
+
+def test_orbit_canonicalization_tracks_sign_for_target_derivative_kernel():
+    from sumpy.kernel import AxisTargetDerivative, LaplaceKernel
+
+    table = npt.NearFieldInteractionTable(
+        quad_order=3,
+        dim=2,
+        build_method="DuffyRadial",
+        kernel_func=npt.constant_one,
+        kernel_type="inv_power",
+        sumpy_kernel=AxisTargetDerivative(0, LaplaceKernel(2)),
+        derive_kernel_func=False,
+        progress_bar=False,
+    )
+
+    info = table._get_invariant_entry_info()
+    scales = np.asarray(info["canonical_scales"])
+
+    # Derivative kernels are odd under some reflections; orbit metadata must
+    # keep sign information rather than assuming all +1.
+    assert np.any(scales < 0)
+
+
+def test_orbit_canonicalization_tracks_sign_for_directional_source_derivative():
+    from sumpy.kernel import DirectionalSourceDerivative, LaplaceKernel
+
+    table = npt.NearFieldInteractionTable(
+        quad_order=3,
+        dim=2,
+        build_method="DuffyRadial",
+        kernel_func=npt.constant_one,
+        kernel_type="inv_power",
+        sumpy_kernel=DirectionalSourceDerivative(LaplaceKernel(2), "dir_vec"),
+        derive_kernel_func=False,
+        symmetry_source_direction=np.array([1.0, 0.0]),
+        progress_bar=False,
+    )
+
+    info = table._get_invariant_entry_info()
+    scales = np.asarray(info["canonical_scales"])
+    assert np.any(scales < 0)
+
+
+def test_directional_source_orbit_updates_when_direction_changes():
+    from sumpy.kernel import DirectionalSourceDerivative, LaplaceKernel
+
+    table = npt.NearFieldInteractionTable(
+        quad_order=3,
+        dim=2,
+        build_method="DuffyRadial",
+        kernel_func=npt.constant_one,
+        kernel_type="inv_power",
+        sumpy_kernel=DirectionalSourceDerivative(LaplaceKernel(2), "dir_vec"),
+        derive_kernel_func=False,
+        symmetry_source_direction=np.array([1.0, 0.0]),
+        progress_bar=False,
+    )
+
+    info_x = table._get_orbit_canonical_info()
+    scales_x = np.asarray(info_x["canonical_scales"]).copy()
+
+    table.symmetry_source_direction = np.array([0.0, 1.0])
+    info_y = table._get_orbit_canonical_info()
+    scales_y = np.asarray(info_y["canonical_scales"]).copy()
+
+    assert scales_x.shape == scales_y.shape
+    assert not np.array_equal(scales_x, scales_y)
 
 
 def test_duffy_radial_routes_queue_to_batched_builder(monkeypatch):
@@ -1279,12 +1390,14 @@ def test_prepare_table_data_and_entry_map_accepts_finite_full_entries():
         mode_nmlz_combined,
         exterior_mode_nmlz_combined,
         table_entry_ids,
+        table_entry_scales,
     ) = _prepare_table_data_and_entry_map([table0, table1])
 
     assert table_data_combined.shape == (2, 3)
     np.testing.assert_allclose(table_data_combined[0], table0.data)
     np.testing.assert_allclose(table_data_combined[1], table1.data)
     np.testing.assert_array_equal(table_entry_ids, np.array([0, 1, 2]))
+    np.testing.assert_allclose(table_entry_scales, np.array([1.0, 1.0, 1.0]))
     np.testing.assert_allclose(mode_nmlz_combined[0], table0.mode_normalizers)
     np.testing.assert_allclose(mode_nmlz_combined[1], table1.mode_normalizers)
     np.testing.assert_allclose(
@@ -1359,14 +1472,90 @@ def test_prepare_table_data_and_entry_map_accepts_consistent_reduced_masks():
         mode_nmlz_combined,
         _,
         table_entry_ids,
+        table_entry_scales,
     ) = _prepare_table_data_and_entry_map([table0, table1])
 
     assert table_data_combined.shape == (2, 2)
     np.testing.assert_allclose(table_data_combined[0], np.array([1.0, 3.0]))
     np.testing.assert_allclose(table_data_combined[1], np.array([10.0, 30.0]))
     np.testing.assert_array_equal(table_entry_ids, np.array([0, -1, 1]))
+    np.testing.assert_allclose(table_entry_scales, np.array([1.0, 1.0, 1.0]))
     np.testing.assert_allclose(mode_nmlz_combined[0], table0.mode_normalizers)
     np.testing.assert_allclose(mode_nmlz_combined[1], table1.mode_normalizers)
+
+
+def test_prepare_table_data_and_entry_map_uses_orbit_canonical_mapping():
+    from types import SimpleNamespace
+
+    from volumential.expansion_wrangler_fpnd import _prepare_table_data_and_entry_map
+
+    orbit_info = {
+        "entry_ids": np.array([0, 2], dtype=np.int64),
+        "canonical_entry_ids": np.array([0, 0, 2], dtype=np.int64),
+        "canonical_scales": np.array([1.0, -1.0, 1.0], dtype=np.float64),
+    }
+
+    table0 = SimpleNamespace(
+        data=np.array([1.0, np.nan, 3.0], dtype=np.float64),
+        mode_normalizers=np.array([1.0], dtype=np.float64),
+        kernel_exterior_normalizers=np.array([0.0], dtype=np.float64),
+        table_data_is_symmetry_reduced=True,
+        _get_orbit_canonical_info=lambda: orbit_info,
+    )
+    table1 = SimpleNamespace(
+        data=np.array([10.0, np.nan, 30.0], dtype=np.float64),
+        mode_normalizers=np.array([2.0], dtype=np.float64),
+        kernel_exterior_normalizers=np.array([0.0], dtype=np.float64),
+        table_data_is_symmetry_reduced=True,
+        _get_orbit_canonical_info=lambda: orbit_info,
+    )
+
+    (
+        table_data_combined,
+        mode_nmlz_combined,
+        _,
+        table_entry_ids,
+        table_entry_scales,
+    ) = _prepare_table_data_and_entry_map([table0, table1])
+
+    assert table_data_combined.shape == (2, 2)
+    np.testing.assert_allclose(table_data_combined[0], np.array([1.0, 3.0]))
+    np.testing.assert_allclose(table_data_combined[1], np.array([10.0, 30.0]))
+    np.testing.assert_array_equal(table_entry_ids, np.array([0, 0, 1], dtype=np.int32))
+    np.testing.assert_allclose(table_entry_scales, np.array([1.0, -1.0, 1.0]))
+    np.testing.assert_allclose(mode_nmlz_combined[0], table0.mode_normalizers)
+    np.testing.assert_allclose(mode_nmlz_combined[1], table1.mode_normalizers)
+
+
+def test_table_payload_serialization_excludes_nan_sentinels_for_reduced_tables():
+    import io
+
+    from volumential.table_manager import (
+        _deserialize_table_payload,
+        _serialize_table_payload,
+    )
+
+    table = npt.NearFieldInteractionTable(
+        quad_order=2,
+        dim=2,
+        build_method="DuffyRadial",
+        kernel_func=npt.constant_one,
+        kernel_type="const",
+        sumpy_kernel=ConstantKernel(2),
+        progress_bar=False,
+    )
+
+    table.data[:] = np.array([1.0, np.nan, 2.0] + [np.nan] * (len(table.data) - 3))
+    table.table_data_is_symmetry_reduced = True
+
+    payload_blob = _serialize_table_payload(table)
+    payload = _deserialize_table_payload(payload_blob)
+
+    assert "data" not in payload
+    assert "reduced_entry_ids" in payload
+    assert "reduced_data" in payload
+    assert np.all(np.isfinite(payload["reduced_data"]))
+    assert not np.isnan(payload["reduced_data"]).any()
 
 
 def test_batched_duffy_non_cl_executor_signature(monkeypatch):

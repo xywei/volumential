@@ -500,6 +500,36 @@ def _resolve_queue(queue, traversal, tree_indep):
     )
 
 
+def _find_directional_source_derivative_kernel(kernel):
+    if isinstance(kernel, DirectionalSourceDerivative):
+        return kernel
+    inner = getattr(kernel, "inner_kernel", None)
+    if inner is None:
+        return None
+    return _find_directional_source_derivative_kernel(inner)
+
+
+def _extract_symmetry_source_direction(out_kernel, source_extra_kwargs, queue):
+    dknl = _find_directional_source_derivative_kernel(out_kernel)
+    if dknl is None:
+        return None
+
+    dir_vec_name = getattr(dknl, "dir_vec_name", None)
+    if not dir_vec_name or dir_vec_name not in source_extra_kwargs:
+        return None
+
+    dir_vec = source_extra_kwargs[dir_vec_name]
+    comps = []
+    for comp in dir_vec:
+        if isinstance(comp, cl.array.Array):
+            host = comp.get(queue=queue)
+            comps.append(float(np.asarray(host).ravel()[0]))
+        else:
+            comps.append(float(np.asarray(comp).ravel()[0]))
+
+    return np.asarray(comps, dtype=np.float64)
+
+
 def _prepare_table_data_and_entry_map(table_levels):
     if not table_levels:
         raise ValueError("table_levels cannot be empty")
@@ -515,25 +545,64 @@ def _prepare_table_data_and_entry_map(table_levels):
         raise RuntimeError("mixed full/reduced near-field table storage across levels")
 
     if reduced_flags[0]:
-        finite_mask = np.isfinite(table0.data)
-        for table in table_levels[1:]:
-            level_finite_mask = np.isfinite(table.data)
-            if not np.array_equal(level_finite_mask, finite_mask):
+        table_entry_scales = np.ones(n_full_entries, dtype=table0.data.dtype)
+        orbit_info = None
+        if hasattr(table0, "_get_orbit_canonical_info"):
+            orbit_info = table0._get_orbit_canonical_info()
+
+        if orbit_info is not None and "canonical_entry_ids" in orbit_info:
+            canonical_entry_ids = np.asarray(
+                orbit_info["canonical_entry_ids"], dtype=np.int64
+            )
+            kept_entry_ids = np.asarray(orbit_info["entry_ids"], dtype=np.int64)
+            if len(kept_entry_ids) == 0:
+                raise RuntimeError("near-field table contains no canonical entries")
+
+            finite_mask = np.isfinite(table0.data)
+            if not np.all(finite_mask[kept_entry_ids]):
                 raise RuntimeError(
-                    "near-field levels disagree on symmetry-reduced entry ids"
+                    "near-field table is missing finite values for canonical entries"
                 )
 
-        kept_entry_ids = np.flatnonzero(finite_mask).astype(np.int64)
-        if len(kept_entry_ids) == 0:
-            raise RuntimeError("near-field table contains no finite entries")
+            for table in table_levels[1:]:
+                level_finite_mask = np.isfinite(table.data)
+                if not np.all(level_finite_mask[kept_entry_ids]):
+                    raise RuntimeError(
+                        "near-field levels disagree on canonical entry availability"
+                    )
+
+            compact_ids = np.full(n_full_entries, -1, dtype=np.int32)
+            compact_ids[kept_entry_ids] = np.arange(len(kept_entry_ids), dtype=np.int32)
+            table_entry_ids = compact_ids[canonical_entry_ids]
+            if "canonical_scales" in orbit_info:
+                table_entry_scales = np.asarray(
+                    orbit_info["canonical_scales"], dtype=table0.data.dtype
+                )
+        else:
+            finite_mask = np.isfinite(table0.data)
+            for table in table_levels[1:]:
+                level_finite_mask = np.isfinite(table.data)
+                if not np.array_equal(level_finite_mask, finite_mask):
+                    raise RuntimeError(
+                        "near-field levels disagree on symmetry-reduced entry ids"
+                    )
+
+            kept_entry_ids = np.flatnonzero(finite_mask).astype(np.int64)
+            if len(kept_entry_ids) == 0:
+                raise RuntimeError("near-field table contains no finite entries")
+
+            table_entry_ids = np.full(n_full_entries, -1, dtype=np.int32)
+            table_entry_ids[kept_entry_ids] = np.arange(
+                len(kept_entry_ids), dtype=np.int32
+            )
     else:
         for table in table_levels:
             if not np.all(np.isfinite(table.data)):
                 raise RuntimeError("full near-field table contains non-finite entries")
         kept_entry_ids = np.arange(n_full_entries, dtype=np.int64)
-
-    table_entry_ids = np.full(n_full_entries, -1, dtype=np.int32)
-    table_entry_ids[kept_entry_ids] = np.arange(len(kept_entry_ids), dtype=np.int32)
+        table_entry_ids = np.full(n_full_entries, -1, dtype=np.int32)
+        table_entry_ids[kept_entry_ids] = np.arange(len(kept_entry_ids), dtype=np.int32)
+        table_entry_scales = np.ones(n_full_entries, dtype=table0.data.dtype)
 
     table_data_combined = np.zeros(
         (len(table_levels), len(kept_entry_ids)),
@@ -558,6 +627,7 @@ def _prepare_table_data_and_entry_map(table_levels):
         mode_nmlz_combined,
         exterior_mode_nmlz_combined,
         table_entry_ids,
+        table_entry_scales,
     )
 
 
@@ -1106,10 +1176,76 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             self._helmholtz_split_constant_kernel = ConstantKernel(base_knl.dim)
         self.list1_extra_kwargs = list1_extra_kwargs
         self._table_layout_validation_cache = set()
+        self._nearfield_device_payload_cache = {}
 
     # }}} End constructor
 
     # {{{ data vector utilities
+
+    def _get_cached_nearfield_payload(
+        self,
+        cache_key,
+        queue,
+        table0,
+        near_field_tables,
+    ):
+        payload = self._nearfield_device_payload_cache.get(cache_key)
+        if payload is not None:
+            return payload
+
+        distinct_numbers = set()
+        for vec in table0.interaction_case_vecs:
+            for cvc in vec:
+                distinct_numbers.add(cvc)
+        base = len(range(min(distinct_numbers), max(distinct_numbers) + 1))
+        shift = -min(distinct_numbers)
+
+        case_indices_dev = cl.array.to_device(queue, table0.case_indices)
+        symmetry_maps = table0._get_online_symmetry_maps()
+        mode_qpoint_map_dev = cl.array.to_device(
+            queue, symmetry_maps["mode_qpoint_map"]
+        )
+        mode_case_map_dev = cl.array.to_device(queue, symmetry_maps["mode_case_map"])
+
+        (
+            table_data_combined,
+            mode_nmlz_combined,
+            exterior_mode_nmlz_combined,
+            table_entry_ids,
+            table_entry_scales,
+        ) = _prepare_table_data_and_entry_map(near_field_tables)
+
+        if table_data_combined.dtype != self.dtype:
+            table_data_combined = table_data_combined.astype(self.dtype)
+        if mode_nmlz_combined.dtype != self.dtype:
+            mode_nmlz_combined = mode_nmlz_combined.astype(self.dtype)
+        if exterior_mode_nmlz_combined.dtype != self.dtype:
+            exterior_mode_nmlz_combined = exterior_mode_nmlz_combined.astype(self.dtype)
+
+        table_data_shapes = {
+            "n_tables": len(near_field_tables),
+            "n_q_points": table0.n_q_points,
+            "n_cases": table0.n_cases,
+            "n_table_entries": table_data_combined.shape[1],
+        }
+
+        payload = {
+            "base": base,
+            "shift": shift,
+            "case_indices_dev": case_indices_dev,
+            "mode_qpoint_map_dev": mode_qpoint_map_dev,
+            "mode_case_map_dev": mode_case_map_dev,
+            "table_data_dev": cl.array.to_device(queue, table_data_combined),
+            "mode_nmlz_dev": cl.array.to_device(queue, mode_nmlz_combined),
+            "exterior_mode_nmlz_dev": cl.array.to_device(
+                queue, exterior_mode_nmlz_combined
+            ),
+            "table_entry_ids_dev": cl.array.to_device(queue, table_entry_ids),
+            "table_entry_scales_dev": cl.array.to_device(queue, table_entry_scales),
+            "table_data_shapes": table_data_shapes,
+        }
+        self._nearfield_device_payload_cache[cache_key] = payload
+        return payload
 
     @property
     def _actx(self):
@@ -1226,48 +1362,36 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
                     + " are not covered."
                 )
 
-        # table.case_encode
-        distinct_numbers = set()
-        for vec in table0.interaction_case_vecs:
-            for cvc in vec:
-                distinct_numbers.add(cvc)
-        base = len(range(min(distinct_numbers), max(distinct_numbers) + 1))
-        shift = -min(distinct_numbers)
-
-        case_indices_dev = cl.array.to_device(queue, table0.case_indices)
-        symmetry_maps = table0._get_online_symmetry_maps()
-        mode_qpoint_map_dev = cl.array.to_device(
-            queue, symmetry_maps["mode_qpoint_map"]
+        symmetry_source_direction = _extract_symmetry_source_direction(
+            out_kernel,
+            self.source_extra_kwargs,
+            queue,
         )
-        mode_case_map_dev = cl.array.to_device(queue, symmetry_maps["mode_case_map"])
+        for table in near_field_tables:
+            table.symmetry_source_direction = symmetry_source_direction
 
-        (
-            table_data_combined,
-            mode_nmlz_combined,
-            exterior_mode_nmlz_combined,
-            table_entry_ids,
-        ) = _prepare_table_data_and_entry_map(near_field_tables)
+        cache_key = (
+            kname,
+            tuple(int(np.asarray(tbl.data).ctypes.data) for tbl in near_field_tables),
+            tuple(int(np.asarray(tbl.data).size) for tbl in near_field_tables),
+            np.dtype(self.dtype).str,
+            None
+            if symmetry_source_direction is None
+            else tuple(np.asarray(symmetry_source_direction, dtype=float).tolist()),
+        )
+        payload = self._get_cached_nearfield_payload(
+            cache_key,
+            queue,
+            table0,
+            near_field_tables,
+        )
 
-        if getattr(out_kernel, "is_complex_valued", False):
-            if table_data_combined.dtype != self.dtype:
-                table_data_combined = table_data_combined.astype(self.dtype)
-            if mode_nmlz_combined.dtype != self.dtype:
-                mode_nmlz_combined = mode_nmlz_combined.astype(self.dtype)
-            if exterior_mode_nmlz_combined.dtype != self.dtype:
-                exterior_mode_nmlz_combined = exterior_mode_nmlz_combined.astype(
-                    self.dtype
-                )
-
-        queue.finish()
-        logger.info("table data for kernel " + out_kernel.__repr__() + " congregated")
-
-        # The loop domain needs to know some info about the tables being used
-        table_data_shapes = {
-            "n_tables": n_tables_local,
-            "n_q_points": table0.n_q_points,
-            "n_cases": table0.n_cases,
-            "n_table_entries": table_data_combined.shape[1],
-        }
+        base = payload["base"]
+        shift = payload["shift"]
+        case_indices_dev = payload["case_indices_dev"]
+        mode_qpoint_map_dev = payload["mode_qpoint_map_dev"]
+        mode_case_map_dev = payload["mode_case_map_dev"]
+        table_data_shapes = payload["table_data_shapes"]
         assert table_data_shapes["n_q_points"] == len(table0.mode_normalizers)
 
         from volumential.list1 import NearFieldFromCSR
@@ -1279,12 +1403,11 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             **list1_extra_kwargs,
         )
 
-        table_data_combined = cl.array.to_device(queue, table_data_combined)
-        mode_nmlz_combined = cl.array.to_device(queue, mode_nmlz_combined)
-        exterior_mode_nmlz_combined = cl.array.to_device(
-            queue, exterior_mode_nmlz_combined
-        )
-        table_entry_ids = cl.array.to_device(queue, table_entry_ids)
+        table_data_combined = payload["table_data_dev"]
+        mode_nmlz_combined = payload["mode_nmlz_dev"]
+        exterior_mode_nmlz_combined = payload["exterior_mode_nmlz_dev"]
+        table_entry_ids = payload["table_entry_ids_dev"]
+        table_entry_scales = payload["table_entry_scales_dev"]
         particle_local_ids = _compute_box_local_ids(queue, self.tree, table0.n_q_points)
 
         _validate_table_box_particle_layout_cached(
@@ -1308,9 +1431,6 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         source_counts_nonchild = cl.array.to_device(queue, source_counts_nonchild)
         target_counts_nonchild = cl.array.to_device(queue, target_counts_nonchild)
 
-        queue.finish()
-        logger.info("sent table data to device")
-
         # NOTE: box_sources for this evaluation should be "box_targets".
         # This is due to the special features of how box-FMM works.
 
@@ -1331,6 +1451,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             mode_nmlz_combined=mode_nmlz_combined,
             exterior_mode_nmlz_combined=exterior_mode_nmlz_combined,
             table_entry_ids=table_entry_ids,
+            table_entry_scales=table_entry_scales,
             neighbor_source_boxes_starts=neighbor_source_boxes_starts,
             root_extent=self.tree.root_extent,
             neighbor_source_boxes_lists=neighbor_source_boxes_lists,
@@ -3121,6 +3242,14 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
                     + " are not covered."
                 )
 
+        symmetry_source_direction = _extract_symmetry_source_direction(
+            out_kernel,
+            self.source_extra_kwargs,
+            self.queue,
+        )
+        for table in self.near_field_table[kname]:
+            table.symmetry_source_direction = symmetry_source_direction
+
         # table.case_encode
         distinct_numbers = set()
         for vec in self.near_field_table[kname][0].interaction_case_vecs:
@@ -3145,6 +3274,7 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
             mode_nmlz_combined,
             exterior_mode_nmlz_combined,
             table_entry_ids,
+            table_entry_scales,
         ) = _prepare_table_data_and_entry_map(self.near_field_table[kname])
 
         logger.info("Table data for kernel " + out_kernel.__repr__() + " congregated")
@@ -3175,6 +3305,7 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
             self.queue, exterior_mode_nmlz_combined
         )
         table_entry_ids = cl.array.to_device(self.queue, table_entry_ids)
+        table_entry_scales = cl.array.to_device(self.queue, table_entry_scales)
         particle_local_ids = _compute_box_local_ids(
             self.queue, self.tree, self.near_field_table[kname][0].n_q_points
         )
@@ -3217,6 +3348,7 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
             mode_nmlz_combined=mode_nmlz_combined,
             exterior_mode_nmlz_combined=exterior_mode_nmlz_combined,
             table_entry_ids=table_entry_ids,
+            table_entry_scales=table_entry_scales,
             neighbor_source_boxes_starts=neighbor_source_boxes_starts,
             root_extent=self.tree.root_extent,
             neighbor_source_boxes_lists=neighbor_source_boxes_lists,

@@ -581,12 +581,13 @@ class NearFieldFromCSR(NearFieldEvalBase):
                         <> pair_id = source_mode_id_sym * n_q_points + target_point_id_sym
                         <> entry_id_full = case_id_sym * (n_q_points * n_q_points) + pair_id
                         <> entry_id = table_entry_ids[entry_id_full]
+                        <> entry_sign = table_entry_scales[entry_id_full]
                         <> has_entry = entry_id >= 0
 
                         <> displacement = COMPUTE_DISPLACEMENT
 
                         <> integ = (
-                                table_data[table_lev, entry_id] * scaling
+                                table_data[table_lev, entry_id] * entry_sign * scaling
                                 + displacement
                                 if has_entry
                                 else 0) {id=integ,dep=tab_lev}
@@ -644,6 +645,11 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 ),
                 loopy.GlobalArg(
                     "table_entry_ids", np.int32, "n_cases*n_q_points*n_q_points"
+                ),
+                loopy.GlobalArg(
+                    "table_entry_scales",
+                    potential_dtype,
+                    "n_cases*n_q_points*n_q_points",
                 ),
                 loopy.GlobalArg("mode_qpoint_map", np.int32, "n_q_points, n_q_points"),
                 loopy.GlobalArg("mode_case_map", np.int32, "n_q_points, n_cases"),
@@ -713,6 +719,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
         mode_qpoint_map = kwargs.pop("mode_qpoint_map")
         mode_case_map = kwargs.pop("mode_case_map")
         table_entry_ids = kwargs.pop("table_entry_ids")
+        table_entry_scales = kwargs.pop("table_entry_scales")
         root_extent = kwargs.pop("root_extent")
         table_root_extent = kwargs.pop("table_root_extent")
         table_starting_level = kwargs.pop("table_starting_level")
@@ -825,6 +832,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
             mode_nmlz=mode_nmlz_combined,
             exterior_mode_nmlz=exterior_mode_nmlz_combined,
             table_entry_ids=table_entry_ids,
+            table_entry_scales=table_entry_scales,
             mode_qpoint_map=mode_qpoint_map,
             mode_case_map=mode_case_map,
             n_tgt_boxes=len(target_boxes),

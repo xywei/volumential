@@ -40,6 +40,19 @@ Debug tip: when validating source-node evaluations, set
 with separate-but-identical source/target arrays (use `targets=None` to build a
 true coincident tree).
 
+## Near-Field Symmetry and Cache Format
+
+- Near-field table storage uses orbit canonicalization over
+  `(source_mode, target_mode, interaction_case)` and stores only canonical
+  entries.
+- Derivative kernels are supported with sign-aware orbit metadata:
+  runtime lookup applies a per-entry sign factor when reconstructing from
+  canonical entries.
+- SQLite cache schema `2.1.0` stores table content in the `payload` blob only;
+  legacy dense blob columns were removed.
+- Symmetry-reduced payloads persist only finite canonical data arrays
+  (`reduced_entry_ids` + `reduced_data`) and do not store NaN sentinels.
+
 ## Documentation
 
 [Browse the documentation online.](http://xiaoyu-wei.com/docs/volumential/)

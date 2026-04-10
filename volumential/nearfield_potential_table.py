@@ -41,6 +41,80 @@ logger = logging.getLogger("NearFieldInteractionTable")
 
 _TABLE_BUILD_METHOD = "DuffyRadial"
 _DUFFY_PROGRESS_STAGES = 3
+_ORBIT_CANONICAL_CACHE = {}
+
+
+def _kernel_symmetry_meta(kernel):
+    """Return symmetry constraints/sign for table-entry orbit folding.
+
+    Returns a tuple ``(constraint, sign_eval)``:
+    - ``constraint(sign_tuple, perm_tuple) -> bool`` decides if a transform keeps
+      this kernel within the same kernel type.
+    - ``sign_eval(sign_tuple, perm_tuple) -> int`` returns +/-1 multiplier.
+    """
+
+    if kernel is None:
+        return (lambda s, p: True), (lambda s, p: 1)
+
+    cls_name = kernel.__class__.__name__
+
+    if cls_name == "AxisTargetDerivative" and hasattr(kernel, "inner_kernel"):
+        axis = int(kernel.axis)
+        inner_constraint, inner_sign = _kernel_symmetry_meta(kernel.inner_kernel)
+
+        def constraint(sign_tuple, perm_tuple):
+            return perm_tuple[axis] == axis and inner_constraint(sign_tuple, perm_tuple)
+
+        def sign_eval(sign_tuple, perm_tuple):
+            return int(sign_tuple[axis]) * int(inner_sign(sign_tuple, perm_tuple))
+
+        return constraint, sign_eval
+
+    if cls_name == "DirectionalSourceDerivative":
+        source_direction = getattr(kernel, "_volumential_source_direction", None)
+        dim = int(getattr(kernel.inner_kernel, "dim", 0) or 0)
+
+        if source_direction is None:
+            # No direction metadata: stay conservative.
+            def constraint(sign_tuple, perm_tuple):
+                if dim > 0 and tuple(perm_tuple) != tuple(range(dim)):
+                    return False
+                return all(int(s) == 1 for s in sign_tuple)
+
+            return constraint, (lambda s, p: 1)
+
+        src_dir = np.asarray(source_direction, dtype=np.float64)
+        if dim > 0 and src_dir.shape != (dim,):
+            raise ValueError(
+                "symmetry_source_direction has incompatible shape "
+                f"{src_dir.shape}; expected ({dim},)"
+            )
+
+        def transformed_direction(sign_tuple, perm_tuple):
+            vec = src_dir * np.asarray(sign_tuple, dtype=np.float64)
+            vec = vec[np.asarray(perm_tuple, dtype=np.int32)]
+            return vec
+
+        def constraint(sign_tuple, perm_tuple):
+            vec = transformed_direction(sign_tuple, perm_tuple)
+            return bool(np.allclose(vec, src_dir) or np.allclose(vec, -src_dir))
+
+        def sign_eval(sign_tuple, perm_tuple):
+            vec = transformed_direction(sign_tuple, perm_tuple)
+            if np.allclose(vec, src_dir):
+                return 1
+            if np.allclose(vec, -src_dir):
+                return -1
+            raise RuntimeError(
+                "unexpected non-collinear directional symmetry transform"
+            )
+
+        return constraint, sign_eval
+
+    if hasattr(kernel, "inner_kernel"):
+        return _kernel_symmetry_meta(kernel.inner_kernel)
+
+    return (lambda s, p: True), (lambda s, p: 1)
 
 
 @dataclass(frozen=True)
@@ -305,6 +379,14 @@ class NearFieldInteractionTable:
 
         self.build_method = _TABLE_BUILD_METHOD
         self._auto_build_queue = None
+        self._orbit_info_cache = {}
+        symmetry_source_direction = kwargs.pop("symmetry_source_direction", None)
+        if symmetry_source_direction is None:
+            self.symmetry_source_direction = None
+        else:
+            self.symmetry_source_direction = np.asarray(
+                symmetry_source_direction, dtype=np.float64
+            )
 
         if kernel_func is None and sumpy_kernel is not None and derive_kernel_func:
             if _is_sumpy_kernel_like(sumpy_kernel):
@@ -441,17 +523,11 @@ class NearFieldInteractionTable:
         pair_id = source_mode_index * self.n_q_points + target_point_index
 
         if self.table_data_is_symmetry_reduced:
-            symmetry_maps = self._get_online_symmetry_maps()
-            source_mode_index_sym = int(
-                symmetry_maps["mode_qpoint_map"][source_mode_index, source_mode_index]
-            )
-            target_point_index_sym = int(
-                symmetry_maps["mode_qpoint_map"][source_mode_index, target_point_index]
-            )
-            case_id = int(symmetry_maps["mode_case_map"][source_mode_index, case_id])
-            pair_id = source_mode_index_sym * self.n_q_points + target_point_index_sym
+            full_entry_id = case_id * self.n_pairs + pair_id
+            orbit_info = self._get_orbit_canonical_info()
+            return int(orbit_info["canonical_entry_ids"][full_entry_id])
 
-        return case_id * self.n_pairs + pair_id
+        return int(case_id * self.n_pairs + pair_id)
 
     # }}} End encode to table index
 
@@ -861,86 +937,8 @@ class NearFieldInteractionTable:
                     bw[i] /= xi[i] - xi[j]
         return xi, bw.astype(geom_dtype)
 
-    @memoize_method
     def _get_invariant_entry_info(self):
-        sym_maps = self._get_online_symmetry_maps()
-        mode_qpoint_map = sym_maps["mode_qpoint_map"]
-        mode_case_map = sym_maps["mode_case_map"]
-        all_mode_axes = self._get_all_mode_axes()
-
-        qpoint_indices = np.arange(self.n_q_points, dtype=np.int32)
-        case_indices_all = np.arange(self.n_cases, dtype=np.int32)
-
-        entry_chunks = []
-        case_chunks = []
-        target_chunks = []
-        source_chunks = []
-
-        n_q_points_i64 = np.int64(self.n_q_points)
-        n_pairs_i64 = np.int64(self.n_pairs)
-
-        for source_mode_index in range(self.n_q_points):
-            if (
-                mode_qpoint_map[source_mode_index, source_mode_index]
-                != source_mode_index
-            ):
-                continue
-
-            fixed_targets = qpoint_indices[
-                mode_qpoint_map[source_mode_index] == qpoint_indices
-            ]
-            if fixed_targets.size == 0:
-                continue
-
-            fixed_cases = case_indices_all[
-                mode_case_map[source_mode_index] == case_indices_all
-            ]
-            if fixed_cases.size == 0:
-                continue
-
-            pair_base = np.int64(
-                source_mode_index
-            ) * n_q_points_i64 + fixed_targets.astype(np.int64)
-            entry_block = (
-                fixed_cases.astype(np.int64)[:, np.newaxis] * n_pairs_i64
-                + pair_base[np.newaxis, :]
-            )
-
-            entry_chunks.append(entry_block.reshape(-1))
-            case_chunks.append(np.repeat(fixed_cases, fixed_targets.size))
-            target_chunks.append(np.tile(fixed_targets, fixed_cases.size))
-            source_chunks.append(
-                np.full(entry_block.size, source_mode_index, dtype=np.int32)
-            )
-
-        if entry_chunks:
-            invariant_entry_ids = np.concatenate(entry_chunks).astype(
-                np.int64, copy=False
-            )
-            case_indices = np.concatenate(case_chunks).astype(np.int32, copy=False)
-            target_point_indices = np.concatenate(target_chunks).astype(
-                np.int32, copy=False
-            )
-            source_mode_indices = np.concatenate(source_chunks).astype(
-                np.int32, copy=False
-            )
-        else:
-            invariant_entry_ids = np.empty(0, dtype=np.int64)
-            case_indices = np.empty(0, dtype=np.int32)
-            target_point_indices = np.empty(0, dtype=np.int32)
-            source_mode_indices = np.empty(0, dtype=np.int32)
-
-        mode_axes = np.ascontiguousarray(
-            all_mode_axes[source_mode_indices], dtype=np.int32
-        )
-
-        return {
-            "entry_ids": invariant_entry_ids,
-            "case_indices": case_indices,
-            "target_point_indices": target_point_indices,
-            "source_mode_indices": source_mode_indices,
-            "mode_axes": mode_axes,
-        }
+        return self._get_orbit_canonical_info()
 
     @memoize_method
     def _get_case_target_points(self):
@@ -983,6 +981,62 @@ class NearFieldInteractionTable:
             residual //= self.quad_order
         return axes
 
+    @staticmethod
+    def _uf_find(parent, idx):
+        while parent[idx] != idx:
+            parent[idx] = parent[parent[idx]]
+            idx = parent[idx]
+        return idx
+
+    @classmethod
+    def _uf_union(cls, parent, rank, ia, ib):
+        ra = cls._uf_find(parent, ia)
+        rb = cls._uf_find(parent, ib)
+        if ra == rb:
+            return
+        if rank[ra] < rank[rb]:
+            parent[ra] = rb
+        elif rank[ra] > rank[rb]:
+            parent[rb] = ra
+        else:
+            parent[rb] = ra
+            rank[ra] += 1
+
+    @staticmethod
+    def _signed_uf_find(parent, rel, idx):
+        if parent[idx] == idx:
+            return idx, 1
+        root, root_rel = NearFieldInteractionTable._signed_uf_find(
+            parent, rel, parent[idx]
+        )
+        rel[idx] *= root_rel
+        parent[idx] = root
+        return root, int(rel[idx])
+
+    @classmethod
+    def _signed_uf_union(cls, parent, rank, rel, ia, ib, sign_b_over_a):
+        root_a, wa = cls._signed_uf_find(parent, rel, ia)
+        root_b, wb = cls._signed_uf_find(parent, rel, ib)
+
+        if root_a == root_b:
+            return
+
+        if rank[root_a] < rank[root_b]:
+            # value[root_a] = t * value[root_b]
+            t = int(wb * sign_b_over_a / wa)
+            parent[root_a] = root_b
+            rel[root_a] = t
+        elif rank[root_a] > rank[root_b]:
+            # value[root_b] = t * value[root_a]
+            t = int(wa / (sign_b_over_a * wb))
+            parent[root_b] = root_a
+            rel[root_b] = t
+        else:
+            t = int(wa / (sign_b_over_a * wb))
+            parent[root_b] = root_a
+            rel[root_b] = t
+            rank[root_a] += 1
+
     @memoize_method
     def _get_online_symmetry_maps(self):
         mode_qpoint_map = np.empty((self.n_q_points, self.n_q_points), dtype=np.int32)
@@ -1020,6 +1074,179 @@ class NearFieldInteractionTable:
             "mode_qpoint_map": mode_qpoint_map,
             "mode_case_map": mode_case_map,
         }
+
+    def _get_orbit_canonical_info(self):
+        """Canonicalize (source_mode, target_mode, case) under full group action."""
+
+        cache_key = (
+            int(self.dim),
+            int(self.quad_order),
+            tuple(tuple(int(c) for c in vec) for vec in self.interaction_case_vecs),
+            repr(self.integral_knl),
+            None
+            if self.symmetry_source_direction is None
+            else tuple(
+                np.asarray(self.symmetry_source_direction, dtype=float).tolist()
+            ),
+        )
+        cached = self._orbit_info_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        cached = _ORBIT_CANONICAL_CACHE.get(cache_key)
+        if cached is not None:
+            self._orbit_info_cache[cache_key] = cached
+            return cached
+
+        all_mode_axes = self._get_all_mode_axes()
+        case_vecs = np.asarray(self.interaction_case_vecs, dtype=np.int32)
+
+        n_entries = self.n_cases * self.n_pairs
+        n_q_points_i64 = np.int64(self.n_q_points)
+        n_pairs_i64 = np.int64(self.n_pairs)
+
+        parent = np.arange(n_entries, dtype=np.int64)
+        rank = np.zeros(n_entries, dtype=np.int8)
+        rel = np.ones(n_entries, dtype=np.int8)
+
+        from itertools import permutations, product
+
+        multi_shape = (self.quad_order,) * self.dim
+        perms = list(permutations(range(self.dim)))
+        signs = list(product([-1, 1], repeat=self.dim))
+
+        mode_maps = []
+        case_maps = []
+        transform_signs = []
+        kernel = self.integral_knl
+        if (
+            kernel is not None
+            and kernel.__class__.__name__ == "DirectionalSourceDerivative"
+            and self.symmetry_source_direction is not None
+        ):
+            # Attach direction metadata for symmetry evaluation.
+            try:
+                setattr(
+                    kernel,
+                    "_volumential_source_direction",
+                    self.symmetry_source_direction,
+                )
+            except Exception:
+                pass
+
+        kernel_constraint, kernel_sign_eval = _kernel_symmetry_meta(kernel)
+
+        for sign_tuple in signs:
+            sgn = np.asarray(sign_tuple, dtype=np.int32)
+            neg_axes = sgn < 0
+
+            for perm_tuple in perms:
+                perm = np.asarray(perm_tuple, dtype=np.int32)
+
+                if not kernel_constraint(sign_tuple, perm_tuple):
+                    continue
+
+                mapped_axes = all_mode_axes
+                if np.any(neg_axes):
+                    mapped_axes = mapped_axes.copy()
+                    mapped_axes[:, neg_axes] = (
+                        self.quad_order - 1 - mapped_axes[:, neg_axes]
+                    )
+                mapped_axes = mapped_axes[:, perm]
+                mode_maps.append(
+                    np.ravel_multi_index(mapped_axes.T, multi_shape).astype(np.int32)
+                )
+
+                mapped_case_vecs = case_vecs * sgn
+                mapped_case_vecs = mapped_case_vecs[:, perm]
+                encoded = np.array(
+                    [
+                        self.case_encode(case_vec.tolist())
+                        for case_vec in mapped_case_vecs
+                    ],
+                    dtype=np.int64,
+                )
+                case_maps.append(self.case_indices[encoded].astype(np.int32))
+                transform_signs.append(int(kernel_sign_eval(sign_tuple, perm_tuple)))
+
+        for mode_map, case_map, transform_sign in zip(
+            mode_maps, case_maps, transform_signs
+        ):
+            for case_id in range(self.n_cases):
+                case_id_sym = int(case_map[case_id])
+                base = np.int64(case_id) * n_pairs_i64
+                base_sym = np.int64(case_id_sym) * n_pairs_i64
+                for source_mode_id in range(self.n_q_points):
+                    source_mode_id_sym = int(mode_map[source_mode_id])
+                    row = base + np.int64(source_mode_id) * n_q_points_i64
+                    row_sym = base_sym + np.int64(source_mode_id_sym) * n_q_points_i64
+                    for target_mode_id in range(self.n_q_points):
+                        target_mode_id_sym = int(mode_map[target_mode_id])
+                        ia = int(row + np.int64(target_mode_id))
+                        ib = int(row_sym + np.int64(target_mode_id_sym))
+                        self._signed_uf_union(
+                            parent,
+                            rank,
+                            rel,
+                            ia,
+                            ib,
+                            transform_sign,
+                        )
+
+        canonical_entry_ids = np.empty(n_entries, dtype=np.int64)
+        weights_to_root = np.empty(n_entries, dtype=np.int8)
+        for entry_id in range(n_entries):
+            root, w = self._signed_uf_find(parent, rel, entry_id)
+            canonical_entry_ids[entry_id] = root
+            weights_to_root[entry_id] = np.int8(w)
+
+        roots = np.unique(canonical_entry_ids)
+        invariant_entry_ids = np.empty(len(roots), dtype=np.int64)
+        rep_weights = np.empty(len(roots), dtype=np.int8)
+        root_to_rep = {}
+        root_to_rep_weight = {}
+        for iroot, root in enumerate(roots):
+            member_ids = np.flatnonzero(canonical_entry_ids == root)
+            rep = int(np.min(member_ids))
+            invariant_entry_ids[iroot] = rep
+            rep_w = int(weights_to_root[rep])
+            rep_weights[iroot] = np.int8(rep_w)
+            root_to_rep[int(root)] = rep
+            root_to_rep_weight[int(root)] = rep_w
+
+        canonical_scales = np.empty(n_entries, dtype=self.dtype)
+        for entry_id in range(n_entries):
+            root = int(canonical_entry_ids[entry_id])
+            rep = root_to_rep[root]
+            rep_w = root_to_rep_weight[root]
+            canonical_entry_ids[entry_id] = rep
+            canonical_scales[entry_id] = self.dtype(
+                int(weights_to_root[entry_id]) / int(rep_w)
+            )
+
+        invariant_entry_ids = np.unique(canonical_entry_ids)
+
+        source_mode_indices = (
+            (invariant_entry_ids % n_pairs_i64) // n_q_points_i64
+        ).astype(np.int32)
+        target_point_indices = (invariant_entry_ids % n_q_points_i64).astype(np.int32)
+        case_indices = (invariant_entry_ids // n_pairs_i64).astype(np.int32)
+        mode_axes = np.ascontiguousarray(
+            all_mode_axes[source_mode_indices], dtype=np.int32
+        )
+
+        result = {
+            "entry_ids": invariant_entry_ids,
+            "canonical_entry_ids": canonical_entry_ids,
+            "canonical_scales": canonical_scales,
+            "case_indices": case_indices,
+            "target_point_indices": target_point_indices,
+            "source_mode_indices": source_mode_indices,
+            "mode_axes": mode_axes,
+        }
+        _ORBIT_CANONICAL_CACHE[cache_key] = result
+        self._orbit_info_cache[cache_key] = result
+        return result
 
     @memoize_method
     def _get_fused_invariant_duffy_table_tunit(self):

@@ -58,8 +58,16 @@ logger = logging.getLogger(__name__)
 _HDF5_SIGNATURE = b"\x89HDF\r\n\x1a\n"
 
 
-TABLE_CACHE_SCHEMA_VERSION = "2.0.0"
+TABLE_CACHE_SCHEMA_VERSION = "2.1.0"
 TABLE_CACHE_MIN_READABLE_SCHEMA_VERSION = "2.0.0"
+_LEGACY_CACHE_BLOB_COLUMNS = {
+    "q_points",
+    "data",
+    "mode_normalizers",
+    "kernel_exterior_normalizers",
+    "interaction_case_vecs",
+    "case_indices",
+}
 _LEGACY_UNVERSIONED_SCHEMA_VERSION = "1.0.0"
 _TABLE_BUILD_METHOD = "DuffyRadial"
 
@@ -187,6 +195,12 @@ def _serialize_table_payload(table):
             dtype=np.int8,
         ),
     }
+
+    symmetry_source_direction = getattr(table, "symmetry_source_direction", None)
+    if symmetry_source_direction is not None:
+        payload["symmetry_source_direction"] = np.array(
+            symmetry_source_direction, dtype=np.float64
+        )
 
     if table_data_is_symmetry_reduced:
         reduced_entry_ids = np.flatnonzero(np.isfinite(data)).astype(np.int64)
@@ -571,13 +585,6 @@ class NearFieldInteractionTableManager:
 
                 build_method TEXT,
                 kernel_type_cached TEXT,
-
-                q_points BLOB NOT NULL,
-                data BLOB NOT NULL,
-                mode_normalizers BLOB,
-                kernel_exterior_normalizers BLOB,
-                interaction_case_vecs BLOB,
-                case_indices BLOB,
                 payload BLOB,
 
                 PRIMARY KEY (dim, kernel_type, q_order, source_box_level)
@@ -635,6 +642,13 @@ class NearFieldInteractionTableManager:
                 )
                 columns.add("payload")
 
+        if not self._read_only and self._has_legacy_blob_columns(columns):
+            self._migrate_drop_legacy_blob_columns()
+            columns = {
+                row["name"]
+                for row in self.datafile.execute("PRAGMA table_info(nearfield_cache)")
+            }
+
         self._initialize_schema_version(columns)
 
         self.datafile.commit()
@@ -659,9 +673,67 @@ class NearFieldInteractionTableManager:
         )
 
     def _infer_schema_version_from_columns(self, cache_columns):
-        if "payload" in cache_columns:
+        if "payload" in cache_columns and not self._has_legacy_blob_columns(
+            cache_columns
+        ):
             return TABLE_CACHE_SCHEMA_VERSION
+        if "payload" in cache_columns:
+            return "2.0.0"
         return _LEGACY_UNVERSIONED_SCHEMA_VERSION
+
+    def _has_legacy_blob_columns(self, cache_columns):
+        return any(col in cache_columns for col in _LEGACY_CACHE_BLOB_COLUMNS)
+
+    def _migrate_drop_legacy_blob_columns(self):
+        logger.info(
+            "Migrating table cache schema in %s to drop legacy blob columns",
+            self.filename,
+        )
+        self.datafile.execute("PRAGMA foreign_keys=OFF")
+        self.datafile.execute(
+            """
+            CREATE TABLE nearfield_cache_new (
+                dim INTEGER NOT NULL,
+                kernel_type TEXT NOT NULL,
+                q_order INTEGER NOT NULL,
+                source_box_level INTEGER NOT NULL,
+                n_q_points INTEGER NOT NULL,
+                quad_order INTEGER NOT NULL,
+                n_pairs INTEGER NOT NULL,
+                source_box_extent REAL NOT NULL,
+                source_box_level_stored INTEGER NOT NULL,
+                case_encoding_base INTEGER,
+                case_encoding_shift INTEGER,
+                build_method TEXT,
+                kernel_type_cached TEXT,
+                payload BLOB,
+                PRIMARY KEY (dim, kernel_type, q_order, source_box_level)
+            )
+            """
+        )
+        self.datafile.execute(
+            """
+            INSERT INTO nearfield_cache_new (
+                dim, kernel_type, q_order, source_box_level,
+                n_q_points, quad_order, n_pairs,
+                source_box_extent, source_box_level_stored,
+                case_encoding_base, case_encoding_shift,
+                build_method, kernel_type_cached, payload
+            )
+            SELECT
+                dim, kernel_type, q_order, source_box_level,
+                n_q_points, quad_order, n_pairs,
+                source_box_extent, source_box_level_stored,
+                case_encoding_base, case_encoding_shift,
+                build_method, kernel_type_cached, payload
+            FROM nearfield_cache
+            """
+        )
+        self.datafile.execute("DROP TABLE nearfield_cache")
+        self.datafile.execute(
+            "ALTER TABLE nearfield_cache_new RENAME TO nearfield_cache"
+        )
+        self.datafile.execute("PRAGMA foreign_keys=ON")
 
     def _initialize_schema_version(self, cache_columns):
         current_version_tuple = _parse_semver(
@@ -1390,6 +1462,12 @@ class NearFieldInteractionTableManager:
             table.interaction_case_vecs = [list(vec) for vec in tmp_case_vecs]
 
             table.case_indices[:] = payload["case_indices"]
+            if "symmetry_source_direction" in payload:
+                table.symmetry_source_direction = np.asarray(
+                    payload["symmetry_source_direction"], dtype=np.float64
+                )
+            else:
+                table.symmetry_source_direction = None
             if "table_data_is_symmetry_reduced" in payload:
                 table.table_data_is_symmetry_reduced = bool(
                     payload["table_data_is_symmetry_reduced"][0]
@@ -1723,7 +1801,6 @@ class NearFieldInteractionTableManager:
         )
         t_payload_serialize_start = time.perf_counter()
         payload_blob = _serialize_table_payload(table)
-        empty_float_blob = _serialize_array(np.array([], dtype=self.dtype))
         t_payload_serialize_end = time.perf_counter()
 
         distinct_numbers = set()
@@ -1747,12 +1824,6 @@ class NearFieldInteractionTableManager:
             shift,
             _TABLE_BUILD_METHOD,
             kernel_bundle.kernel_scale_type,
-            empty_float_blob,
-            empty_float_blob,
-            None,
-            None,
-            None,
-            None,
             payload_blob,
         )
 
@@ -1764,12 +1835,9 @@ class NearFieldInteractionTableManager:
                 n_q_points, quad_order, n_pairs,
                 source_box_extent, source_box_level_stored,
                 case_encoding_base, case_encoding_shift,
-                build_method, kernel_type_cached,
-                q_points, data, mode_normalizers,
-                kernel_exterior_normalizers, interaction_case_vecs,
-                case_indices, payload
+                build_method, kernel_type_cached, payload
             ) VALUES (
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
             )
             ON CONFLICT(dim, kernel_type, q_order, source_box_level) DO UPDATE SET
                 n_q_points=excluded.n_q_points,
@@ -1781,12 +1849,6 @@ class NearFieldInteractionTableManager:
                 case_encoding_shift=excluded.case_encoding_shift,
                 build_method=excluded.build_method,
                 kernel_type_cached=excluded.kernel_type_cached,
-                q_points=excluded.q_points,
-                data=excluded.data,
-                mode_normalizers=excluded.mode_normalizers,
-                kernel_exterior_normalizers=excluded.kernel_exterior_normalizers,
-                interaction_case_vecs=excluded.interaction_case_vecs,
-                case_indices=excluded.case_indices,
                 payload=excluded.payload
             """,
             record_values,
