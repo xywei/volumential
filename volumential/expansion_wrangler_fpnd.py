@@ -23,6 +23,7 @@ THE SOFTWARE.
 import json
 import logging
 import hashlib
+from collections import OrderedDict
 
 import numpy as np
 
@@ -1210,7 +1211,8 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             self._helmholtz_split_constant_kernel = ConstantKernel(base_knl.dim)
         self.list1_extra_kwargs = list1_extra_kwargs
         self._table_layout_validation_cache = set()
-        self._nearfield_device_payload_cache = {}
+        self._nearfield_device_payload_cache = OrderedDict()
+        self._nearfield_device_payload_cache_max = 16
 
     # }}} End constructor
 
@@ -1225,6 +1227,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
     ):
         payload = self._nearfield_device_payload_cache.get(cache_key)
         if payload is not None:
+            self._nearfield_device_payload_cache.move_to_end(cache_key)
             return payload
 
         distinct_numbers = set()
@@ -1281,6 +1284,11 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             "table_data_shapes": table_data_shapes,
         }
         self._nearfield_device_payload_cache[cache_key] = payload
+        while (
+            len(self._nearfield_device_payload_cache)
+            > self._nearfield_device_payload_cache_max
+        ):
+            self._nearfield_device_payload_cache.popitem(last=False)
         return payload
 
     @property
@@ -3113,7 +3121,8 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
 
         self.list1_extra_kwargs = list1_extra_kwargs
         self._table_layout_validation_cache = set()
-        self._nearfield_device_payload_cache = {}
+        self._nearfield_device_payload_cache = OrderedDict()
+        self._nearfield_device_payload_cache_max = 16
 
         # }}} End table setup
 
@@ -3409,6 +3418,7 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
     ):
         payload = self._nearfield_device_payload_cache.get(cache_key)
         if payload is not None:
+            self._nearfield_device_payload_cache.move_to_end(cache_key)
             return payload
 
         distinct_numbers = set()
@@ -3465,6 +3475,11 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
             "table_data_shapes": table_data_shapes,
         }
         self._nearfield_device_payload_cache[cache_key] = payload
+        while (
+            len(self._nearfield_device_payload_cache)
+            > self._nearfield_device_payload_cache_max
+        ):
+            self._nearfield_device_payload_cache.popitem(last=False)
         return payload
 
     def eval_direct(

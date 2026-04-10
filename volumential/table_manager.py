@@ -229,7 +229,17 @@ def _to_stable_jsonable(value):
         return _to_stable_jsonable(value.tolist())
 
     if value is None or isinstance(value, (bool, int, float, str)):
-        return value
+    return value
+
+
+def _normalize_symmetry_source_direction(value):
+    if value is None:
+        return None
+
+    arr = np.asarray(value, dtype=np.float64).ravel()
+    if arr.size == 0:
+        return None
+    return tuple(float(v) for v in arr.tolist())
 
     if is_dataclass(value) and not isinstance(value, type):
         return _to_stable_jsonable(
@@ -1082,6 +1092,12 @@ class NearFieldInteractionTableManager:
 
     def _kwargs_for_cache_storage(self, kwargs):
         cache_kwargs = dict(kwargs)
+        symmetry_dir = _normalize_symmetry_source_direction(
+            cache_kwargs.pop("symmetry_source_direction", None)
+        )
+        if symmetry_dir is not None:
+            cache_kwargs["symmetry_source_direction_json"] = json.dumps(symmetry_dir)
+
         build_config_fingerprint = self._build_config_fingerprint(kwargs)
         if build_config_fingerprint is not None:
             cache_kwargs["build_config_fingerprint"] = build_config_fingerprint
@@ -1563,6 +1579,22 @@ class NearFieldInteractionTableManager:
 
         t_kwargs_load_start = time.perf_counter()
         loaded_kwargs = self._load_record_kwargs(table_request)
+
+        requested_symmetry_dir = _normalize_symmetry_source_direction(
+            kwargs.get("symmetry_source_direction", None)
+        )
+        loaded_symmetry_dir_json = loaded_kwargs.get("symmetry_source_direction_json")
+        loaded_symmetry_dir = None
+        if loaded_symmetry_dir_json is not None:
+            try:
+                loaded_symmetry_dir = _normalize_symmetry_source_direction(
+                    json.loads(loaded_symmetry_dir_json)
+                )
+            except Exception:
+                raise KeyError("cached symmetry_source_direction metadata is malformed")
+        if requested_symmetry_dir != loaded_symmetry_dir:
+            raise KeyError("cached symmetry_source_direction mismatch")
+
         requested_build_config_fingerprint = self._build_config_fingerprint(kwargs)
         if requested_build_config_fingerprint is not None:
             loaded_build_config_fingerprint = loaded_kwargs.get(
