@@ -1212,11 +1212,41 @@ class NearFieldInteractionTableManager:
                 "for loopy table build."
             )
 
+        kernel_func = None
+        if sumpy_knl is not None:
+            from volumential.nearfield_potential_table import sumpy_kernel_to_lambda
+
+            parameter_values = self._extract_kernel_parameter_values(sumpy_knl, kwargs)
+            kernel_func = sumpy_kernel_to_lambda(
+                sumpy_knl,
+                fallback_dim=table_request.dim,
+                parameter_values=parameter_values,
+            )
+
         return TableKernelBundle(
-            kernel_func=None,
+            kernel_func=kernel_func,
             kernel_scale_type=kernel_scale_type,
             sumpy_kernel=sumpy_knl,
         )
+
+    def _extract_kernel_parameter_values(self, sumpy_knl, kwargs):
+        parameter_values = {}
+        for attr_name in ("helmholtz_k_name", "yukawa_lambda_name"):
+            param_name = getattr(sumpy_knl, attr_name, None)
+            if not isinstance(param_name, str) or not param_name:
+                continue
+
+            if param_name not in kwargs:
+                raise TypeError(
+                    "missing kernel parameter "
+                    + repr(param_name)
+                    + " for "
+                    + sumpy_knl.__class__.__name__
+                )
+
+            parameter_values[param_name] = kwargs[param_name]
+
+        return parameter_values
 
     def _warn_on_loaded_kwarg_mismatch(self, table, kwargs):
         for kkey, kval in kwargs.items():

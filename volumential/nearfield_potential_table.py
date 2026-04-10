@@ -294,7 +294,7 @@ def _sumpy_kernel_dim(sknl, fallback_dim=None):
     )
 
 
-def sumpy_kernel_to_lambda(sknl, fallback_dim=None):
+def sumpy_kernel_to_lambda(sknl, fallback_dim=None, parameter_values=None):
     if not _is_sumpy_kernel_like(sknl):
         raise TypeError(
             "sumpy_kernel_to_lambda requires a sumpy-like kernel object with "
@@ -317,9 +317,15 @@ def sumpy_kernel_to_lambda(sknl, fallback_dim=None):
     arg_names = symbols(var_names)
     args = [Symbol(var_name_prefix + str(i)) for i in range(dim)]
 
+    expr = sknl.get_expression(args) * sknl.get_global_scaling_const()
+    if parameter_values:
+        expr = expr.subs(
+            {Symbol(str(name)): value for name, value in parameter_values.items()}
+        )
+
     lmd = lambdify(
         arg_names,
-        sknl.get_expression(args) * sknl.get_global_scaling_const(),
+        expr,
         modules=[
             {
                 "hankel_1": _hankel1,
