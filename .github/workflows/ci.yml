@@ -21,6 +21,59 @@ env:
   PYOPENCL_TEST: 'portable:0'
 
 jobs:
+  typos:
+    name: Typos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: crate-ci/typos@v1
+        with:
+          config: .typos.toml
+          files: |
+            .github/workflows
+            volumential
+            README.md
+            DEVELOPMENT.md
+            pyproject.toml
+
+  ruff:
+    name: Ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - name: Main Script
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ruff
+          ruff check --select E9,F63,F7,F82
+
+  basedpyright:
+    name: Type Checking (basedpyright)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: .test-conda-env-py3.yml
+          environment-name: testing
+          cache-downloads: true
+          generate-run-shell: true
+      - name: Main Script
+        shell: micromamba-shell {0}
+        run: |
+          export PY_EXE=python
+
+          python -m pip install --upgrade pip
+          python -m pip install uv
+          uv pip install --system --editable ".[test]"
+          uv pip install --system basedpyright
+
+          python -m basedpyright -p pyproject.toml --level error
+
   pytest:
     name: Testing (Linux)
     runs-on: ubuntu-latest
