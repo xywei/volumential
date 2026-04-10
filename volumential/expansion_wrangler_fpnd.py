@@ -3270,45 +3270,31 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
         for table in self.near_field_table[kname]:
             table.symmetry_source_direction = symmetry_source_direction
 
-        # table.case_encode
-        distinct_numbers = set()
-        for vec in self.near_field_table[kname][0].interaction_case_vecs:
-            for cvc in vec:
-                distinct_numbers.add(cvc)
-        base = len(range(min(distinct_numbers), max(distinct_numbers) + 1))
-        shift = -min(distinct_numbers)
-
-        case_indices_dev = cl.array.to_device(
-            self.queue, self.near_field_table[kname][0].case_indices
+        near_field_tables = self.near_field_table[kname]
+        table0 = near_field_tables[0]
+        cache_key = (
+            kname,
+            tuple(int(np.asarray(tbl.data).ctypes.data) for tbl in near_field_tables),
+            tuple(int(np.asarray(tbl.data).size) for tbl in near_field_tables),
+            tuple(_table_data_fingerprint(tbl.data) for tbl in near_field_tables),
+            np.dtype(self.dtype).str,
+            None
+            if symmetry_source_direction is None
+            else tuple(np.asarray(symmetry_source_direction, dtype=float).tolist()),
         )
-        symmetry_maps = self.near_field_table[kname][0]._get_online_symmetry_maps()
-        mode_qpoint_map_dev = cl.array.to_device(
-            self.queue, symmetry_maps["mode_qpoint_map"]
+        payload = self._get_cached_nearfield_payload(
+            cache_key,
+            self.queue,
+            table0,
+            near_field_tables,
         )
-        mode_case_map_dev = cl.array.to_device(
-            self.queue, symmetry_maps["mode_case_map"]
-        )
 
-        (
-            table_data_combined,
-            mode_nmlz_combined,
-            exterior_mode_nmlz_combined,
-            table_entry_ids,
-            table_entry_scales,
-        ) = _prepare_table_data_and_entry_map(self.near_field_table[kname])
-
-        if table_entry_scales.dtype != self.dtype:
-            table_entry_scales = table_entry_scales.astype(self.dtype)
-
-        logger.info("Table data for kernel " + out_kernel.__repr__() + " congregated")
-
-        # The loop domain needs to know some info about the tables being used
-        table_data_shapes = {
-            "n_tables": len(self.near_field_table[kname]),
-            "n_q_points": self.near_field_table[kname][0].n_q_points,
-            "n_cases": self.near_field_table[kname][0].n_cases,
-            "n_table_entries": table_data_combined.shape[1],
-        }
+        base = payload["base"]
+        shift = payload["shift"]
+        case_indices_dev = payload["case_indices_dev"]
+        mode_qpoint_map_dev = payload["mode_qpoint_map_dev"]
+        mode_case_map_dev = payload["mode_case_map_dev"]
+        table_data_shapes = payload["table_data_shapes"]
         assert table_data_shapes["n_q_points"] == len(
             self.near_field_table[kname][0].mode_normalizers
         )
@@ -3322,13 +3308,11 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
             **self.list1_extra_kwargs,
         )
 
-        table_data_combined = cl.array.to_device(self.queue, table_data_combined)
-        mode_nmlz_combined = cl.array.to_device(self.queue, mode_nmlz_combined)
-        exterior_mode_nmlz_combined = cl.array.to_device(
-            self.queue, exterior_mode_nmlz_combined
-        )
-        table_entry_ids = cl.array.to_device(self.queue, table_entry_ids)
-        table_entry_scales = cl.array.to_device(self.queue, table_entry_scales)
+        table_data_combined = payload["table_data_dev"]
+        mode_nmlz_combined = payload["mode_nmlz_dev"]
+        exterior_mode_nmlz_combined = payload["exterior_mode_nmlz_dev"]
+        table_entry_ids = payload["table_entry_ids_dev"]
+        table_entry_scales = payload["table_entry_scales_dev"]
         particle_local_ids = _compute_box_local_ids(
             self.queue, self.tree, self.near_field_table[kname][0].n_q_points
         )

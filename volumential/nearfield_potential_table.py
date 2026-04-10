@@ -1035,14 +1035,28 @@ class NearFieldInteractionTable:
 
     @staticmethod
     def _signed_uf_find(parent, rel, idx):
-        if parent[idx] == idx:
-            return idx, 1
-        root, root_rel = NearFieldInteractionTable._signed_uf_find(
-            parent, rel, parent[idx]
-        )
-        rel[idx] *= root_rel
-        parent[idx] = root
-        return root, int(rel[idx])
+        # Iterative signed-find with path compression.
+        node = int(idx)
+        total = 1
+        path = []
+
+        while True:
+            parent_node = int(parent[node])
+            path.append(node)
+            if parent_node == node:
+                root = node
+                break
+            total *= int(rel[node])
+            node = parent_node
+
+        prod_to_root = 1
+        for path_node in reversed(path):
+            next_prod = prod_to_root * int(rel[path_node])
+            parent[path_node] = root
+            rel[path_node] = prod_to_root
+            prod_to_root = next_prod
+
+        return root, int(total)
 
     @classmethod
     def _signed_uf_union(cls, parent, rank, rel, ia, ib, sign_b_over_a):
