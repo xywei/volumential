@@ -217,6 +217,12 @@ Supported planner config keys:
 - ``order_min`` / ``order_max``: optional clamps
 - ``rho_base_real`` / ``rho_base_imag``: base values for default geometric
   threshold ladders for :math:`|\Re(k)|h` and :math:`|\Im(k)|h`
+- ``exp_tail_guardrail_enabled``: enable exponential-tail order guardrail
+- ``exp_tail_rel_tol``: relative tail tolerance for the exponential guardrail
+- ``rho_imag_split_max``: maximum :math:`|\Im(k)|h` for default split mode
+- ``disable_split_if_outside_coverage``: if true, auto mode falls back to
+  direct (non-split) near-field evaluation when :math:`|\Im(k)|h` exceeds
+  ``rho_imag_split_max``
 - ``smooth_quad_order_min``: floor for smooth quadrature order
 - ``smooth_quad_order_per_order``: increment per additional split order above 1
 

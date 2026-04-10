@@ -2560,8 +2560,37 @@ def test_volume_fmm_2d_yukawa_complex_lambda_rejected(tmp_path):
         )
 
 
+def test_volume_fmm_2d_yukawa_split_auto_high_rho_runs(tmp_path):
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 5
+    lam = 32.0
+    split_table = _get_laplace_2d_table(
+        queue,
+        tmp_path / "nft-yukawa2d-split-auto-highrho-q5.sqlite",
+        q_order,
+    )
+
+    out = _run_2d_yukawa_split_case(
+        ctx,
+        queue,
+        split_table,
+        q_order=q_order,
+        nlevels=3,
+        fmm_order=16,
+        lam=lam,
+        helmholtz_split=True,
+        helmholtz_split_order="auto",
+    )
+
+    pot = out["potentials"].get(queue)
+    assert np.all(np.isfinite(pot))
+
+
 def test_select_split_order_from_rho_default_boundaries():
     from volumential.expansion_wrangler_fpnd import (
+        _select_split_order_from_exp_tail,
         _select_split_order_from_rho,
         _select_split_order_from_rho_components,
     )
@@ -2584,6 +2613,18 @@ def test_select_split_order_from_rho_default_boundaries():
         orders=(1, 2, 3, 4),
     )
     assert order == 2
+
+    # Exponential-tail guardrail is monotone in rho_imag.
+    p1 = _select_split_order_from_exp_tail(
+        1.0, rel_tol=1.0e-2, order_min=1, order_max=12
+    )
+    p2 = _select_split_order_from_exp_tail(
+        4.0, rel_tol=1.0e-2, order_min=1, order_max=12
+    )
+    p3 = _select_split_order_from_exp_tail(
+        8.0, rel_tol=1.0e-2, order_min=1, order_max=12
+    )
+    assert p1 <= p2 <= p3
 
 
 def test_volume_fmm_2d_helmholtz_split_order1_remainder_matches_legacy(tmp_path):

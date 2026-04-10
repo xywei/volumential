@@ -23,6 +23,7 @@ THE SOFTWARE.
 import json
 import logging
 import hashlib
+import math
 from collections import OrderedDict
 
 import numpy as np
@@ -364,6 +365,30 @@ def _select_split_order_from_rho_components(
     order_real = _select_split_order_from_rho(rho_real, thresholds_real, orders)
     order_imag = _select_split_order_from_rho(rho_imag, thresholds_imag, orders)
     return max(order_real, order_imag)
+
+
+def _select_split_order_from_exp_tail(
+    rho_imag,
+    *,
+    rel_tol,
+    order_min,
+    order_max,
+):
+    """Choose p so truncated-series proxy x^p/p! <= rel_tol."""
+    x = float(max(0.0, rho_imag))
+    tol = float(rel_tol)
+    if tol <= 0.0:
+        raise ValueError("rel_tol must be positive")
+
+    for p in range(int(order_min), int(order_max) + 1):
+        if x == 0.0:
+            return p
+
+        log_term = p * math.log(x) - math.lgamma(p + 1.0)
+        if log_term <= math.log(tol):
+            return p
+
+    return int(order_max)
 
 
 def _compute_box_local_ids(queue, tree, n_q_points):
@@ -1072,6 +1097,23 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
 
         if self.helmholtz_split_order < 1:
             raise ValueError("helmholtz_split_order must be >= 1")
+
+        if auto_mode and self.helmholtz_split:
+            max_rho_imag = float(auto_cfg.get("rho_imag_split_max", 8.0))
+            disable_outside = bool(
+                auto_cfg.get("disable_split_if_outside_coverage", True)
+            )
+            if (
+                disable_outside
+                and getattr(self, "_split_auto_rho_imag", 0.0) > max_rho_imag
+            ):
+                logger.warning(
+                    "Disabling split mode for high imaginary rho (%.3g > %.3g); "
+                    "falling back to direct kernel near-field evaluation",
+                    self._split_auto_rho_imag,
+                    max_rho_imag,
+                )
+                self.helmholtz_split = False
 
         self.helmholtz_split_order1_legacy_subtraction = bool(
             helmholtz_split_order1_legacy_subtraction
@@ -1999,6 +2041,8 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             thresholds_imag = tuple(auto_cfg["rho_thresholds_imag"])
 
         rho_real, rho_imag = self._compute_split_rho_components()
+        self._split_auto_rho_real = float(rho_real)
+        self._split_auto_rho_imag = float(rho_imag)
         rho_max = max(rho_real, rho_imag)
         selected = _select_split_order_from_rho_components(
             rho_real,
@@ -2007,6 +2051,17 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             thresholds_imag,
             orders,
         )
+
+        if bool(auto_cfg.get("exp_tail_guardrail_enabled", True)):
+            exp_tail_rel_tol = float(auto_cfg.get("exp_tail_rel_tol", 1.0e-2))
+            p_exp = _select_split_order_from_exp_tail(
+                rho_imag,
+                rel_tol=exp_tail_rel_tol,
+                order_min=order_min,
+                order_max=order_max,
+            )
+            selected = max(selected, p_exp)
+
         selected = max(order_min, min(order_max, selected))
 
         coverage_max = max(
