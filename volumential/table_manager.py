@@ -1633,6 +1633,18 @@ class NearFieldInteractionTableManager:
             if loaded_build_config_fingerprint != requested_build_config_fingerprint:
                 raise KeyError("cached build_config mismatch")
 
+        requested_kernel_params = self._extract_kernel_parameter_values(
+            kernel_bundle.sumpy_kernel,
+            kwargs,
+        )
+        for pname, pvalue in requested_kernel_params.items():
+            loaded_value = loaded_kwargs.get(pname)
+            if loaded_value is None:
+                raise KeyError(f"cached kernel parameter '{pname}' is missing")
+
+            if complex(loaded_value) != complex(pvalue):
+                raise KeyError(f"cached kernel parameter '{pname}' mismatch")
+
         for atkey, atval in loaded_kwargs.items():
             setattr(table, atkey, atval)
         t_kwargs_load_end = time.perf_counter()
