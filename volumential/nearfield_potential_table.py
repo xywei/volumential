@@ -1171,11 +1171,10 @@ class NearFieldInteractionTable:
         case_maps = []
         transform_signs = []
         kernel = self.integral_knl
-        if self.symmetry_source_direction is not None:
-            self._attach_directional_symmetry_metadata(
-                kernel,
-                self.symmetry_source_direction,
-            )
+        self._attach_directional_symmetry_metadata(
+            kernel,
+            self.symmetry_source_direction,
+        )
 
         kernel_constraint, kernel_sign_eval = _kernel_symmetry_meta(kernel)
 
@@ -1306,7 +1305,11 @@ class NearFieldInteractionTable:
 
             if knl.__class__.__name__ == "DirectionalSourceDerivative":
                 try:
-                    setattr(knl, "_volumential_source_direction", source_direction)
+                    if source_direction is None:
+                        if hasattr(knl, "_volumential_source_direction"):
+                            delattr(knl, "_volumential_source_direction")
+                    else:
+                        setattr(knl, "_volumential_source_direction", source_direction)
                 except Exception:
                     pass
 

@@ -540,6 +540,8 @@ def _extract_symmetry_source_direction(out_kernel, source_extra_kwargs, queue):
     for comp in dir_vec:
         if isinstance(comp, cl.array.Array):
             size = int(np.prod(comp.shape))
+            if size == 0:
+                return None
             first = float(np.asarray(comp[0].get(queue=queue)).ravel()[0])
             if size > 1:
                 last = float(np.asarray(comp[-1].get(queue=queue)).ravel()[0])
@@ -550,6 +552,8 @@ def _extract_symmetry_source_direction(out_kernel, source_extra_kwargs, queue):
             comps.append(first)
         else:
             arr = np.asarray(comp).ravel()
+            if arr.size == 0:
+                return None
             first = float(arr[0])
             if arr.size > 1 and not np.allclose(arr, first):
                 raise ValueError(
@@ -3109,6 +3113,7 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
 
         self.list1_extra_kwargs = list1_extra_kwargs
         self._table_layout_validation_cache = set()
+        self._nearfield_device_payload_cache = {}
 
         # }}} End table setup
 
@@ -3394,6 +3399,73 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
 
         scale_factor = self.get_scale_factor()
         return out_pot / scale_factor, evt
+
+    def _get_cached_nearfield_payload(
+        self,
+        cache_key,
+        queue,
+        table0,
+        near_field_tables,
+    ):
+        payload = self._nearfield_device_payload_cache.get(cache_key)
+        if payload is not None:
+            return payload
+
+        distinct_numbers = set()
+        for vec in table0.interaction_case_vecs:
+            for cvc in vec:
+                distinct_numbers.add(cvc)
+        base = len(range(min(distinct_numbers), max(distinct_numbers) + 1))
+        shift = -min(distinct_numbers)
+
+        case_indices_dev = cl.array.to_device(queue, table0.case_indices)
+        symmetry_maps = table0._get_online_symmetry_maps()
+        mode_qpoint_map_dev = cl.array.to_device(
+            queue, symmetry_maps["mode_qpoint_map"]
+        )
+        mode_case_map_dev = cl.array.to_device(queue, symmetry_maps["mode_case_map"])
+
+        (
+            table_data_combined,
+            mode_nmlz_combined,
+            exterior_mode_nmlz_combined,
+            table_entry_ids,
+            table_entry_scales,
+        ) = _prepare_table_data_and_entry_map(near_field_tables)
+
+        if table_data_combined.dtype != self.dtype:
+            table_data_combined = table_data_combined.astype(self.dtype)
+        if mode_nmlz_combined.dtype != self.dtype:
+            mode_nmlz_combined = mode_nmlz_combined.astype(self.dtype)
+        if exterior_mode_nmlz_combined.dtype != self.dtype:
+            exterior_mode_nmlz_combined = exterior_mode_nmlz_combined.astype(self.dtype)
+        if table_entry_scales.dtype != self.dtype:
+            table_entry_scales = table_entry_scales.astype(self.dtype)
+
+        table_data_shapes = {
+            "n_tables": len(near_field_tables),
+            "n_q_points": table0.n_q_points,
+            "n_cases": table0.n_cases,
+            "n_table_entries": table_data_combined.shape[1],
+        }
+
+        payload = {
+            "base": base,
+            "shift": shift,
+            "case_indices_dev": case_indices_dev,
+            "mode_qpoint_map_dev": mode_qpoint_map_dev,
+            "mode_case_map_dev": mode_case_map_dev,
+            "table_data_dev": cl.array.to_device(queue, table_data_combined),
+            "mode_nmlz_dev": cl.array.to_device(queue, mode_nmlz_combined),
+            "exterior_mode_nmlz_dev": cl.array.to_device(
+                queue, exterior_mode_nmlz_combined
+            ),
+            "table_entry_ids_dev": cl.array.to_device(queue, table_entry_ids),
+            "table_entry_scales_dev": cl.array.to_device(queue, table_entry_scales),
+            "table_data_shapes": table_data_shapes,
+        }
+        self._nearfield_device_payload_cache[cache_key] = payload
+        return payload
 
     def eval_direct(
         self,
