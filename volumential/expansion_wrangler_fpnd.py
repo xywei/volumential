@@ -42,6 +42,7 @@ from sumpy.kernel import (
     ExpressionKernel,
     HelmholtzKernel,
     LaplaceKernel,
+    YukawaKernel,
 )
 
 from volumential.expansion_wrangler_interface import (
@@ -1121,7 +1122,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
                 raise ValueError("helmholtz_split_smooth_quad_order must be >= 1")
 
         if self.helmholtz_split:
-            from sumpy.kernel import HelmholtzKernel, LaplaceKernel
+            from sumpy.kernel import HelmholtzKernel, LaplaceKernel, YukawaKernel
 
             from volumential.table_manager import ConstantKernel
 
@@ -1132,9 +1133,11 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
 
             out_knl = self.tree_indep.target_kernels[0]
             base_knl = out_knl.get_base_kernel()
-            if out_knl is not base_knl or not isinstance(base_knl, HelmholtzKernel):
+            if out_knl is not base_knl or not isinstance(
+                base_knl, (HelmholtzKernel, YukawaKernel)
+            ):
                 raise NotImplementedError(
-                    "helmholtz_split currently supports only base Helmholtz kernels"
+                    "helmholtz_split currently supports only base Helmholtz/Yukawa kernels"
                 )
 
             if base_knl.dim not in (2, 3):
@@ -1224,6 +1227,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         queue,
         table0,
         near_field_tables,
+        eval_dtype,
     ):
         payload = self._nearfield_device_payload_cache.get(cache_key)
         if payload is not None:
@@ -1252,14 +1256,14 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             table_entry_scales,
         ) = _prepare_table_data_and_entry_map(near_field_tables)
 
-        if table_data_combined.dtype != self.dtype:
-            table_data_combined = table_data_combined.astype(self.dtype)
-        if mode_nmlz_combined.dtype != self.dtype:
-            mode_nmlz_combined = mode_nmlz_combined.astype(self.dtype)
-        if exterior_mode_nmlz_combined.dtype != self.dtype:
-            exterior_mode_nmlz_combined = exterior_mode_nmlz_combined.astype(self.dtype)
-        if table_entry_scales.dtype != self.dtype:
-            table_entry_scales = table_entry_scales.astype(self.dtype)
+        if table_data_combined.dtype != eval_dtype:
+            table_data_combined = table_data_combined.astype(eval_dtype)
+        if mode_nmlz_combined.dtype != eval_dtype:
+            mode_nmlz_combined = mode_nmlz_combined.astype(eval_dtype)
+        if exterior_mode_nmlz_combined.dtype != eval_dtype:
+            exterior_mode_nmlz_combined = exterior_mode_nmlz_combined.astype(eval_dtype)
+        if table_entry_scales.dtype != eval_dtype:
+            table_entry_scales = table_entry_scales.astype(eval_dtype)
 
         table_data_shapes = {
             "n_tables": len(near_field_tables),
@@ -1414,12 +1418,14 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         for table in near_field_tables:
             table.symmetry_source_direction = symmetry_source_direction
 
+        eval_dtype = np.complex128 if out_kernel.is_complex_valued else np.float64
+
         cache_key = (
             kname,
             tuple(int(np.asarray(tbl.data).ctypes.data) for tbl in near_field_tables),
             tuple(int(np.asarray(tbl.data).size) for tbl in near_field_tables),
             tuple(_table_data_fingerprint(tbl.data) for tbl in near_field_tables),
-            np.dtype(self.dtype).str,
+            np.dtype(eval_dtype).str,
             None
             if symmetry_source_direction is None
             else tuple(np.asarray(symmetry_source_direction, dtype=float).tolist()),
@@ -1429,6 +1435,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             queue,
             table0,
             near_field_tables,
+            eval_dtype,
         )
 
         base = payload["base"]
@@ -1845,6 +1852,29 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
 
         return cache[kname]
 
+    def _split_wave_number_parameter_name(self, base_knl):
+        if isinstance(base_knl, HelmholtzKernel):
+            return getattr(base_knl, "helmholtz_k_name", None)
+        if isinstance(base_knl, YukawaKernel):
+            return getattr(base_knl, "yukawa_lambda_name", None)
+        return None
+
+    def _split_wave_number(self, base_knl, *, what):
+        param_name = self._split_wave_number_parameter_name(base_knl)
+        if (
+            not isinstance(param_name, str)
+            or param_name not in self.kernel_extra_kwargs
+        ):
+            raise RuntimeError(f"missing kernel parameter for {what}")
+
+        param = np.complex128(self.kernel_extra_kwargs[param_name])
+        if isinstance(base_knl, HelmholtzKernel):
+            return np.complex128(param)
+        if isinstance(base_knl, YukawaKernel):
+            return np.complex128(1j * param)
+
+        raise RuntimeError("split mode supports only Helmholtz/Yukawa kernels")
+
     def _helmholtz_split_max_neighbor_distance(self):
         box_source_counts = self.tree.box_source_counts_nonchild.get(self.queue)
         box_levels = self.tree.box_levels.get(self.queue)
@@ -1864,11 +1894,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         if split_order < 1:
             raise ValueError("split_order must be >= 1")
 
-        k_name = helm_knl.helmholtz_k_name
-        if k_name not in self.kernel_extra_kwargs:
-            raise RuntimeError("missing Helmholtz wave number for split terms")
-
-        k = np.complex128(self.kernel_extra_kwargs[k_name])
+        k = self._split_wave_number(helm_knl, what="split terms")
         abs_k = float(np.abs(k))
         r_max = self._helmholtz_split_max_neighbor_distance()
         z_max = abs_k * r_max
@@ -1919,11 +1945,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         helm_knl, _ = self._helmholtz_split_kernels
         dim = int(helm_knl.dim)
         split_order = int(self.helmholtz_split_order)
-        k_name = helm_knl.helmholtz_k_name
-        if k_name not in self.kernel_extra_kwargs:
-            raise RuntimeError("missing Helmholtz wave number for split remainder")
-
-        k = np.complex128(self.kernel_extra_kwargs[k_name])
+        k = self._split_wave_number(helm_knl, what="split remainder")
         series_nmax = self._helmholtz_split_series_nmax(split_order)
 
         cache_key = (
@@ -2420,11 +2442,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
 
         helm_knl, _ = self._helmholtz_split_kernels
         dim = helm_knl.dim
-        k_name = helm_knl.helmholtz_k_name
-        if k_name not in self.kernel_extra_kwargs:
-            raise RuntimeError("missing Helmholtz wave number for split terms")
-
-        k = np.complex128(self.kernel_extra_kwargs[k_name])
+        k = self._split_wave_number(helm_knl, what="split terms")
 
         terms = []
 
@@ -2655,11 +2673,10 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             return None
 
         helm_knl, _ = self._helmholtz_split_kernels
-        k_name = helm_knl.helmholtz_k_name
-        if k_name not in self.kernel_extra_kwargs:
+        try:
+            k = self._split_wave_number(helm_knl, what="self diagonal limit")
+        except RuntimeError:
             return None
-
-        k = np.complex128(self.kernel_extra_kwargs[k_name])
         if helm_knl.dim == 3:
             return np.complex128(1j * k / (4.0 * np.pi))
 
@@ -3299,12 +3316,13 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
 
         near_field_tables = self.near_field_table[kname]
         table0 = near_field_tables[0]
+        eval_dtype = np.complex128 if out_kernel.is_complex_valued else np.float64
         cache_key = (
             kname,
             tuple(int(np.asarray(tbl.data).ctypes.data) for tbl in near_field_tables),
             tuple(int(np.asarray(tbl.data).size) for tbl in near_field_tables),
             tuple(_table_data_fingerprint(tbl.data) for tbl in near_field_tables),
-            np.dtype(self.dtype).str,
+            np.dtype(eval_dtype).str,
             None
             if symmetry_source_direction is None
             else tuple(np.asarray(symmetry_source_direction, dtype=float).tolist()),
@@ -3314,6 +3332,7 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
             self.queue,
             table0,
             near_field_tables,
+            eval_dtype,
         )
 
         base = payload["base"]
@@ -3415,6 +3434,7 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
         queue,
         table0,
         near_field_tables,
+        eval_dtype,
     ):
         payload = self._nearfield_device_payload_cache.get(cache_key)
         if payload is not None:
@@ -3443,14 +3463,14 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
             table_entry_scales,
         ) = _prepare_table_data_and_entry_map(near_field_tables)
 
-        if table_data_combined.dtype != self.dtype:
-            table_data_combined = table_data_combined.astype(self.dtype)
-        if mode_nmlz_combined.dtype != self.dtype:
-            mode_nmlz_combined = mode_nmlz_combined.astype(self.dtype)
-        if exterior_mode_nmlz_combined.dtype != self.dtype:
-            exterior_mode_nmlz_combined = exterior_mode_nmlz_combined.astype(self.dtype)
-        if table_entry_scales.dtype != self.dtype:
-            table_entry_scales = table_entry_scales.astype(self.dtype)
+        if table_data_combined.dtype != eval_dtype:
+            table_data_combined = table_data_combined.astype(eval_dtype)
+        if mode_nmlz_combined.dtype != eval_dtype:
+            mode_nmlz_combined = mode_nmlz_combined.astype(eval_dtype)
+        if exterior_mode_nmlz_combined.dtype != eval_dtype:
+            exterior_mode_nmlz_combined = exterior_mode_nmlz_combined.astype(eval_dtype)
+        if table_entry_scales.dtype != eval_dtype:
+            table_entry_scales = table_entry_scales.astype(eval_dtype)
 
         table_data_shapes = {
             "n_tables": len(near_field_tables),
