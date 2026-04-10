@@ -539,10 +539,23 @@ def _extract_symmetry_source_direction(out_kernel, source_extra_kwargs, queue):
     comps = []
     for comp in dir_vec:
         if isinstance(comp, cl.array.Array):
-            host = comp.get(queue=queue)
-            comps.append(float(np.asarray(host).ravel()[0]))
+            size = int(np.prod(comp.shape))
+            first = float(np.asarray(comp[0].get(queue=queue)).ravel()[0])
+            if size > 1:
+                last = float(np.asarray(comp[-1].get(queue=queue)).ravel()[0])
+                if not np.allclose(last, first):
+                    raise ValueError(
+                        "symmetry_source_direction must be constant across sources"
+                    )
+            comps.append(first)
         else:
-            comps.append(float(np.asarray(comp).ravel()[0]))
+            arr = np.asarray(comp).ravel()
+            first = float(arr[0])
+            if arr.size > 1 and not np.allclose(arr, first):
+                raise ValueError(
+                    "symmetry_source_direction must be constant across sources"
+                )
+            comps.append(first)
 
     return np.asarray(comps, dtype=np.float64)
 

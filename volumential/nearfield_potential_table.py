@@ -85,6 +85,7 @@ def _kernel_symmetry_meta(kernel):
     if cls_name == "DirectionalSourceDerivative":
         source_direction = getattr(kernel, "_volumential_source_direction", None)
         dim = int(getattr(kernel.inner_kernel, "dim", 0) or 0)
+        inner_constraint, inner_sign = _kernel_symmetry_meta(kernel.inner_kernel)
 
         if source_direction is None:
             # No direction metadata: stay conservative.
@@ -109,14 +110,17 @@ def _kernel_symmetry_meta(kernel):
 
         def constraint(sign_tuple, perm_tuple):
             vec = transformed_direction(sign_tuple, perm_tuple)
-            return bool(np.allclose(vec, src_dir) or np.allclose(vec, -src_dir))
+            return bool(
+                (np.allclose(vec, src_dir) or np.allclose(vec, -src_dir))
+                and inner_constraint(sign_tuple, perm_tuple)
+            )
 
         def sign_eval(sign_tuple, perm_tuple):
             vec = transformed_direction(sign_tuple, perm_tuple)
             if np.allclose(vec, src_dir):
-                return 1
+                return int(inner_sign(sign_tuple, perm_tuple))
             if np.allclose(vec, -src_dir):
-                return -1
+                return int(-inner_sign(sign_tuple, perm_tuple))
             raise RuntimeError(
                 "unexpected non-collinear directional symmetry transform"
             )

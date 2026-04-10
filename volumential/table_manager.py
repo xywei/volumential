@@ -825,6 +825,12 @@ class NearFieldInteractionTableManager:
         )
 
         if not has_stored_schema_version:
+            if not has_cache_rows:
+                if not self._read_only:
+                    self._store_meta_value("schema_version", TABLE_CACHE_SCHEMA_VERSION)
+                self.cache_schema_version = TABLE_CACHE_SCHEMA_VERSION
+                return
+
             raise RuntimeError(
                 "The table cache file "
                 + self.filename
