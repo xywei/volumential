@@ -274,7 +274,7 @@ def laplace_const_source_neighbor_box(table_2d_order1, queue, q_order, case_id, 
         for target_point_index in range(n_q_points):
             pair_id = source_mode_index * n_q_points + target_point_index
             entry_id = case_id * n_pairs + pair_id
-            pot[target_point_index] += 1.0 * nft.data[entry_id]
+            pot[target_point_index] += 1.0 * nft.get_entry_data(entry_id)
     return pot
 
 

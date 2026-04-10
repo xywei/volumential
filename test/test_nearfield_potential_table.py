@@ -73,8 +73,8 @@ def test_const_order_1():
         progress_bar=False,
     )
     table.build_table(queue=queue)
-    for ary in table.data:
-        assert np.allclose(ary, 1)
+    for entry_id in range(len(table.data)):
+        assert np.allclose(table.get_entry_data(entry_id), 1)
 
 
 def test_const_order_2(longrun):
@@ -87,8 +87,8 @@ def test_const_order_2(longrun):
         progress_bar=False,
     )
     table.build_table(queue=queue)
-    for ary in table.data:
-        assert np.allclose(ary, 0.25)
+    for entry_id in range(len(table.data)):
+        assert np.allclose(table.get_entry_data(entry_id), 0.25)
 
 
 def interp_modes(q_order):

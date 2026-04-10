@@ -866,6 +866,25 @@ class NearFieldInteractionTable:
 
         return entry_id, centry_id
 
+    def get_entry_data(self, entry_id):
+        """Return the requested entry value from full or orbit-reduced storage."""
+        value = self.data[entry_id]
+        if np.isfinite(value):
+            return value
+
+        orbit_info = self._get_orbit_canonical_info()
+        canonical_entry_ids = orbit_info["canonical_entry_ids"]
+        canonical_scales = orbit_info["canonical_scales"]
+        canonical_entry_id = int(canonical_entry_ids[entry_id])
+        canonical_value = self.data[canonical_entry_id]
+
+        if not np.isfinite(canonical_value):
+            raise RuntimeError(
+                "missing canonical table entry data for orbit-reduced table"
+            )
+
+        return self.dtype(canonical_scales[entry_id]) * canonical_value
+
     def compute_table_entry_duffy_radial(
         self,
         entry_id,
@@ -2095,17 +2114,6 @@ class NearFieldInteractionTable:
             "n_entries": int(len(invariant_entry_ids)),
         }
 
-    def _populate_full_table_from_orbit_mapping(self):
-        orbit_info = self._get_orbit_canonical_info()
-        canonical_entry_ids = np.asarray(
-            orbit_info["canonical_entry_ids"], dtype=np.int64
-        )
-        canonical_scales = np.asarray(orbit_info["canonical_scales"], dtype=self.dtype)
-
-        representative_vals = self.data[canonical_entry_ids]
-        self.data[:] = canonical_scales * representative_vals
-        self.table_data_is_symmetry_reduced = False
-
     def build_table_via_duffy_radial(
         self,
         radial_rule="tanh-sinh-fast",
@@ -2236,10 +2244,6 @@ class NearFieldInteractionTable:
             build_config=build_config,
             **kwargs,
         )
-        # Preserve historical behavior for the default build path: all entries are
-        # directly readable from table.data (no NaN sentinels for non-invariants).
-        if bool(getattr(self, "table_data_is_symmetry_reduced", False)):
-            self._populate_full_table_from_orbit_mapping()
 
     # }}} End build table (driver)
 
