@@ -158,6 +158,80 @@ Split order :math:`p` extracts
 into prebuilt split tables, while the online remainder keeps the constant,
 even powers, and higher odd powers.
 
+Design Principles (Why This Layer Exists)
+-----------------------------------------
+
+The split implementation is organized around a **kernel-agnostic basis cache**
+plus **runtime kernel coefficients**.
+
+- Split basis tables (Laplace + split terms such as ``power``/``power_log``)
+  depend on geometry/discretization, not on runtime wave number.
+- Helmholtz/Yukawa parameter values are applied online in split coefficients and
+  smooth remainders.
+- This enables broad reuse across wave numbers while preserving correctness.
+
+In contrast, direct (non-split) parameterized kernel tables remain
+parameter-specific and are validated against requested kernel parameters when
+loaded from cache.
+
+Automatic Regime Planner
+------------------------
+
+For wide ranges of :math:`k` and mesh sizes, one fixed split order is often
+suboptimal. Volumential now provides a lightweight automatic planner that
+chooses split order from the dimensionless local scale
+
+.. math::
+
+    \rho_{\max} = \max_{\ell\in\text{active levels}} |k| h_\ell,
+
+where :math:`h_\ell` is source-box extent at level :math:`\ell`.
+
+For Yukawa split mode, the planner uses the internal mapping
+:math:`k = i\,\lambda`, so :math:`|k|=|\lambda|` in the same formula.
+
+Default planner policy:
+
+- thresholds: ``(0.5, 1.5, 3.0)``
+- split orders: ``(1, 2, 3, 4)``
+
+meaning:
+
+- :math:`\rho_{\max} \le 0.5 \Rightarrow p=1`
+- :math:`0.5 < \rho_{\max} \le 1.5 \Rightarrow p=2`
+- :math:`1.5 < \rho_{\max} \le 3.0 \Rightarrow p=3`
+- :math:`\rho_{\max} > 3.0 \Rightarrow p=4`
+
+These defaults are intentionally conservative and can be tuned per workload.
+
+Runtime Configuration Knobs
+---------------------------
+
+You may enable auto selection by either:
+
+- passing ``helmholtz_split_order="auto"``, or
+- passing ``helmholtz_split_auto_config={"enabled": True, ...}``.
+
+Supported planner config keys:
+
+- ``rho_thresholds``: sequence of increasing boundaries
+- ``orders``: sequence of selected orders (length = ``len(rho_thresholds)+1``)
+- ``order_min`` / ``order_max``: optional clamps
+- ``smooth_quad_order_min``: floor for smooth quadrature order
+- ``smooth_quad_order_per_order``: increment per additional split order above 1
+
+When auto mode is active and ``helmholtz_split_smooth_quad_order`` is not set,
+the smooth quadrature order is chosen from these knobs instead of forcing
+``m=q``.
+
+Yukawa and Mixed-Complex Parameters
+-----------------------------------
+
+- Yukawa split reuse follows the same basis-table mechanism as Helmholtz.
+- Current Yukawa split path requires real ``lam``.
+- For mixed complex wave numbers (nonzero real+imag parts), use Helmholtz
+  kernels directly.
+
 Implementation Notes
 --------------------
 
