@@ -319,9 +319,12 @@ def sumpy_kernel_to_lambda(sknl, fallback_dim=None, parameter_values=None):
 
     expr = sknl.get_expression(args) * sknl.get_global_scaling_const()
     if parameter_values:
-        expr = expr.subs(
-            {Symbol(str(name)): value for name, value in parameter_values.items()}
-        )
+        subs_map = {}
+        for name, value in parameter_values.items():
+            name_str = str(name)
+            subs_map[Symbol(name_str)] = value
+            subs_map[Symbol(f"_spatial_constant_{name_str}")] = value
+        expr = expr.subs(subs_map)
 
     lmd = lambdify(
         arg_names,
@@ -1324,6 +1327,19 @@ class NearFieldInteractionTable:
                 if child is not None:
                     stack.append(child)
 
+    def _supports_batched_duffy_builder(self):
+        if self.integral_knl is None:
+            return False
+
+        kernel = self.integral_knl
+        if hasattr(kernel, "get_base_kernel"):
+            try:
+                kernel = kernel.get_base_kernel()
+            except Exception:
+                pass
+
+        return kernel.__class__.__name__ != "YukawaKernel"
+
     @memoize_method
     def _get_fused_invariant_duffy_table_tunit(self):
         from sumpy.assignment_collection import SymbolicAssignmentCollection
@@ -1741,6 +1757,7 @@ class NearFieldInteractionTable:
             and self.dim in (1, 2, 3)
             and self.integral_knl is not None
             and radial_rule in {"tanh-sinh-fast", "tanh-sinh"}
+            and self._supports_batched_duffy_builder()
         )
 
         invariant_info = None
@@ -2243,16 +2260,28 @@ class NearFieldInteractionTable:
                 "tanh-sinh-fast radial rules"
             )
 
-        logger.warning(
-            "Using batched GPU-backed %dD DuffyRadial table builder", self.dim
-        )
-        return_value = self.build_table_via_duffy_radial_batched(
-            queue,
-            radial_rule=build_config.radial_rule,
-            deg_theta=int(build_config.regular_quad_order),
-            radial_quad_order=int(build_config.radial_quad_order),
-            mp_dps=build_config.mp_dps,
-        )
+        if self._supports_batched_duffy_builder():
+            logger.warning(
+                "Using batched GPU-backed %dD DuffyRadial table builder", self.dim
+            )
+            return_value = self.build_table_via_duffy_radial_batched(
+                queue,
+                radial_rule=build_config.radial_rule,
+                deg_theta=int(build_config.regular_quad_order),
+                radial_quad_order=int(build_config.radial_quad_order),
+                mp_dps=build_config.mp_dps,
+            )
+        else:
+            logger.info(
+                "Falling back to scalar DuffyRadial table builder for %s",
+                self.integral_knl.__class__.__name__,
+            )
+            return_value = self._build_table_via_duffy_radial_scalar(
+                build_config.radial_rule,
+                int(build_config.regular_quad_order),
+                int(build_config.radial_quad_order),
+                build_config.mp_dps,
+            )
         if self.last_duffy_build_timings is not None:
             self.last_duffy_build_timings["normalizer_s"] = normalizer_s
             self.last_duffy_build_timings["total_with_normalizer_s"] = (
