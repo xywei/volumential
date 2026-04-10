@@ -229,17 +229,7 @@ def _to_stable_jsonable(value):
         return _to_stable_jsonable(value.tolist())
 
     if value is None or isinstance(value, (bool, int, float, str)):
-    return value
-
-
-def _normalize_symmetry_source_direction(value):
-    if value is None:
-        return None
-
-    arr = np.asarray(value, dtype=np.float64).ravel()
-    if arr.size == 0:
-        return None
-    return tuple(float(v) for v in arr.tolist())
+        return value
 
     if is_dataclass(value) and not isinstance(value, type):
         return _to_stable_jsonable(
@@ -256,6 +246,16 @@ def _normalize_symmetry_source_direction(value):
         }
 
     raise TypeError(f"unsupported value type for stable serialization: {type(value)!r}")
+
+
+def _normalize_symmetry_source_direction(value):
+    if value is None:
+        return None
+
+    arr = np.asarray(value, dtype=np.float64).ravel()
+    if arr.size == 0:
+        return None
+    return tuple(float(v) for v in arr.tolist())
 
 
 def _serialize_scalar(value):
