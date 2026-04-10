@@ -977,6 +977,39 @@ def _get_laplace_2d_table(queue, table_path, q_order):
     return table
 
 
+def _get_yukawa_2d_tables(queue, table_path, q_order, lam, *, max_source_box_level):
+    from volumential.nearfield_potential_table import DuffyBuildConfig
+    from volumential.table_manager import NearFieldInteractionTableManager
+
+    regular_quad_order = max(8, 4 * q_order)
+    radial_quad_order = max(21, 10 * q_order)
+
+    build_config = DuffyBuildConfig(
+        radial_rule="tanh-sinh-fast",
+        regular_quad_order=regular_quad_order,
+        radial_quad_order=radial_quad_order,
+    )
+
+    tables = []
+    with NearFieldInteractionTableManager(
+        str(table_path), root_extent=2.0, queue=queue
+    ) as tm:
+        for source_box_level in range(max_source_box_level + 1):
+            table, _ = tm.get_table(
+                2,
+                "Yukawa",
+                q_order,
+                source_box_level=source_box_level,
+                force_recompute=False,
+                queue=queue,
+                build_config=build_config,
+                lam=lam,
+            )
+            tables.append(table)
+
+    return tables
+
+
 def _make_radial_power_kernel(dim, power):
     from pymbolic.primitives import make_sym_vector
     from sumpy.kernel import ExpressionKernel
@@ -1502,6 +1535,103 @@ def _run_2d_helmholtz_pde_case(
         )
 
     return result
+
+
+def _run_2d_yukawa_split_case(
+    ctx,
+    queue,
+    near_field_table,
+    *,
+    q_order,
+    nlevels,
+    fmm_order,
+    lam,
+    helmholtz_split=False,
+    helmholtz_split_order=1,
+):
+    from sumpy.expansion import DefaultExpansionFactory
+    from sumpy.kernel import YukawaKernel
+
+    from volumential.expansion_wrangler_fpnd import (
+        FPNDExpansionWrangler,
+        FPNDTreeIndependentDataForWrangler,
+    )
+    from volumential.volume_fmm import drive_volume_fmm
+
+    if np.imag(np.complex128(lam)) != 0.0:
+        raise NotImplementedError(
+            "Yukawa FMM path currently requires real lam; use HelmholtzKernel for mixed complex k"
+        )
+
+    dim = 2
+    mesh = mg.MeshGen2D(q_order, nlevels, -0.5, 0.5, queue=queue)
+    q_points, source_weights, tree, traversal = mg.build_geometry_info(
+        ctx,
+        queue,
+        dim,
+        q_order,
+        mesh,
+        bbox=np.array([[-0.5, 0.5]] * dim, dtype=np.float64),
+    )
+
+    source_coords_host = np.array([coords.get(queue) for coords in q_points])
+    x = source_coords_host[0]
+    y = source_coords_host[1]
+
+    source_vals_host = np.exp(-35.0 * ((x + 0.11) ** 2 + (y - 0.07) ** 2))
+    value_dtype = np.complex128 if helmholtz_split else np.float64
+    source_vals = cl.array.to_device(
+        queue,
+        np.ascontiguousarray(source_vals_host.astype(value_dtype)),
+    )
+
+    knl = YukawaKernel(dim)
+    expn_factory = DefaultExpansionFactory()
+    local_expn_class = expn_factory.get_local_expansion_class(knl)
+    mpole_expn_class = expn_factory.get_multipole_expansion_class(knl)
+
+    tree_indep = FPNDTreeIndependentDataForWrangler(
+        ctx,
+        partial(mpole_expn_class, knl),
+        partial(local_expn_class, knl),
+        [knl],
+        exclude_self=True,
+    )
+
+    self_extra_kwargs = {}
+    if tree.sources_are_targets:
+        self_extra_kwargs = {
+            "target_to_source": np.arange(tree.ntargets, dtype=np.int32)
+        }
+
+    wrangler = FPNDExpansionWrangler(
+        tree_indep=tree_indep,
+        queue=queue,
+        traversal=traversal,
+        near_field_table=near_field_table,
+        dtype=value_dtype,
+        fmm_level_to_order=lambda kernel, kernel_args, tree, lev: fmm_order,
+        quad_order=q_order,
+        kernel_extra_kwargs={knl.yukawa_lambda_name: lam},
+        self_extra_kwargs=self_extra_kwargs,
+        helmholtz_split=helmholtz_split,
+        helmholtz_split_order=helmholtz_split_order,
+    )
+
+    weighted_sources = source_vals * source_weights.astype(value_dtype)
+    (fmm_potentials,) = drive_volume_fmm(
+        traversal,
+        wrangler,
+        weighted_sources,
+        source_vals,
+        direct_evaluation=False,
+        list1_only=False,
+    )
+
+    return {
+        "potentials": fmm_potentials,
+        "n_points": int(source_vals_host.size),
+    }
 
 
 def _run_3d_gaussian_case(
@@ -2374,6 +2504,60 @@ def test_volume_fmm_2d_helmholtz_split_order2_runs(tmp_path):
 
     assert np.isfinite(result["rel_pde_residual"])
     assert result["rel_pde_residual"] < 1.0
+
+
+def test_volume_fmm_2d_yukawa_split_order2_runs(tmp_path):
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 5
+    lam = 8.0
+    split_table = _get_laplace_2d_table(
+        queue,
+        tmp_path / "nft-yukawa2d-split-order2-q5.sqlite",
+        q_order,
+    )
+    split = _run_2d_yukawa_split_case(
+        ctx,
+        queue,
+        split_table,
+        q_order=q_order,
+        nlevels=3,
+        fmm_order=16,
+        lam=lam,
+        helmholtz_split=True,
+        helmholtz_split_order=2,
+    )
+
+    pot = split["potentials"].get(queue)
+    assert np.all(np.isfinite(pot))
+    assert split["n_points"] > 0
+
+
+def test_volume_fmm_2d_yukawa_complex_lambda_rejected(tmp_path):
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 5
+    lam = 7.0 + 1.25j
+    split_table = _get_laplace_2d_table(
+        queue,
+        tmp_path / "nft-yukawa2d-split-complex-q5.sqlite",
+        q_order,
+    )
+
+    with pytest.raises(NotImplementedError, match="real lam"):
+        _run_2d_yukawa_split_case(
+            ctx,
+            queue,
+            split_table,
+            q_order=q_order,
+            nlevels=3,
+            fmm_order=16,
+            lam=lam,
+            helmholtz_split=True,
+            helmholtz_split_order=2,
+        )
 
 
 def test_volume_fmm_2d_helmholtz_split_order1_remainder_matches_legacy(tmp_path):

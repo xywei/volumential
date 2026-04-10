@@ -1753,8 +1753,20 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
                         strength_arg=beta_strength,
                         max_nsources_in_one_box_arg=self.max_nsources_in_one_box,
                     )
+                    beta_term = beta_power_term[0]
+                    if isinstance(term_contribution, cl.array.Array) and not isinstance(
+                        beta_term, cl.array.Array
+                    ):
+                        beta_term = cl.array.to_device(
+                            self.queue,
+                            np.ascontiguousarray(np.asarray(beta_term)),
+                        )
+                    elif isinstance(beta_term, cl.array.Array) and not isinstance(
+                        term_contribution, cl.array.Array
+                    ):
+                        beta_term = beta_term.get(self.queue)
 
-                    term_contribution = term_contribution + beta_power_term[0]
+                    term_contribution = term_contribution + beta_term
 
                 term_scale = correction[0].dtype.type(term_coeff)
                 correction = obj_array_1d(
