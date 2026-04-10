@@ -36,6 +36,7 @@ THE SOFTWARE.
 
 import logging
 import json
+import os
 import re
 import sqlite3
 import time
@@ -316,6 +317,26 @@ def _looks_like_hdf5_file(path):
         return False
 
 
+def _backup_cache_file(path):
+    if not os.path.exists(path):
+        return None
+
+    backup_path = f"{path}.bak"
+    suffix = 1
+    while os.path.exists(backup_path):
+        backup_path = f"{path}.bak.{suffix}"
+        suffix += 1
+
+    os.replace(path, backup_path)
+
+    for sidecar_suffix in ("-wal", "-shm"):
+        sidecar = f"{path}{sidecar_suffix}"
+        if os.path.exists(sidecar):
+            os.replace(sidecar, f"{backup_path}{sidecar_suffix}")
+
+    return backup_path
+
+
 # {{{ constant sumpy kernel
 
 
@@ -519,23 +540,63 @@ class NearFieldInteractionTableManager:
 
         self.datafile = conn
         self.datafile.row_factory = sqlite3.Row
-
-        self.datafile.execute("PRAGMA foreign_keys = ON")
-        try:
-            self.datafile.execute("PRAGMA temp_store = MEMORY")
-            self.datafile.execute("PRAGMA cache_size = -200000")
-            if not self._read_only:
-                self.datafile.execute("PRAGMA journal_mode = WAL")
-                self.datafile.execute("PRAGMA synchronous = NORMAL")
-        except sqlite3.DatabaseError:
-            logger.warning("Failed to apply one or more SQLite tuning pragmas")
+        self._configure_connection(self.datafile)
 
         try:
+            self._init_schema()
+            self._initialize_root_extent()
+        except RuntimeError as exc:
+            self.datafile.close()
+            if self._read_only or not self._should_rebuild_from_init_error(exc):
+                raise
+
+            backup_path = _backup_cache_file(self.filename)
+            logger.warning(
+                "Invalid table cache detected at %s; moved to %s and rebuilding.",
+                self.filename,
+                backup_path,
+            )
+
+            conn = sqlite3.connect(_sqlite_uri(self.filename, "rwc"), uri=True)
+            self.datafile = conn
+            self.datafile.row_factory = sqlite3.Row
+            self._configure_connection(self.datafile)
             self._init_schema()
             self._initialize_root_extent()
         except sqlite3.DatabaseError as exc:
             self.datafile.close()
             if _looks_like_hdf5_file(self.filename):
+                if not self._read_only:
+                    backup_path = _backup_cache_file(self.filename)
+                    logger.warning(
+                        "Legacy HDF5 cache detected at %s; moved to %s and rebuilding.",
+                        self.filename,
+                        backup_path,
+                    )
+                    conn = sqlite3.connect(_sqlite_uri(self.filename, "rwc"), uri=True)
+                    self.datafile = conn
+                    self.datafile.row_factory = sqlite3.Row
+                    self._configure_connection(self.datafile)
+                    self._init_schema()
+                    self._initialize_root_extent()
+                    self.table_extra_kwargs = kwargs
+                    self.supported_kernels = [
+                        "Laplace",
+                        "Laplace-Dx",
+                        "Laplace-Dy",
+                        "Laplace-Dz",
+                        "Constant",
+                        "Yukawa",
+                        "Yukawa-Dx",
+                        "Yukawa-Dy",
+                        "Cahn-Hilliard",
+                        "Cahn-Hilliard-Laplacian",
+                        "Cahn-Hilliard-Dx",
+                        "Cahn-Hilliard-Dy",
+                        "Cahn-Hilliard-Laplacian-Dx",
+                        "Cahn-Hilliard-Laplacian-Dy",
+                    ]
+                    return
                 raise RuntimeError(
                     "The table cache file "
                     + self.filename
@@ -563,6 +624,26 @@ class NearFieldInteractionTableManager:
             "Cahn-Hilliard-Laplacian-Dx",
             "Cahn-Hilliard-Laplacian-Dy",
         ]
+
+    def _configure_connection(self, conn):
+        conn.execute("PRAGMA foreign_keys = ON")
+        try:
+            conn.execute("PRAGMA temp_store = MEMORY")
+            conn.execute("PRAGMA cache_size = -200000")
+            if not self._read_only:
+                conn.execute("PRAGMA journal_mode = WAL")
+                conn.execute("PRAGMA synchronous = NORMAL")
+        except sqlite3.DatabaseError:
+            logger.warning("Failed to apply one or more SQLite tuning pragmas")
+
+    @staticmethod
+    def _should_rebuild_from_init_error(exc):
+        msg = str(exc)
+        return (
+            "unsupported legacy schema" in msg
+            or "missing schema_version" in msg
+            or "invalid schema_version" in msg
+        )
 
     def _init_schema(self):
         """Create missing tables for a new cache file."""

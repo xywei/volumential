@@ -94,7 +94,7 @@ def _insert_dummy_cache_row(db, payload_blob=None, build_method="DuffyRadial"):
         )
 
 
-def test_manager_rejects_legacy_blob_columns_from_cache(tmp_path):
+def test_manager_rebuilds_legacy_blob_columns_cache_with_backup(tmp_path):
     filename = tmp_path / "cache.sqlite"
 
     db = sqlite3.connect(str(filename))
@@ -156,9 +156,11 @@ def test_manager_rejects_legacy_blob_columns_from_cache(tmp_path):
     db.commit()
     db.close()
 
-    with pytest.raises(RuntimeError, match="unsupported legacy schema"):
-        with NFTable(str(filename), progress_bar=False):
-            pass
+    with NFTable(str(filename), progress_bar=False):
+        pass
+
+    assert filename.exists()
+    assert (tmp_path / "cache.sqlite.bak").exists()
 
 
 def test_table_request_is_composed_from_stable_specs():
@@ -823,7 +825,7 @@ def test_get_table_recomputes_on_payload_decode_failure(tmp_path, monkeypatch):
         assert seen["called"]
 
 
-def test_unversioned_cache_rows_rejected_in_write_mode(tmp_path):
+def test_unversioned_cache_rows_rebuilt_in_write_mode(tmp_path):
     filename = tmp_path / "cache.sqlite"
 
     with NFTable(str(filename), progress_bar=False):
@@ -834,9 +836,11 @@ def test_unversioned_cache_rows_rejected_in_write_mode(tmp_path):
         db.execute("DELETE FROM nearfield_cache_meta WHERE key='schema_version'")
         db.commit()
 
-    with pytest.raises(RuntimeError, match="missing schema_version"):
-        with NFTable(str(filename), progress_bar=False):
-            pass
+    with NFTable(str(filename), progress_bar=False):
+        pass
+
+    assert filename.exists()
+    assert (tmp_path / "cache.sqlite.bak").exists()
 
 
 def test_unversioned_cache_rows_rejected_in_read_only_mode(tmp_path):

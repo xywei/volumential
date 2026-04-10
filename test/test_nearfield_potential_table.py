@@ -645,9 +645,11 @@ def test_duffy_radial_adaptive_rule_uses_scalar_fallback(monkeypatch):
     )
 
     assert not seen["batched_called"]
-    assert seen["scalar_calls"] == len(table.data)
+    invariant_entry_ids = table._get_invariant_entry_info()["entry_ids"]
+    assert seen["scalar_calls"] == len(invariant_entry_ids)
     assert table.is_built
-    assert np.all(np.isfinite(table.data))
+    for entry_id in range(len(table.data)):
+        assert np.isfinite(table.get_entry_data(entry_id))
 
 
 def test_duffy_radial_auto_tune_orders_routes_to_batched_builder(monkeypatch):
