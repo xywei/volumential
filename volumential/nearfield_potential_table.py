@@ -1042,23 +1042,26 @@ class NearFieldInteractionTable:
         # Iterative signed-find with path compression.
         node = int(idx)
         total = 1
-        path = []
+        path_nodes = []
+        path_rels = []
 
         while True:
             parent_node = int(parent[node])
-            path.append(node)
             if parent_node == node:
                 root = node
                 break
-            total *= int(rel[node])
+            step_rel = int(rel[node])
+            path_nodes.append(node)
+            path_rels.append(step_rel)
+            total *= step_rel
             node = parent_node
 
-        prod_to_root = 1
-        for path_node in reversed(path):
-            next_prod = prod_to_root * int(rel[path_node])
+        suffix = 1
+        for i in range(len(path_nodes) - 1, -1, -1):
+            suffix *= path_rels[i]
+            path_node = path_nodes[i]
             parent[path_node] = root
-            rel[path_node] = prod_to_root
-            prod_to_root = next_prod
+            rel[path_node] = suffix
 
         return root, int(total)
 
