@@ -33,6 +33,35 @@ Hence the neighbor potential contribution is
     + \mathcal{N}_{S_p,\mathrm{table}}[\rho]
     + \mathcal{N}_{R_p,\mathrm{p2p}}[\rho].
 
+Reusable Split-Term Notation
+----------------------------
+
+To avoid duplicating implementation logic, both 2D and 3D paths are written in
+the same abstract form:
+
+.. math::
+
+    G_k(r) - G_0(r)
+    = C_k + \sum_{n\ge 1} \beta_n(k)\,\phi_n(r) + \Psi_k(r),
+
+where:
+
+- :math:`\phi_n` are the non-smooth radial basis terms that get table support,
+- :math:`\beta_n(k)` are runtime coefficients,
+- :math:`\Psi_k` is the remaining smooth/higher-order part evaluated online.
+
+For split order :math:`p`, Volumential tables
+:math:`\{\phi_1,\ldots,\phi_{p-1}\}` and evaluates
+
+.. math::
+
+    R_p(r) = C_k + \sum_{n\ge p} \beta_n(k)\,\phi_n(r) + \Psi_k(r)
+
+in the online correction path.
+
+This is exactly the same cache/reuse pattern used for Helmholtz and Yukawa;
+Yukawa uses the mapping :math:`k=i\lambda` in the coefficient formulas.
+
 2D Expansion
 ------------
 
@@ -71,6 +100,27 @@ with
       \left[
         \frac{H_n - (\log(k/2)+\gamma)}{2\pi} + \frac{i}{4}
       \right].
+
+These coefficients come directly from the classical small-argument expansions:
+
+.. math::
+
+    J_0(z) = \sum_{n=0}^{\infty} \frac{(-1)^n}{(n!)^2}\left(\frac{z^2}{4}\right)^n,
+
+.. math::
+
+    Y_0(z) = \frac{2}{\pi}\left(\log(z/2)+\gamma\right)J_0(z)
+    - \frac{2}{\pi}\sum_{n=1}^{\infty} H_n
+      \frac{(-1)^n}{(n!)^2}\left(\frac{z^2}{4}\right)^n,
+
+with :math:`H_0^{(1)}(z)=J_0(z)+iY_0(z)` and :math:`z=kr`.
+
+Using the reusable notation above:
+
+- :math:`\phi_n(r)=r^{2n}\log r`,
+- :math:`\beta_n(k)=a_n(k)`,
+- :math:`\Psi_k(r)=\sum_{n\ge 1} b_n(k)r^{2n}`,
+- :math:`C_k=c_0(k)`.
 
 Split order :math:`p` means:
 
@@ -148,6 +198,13 @@ we have
     \qquad
     c_n(k)=\frac{(ik)^n}{4\pi\,n!}.
 
+Equivalently, from :math:`e^{ikr}=\sum_{n\ge 0}(ikr)^n/n!`:
+
+.. math::
+
+    \frac{e^{ikr}-1}{4\pi r}
+    = \sum_{n=1}^{\infty}\frac{(ik)^n}{4\pi\,n!}r^{n-1}.
+
 Terms :math:`r^{2j-1}` are the non-smooth radial powers at the origin.
 Split order :math:`p` extracts
 
@@ -157,6 +214,214 @@ Split order :math:`p` extracts
 
 into prebuilt split tables, while the online remainder keeps the constant,
 even powers, and higher odd powers.
+
+Using the reusable notation above:
+
+- :math:`\phi_j(r)=r^{2j-1}` (odd-power branch),
+- :math:`\beta_j(k)=(ik)^{2j}/(4\pi(2j)!)`,
+- :math:`\Psi_k` collects constant/even-power terms and odd powers
+  :math:`j\ge p`.
+
+High-Reference Wideband Convergence Snapshot
+--------------------------------------------
+
+Copy of the IPA table used in PR #79 for split-auto defaults
+(``helmholtz_split_order="auto"`` with auto smooth quadrature), reporting
+``rel_vs_direct_high``.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 14 5 6 6 8 8 6 6 14
+
+   * - Kernel
+     - Dim
+     - Re(k)
+     - Im(k)
+     - rho_real
+     - rho_imag
+     - auto p
+     - auto m
+     - rel_vs_direct_high
+   * - Helmholtz
+     - 2
+     - 2.0
+     - 0
+     - 0.5
+     - 0
+     - 3
+     - 7
+     - 2.3436e-08
+   * - Helmholtz
+     - 2
+     - 8.0
+     - 0
+     - 2.0
+     - 0
+     - 5
+     - 9
+     - 7.9173e-08
+   * - Helmholtz
+     - 2
+     - 16.0
+     - 0
+     - 4.0
+     - 0
+     - 6
+     - 11
+     - 3.3398e-07
+   * - Helmholtz
+     - 2
+     - 32.0
+     - 0
+     - 8.0
+     - 0
+     - 7
+     - 14
+     - 2.6230e-06
+   * - Helmholtz
+     - 3
+     - 2.0
+     - 0
+     - 0.5
+     - 0
+     - 3
+     - 5
+     - 2.2215e-12
+   * - Helmholtz
+     - 3
+     - 4.0
+     - 0
+     - 1.0
+     - 0
+     - 4
+     - 6
+     - 1.3885e-13
+   * - Helmholtz
+     - 3
+     - 6.0
+     - 0
+     - 1.5
+     - 0
+     - 5
+     - 7
+     - 5.5698e-13
+   * - Helmholtz
+     - 3
+     - 8.0
+     - 0
+     - 2.0
+     - 0
+     - 5
+     - 7
+     - 3.4457e-12
+   * - Helmholtz
+     - 3
+     - 10.0
+     - 0
+     - 2.5
+     - 0
+     - 6
+     - 8
+     - 1.9042e-11
+   * - Helmholtz
+     - 3
+     - 12.0
+     - 0
+     - 3.0
+     - 0
+     - 6
+     - 8
+     - 1.9167e-10
+   * - Helmholtz
+     - 3
+     - 16.0
+     - 0
+     - 4.0
+     - 0
+     - 6
+     - 9
+     - 1.1670e-08
+   * - Yukawa
+     - 2
+     - 0
+     - 8
+     - 0
+     - 2.0
+     - 4
+     - 8
+     - 1.8611e-09
+   * - Yukawa
+     - 2
+     - 0
+     - 16
+     - 0
+     - 4.0
+     - 5
+     - 9
+     - 6.1665e-08
+   * - Yukawa
+     - 2
+     - 0
+     - 24
+     - 0
+     - 6.0
+     - 6
+     - 12
+     - 1.2716e-07
+   * - Yukawa
+     - 2
+     - 0
+     - 32
+     - 0
+     - 8.0
+     - 6
+     - 14
+     - 6.6297e-08
+   * - Yukawa
+     - 3
+     - 0
+     - 2
+     - 0
+     - 0.5
+     - 2
+     - 4
+     - 4.8224e-07
+   * - Yukawa
+     - 3
+     - 0
+     - 4
+     - 0
+     - 1.0
+     - 3
+     - 5
+     - 8.7211e-07
+   * - Yukawa
+     - 3
+     - 0
+     - 8
+     - 0
+     - 2.0
+     - 4
+     - 6
+     - 2.0533e-06
+   * - Yukawa
+     - 3
+     - 0
+     - 12
+     - 0
+     - 3.0
+     - 5
+     - 7
+     - 3.8141e-06
+   * - Yukawa
+     - 3
+     - 0
+     - 16
+     - 0
+     - 4.0
+     - 5
+     - 7
+     - 6.1529e-06
 
 Design Principles (Why This Layer Exists)
 -----------------------------------------
