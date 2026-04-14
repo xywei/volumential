@@ -1332,11 +1332,6 @@ class NearFieldInteractionTable:
             return False
 
         kernel = self.integral_knl
-        if hasattr(kernel, "get_base_kernel"):
-            try:
-                kernel = kernel.get_base_kernel()
-            except Exception:
-                pass
 
         # Yukawa was historically routed to scalar Duffy builds. Batched Yukawa
         # is now supported for 3D and should be preferred for production runtime.
@@ -2187,7 +2182,17 @@ class NearFieldInteractionTable:
         deg_theta,
         radial_quad_order,
         mp_dps,
+        kernel_kwargs=None,
     ):
+        reset_kernel_func = bool(kernel_kwargs) and self.integral_knl is not None
+        previous_kernel_func = self.kernel_func
+        if reset_kernel_func:
+            self.kernel_func = sumpy_kernel_to_lambda(
+                self.integral_knl,
+                fallback_dim=self.dim,
+                parameter_values=kernel_kwargs,
+            )
+
         t_total_start = time.perf_counter()
 
         t_invariant_start = time.perf_counter()
@@ -2229,6 +2234,9 @@ class NearFieldInteractionTable:
             "total_s": t_total_end - t_total_start,
             "n_entries": int(len(invariant_entry_ids)),
         }
+
+        if reset_kernel_func:
+            self.kernel_func = previous_kernel_func
 
     def build_table_via_duffy_radial(
         self,
@@ -2272,6 +2280,17 @@ class NearFieldInteractionTable:
                     auto_tune_candidates=build_config.auto_tune_candidates,
                     kwargs=kwargs,
                 )
+
+        if queue is not None and cl_ctx is not None and queue.context != cl_ctx:
+            raise ValueError("queue context does not match cl_ctx")
+
+        if (
+            queue is None
+            and cl_ctx is not None
+            and self._supports_batched_duffy_builder()
+        ):
+            queue = cl.CommandQueue(cl_ctx)
+
         kernel_kwargs = self._extract_integral_kernel_runtime_kwargs(kwargs)
         build_config = self._resolve_duffy_build_config(
             build_config,
@@ -2302,6 +2321,7 @@ class NearFieldInteractionTable:
                 deg_theta=int(build_config.regular_quad_order),
                 radial_quad_order=int(build_config.radial_quad_order),
                 mp_dps=build_config.mp_dps,
+                kernel_kwargs=kernel_kwargs,
             )
             if self.last_duffy_build_timings is not None:
                 self.last_duffy_build_timings["normalizer_s"] = normalizer_s
@@ -2361,6 +2381,7 @@ class NearFieldInteractionTable:
                     int(build_config.regular_quad_order),
                     int(build_config.radial_quad_order),
                     build_config.mp_dps,
+                    kernel_kwargs=kernel_kwargs,
                 )
         else:
             logger.info(
@@ -2372,6 +2393,7 @@ class NearFieldInteractionTable:
                 int(build_config.regular_quad_order),
                 int(build_config.radial_quad_order),
                 build_config.mp_dps,
+                kernel_kwargs=kernel_kwargs,
             )
         if self.last_duffy_build_timings is not None:
             self.last_duffy_build_timings["normalizer_s"] = normalizer_s
