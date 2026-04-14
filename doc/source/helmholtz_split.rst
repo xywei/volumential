@@ -192,13 +192,16 @@ For Yukawa split mode, the planner uses the internal mapping
 
 Default planner policy:
 
-- ``order_min=1``
+- ``order_min=2``
 - ``order_max=12``
-- geometric rho ladders with ``rho_base_real=0.75`` and ``rho_base_imag=0.5``
+- geometric rho ladders with ``rho_base_real=0.25`` and ``rho_base_imag=0.5``
+- hard-real smooth trigger ``smooth_quad_order_hard_rho_real=3.0``
 
-This yields thresholds like ``(0.5, 1, 2, 4, 8, 16, 32)`` and candidate
-orders ``1..8``. This default is meant to cover wider :math:`k h` regimes than
-a short fixed threshold list.
+This yields thresholds like ``(0.25, 0.5, 1, 2, 4, 8, 16)`` for
+:math:`|\Re(k)|h` and ``(0.5, 1, 2, 4, 8, 16, 32)`` for
+:math:`|\Im(k)|h`, with candidate orders ``2..12``. This default is tuned to
+be more accuracy-forward in easy regimes while keeping split-order selection
+purely ladder-based.
 
 Runtime Configuration Knobs
 ---------------------------
@@ -217,11 +220,6 @@ Supported planner config keys:
 - ``order_min`` / ``order_max``: optional clamps
 - ``rho_base_real`` / ``rho_base_imag``: base values for default geometric
   threshold ladders for :math:`|\Re(k)|h` and :math:`|\Im(k)|h`
-- ``exp_tail_guardrail_enabled``: enable exponential-tail order guardrail
-- ``exp_tail_rel_tol``: relative tail tolerance for the exponential guardrail
-  (default ``2e-1``)
-- ``rho_imag_hard_trigger``: when :math:`|\Im(k)|h` exceeds this value,
-  auto mode promotes split order to ``order_max``
 - ``rho_imag_split_max``: maximum :math:`|\Im(k)|h` for default split mode
 - ``disable_split_if_outside_coverage``: if true, auto mode falls back to
   direct (non-split) near-field evaluation when :math:`|\Im(k)|h` exceeds
@@ -232,10 +230,49 @@ auto selection keeps split enabled, clamps to the highest configured split
 order, and emits warnings when :math:`|\Im(k)|h` exceeds configured coverage.
 - ``smooth_quad_order_min``: floor for smooth quadrature order
 - ``smooth_quad_order_per_order``: increment per additional split order above 1
+  for easy/moderate attenuation regimes (default ``1``)
+- ``smooth_quad_order_per_order_hard``: increment per additional split order above
+  1 for hard attenuation regimes (default ``1``)
+- ``smooth_quad_order_hard_rho_imag``: hard-regime trigger on
+  :math:`|\Im(k)|h` for switching from
+  ``smooth_quad_order_per_order`` to
+  ``smooth_quad_order_per_order_hard`` (default ``4.0``)
+- ``smooth_quad_order_hard_rho_real``: hard-regime trigger on
+  :math:`|\Re(k)|h` for switching from
+  ``smooth_quad_order_per_order`` to
+  ``smooth_quad_order_per_order_hard`` (default ``3.0``)
+- ``smooth_quad_order_rho_boost_start``: start of direct
+  :math:`|\Im(k)|h`-based smooth-order boost (default same as
+  ``smooth_quad_order_hard_rho_imag``)
+- ``smooth_quad_order_rho_boost_scale``: boost slope in
+  :math:`\Delta m \approx \lceil \mathrm{scale}\cdot(
+  \rho_{\mathrm{imag}}-\rho_0)\rceil`
+  (default ``1.0``)
+- ``smooth_quad_order_rho_boost_cap``: optional cap on direct rho-based boost
+- ``smooth_quad_order_real_boost_start``: start of direct
+  :math:`|\Re(k)|h`-based smooth-order boost (default same as
+  ``smooth_quad_order_hard_rho_real``)
+- ``smooth_quad_order_real_boost_scale``: boost slope in
+  :math:`\Delta m \approx \lceil \mathrm{scale}\cdot(
+  \rho_{\mathrm{real}}-\rho_0)\rceil`
+  (default ``0.5``)
+- ``smooth_quad_order_real_boost_cap``: optional cap on direct
+  :math:`|\Re(k)|h`-based smooth-order boost
+- ``smooth_quad_order_max``: optional cap on final auto-selected smooth order
+- ``power_log_single_table_beta_mode``: backend for the
+  :math:`(\log \alpha_\ell)r^{2n}` correction when 2D ``power_log`` terms use
+  one reference table. ``"p2p"`` (default) evaluates this correction online
+  with the active smooth-correction source layout (including oversampled
+  ``m>q`` sources). ``"table"`` evaluates it via split-power tables.
 
 When auto mode is active and ``helmholtz_split_smooth_quad_order`` is not set,
 the smooth quadrature order is chosen from these knobs instead of forcing
-``m=q``.
+``m=q``. The default policy is accuracy-forward in easy regimes
+(``smooth_quad_order_per_order=1``) while retaining stronger smooth-quadrature
+growth in hard attenuation regimes via
+``smooth_quad_order_per_order_hard=1`` and an additional direct
+:math:`|\Im(k)|h`-based boost, while also allowing extra smooth-order growth
+for high real-frequency regimes via :math:`|\Re(k)|h`-based triggers/boosts.
 
 Yukawa and Mixed-Complex Parameters
 -----------------------------------
@@ -248,7 +285,9 @@ Yukawa and Mixed-Complex Parameters
 Implementation Notes
 --------------------
 
-- ``helmholtz_split_smooth_quad_order`` defaults to ``m=q``.
+- ``helmholtz_split_smooth_quad_order`` defaults to ``m=q`` when auto mode is
+  inactive. In auto mode, the default smooth order follows the planner policy
+  described above.
 - split-order-1 now defaults to the analytic series-remainder kernel path,
   avoiding runtime Helmholtz-minus-Laplace singular subtraction.
 - the historical split-order-1 subtraction path is still available for
@@ -268,9 +307,15 @@ Implementation Notes
 
       (\log \alpha_\ell) r^{2n}
 
-  is added online by folding :math:`\log \alpha_\ell` into source strengths,
-  where :math:`\alpha_\ell = h_\ell / h_{\mathrm{ref}}` and :math:`h_\ell` is
-  the source-box extent.
+  is added online by folding :math:`\log \alpha_\ell` into source strengths
+  and evaluating the matching :math:`r^{2n}` correction kernel. By default this
+  uses an online P2P correction with the same source layout as the active
+  smooth-correction path (including oversampled ``m>q`` sources), which avoids
+  prebuilding extra split-power tables and typically improves list1 throughput
+  on GPU. The alternative table-based correction path can be selected with
+  ``helmholtz_split_auto_config={"power_log_single_table_beta_mode": "table"}``.
+  Here :math:`\alpha_\ell = h_\ell / h_{\mathrm{ref}}` and :math:`h_\ell` is the
+  source-box extent.
 - when self interactions are excluded in correction P2P, the finite
   :math:`r\to0` diagonal limit of :math:`G_k-G_0` is added back analytically.
 

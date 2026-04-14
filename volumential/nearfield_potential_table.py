@@ -1338,7 +1338,53 @@ class NearFieldInteractionTable:
             except Exception:
                 pass
 
-        return kernel.__class__.__name__ != "YukawaKernel"
+        # Yukawa was historically routed to scalar Duffy builds. Batched Yukawa
+        # is now supported for 3D and should be preferred for production runtime.
+        if kernel.__class__.__name__ == "YukawaKernel":
+            return self.dim == 3
+
+        return True
+
+    def _prepare_loopy_kernel_for_integral_kernel(self, loopy_knl):
+        """Apply kernel-specific loopy callable registrations if needed."""
+        if self.integral_knl is None:
+            return loopy_knl
+
+        prepare = getattr(self.integral_knl, "prepare_loopy_kernel", None)
+        if prepare is None:
+            return loopy_knl
+
+        return prepare(loopy_knl)
+
+    def _extract_integral_kernel_runtime_kwargs(self, kwargs):
+        if self.integral_knl is None:
+            return {}
+
+        get_args = getattr(self.integral_knl, "get_args", None)
+        if get_args is None:
+            return {}
+
+        kernel_kwargs = {}
+        missing = []
+        for kernel_arg in get_args():
+            loopy_arg = getattr(kernel_arg, "loopy_arg", None)
+            name = getattr(loopy_arg, "name", None)
+            if not name:
+                continue
+
+            if name in kwargs:
+                kernel_kwargs[name] = kwargs[name]
+            else:
+                missing.append(name)
+
+        if missing:
+            missing_list = ", ".join(sorted(missing))
+            raise ValueError(
+                "Missing required kernel parameter value(s) for DuffyRadial "
+                f"table build: {missing_list}"
+            )
+
+        return kernel_kwargs
 
     @memoize_method
     def _get_fused_invariant_duffy_table_tunit(self):
@@ -1385,6 +1431,15 @@ class NearFieldInteractionTable:
             temp_var_type=lp.Optional(),
             within_inames=frozenset(["ientry", "inode"]),
         )
+
+        kernel_arg_types = []
+        if self.integral_knl is not None:
+            get_args = getattr(self.integral_knl, "get_args", None)
+            if get_args is not None:
+                for kernel_arg in get_args():
+                    loopy_arg = getattr(kernel_arg, "loopy_arg", None)
+                    if loopy_arg is not None:
+                        kernel_arg_types.append(loopy_arg)
 
         setup_lines = ["<> active = 1"]
         len_terms = []
@@ -1472,6 +1527,9 @@ class NearFieldInteractionTable:
                 lp.GlobalArg("interp_nodes", geom_dtype, "q_order"),
                 lp.GlobalArg("bary_w", geom_dtype, "q_order"),
                 lp.GlobalArg("mode_i", np.int32, "dim,n_entries"),
+            ]
+            + kernel_arg_types
+            + [
                 lp.GlobalArg("result", self.dtype, "n_entries", is_output=True),
                 lp.TemporaryVariable("knl_scaling", self.dtype),
             ],
@@ -1479,6 +1537,7 @@ class NearFieldInteractionTable:
             lang_version=(2018, 2),
         )
         tunit = lp.fix_parameters(tunit, dim=self.dim)
+        tunit = self._prepare_loopy_kernel_for_integral_kernel(tunit)
         tunit = lp.set_options(tunit, return_dict=True, no_numpy=True)
         tunit = lp.split_iname(tunit, "ientry", 64, outer_tag="g.0", inner_tag="l.0")
         tunit = lp.tag_inames(
@@ -1612,6 +1671,7 @@ class NearFieldInteractionTable:
         regular_quad_order,
         radial_quad_order,
         mp_dps,
+        kernel_kwargs=None,
     ):
         local_entry_indices = np.asarray(local_entry_indices, dtype=np.int64)
         n_entries = int(local_entry_indices.size)
@@ -1705,6 +1765,8 @@ class NearFieldInteractionTable:
             bary_w=bw_arg,
             mode_i=mode_i_arg,
         )
+        if kernel_kwargs:
+            common_kwargs.update(kernel_kwargs)
 
         if queue_is_cl:
             _, res = prg_exec(queue, **common_kwargs)
@@ -1860,6 +1922,7 @@ class NearFieldInteractionTable:
         deg_theta=20,
         radial_quad_order=61,
         mp_dps=50,
+        kernel_kwargs=None,
     ):
         t_total_start = time.perf_counter()
 
@@ -1906,6 +1969,7 @@ class NearFieldInteractionTable:
             deg_theta,
             radial_quad_order,
             mp_dps,
+            kernel_kwargs=kernel_kwargs,
         )
         t_quadrature_end = time.perf_counter()
         self._progress_step()
@@ -1943,6 +2007,7 @@ class NearFieldInteractionTable:
         deg_theta=20,
         radial_quad_order=61,
         mp_dps=50,
+        kernel_kwargs=None,
     ):
         if self.dim != 2:
             raise ValueError("build_table_via_duffy_radial_batched_2d requires dim=2")
@@ -1952,6 +2017,7 @@ class NearFieldInteractionTable:
             deg_theta=deg_theta,
             radial_quad_order=radial_quad_order,
             mp_dps=mp_dps,
+            kernel_kwargs=kernel_kwargs,
         )
 
     def compute_nmlz(self, mode_id):
@@ -2254,6 +2320,8 @@ class NearFieldInteractionTable:
                 "DuffyRadial loopy builder requires sumpy_kernel (integral_knl)"
             )
 
+        kernel_kwargs = self._extract_integral_kernel_runtime_kwargs(kwargs)
+
         if build_config.radial_rule not in {"tanh-sinh-fast", "tanh-sinh"}:
             raise ValueError(
                 "DuffyRadial loopy builder supports only tanh-sinh and "
@@ -2264,13 +2332,28 @@ class NearFieldInteractionTable:
             logger.warning(
                 "Using batched GPU-backed %dD DuffyRadial table builder", self.dim
             )
-            return_value = self.build_table_via_duffy_radial_batched(
-                queue,
-                radial_rule=build_config.radial_rule,
-                deg_theta=int(build_config.regular_quad_order),
-                radial_quad_order=int(build_config.radial_quad_order),
-                mp_dps=build_config.mp_dps,
-            )
+            try:
+                return_value = self.build_table_via_duffy_radial_batched(
+                    queue,
+                    radial_rule=build_config.radial_rule,
+                    deg_theta=int(build_config.regular_quad_order),
+                    radial_quad_order=int(build_config.radial_quad_order),
+                    mp_dps=build_config.mp_dps,
+                    kernel_kwargs=kernel_kwargs,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Batched DuffyRadial build failed for %s (%s); falling back "
+                    "to scalar builder",
+                    self.integral_knl.__class__.__name__,
+                    type(exc).__name__,
+                )
+                return_value = self._build_table_via_duffy_radial_scalar(
+                    build_config.radial_rule,
+                    int(build_config.regular_quad_order),
+                    int(build_config.radial_quad_order),
+                    build_config.mp_dps,
+                )
         else:
             logger.info(
                 "Falling back to scalar DuffyRadial table builder for %s",
@@ -2570,6 +2653,7 @@ class NearFieldInteractionTable:
         )
 
         lpknl = lp.fix_parameters(lpknl, dim=self.dim)
+        lpknl = self._prepare_loopy_kernel_for_integral_kernel(lpknl)
         lpknl = lp.set_options(lpknl, write_cl=False)
         lpknl = lp.set_options(lpknl, return_dict=True)
         lpknl_exec = lpknl.executor(queue.context)

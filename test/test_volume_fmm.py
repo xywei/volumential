@@ -207,6 +207,48 @@ def test_validate_table_box_particle_layout_cached_separates_q_order(monkeypatch
     assert calls == [16, 25]
 
 
+def test_autobuild_split_source_levels_uses_base_table_levels():
+    import volumential.expansion_wrangler_fpnd as wrangler_mod
+
+    wrangler = wrangler_mod.FPNDExpansionWrangler.__new__(
+        wrangler_mod.FPNDExpansionWrangler
+    )
+    wrangler.queue = None
+    wrangler.table_starting_level = 0
+    fake_tree = SimpleNamespace(
+        box_source_counts_nonchild=_FakeDeviceArray(np.array([0, 0, 16, 16])),
+        box_levels=_FakeDeviceArray(np.array([0, 1, 2, 3])),
+        nlevels=4,
+    )
+    wrangler.traversal = SimpleNamespace(tree=fake_tree)
+
+    base_tables = [
+        SimpleNamespace(source_box_level=0),
+        SimpleNamespace(source_box_level=2),
+        SimpleNamespace(source_box_level=2),
+    ]
+
+    power_levels = wrangler._autobuild_helmholtz_split_source_box_levels(
+        base_tables,
+        [("power", 1)],
+    )
+    assert power_levels == [0, 2]
+
+    power_log_levels = wrangler._autobuild_helmholtz_split_source_box_levels(
+        base_tables,
+        [("power_log", 2)],
+    )
+    assert power_log_levels == [0, 2]
+
+    wrangler.table_starting_level = -1
+    inferred_tables = [SimpleNamespace(source_box_level=None)]
+    inferred_levels = wrangler._autobuild_helmholtz_split_source_box_levels(
+        inferred_tables,
+        [("power_log", 2)],
+    )
+    assert inferred_levels == [-1]
+
+
 def test_rebuild_tob_from_geometry_restores_unit_level_edges():
     from boxtree import make_tree_of_boxes_root, refine_and_coarsen_tree_of_boxes
 
@@ -1423,6 +1465,7 @@ def _run_2d_helmholtz_pde_case(
     helmholtz_split=False,
     helmholtz_split_order=1,
     helmholtz_split_smooth_quad_order=None,
+    helmholtz_split_auto_config=None,
     helmholtz_split_term_tables=None,
     helmholtz_split_order1_legacy_subtraction=False,
     compute_pde_residual=True,
@@ -1493,6 +1536,7 @@ def _run_2d_helmholtz_pde_case(
         helmholtz_split=helmholtz_split,
         helmholtz_split_order=helmholtz_split_order,
         helmholtz_split_smooth_quad_order=helmholtz_split_smooth_quad_order,
+        helmholtz_split_auto_config=helmholtz_split_auto_config,
         helmholtz_split_term_tables=helmholtz_split_term_tables,
         helmholtz_split_order1_legacy_subtraction=(
             helmholtz_split_order1_legacy_subtraction
@@ -1548,6 +1592,8 @@ def _run_2d_yukawa_split_case(
     lam,
     helmholtz_split=False,
     helmholtz_split_order=1,
+    helmholtz_split_auto_config=None,
+    return_state=False,
 ):
     from sumpy.expansion import DefaultExpansionFactory
     from sumpy.kernel import YukawaKernel
@@ -1616,6 +1662,7 @@ def _run_2d_yukawa_split_case(
         self_extra_kwargs=self_extra_kwargs,
         helmholtz_split=helmholtz_split,
         helmholtz_split_order=helmholtz_split_order,
+        helmholtz_split_auto_config=helmholtz_split_auto_config,
     )
 
     weighted_sources = source_vals * source_weights.astype(value_dtype)
@@ -1628,10 +1675,16 @@ def _run_2d_yukawa_split_case(
         list1_only=False,
     )
 
-    return {
+    result = {
         "potentials": fmm_potentials,
         "n_points": int(source_vals_host.size),
     }
+
+    if return_state:
+        result["wrangler"] = wrangler
+        result["traversal"] = traversal
+
+    return result
 
 
 def _run_3d_gaussian_case(
@@ -2588,9 +2641,113 @@ def test_volume_fmm_2d_yukawa_split_auto_high_rho_runs(tmp_path):
     assert np.all(np.isfinite(pot))
 
 
+def test_volume_fmm_2d_yukawa_split_auto_smooth_quad_policy(tmp_path):
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 5
+    split_table = _get_laplace_2d_table(
+        queue,
+        tmp_path / "nft-yukawa2d-split-auto-smooth-policy-q5.sqlite",
+        q_order,
+    )
+
+    easy = _run_2d_yukawa_split_case(
+        ctx,
+        queue,
+        split_table,
+        q_order=q_order,
+        nlevels=3,
+        fmm_order=16,
+        lam=8.0,
+        helmholtz_split=True,
+        helmholtz_split_order="auto",
+        return_state=True,
+    )
+    easy_wrangler = easy["wrangler"]
+    easy_base_smooth = q_order + max(0, easy_wrangler.helmholtz_split_order - 1)
+    assert easy_wrangler.helmholtz_split_smooth_quad_order == easy_base_smooth
+    assert getattr(easy_wrangler, "_split_auto_rho_imag", np.inf) < 4.0
+
+    hard = _run_2d_yukawa_split_case(
+        ctx,
+        queue,
+        split_table,
+        q_order=q_order,
+        nlevels=3,
+        fmm_order=16,
+        lam=32.0,
+        helmholtz_split=True,
+        helmholtz_split_order="auto",
+        return_state=True,
+    )
+    hard_wrangler = hard["wrangler"]
+    assert getattr(hard_wrangler, "_split_auto_rho_imag", 0.0) >= 4.0
+    assert hard_wrangler.helmholtz_split_order > easy_wrangler.helmholtz_split_order
+    hard_base_smooth = q_order + max(0, hard_wrangler.helmholtz_split_order - 1)
+    assert hard_wrangler.helmholtz_split_smooth_quad_order >= hard_base_smooth
+    if getattr(hard_wrangler, "_split_auto_rho_imag", 0.0) > 4.0:
+        assert hard_wrangler.helmholtz_split_smooth_quad_order > hard_base_smooth
+
+
+def test_volume_fmm_2d_helmholtz_split_auto_real_smooth_quad_policy(tmp_path):
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 5
+    table = _get_laplace_2d_table(
+        queue,
+        tmp_path / "nft-helmholtz2d-split-auto-real-smooth-policy-q5.sqlite",
+        q_order,
+    )
+
+    easy = _run_2d_helmholtz_pde_case(
+        ctx,
+        queue,
+        table,
+        q_order=q_order,
+        nlevels=3,
+        fmm_order=16,
+        wave_number=2.0,
+        helmholtz_split=True,
+        helmholtz_split_order="auto",
+        compute_pde_residual=False,
+        return_state=True,
+    )
+    easy_wrangler = easy["wrangler"]
+    assert getattr(easy_wrangler, "_split_auto_rho_real", np.inf) < 3.0
+    easy_base_smooth = q_order + max(0, easy_wrangler.helmholtz_split_order - 1)
+    assert easy_wrangler.helmholtz_split_smooth_quad_order == easy_base_smooth
+
+    hard = _run_2d_helmholtz_pde_case(
+        ctx,
+        queue,
+        table,
+        q_order=q_order,
+        nlevels=3,
+        fmm_order=16,
+        wave_number=30.0,
+        helmholtz_split=True,
+        helmholtz_split_order="auto",
+        helmholtz_split_auto_config={
+            "smooth_quad_order_hard_rho_real": 1.0,
+            "smooth_quad_order_real_boost_start": 1.0,
+            "smooth_quad_order_real_boost_scale": 1.0,
+            "smooth_quad_order_rho_boost_scale": 0.0,
+            "smooth_quad_order_hard_rho_imag": 1000.0,
+        },
+        compute_pde_residual=False,
+        return_state=True,
+    )
+    hard_wrangler = hard["wrangler"]
+    assert getattr(hard_wrangler, "_split_auto_rho_imag", np.inf) < 1000.0
+    assert getattr(hard_wrangler, "_split_auto_rho_real", 0.0) > 1.0
+    hard_base_smooth = q_order + max(0, hard_wrangler.helmholtz_split_order - 1)
+    assert hard_wrangler.helmholtz_split_smooth_quad_order > hard_base_smooth
+
+
 def test_select_split_order_from_rho_default_boundaries():
     from volumential.expansion_wrangler_fpnd import (
-        _select_split_order_from_exp_tail,
         _select_split_order_from_rho,
         _select_split_order_from_rho_components,
     )
@@ -2613,18 +2770,6 @@ def test_select_split_order_from_rho_default_boundaries():
         orders=(1, 2, 3, 4),
     )
     assert order == 2
-
-    # Exponential-tail guardrail is monotone in rho_imag.
-    p1 = _select_split_order_from_exp_tail(
-        1.0, rel_tol=1.0e-2, order_min=1, order_max=12
-    )
-    p2 = _select_split_order_from_exp_tail(
-        4.0, rel_tol=1.0e-2, order_min=1, order_max=12
-    )
-    p3 = _select_split_order_from_exp_tail(
-        8.0, rel_tol=1.0e-2, order_min=1, order_max=12
-    )
-    assert p1 <= p2 <= p3
 
 
 def test_volume_fmm_2d_helmholtz_split_order1_remainder_matches_legacy(tmp_path):
