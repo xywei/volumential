@@ -1288,6 +1288,72 @@ def test_duffy_radial_routes_queue_to_batched_builder_3d(monkeypatch):
     assert table.last_duffy_build_timings["normalizer_s"] == 0.0
 
 
+def test_duffy_radial_wrapped_kernel_does_not_fallback_to_scalar(monkeypatch):
+    class WrappedKernel:
+        def __init__(self):
+            self._base = object()
+
+        def get_base_kernel(self):
+            return self._base
+
+    table = npt.NearFieldInteractionTable(
+        quad_order=2,
+        build_method="DuffyRadial",
+        dim=2,
+        sumpy_kernel=WrappedKernel(),
+        derive_kernel_func=False,
+        progress_bar=False,
+    )
+
+    seen = {"scalar_called": False}
+
+    def fake_build_normalizer_table(self, pool=None, pb=None):
+        pass
+
+    def fake_batched(
+        self,
+        queue,
+        radial_rule,
+        deg_theta,
+        radial_quad_order,
+        mp_dps,
+        kernel_kwargs=None,
+    ):
+        raise RuntimeError("batched failed")
+
+    def fake_scalar(
+        self,
+        radial_rule,
+        deg_theta,
+        radial_quad_order,
+        mp_dps,
+        kernel_kwargs=None,
+    ):
+        seen["scalar_called"] = True
+        self.is_built = True
+
+    monkeypatch.setattr(
+        npt.NearFieldInteractionTable,
+        "build_normalizer_table",
+        fake_build_normalizer_table,
+    )
+    monkeypatch.setattr(
+        npt.NearFieldInteractionTable,
+        "build_table_via_duffy_radial_batched",
+        fake_batched,
+    )
+    monkeypatch.setattr(
+        npt.NearFieldInteractionTable,
+        "_build_table_via_duffy_radial_scalar",
+        fake_scalar,
+    )
+
+    with pytest.raises(RuntimeError, match="scalar fallback is disabled"):
+        table.build_table_via_duffy_radial(queue=object())
+
+    assert not seen["scalar_called"]
+
+
 def _get_cpu_queue_or_skip(ctx_factory):
     import pyopencl as cl
 

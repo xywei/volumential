@@ -1340,6 +1340,21 @@ class NearFieldInteractionTable:
 
         return True
 
+    def _scalar_duffy_fallback_is_safe(self):
+        if self.integral_knl is None:
+            return True
+
+        get_base = getattr(self.integral_knl, "get_base_kernel", None)
+        if get_base is None:
+            return True
+
+        try:
+            base_kernel = get_base()
+        except Exception:
+            return False
+
+        return base_kernel is self.integral_knl
+
     def _prepare_loopy_kernel_for_integral_kernel(self, loopy_knl):
         """Apply kernel-specific loopy callable registrations if needed."""
         if self.integral_knl is None:
@@ -2379,6 +2394,13 @@ class NearFieldInteractionTable:
                     kernel_kwargs=kernel_kwargs,
                 )
             except Exception as exc:
+                if not self._scalar_duffy_fallback_is_safe():
+                    raise RuntimeError(
+                        "Batched DuffyRadial build failed for wrapped kernel "
+                        f"{self.integral_knl.__class__.__name__}; scalar fallback "
+                        "is disabled because it may drop wrapper postprocessing"
+                    ) from exc
+
                 logger.warning(
                     "Batched DuffyRadial build failed for %s (%s); falling back "
                     "to scalar builder",
