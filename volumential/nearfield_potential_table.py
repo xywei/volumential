@@ -2281,7 +2281,12 @@ class NearFieldInteractionTable:
                     kwargs=kwargs,
                 )
 
-        if queue is not None and cl_ctx is not None and queue.context != cl_ctx:
+        if (
+            queue is not None
+            and cl_ctx is not None
+            and hasattr(queue, "context")
+            and queue.context != cl_ctx
+        ):
             raise ValueError("queue context does not match cl_ctx")
 
         if (
@@ -2354,7 +2359,11 @@ class NearFieldInteractionTable:
                         "queue (or cl_ctx) is required for batched DuffyRadial "
                         "table builds"
                     )
-            elif cl_ctx is not None and queue.context != cl_ctx:
+            elif (
+                cl_ctx is not None
+                and hasattr(queue, "context")
+                and queue.context != cl_ctx
+            ):
                 raise ValueError("queue context does not match cl_ctx")
 
             logger.warning(
