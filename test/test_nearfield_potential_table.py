@@ -415,7 +415,15 @@ def test_duffy_radial_routes_queue_to_batched_builder(monkeypatch):
     def fake_build_normalizer_table(self, pool=None, pb=None):
         self.mode_normalizers[:] = 1
 
-    def fake_batched(self, queue, radial_rule, deg_theta, radial_quad_order, mp_dps):
+    def fake_batched(
+        self,
+        queue,
+        radial_rule,
+        deg_theta,
+        radial_quad_order,
+        mp_dps,
+        kernel_kwargs=None,
+    ):
         seen["queue"] = queue
         seen["called"] = True
         self.is_built = True
@@ -455,7 +463,15 @@ def test_build_table_uses_supplied_cl_ctx_when_queue_missing(monkeypatch):
     def fake_build_normalizer_table(self, pool=None, pb=None):
         pass
 
-    def fake_batched(self, queue, radial_rule, deg_theta, radial_quad_order, mp_dps):
+    def fake_batched(
+        self,
+        queue,
+        radial_rule,
+        deg_theta,
+        radial_quad_order,
+        mp_dps,
+        kernel_kwargs=None,
+    ):
         seen["queue"] = queue
         self.is_built = True
 
@@ -505,7 +521,15 @@ def test_duffy_radial_keeps_legacy_deg_theta_alias(monkeypatch):
     def fake_build_normalizer_table(self, pool=None, pb=None):
         pass
 
-    def fake_batched(self, queue, radial_rule, deg_theta, radial_quad_order, mp_dps):
+    def fake_batched(
+        self,
+        queue,
+        radial_rule,
+        deg_theta,
+        radial_quad_order,
+        mp_dps,
+        kernel_kwargs=None,
+    ):
         seen["called"] = True
         seen["regular_quad_order"] = deg_theta
 
@@ -544,7 +568,15 @@ def test_duffy_radial_accepts_build_config_dataclass(monkeypatch):
     def fake_build_normalizer_table(self, pool=None, pb=None):
         pass
 
-    def fake_batched(self, queue, radial_rule, deg_theta, radial_quad_order, mp_dps):
+    def fake_batched(
+        self,
+        queue,
+        radial_rule,
+        deg_theta,
+        radial_quad_order,
+        mp_dps,
+        kernel_kwargs=None,
+    ):
         seen["called"] = True
         seen["radial_rule"] = radial_rule
         seen["regular_quad_order"] = deg_theta
@@ -596,7 +628,15 @@ def test_duffy_radial_adaptive_rule_uses_scalar_fallback(monkeypatch):
     def fake_build_normalizer_table(self, pool=None, pb=None):
         self.mode_normalizers[:] = 1
 
-    def fake_batched(self, queue, radial_rule, deg_theta, radial_quad_order, mp_dps):
+    def fake_batched(
+        self,
+        queue,
+        radial_rule,
+        deg_theta,
+        radial_quad_order,
+        mp_dps,
+        kernel_kwargs=None,
+    ):
         seen["batched_called"] = True
         raise AssertionError("adaptive rule should not use batched builder")
 
@@ -689,7 +729,15 @@ def test_duffy_radial_auto_tune_orders_routes_to_batched_builder(monkeypatch):
             },
         )
 
-    def fake_batched(self, queue, radial_rule, deg_theta, radial_quad_order, mp_dps):
+    def fake_batched(
+        self,
+        queue,
+        radial_rule,
+        deg_theta,
+        radial_quad_order,
+        mp_dps,
+        kernel_kwargs=None,
+    ):
         seen["called"] = True
         seen["regular_quad_order"] = deg_theta
         seen["radial_quad_order"] = radial_quad_order
@@ -761,7 +809,15 @@ def test_duffy_radial_auto_keyword_orders_trigger_autotune(monkeypatch):
             },
         )
 
-    def fake_batched(self, queue, radial_rule, deg_theta, radial_quad_order, mp_dps):
+    def fake_batched(
+        self,
+        queue,
+        radial_rule,
+        deg_theta,
+        radial_quad_order,
+        mp_dps,
+        kernel_kwargs=None,
+    ):
         seen["called"] = True
         seen["regular_quad_order"] = deg_theta
         seen["radial_quad_order"] = radial_quad_order
@@ -830,7 +886,15 @@ def test_duffy_radial_partial_auto_order_keeps_explicit_value(monkeypatch):
             },
         )
 
-    def fake_batched(self, queue, radial_rule, deg_theta, radial_quad_order, mp_dps):
+    def fake_batched(
+        self,
+        queue,
+        radial_rule,
+        deg_theta,
+        radial_quad_order,
+        mp_dps,
+        kernel_kwargs=None,
+    ):
         seen["called"] = True
         seen["regular_quad_order"] = deg_theta
         seen["radial_quad_order"] = radial_quad_order
@@ -968,7 +1032,15 @@ def test_duffy_radial_batched_initializes_normalizers(monkeypatch):
         self.mode_normalizers[:] = 2
         seen["normalizers"] = True
 
-    def fake_batched(self, queue, radial_rule, deg_theta, radial_quad_order, mp_dps):
+    def fake_batched(
+        self,
+        queue,
+        radial_rule,
+        deg_theta,
+        radial_quad_order,
+        mp_dps,
+        kernel_kwargs=None,
+    ):
         assert seen["normalizers"]
         self.is_built = True
 
@@ -1114,7 +1186,15 @@ def test_duffy_radial_routes_queue_to_batched_builder_1d(monkeypatch):
     def fail_build_normalizer_table(self, pool=None, pb=None):
         raise AssertionError("normalizer table should not be built in 1D")
 
-    def fake_batched(self, queue, radial_rule, deg_theta, radial_quad_order, mp_dps):
+    def fake_batched(
+        self,
+        queue,
+        radial_rule,
+        deg_theta,
+        radial_quad_order,
+        mp_dps,
+        kernel_kwargs=None,
+    ):
         seen["queue"] = queue
         seen["dim"] = self.dim
         seen["called"] = True
@@ -1163,7 +1243,15 @@ def test_duffy_radial_routes_queue_to_batched_builder_3d(monkeypatch):
     def fail_build_normalizer_table(self, pool=None, pb=None):
         raise AssertionError("normalizer table should not be built in 3D")
 
-    def fake_batched(self, queue, radial_rule, deg_theta, radial_quad_order, mp_dps):
+    def fake_batched(
+        self,
+        queue,
+        radial_rule,
+        deg_theta,
+        radial_quad_order,
+        mp_dps,
+        kernel_kwargs=None,
+    ):
         seen["queue"] = queue
         seen["dim"] = self.dim
         seen["called"] = True

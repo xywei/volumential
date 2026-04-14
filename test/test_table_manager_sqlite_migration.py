@@ -205,7 +205,7 @@ def test_resolve_kernel_bundle_skips_python_kernel_lookup_for_sumpy(
         )
 
     assert bundle.sumpy_kernel is not None
-    assert bundle.kernel_func is None
+    assert callable(bundle.kernel_func)
 
 
 def test_load_saved_table_uses_payload_without_python_kernel_lookup(
@@ -296,7 +296,7 @@ def test_load_saved_table_uses_payload_without_python_kernel_lookup(
 
         loaded = table_manager.load_saved_table(3, "Laplace", q_order=1)
 
-    assert loaded.kernel_func is None
+    assert callable(loaded.kernel_func)
     assert np.allclose(loaded.q_points, payload_table.q_points)
     assert np.allclose(loaded.data, payload_table.data)
 
@@ -357,7 +357,7 @@ def test_get_table_recompute_skips_python_kernel_lookup_for_sumpy(
         table, is_recomputed = table_manager.get_table(3, "Laplace", q_order=1)
 
     assert is_recomputed
-    assert table.kernel_func is None
+    assert callable(table.kernel_func)
 
 
 def test_get_table_rejects_legacy_knl_func_kwarg(tmp_path):
