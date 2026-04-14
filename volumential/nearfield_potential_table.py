@@ -1786,6 +1786,7 @@ class NearFieldInteractionTable:
         sample_count=5,
         candidates=None,
         floor_factor=8.0,
+        kernel_kwargs=None,
     ):
         if radial_rule == "adaptive":
             raise ValueError(
@@ -1846,6 +1847,7 @@ class NearFieldInteractionTable:
                     regular_quad_order,
                     radial_quad_order,
                     mp_dps,
+                    kernel_kwargs=kernel_kwargs,
                 )
             else:
                 values = []
@@ -2131,7 +2133,7 @@ class NearFieldInteractionTable:
             auto_tune_candidates=auto_tune_candidates,
         )
 
-    def _resolve_duffy_build_config(self, build_config, queue):
+    def _resolve_duffy_build_config(self, build_config, queue, kernel_kwargs=None):
         regular_quad_order = build_config.regular_quad_order
         radial_quad_order = build_config.radial_quad_order
 
@@ -2148,6 +2150,7 @@ class NearFieldInteractionTable:
                 sample_count=build_config.auto_tune_samples,
                 candidates=build_config.auto_tune_candidates,
                 floor_factor=build_config.auto_tune_floor_factor,
+                kernel_kwargs=kernel_kwargs,
             )
             if build_config.auto_tune_orders or _is_auto_quad_order(regular_quad_order):
                 regular_quad_order = tuned_regular
@@ -2269,7 +2272,12 @@ class NearFieldInteractionTable:
                     auto_tune_candidates=build_config.auto_tune_candidates,
                     kwargs=kwargs,
                 )
-        build_config = self._resolve_duffy_build_config(build_config, queue=queue)
+        kernel_kwargs = self._extract_integral_kernel_runtime_kwargs(kwargs)
+        build_config = self._resolve_duffy_build_config(
+            build_config,
+            queue=queue,
+            kernel_kwargs=kernel_kwargs,
+        )
 
         if self.pb is not None:
             self.pb.draw()
@@ -2308,8 +2316,6 @@ class NearFieldInteractionTable:
             raise ValueError(
                 "DuffyRadial loopy builder requires sumpy_kernel (integral_knl)"
             )
-
-        kernel_kwargs = self._extract_integral_kernel_runtime_kwargs(kwargs)
 
         if build_config.radial_rule not in {"tanh-sinh-fast", "tanh-sinh"}:
             raise ValueError(
