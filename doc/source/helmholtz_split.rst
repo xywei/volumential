@@ -486,13 +486,14 @@ Supported planner config keys:
 - ``rho_base_real`` / ``rho_base_imag``: base values for default geometric
   threshold ladders for :math:`|\Re(k)|h` and :math:`|\Im(k)|h`
 - ``rho_imag_split_max``: maximum :math:`|\Im(k)|h` for default split mode
-- ``disable_split_if_outside_coverage``: if true, auto mode falls back to
-  direct (non-split) near-field evaluation when :math:`|\Im(k)|h` exceeds
-  ``rho_imag_split_max``
+- ``disable_split_if_outside_coverage``: when :math:`|\Im(k)|h` exceeds
+  ``rho_imag_split_max``, Volumential currently emits warnings and keeps split
+  evaluation enabled (direct fallback is not performed because it would require
+  matching direct near-field tables)
 
-By default, ``disable_split_if_outside_coverage`` is ``False``. In that mode,
-auto selection keeps split enabled, clamps to the highest configured split
-order, and emits warnings when :math:`|\Im(k)|h` exceeds configured coverage.
+By default, ``disable_split_if_outside_coverage`` is ``False``. Auto selection
+keeps split enabled, clamps to the highest configured split order, and emits
+warnings when :math:`|\Im(k)|h` exceeds configured coverage.
 - ``smooth_quad_order_min``: floor for smooth quadrature order
 - ``smooth_quad_order_per_order``: increment per additional split order above 1
   for easy/moderate attenuation regimes (default ``1``)
