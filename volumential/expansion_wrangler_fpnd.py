@@ -2194,6 +2194,14 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         if "rho_thresholds_imag" in auto_cfg:
             thresholds_imag = tuple(auto_cfg["rho_thresholds_imag"])
 
+        if "orders" not in auto_cfg:
+            if len(thresholds_real) != len(thresholds_imag):
+                raise ValueError(
+                    "rho_thresholds_real and rho_thresholds_imag must have the "
+                    "same length when orders are not provided"
+                )
+            orders = tuple(range(order_min, order_min + len(thresholds_real) + 1))
+
         rho_real, rho_imag = self._compute_split_rho_components()
         self._split_auto_rho_real = float(rho_real)
         self._split_auto_rho_imag = float(rho_imag)

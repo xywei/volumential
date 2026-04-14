@@ -715,6 +715,7 @@ def test_duffy_radial_auto_tune_orders_routes_to_batched_builder(monkeypatch):
         sample_count=5,
         candidates=None,
         floor_factor=8.0,
+        kernel_kwargs=None,
     ):
         seen["auto_called"] = True
         seen["sample_count"] = sample_count
@@ -797,6 +798,7 @@ def test_duffy_radial_auto_keyword_orders_trigger_autotune(monkeypatch):
         sample_count=5,
         candidates=None,
         floor_factor=8.0,
+        kernel_kwargs=None,
     ):
         seen["auto_called"] = True
         return (
@@ -874,6 +876,7 @@ def test_duffy_radial_partial_auto_order_keeps_explicit_value(monkeypatch):
         sample_count=5,
         candidates=None,
         floor_factor=8.0,
+        kernel_kwargs=None,
     ):
         seen["auto_called"] = True
         return (
