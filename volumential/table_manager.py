@@ -1275,6 +1275,26 @@ class NearFieldInteractionTableManager:
 
         return parameter_values
 
+    @staticmethod
+    def _kernel_parameter_values_match(loaded_value, requested_value):
+        loaded_c = complex(loaded_value)
+        requested_c = complex(requested_value)
+
+        if np.isclose(loaded_c, requested_c, rtol=1.0e-12, atol=1.0e-15):
+            return True
+
+        loaded_c64 = np.complex64(loaded_c)
+        requested_c64 = np.complex64(requested_c)
+        c64_eps = np.finfo(np.float32).eps
+        return bool(
+            np.isclose(
+                loaded_c64,
+                requested_c64,
+                rtol=64.0 * c64_eps,
+                atol=64.0 * c64_eps,
+            )
+        )
+
     def _warn_on_loaded_kwarg_mismatch(self, table, kwargs):
         for kkey, kval in kwargs.items():
             if kval is not None:
@@ -1669,12 +1689,7 @@ class NearFieldInteractionTableManager:
             if loaded_value is None:
                 raise KeyError(f"cached kernel parameter '{pname}' is missing")
 
-            if not np.isclose(
-                complex(loaded_value),
-                complex(pvalue),
-                rtol=1.0e-12,
-                atol=1.0e-15,
-            ):
+            if not self._kernel_parameter_values_match(loaded_value, pvalue):
                 raise KeyError(f"cached kernel parameter '{pname}' mismatch")
 
         for atkey, atval in loaded_kwargs.items():
