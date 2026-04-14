@@ -2304,17 +2304,6 @@ class NearFieldInteractionTable:
                 self.pb.finished()
             return return_value
 
-        if queue is None:
-            if cl_ctx is not None:
-                queue = cl.CommandQueue(cl_ctx)
-            else:
-                raise ValueError(
-                    "queue (or cl_ctx) is required for DuffyRadial table builds; "
-                    "implicit OpenCL context auto-selection is not supported"
-                )
-        elif cl_ctx is not None and queue.context != cl_ctx:
-            raise ValueError("queue context does not match cl_ctx")
-
         if self.integral_knl is None:
             raise ValueError(
                 "DuffyRadial loopy builder requires sumpy_kernel (integral_knl)"
@@ -2328,7 +2317,20 @@ class NearFieldInteractionTable:
                 "tanh-sinh-fast radial rules"
             )
 
-        if self._supports_batched_duffy_builder():
+        use_batched_builder = self._supports_batched_duffy_builder()
+
+        if use_batched_builder:
+            if queue is None:
+                if cl_ctx is not None:
+                    queue = cl.CommandQueue(cl_ctx)
+                else:
+                    raise ValueError(
+                        "queue (or cl_ctx) is required for batched DuffyRadial "
+                        "table builds"
+                    )
+            elif cl_ctx is not None and queue.context != cl_ctx:
+                raise ValueError("queue context does not match cl_ctx")
+
             logger.warning(
                 "Using batched GPU-backed %dD DuffyRadial table builder", self.dim
             )

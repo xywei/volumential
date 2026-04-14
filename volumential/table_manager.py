@@ -1230,9 +1230,17 @@ class NearFieldInteractionTableManager:
         )
 
     def _extract_kernel_parameter_values(self, sumpy_knl, kwargs):
+        base_knl = sumpy_knl
+        get_base_kernel = getattr(sumpy_knl, "get_base_kernel", None)
+        if callable(get_base_kernel):
+            try:
+                base_knl = get_base_kernel()
+            except Exception:
+                base_knl = sumpy_knl
+
         parameter_values = {}
         for attr_name in ("helmholtz_k_name", "yukawa_lambda_name"):
-            param_name = getattr(sumpy_knl, attr_name, None)
+            param_name = getattr(base_knl, attr_name, None)
             if not isinstance(param_name, str) or not param_name:
                 continue
 
@@ -1244,7 +1252,26 @@ class NearFieldInteractionTableManager:
                     + sumpy_knl.__class__.__name__
                 )
 
-            parameter_values[param_name] = kwargs[param_name]
+            param_value = kwargs[param_name]
+            if param_value is None:
+                raise TypeError(
+                    "missing kernel parameter "
+                    + repr(param_name)
+                    + " for "
+                    + sumpy_knl.__class__.__name__
+                )
+
+            try:
+                complex(param_value)
+            except Exception as exc:
+                raise TypeError(
+                    "kernel parameter "
+                    + repr(param_name)
+                    + " must be numeric for "
+                    + sumpy_knl.__class__.__name__
+                ) from exc
+
+            parameter_values[param_name] = param_value
 
         return parameter_values
 
@@ -1642,7 +1669,12 @@ class NearFieldInteractionTableManager:
             if loaded_value is None:
                 raise KeyError(f"cached kernel parameter '{pname}' is missing")
 
-            if complex(loaded_value) != complex(pvalue):
+            if not np.isclose(
+                complex(loaded_value),
+                complex(pvalue),
+                rtol=1.0e-12,
+                atol=1.0e-15,
+            ):
                 raise KeyError(f"cached kernel parameter '{pname}' mismatch")
 
         for atkey, atval in loaded_kwargs.items():

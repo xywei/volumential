@@ -1061,18 +1061,23 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         self.helmholtz_split = bool(helmholtz_split)
         auto_cfg = dict(helmholtz_split_auto_config or {})
         self._helmholtz_split_auto_config = dict(auto_cfg)
-        auto_enabled = bool(auto_cfg.get("enabled", False))
-        auto_mode = auto_enabled or (
-            isinstance(helmholtz_split_order, str)
-            and helmholtz_split_order.strip().lower() == "auto"
-        )
-
-        if auto_mode and self.helmholtz_split:
-            self.helmholtz_split_order = self._choose_auto_helmholtz_split_order(
-                auto_cfg
+        auto_mode = False
+        if self.helmholtz_split:
+            auto_enabled = bool(auto_cfg.get("enabled", False))
+            auto_mode = auto_enabled or (
+                isinstance(helmholtz_split_order, str)
+                and helmholtz_split_order.strip().lower() == "auto"
             )
+
+            if auto_mode:
+                self.helmholtz_split_order = self._choose_auto_helmholtz_split_order(
+                    auto_cfg
+                )
+            else:
+                self.helmholtz_split_order = int(helmholtz_split_order)
         else:
-            self.helmholtz_split_order = int(helmholtz_split_order)
+            # Split order is irrelevant when split mode is disabled.
+            self.helmholtz_split_order = 1
 
         if self.helmholtz_split_order < 1:
             raise ValueError("helmholtz_split_order must be >= 1")
@@ -1087,12 +1092,12 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
                 and getattr(self, "_split_auto_rho_imag", 0.0) > max_rho_imag
             ):
                 logger.warning(
-                    "Disabling split mode for high imaginary rho (%.3g > %.3g); "
-                    "falling back to direct kernel near-field evaluation",
+                    "Imaginary rho %.3g exceeds configured split coverage %.3g. "
+                    "Keeping split mode enabled because direct fallback requires "
+                    "matching direct near-field tables.",
                     self._split_auto_rho_imag,
                     max_rho_imag,
                 )
-                self.helmholtz_split = False
             elif getattr(self, "_split_auto_rho_imag", 0.0) > max_rho_imag:
                 logger.warning(
                     "Imaginary rho %.3g exceeds configured split coverage %.3g; "
@@ -1572,7 +1577,21 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         for table in near_field_tables:
             table.symmetry_source_direction = symmetry_source_direction
 
-        eval_dtype = np.complex128 if out_kernel.is_complex_valued else np.float64
+        configured_dtype = np.dtype(self.dtype)
+        if out_kernel.is_complex_valued:
+            if configured_dtype.kind == "c":
+                eval_dtype = configured_dtype
+            else:
+                eval_dtype = (
+                    np.complex64 if configured_dtype == np.float32 else np.complex128
+                )
+        else:
+            if configured_dtype.kind == "f":
+                eval_dtype = configured_dtype
+            else:
+                eval_dtype = (
+                    np.float32 if configured_dtype == np.complex64 else np.float64
+                )
 
         cache_key = (
             kname,
@@ -2083,17 +2102,27 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
 
     def _split_wave_number(self, base_knl, *, what):
         param_name = self._split_wave_number_parameter_name(base_knl)
-        if (
-            not isinstance(param_name, str)
-            or param_name not in self.kernel_extra_kwargs
-        ):
-            raise RuntimeError(f"missing kernel parameter for {what}")
+        if not isinstance(param_name, str) or not param_name:
+            raise RuntimeError(
+                f"{base_knl.__class__.__name__} does not expose a split parameter "
+                f"name while evaluating {what}"
+            )
+        if param_name not in self.kernel_extra_kwargs:
+            raise TypeError(
+                f"missing kernel parameter {param_name!r} for "
+                f"{base_knl.__class__.__name__} while evaluating {what}"
+            )
 
         param = np.complex128(self.kernel_extra_kwargs[param_name])
         if isinstance(base_knl, HelmholtzKernel):
             return np.complex128(param)
         if isinstance(base_knl, YukawaKernel):
-            return np.complex128(1j * param)
+            if not np.isclose(np.imag(param), 0.0):
+                raise NotImplementedError(
+                    "Yukawa split mode requires real lam; use HelmholtzKernel "
+                    "for complex wave numbers"
+                )
+            return np.complex128(1j * np.real(param))
 
         raise RuntimeError("split mode supports only Helmholtz/Yukawa kernels")
 
@@ -2145,7 +2174,10 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         if "rho_thresholds" in auto_cfg or "orders" in auto_cfg:
             thresholds_real = auto_cfg.get("rho_thresholds", (0.5, 1.5, 3.0))
             thresholds_imag = thresholds_real
-            orders = auto_cfg.get("orders", (1, 2, 3, 4))
+            if "orders" in auto_cfg:
+                orders = auto_cfg["orders"]
+            else:
+                orders = tuple(range(order_min, order_min + len(thresholds_real) + 1))
         else:
             # Default to geometric ladders for real/imag parts separately.
             rho0_real = float(auto_cfg.get("rho_base_real", 0.25))
@@ -3707,7 +3739,21 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
 
         near_field_tables = self.near_field_table[kname]
         table0 = near_field_tables[0]
-        eval_dtype = np.complex128 if out_kernel.is_complex_valued else np.float64
+        configured_dtype = np.dtype(self.dtype)
+        if out_kernel.is_complex_valued:
+            if configured_dtype.kind == "c":
+                eval_dtype = configured_dtype
+            else:
+                eval_dtype = (
+                    np.complex64 if configured_dtype == np.float32 else np.complex128
+                )
+        else:
+            if configured_dtype.kind == "f":
+                eval_dtype = configured_dtype
+            else:
+                eval_dtype = (
+                    np.float32 if configured_dtype == np.complex64 else np.float64
+                )
         cache_key = (
             kname,
             tuple(int(np.asarray(tbl.data).ctypes.data) for tbl in near_field_tables),

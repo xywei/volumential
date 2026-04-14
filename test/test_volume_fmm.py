@@ -2581,29 +2581,39 @@ def test_volume_fmm_2d_yukawa_split_order2_runs(tmp_path):
         helmholtz_split=True,
         helmholtz_split_order=2,
     )
+    split_half_lam = _run_2d_yukawa_split_case(
+        ctx,
+        queue,
+        split_table,
+        q_order=q_order,
+        nlevels=3,
+        fmm_order=16,
+        lam=0.5 * lam,
+        helmholtz_split=True,
+        helmholtz_split_order=2,
+    )
 
     pot = split["potentials"].get(queue)
+    pot_half_lam = split_half_lam["potentials"].get(queue)
     assert np.all(np.isfinite(pot))
+    assert np.all(np.isfinite(pot_half_lam))
+    assert not np.allclose(pot, pot_half_lam, rtol=1.0e-8, atol=1.0e-10)
     assert split["n_points"] > 0
+    assert split_half_lam["n_points"] > 0
 
 
-def test_volume_fmm_2d_yukawa_complex_lambda_rejected(tmp_path):
+def test_volume_fmm_2d_yukawa_complex_lambda_rejected():
     ctx = _create_non_intel_opencl_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 5
     lam = 7.0 + 1.25j
-    split_table = _get_laplace_2d_table(
-        queue,
-        tmp_path / "nft-yukawa2d-split-complex-q5.sqlite",
-        q_order,
-    )
 
     with pytest.raises(NotImplementedError, match="real lam"):
         _run_2d_yukawa_split_case(
             ctx,
             queue,
-            split_table,
+            object(),
             q_order=q_order,
             nlevels=3,
             fmm_order=16,
