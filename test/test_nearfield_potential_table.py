@@ -141,6 +141,26 @@ def test_sumpy_kernel_to_lambda_lambdifies_once(monkeypatch):
     assert call_count["n"] == 1
 
 
+def test_sumpy_kernel_to_lambda_applies_wrapper_postprocess():
+    class FakeKernel:
+        dim = 1
+
+        def get_expression(self, args):
+            return args[0]
+
+        def postprocess_at_source(self, expr, bvec):
+            return expr + 1
+
+        def postprocess_at_target(self, expr, bvec):
+            return 2 * expr
+
+        def get_global_scaling_const(self):
+            return 3
+
+    knl_func = npt.sumpy_kernel_to_lambda(FakeKernel())
+    assert knl_func(4.0) == 30.0
+
+
 def cheb_eval(dim, coefs, coords):
     if dim == 1:
         return chebval(coords[0], coefs)
@@ -415,7 +435,15 @@ def test_duffy_radial_routes_queue_to_batched_builder(monkeypatch):
     def fake_build_normalizer_table(self, pool=None, pb=None):
         self.mode_normalizers[:] = 1
 
-    def fake_batched(self, queue, radial_rule, deg_theta, radial_quad_order, mp_dps):
+    def fake_batched(
+        self,
+        queue,
+        radial_rule,
+        deg_theta,
+        radial_quad_order,
+        mp_dps,
+        kernel_kwargs=None,
+    ):
         seen["queue"] = queue
         seen["called"] = True
         self.is_built = True
@@ -455,7 +483,15 @@ def test_build_table_uses_supplied_cl_ctx_when_queue_missing(monkeypatch):
     def fake_build_normalizer_table(self, pool=None, pb=None):
         pass
 
-    def fake_batched(self, queue, radial_rule, deg_theta, radial_quad_order, mp_dps):
+    def fake_batched(
+        self,
+        queue,
+        radial_rule,
+        deg_theta,
+        radial_quad_order,
+        mp_dps,
+        kernel_kwargs=None,
+    ):
         seen["queue"] = queue
         self.is_built = True
 
@@ -505,7 +541,15 @@ def test_duffy_radial_keeps_legacy_deg_theta_alias(monkeypatch):
     def fake_build_normalizer_table(self, pool=None, pb=None):
         pass
 
-    def fake_batched(self, queue, radial_rule, deg_theta, radial_quad_order, mp_dps):
+    def fake_batched(
+        self,
+        queue,
+        radial_rule,
+        deg_theta,
+        radial_quad_order,
+        mp_dps,
+        kernel_kwargs=None,
+    ):
         seen["called"] = True
         seen["regular_quad_order"] = deg_theta
 
@@ -544,7 +588,15 @@ def test_duffy_radial_accepts_build_config_dataclass(monkeypatch):
     def fake_build_normalizer_table(self, pool=None, pb=None):
         pass
 
-    def fake_batched(self, queue, radial_rule, deg_theta, radial_quad_order, mp_dps):
+    def fake_batched(
+        self,
+        queue,
+        radial_rule,
+        deg_theta,
+        radial_quad_order,
+        mp_dps,
+        kernel_kwargs=None,
+    ):
         seen["called"] = True
         seen["radial_rule"] = radial_rule
         seen["regular_quad_order"] = deg_theta
@@ -596,7 +648,15 @@ def test_duffy_radial_adaptive_rule_uses_scalar_fallback(monkeypatch):
     def fake_build_normalizer_table(self, pool=None, pb=None):
         self.mode_normalizers[:] = 1
 
-    def fake_batched(self, queue, radial_rule, deg_theta, radial_quad_order, mp_dps):
+    def fake_batched(
+        self,
+        queue,
+        radial_rule,
+        deg_theta,
+        radial_quad_order,
+        mp_dps,
+        kernel_kwargs=None,
+    ):
         seen["batched_called"] = True
         raise AssertionError("adaptive rule should not use batched builder")
 
@@ -675,6 +735,7 @@ def test_duffy_radial_auto_tune_orders_routes_to_batched_builder(monkeypatch):
         sample_count=5,
         candidates=None,
         floor_factor=8.0,
+        kernel_kwargs=None,
     ):
         seen["auto_called"] = True
         seen["sample_count"] = sample_count
@@ -689,7 +750,15 @@ def test_duffy_radial_auto_tune_orders_routes_to_batched_builder(monkeypatch):
             },
         )
 
-    def fake_batched(self, queue, radial_rule, deg_theta, radial_quad_order, mp_dps):
+    def fake_batched(
+        self,
+        queue,
+        radial_rule,
+        deg_theta,
+        radial_quad_order,
+        mp_dps,
+        kernel_kwargs=None,
+    ):
         seen["called"] = True
         seen["regular_quad_order"] = deg_theta
         seen["radial_quad_order"] = radial_quad_order
@@ -749,6 +818,7 @@ def test_duffy_radial_auto_keyword_orders_trigger_autotune(monkeypatch):
         sample_count=5,
         candidates=None,
         floor_factor=8.0,
+        kernel_kwargs=None,
     ):
         seen["auto_called"] = True
         return (
@@ -761,7 +831,15 @@ def test_duffy_radial_auto_keyword_orders_trigger_autotune(monkeypatch):
             },
         )
 
-    def fake_batched(self, queue, radial_rule, deg_theta, radial_quad_order, mp_dps):
+    def fake_batched(
+        self,
+        queue,
+        radial_rule,
+        deg_theta,
+        radial_quad_order,
+        mp_dps,
+        kernel_kwargs=None,
+    ):
         seen["called"] = True
         seen["regular_quad_order"] = deg_theta
         seen["radial_quad_order"] = radial_quad_order
@@ -818,6 +896,7 @@ def test_duffy_radial_partial_auto_order_keeps_explicit_value(monkeypatch):
         sample_count=5,
         candidates=None,
         floor_factor=8.0,
+        kernel_kwargs=None,
     ):
         seen["auto_called"] = True
         return (
@@ -830,7 +909,15 @@ def test_duffy_radial_partial_auto_order_keeps_explicit_value(monkeypatch):
             },
         )
 
-    def fake_batched(self, queue, radial_rule, deg_theta, radial_quad_order, mp_dps):
+    def fake_batched(
+        self,
+        queue,
+        radial_rule,
+        deg_theta,
+        radial_quad_order,
+        mp_dps,
+        kernel_kwargs=None,
+    ):
         seen["called"] = True
         seen["regular_quad_order"] = deg_theta
         seen["radial_quad_order"] = radial_quad_order
@@ -968,7 +1055,15 @@ def test_duffy_radial_batched_initializes_normalizers(monkeypatch):
         self.mode_normalizers[:] = 2
         seen["normalizers"] = True
 
-    def fake_batched(self, queue, radial_rule, deg_theta, radial_quad_order, mp_dps):
+    def fake_batched(
+        self,
+        queue,
+        radial_rule,
+        deg_theta,
+        radial_quad_order,
+        mp_dps,
+        kernel_kwargs=None,
+    ):
         assert seen["normalizers"]
         self.is_built = True
 
@@ -1114,7 +1209,15 @@ def test_duffy_radial_routes_queue_to_batched_builder_1d(monkeypatch):
     def fail_build_normalizer_table(self, pool=None, pb=None):
         raise AssertionError("normalizer table should not be built in 1D")
 
-    def fake_batched(self, queue, radial_rule, deg_theta, radial_quad_order, mp_dps):
+    def fake_batched(
+        self,
+        queue,
+        radial_rule,
+        deg_theta,
+        radial_quad_order,
+        mp_dps,
+        kernel_kwargs=None,
+    ):
         seen["queue"] = queue
         seen["dim"] = self.dim
         seen["called"] = True
@@ -1163,7 +1266,15 @@ def test_duffy_radial_routes_queue_to_batched_builder_3d(monkeypatch):
     def fail_build_normalizer_table(self, pool=None, pb=None):
         raise AssertionError("normalizer table should not be built in 3D")
 
-    def fake_batched(self, queue, radial_rule, deg_theta, radial_quad_order, mp_dps):
+    def fake_batched(
+        self,
+        queue,
+        radial_rule,
+        deg_theta,
+        radial_quad_order,
+        mp_dps,
+        kernel_kwargs=None,
+    ):
         seen["queue"] = queue
         seen["dim"] = self.dim
         seen["called"] = True
@@ -1195,6 +1306,162 @@ def test_duffy_radial_routes_queue_to_batched_builder_3d(monkeypatch):
     assert seen["queue"] is q
     assert seen["dim"] == 3
     assert table.last_duffy_build_timings["normalizer_s"] == 0.0
+
+
+def test_duffy_radial_wrapped_kernel_does_not_fallback_to_scalar(monkeypatch):
+    class WrappedKernel:
+        def __init__(self):
+            self._base = object()
+
+        def get_base_kernel(self):
+            return self._base
+
+    table = npt.NearFieldInteractionTable(
+        quad_order=2,
+        build_method="DuffyRadial",
+        dim=2,
+        sumpy_kernel=WrappedKernel(),
+        derive_kernel_func=False,
+        progress_bar=False,
+    )
+
+    seen = {"scalar_called": False}
+
+    def fake_build_normalizer_table(self, pool=None, pb=None):
+        pass
+
+    def fake_batched(
+        self,
+        queue,
+        radial_rule,
+        deg_theta,
+        radial_quad_order,
+        mp_dps,
+        kernel_kwargs=None,
+    ):
+        raise RuntimeError("batched failed")
+
+    def fake_scalar(
+        self,
+        radial_rule,
+        deg_theta,
+        radial_quad_order,
+        mp_dps,
+        kernel_kwargs=None,
+    ):
+        seen["scalar_called"] = True
+        self.is_built = True
+
+    monkeypatch.setattr(
+        npt.NearFieldInteractionTable,
+        "build_normalizer_table",
+        fake_build_normalizer_table,
+    )
+    monkeypatch.setattr(
+        npt.NearFieldInteractionTable,
+        "build_table_via_duffy_radial_batched",
+        fake_batched,
+    )
+    monkeypatch.setattr(
+        npt.NearFieldInteractionTable,
+        "_build_table_via_duffy_radial_scalar",
+        fake_scalar,
+    )
+
+    with pytest.raises(RuntimeError, match="scalar fallback is disabled"):
+        table.build_table_via_duffy_radial(queue=object())
+
+    assert not seen["scalar_called"]
+
+
+def test_duffy_radial_adaptive_rejects_wrapped_kernel_scalar_path(monkeypatch):
+    class WrappedKernel:
+        def __init__(self):
+            self._base = object()
+
+        def get_base_kernel(self):
+            return self._base
+
+    table = npt.NearFieldInteractionTable(
+        quad_order=2,
+        build_method="DuffyRadial",
+        dim=2,
+        sumpy_kernel=WrappedKernel(),
+        derive_kernel_func=False,
+        progress_bar=False,
+    )
+
+    seen = {"scalar_called": False}
+
+    def fake_build_normalizer_table(self, pool=None, pb=None):
+        pass
+
+    def fake_scalar(
+        self,
+        radial_rule,
+        deg_theta,
+        radial_quad_order,
+        mp_dps,
+        kernel_kwargs=None,
+    ):
+        seen["scalar_called"] = True
+
+    monkeypatch.setattr(
+        npt.NearFieldInteractionTable,
+        "build_normalizer_table",
+        fake_build_normalizer_table,
+    )
+    monkeypatch.setattr(
+        npt.NearFieldInteractionTable,
+        "_build_table_via_duffy_radial_scalar",
+        fake_scalar,
+    )
+
+    with pytest.raises(RuntimeError, match="Adaptive DuffyRadial scalar build"):
+        table.build_table_via_duffy_radial(
+            radial_rule="adaptive",
+            regular_quad_order=8,
+            radial_quad_order=31,
+            mp_dps=50,
+        )
+
+    assert not seen["scalar_called"]
+
+
+def test_duffy_runtime_kernel_kwargs_reject_none_or_nonnumeric():
+    class FakeLoopyArg:
+        def __init__(self, name):
+            self.name = name
+
+    class FakeKernelArg:
+        def __init__(self, name):
+            self.loopy_arg = FakeLoopyArg(name)
+
+    class FakeKernel:
+        def get_args(self):
+            return [FakeKernelArg("lam")]
+
+    table = npt.NearFieldInteractionTable(
+        quad_order=2,
+        build_method="DuffyRadial",
+        dim=2,
+        sumpy_kernel=object(),
+        derive_kernel_func=False,
+        progress_bar=False,
+    )
+    table.integral_knl = FakeKernel()
+
+    with pytest.raises(TypeError, match="lam=None"):
+        table._extract_integral_kernel_runtime_kwargs({"lam": None})
+
+    with pytest.raises(TypeError, match="expected numeric scalar"):
+        table._extract_integral_kernel_runtime_kwargs({"lam": "abc"})
+
+    with pytest.raises(TypeError, match="expected finite numeric scalar"):
+        table._extract_integral_kernel_runtime_kwargs({"lam": np.nan})
+
+    with pytest.raises(TypeError, match="expected finite numeric scalar"):
+        table._extract_integral_kernel_runtime_kwargs({"lam": np.inf})
 
 
 def _get_cpu_queue_or_skip(ctx_factory):

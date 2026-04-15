@@ -1212,10 +1212,87 @@ class NearFieldInteractionTableManager:
                 "for loopy table build."
             )
 
+        kernel_func = None
+        if sumpy_knl is not None:
+            from volumential.nearfield_potential_table import sumpy_kernel_to_lambda
+
+            parameter_values = self._extract_kernel_parameter_values(sumpy_knl, kwargs)
+            kernel_func = sumpy_kernel_to_lambda(
+                sumpy_knl,
+                fallback_dim=table_request.dim,
+                parameter_values=parameter_values,
+            )
+
         return TableKernelBundle(
-            kernel_func=None,
+            kernel_func=kernel_func,
             kernel_scale_type=kernel_scale_type,
             sumpy_kernel=sumpy_knl,
+        )
+
+    def _extract_kernel_parameter_values(self, sumpy_knl, kwargs):
+        base_knl = sumpy_knl
+        get_base_kernel = getattr(sumpy_knl, "get_base_kernel", None)
+        if callable(get_base_kernel):
+            try:
+                base_knl = get_base_kernel()
+            except Exception:
+                base_knl = sumpy_knl
+
+        parameter_values = {}
+        for attr_name in ("helmholtz_k_name", "yukawa_lambda_name"):
+            param_name = getattr(base_knl, attr_name, None)
+            if not isinstance(param_name, str) or not param_name:
+                continue
+
+            if param_name not in kwargs:
+                raise TypeError(
+                    "missing kernel parameter "
+                    + repr(param_name)
+                    + " for "
+                    + sumpy_knl.__class__.__name__
+                )
+
+            param_value = kwargs[param_name]
+            if param_value is None:
+                raise TypeError(
+                    "missing kernel parameter "
+                    + repr(param_name)
+                    + " for "
+                    + sumpy_knl.__class__.__name__
+                )
+
+            try:
+                complex(param_value)
+            except Exception as exc:
+                raise TypeError(
+                    "kernel parameter "
+                    + repr(param_name)
+                    + " must be numeric for "
+                    + sumpy_knl.__class__.__name__
+                ) from exc
+
+            parameter_values[param_name] = param_value
+
+        return parameter_values
+
+    @staticmethod
+    def _kernel_parameter_values_match(loaded_value, requested_value):
+        loaded_c = complex(loaded_value)
+        requested_c = complex(requested_value)
+
+        if np.isclose(loaded_c, requested_c, rtol=1.0e-12, atol=1.0e-15):
+            return True
+
+        loaded_c64 = np.complex64(loaded_c)
+        requested_c64 = np.complex64(requested_c)
+        c64_eps = np.finfo(np.float32).eps
+        return bool(
+            np.isclose(
+                loaded_c64,
+                requested_c64,
+                rtol=64.0 * c64_eps,
+                atol=64.0 * c64_eps,
+            )
         )
 
     def _warn_on_loaded_kwarg_mismatch(self, table, kwargs):
@@ -1602,6 +1679,18 @@ class NearFieldInteractionTableManager:
             )
             if loaded_build_config_fingerprint != requested_build_config_fingerprint:
                 raise KeyError("cached build_config mismatch")
+
+        requested_kernel_params = self._extract_kernel_parameter_values(
+            kernel_bundle.sumpy_kernel,
+            kwargs,
+        )
+        for pname, pvalue in requested_kernel_params.items():
+            loaded_value = loaded_kwargs.get(pname)
+            if loaded_value is None:
+                raise KeyError(f"cached kernel parameter '{pname}' is missing")
+
+            if not self._kernel_parameter_values_match(loaded_value, pvalue):
+                raise KeyError(f"cached kernel parameter '{pname}' mismatch")
 
         for atkey, atval in loaded_kwargs.items():
             setattr(table, atkey, atval)

@@ -23,6 +23,7 @@ THE SOFTWARE.
 import json
 import logging
 import hashlib
+import math
 from collections import OrderedDict
 
 import numpy as np
@@ -42,6 +43,7 @@ from sumpy.kernel import (
     ExpressionKernel,
     HelmholtzKernel,
     LaplaceKernel,
+    YukawaKernel,
 )
 
 from volumential.expansion_wrangler_interface import (
@@ -340,6 +342,29 @@ def _format_helmholtz_split_term_key(term_key):
     if kind == "power":
         return f"power:{power}"
     return f"power_log:{power}"
+
+
+def _select_split_order_from_rho(rho_max, thresholds, orders):
+    if len(orders) != len(thresholds) + 1:
+        raise ValueError("orders must have one more element than thresholds")
+
+    rho = float(rho_max)
+    for idx, threshold in enumerate(thresholds):
+        if rho <= float(threshold):
+            return int(orders[idx])
+    return int(orders[-1])
+
+
+def _select_split_order_from_rho_components(
+    rho_real,
+    rho_imag,
+    thresholds_real,
+    thresholds_imag,
+    orders,
+):
+    order_real = _select_split_order_from_rho(rho_real, thresholds_real, orders)
+    order_imag = _select_split_order_from_rho(rho_imag, thresholds_imag, orders)
+    return max(order_real, order_imag)
 
 
 def _compute_box_local_ids(queue, tree, n_q_points):
@@ -827,6 +852,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         helmholtz_split=False,
         helmholtz_split_order=1,
         helmholtz_split_smooth_quad_order=None,
+        helmholtz_split_auto_config=None,
         helmholtz_split_term_tables=None,
         helmholtz_split_order1_legacy_subtraction=False,
         translation_classes_data=None,
@@ -854,7 +880,9 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         smooth correction.
         For 2D ``power_log`` terms, single-table scaling is supported with a
         level-dependent :math:`\\log(\\alpha_\\ell)` correction folded into online
-        source strengths.
+        source strengths. The correction backend is controlled by
+        ``helmholtz_split_auto_config["power_log_single_table_beta_mode"]``:
+        ``"p2p"`` (default) or ``"table"``.
 
         ``helmholtz_split_smooth_quad_order`` controls the online tensor-product
         quadrature order used for the smooth split correction integral. For
@@ -1031,9 +1059,52 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             list1_extra_kwargs = {}
 
         self.helmholtz_split = bool(helmholtz_split)
-        self.helmholtz_split_order = int(helmholtz_split_order)
+        auto_cfg = dict(helmholtz_split_auto_config or {})
+        self._helmholtz_split_auto_config = dict(auto_cfg)
+        auto_mode = False
+        if self.helmholtz_split:
+            auto_enabled = bool(auto_cfg.get("enabled", False))
+            auto_mode = auto_enabled or (
+                isinstance(helmholtz_split_order, str)
+                and helmholtz_split_order.strip().lower() == "auto"
+            )
+
+            if auto_mode:
+                self.helmholtz_split_order = self._choose_auto_helmholtz_split_order(
+                    auto_cfg
+                )
+            else:
+                self.helmholtz_split_order = int(helmholtz_split_order)
+        else:
+            # Split order is irrelevant when split mode is disabled.
+            self.helmholtz_split_order = 1
+
         if self.helmholtz_split_order < 1:
             raise ValueError("helmholtz_split_order must be >= 1")
+
+        if auto_mode and self.helmholtz_split:
+            max_rho_imag = float(auto_cfg.get("rho_imag_split_max", 8.0))
+            disable_outside = bool(
+                auto_cfg.get("disable_split_if_outside_coverage", False)
+            )
+            if (
+                disable_outside
+                and getattr(self, "_split_auto_rho_imag", 0.0) > max_rho_imag
+            ):
+                logger.warning(
+                    "Imaginary rho %.3g exceeds configured split coverage %.3g. "
+                    "Keeping split mode enabled because direct fallback requires "
+                    "matching direct near-field tables.",
+                    self._split_auto_rho_imag,
+                    max_rho_imag,
+                )
+            elif getattr(self, "_split_auto_rho_imag", 0.0) > max_rho_imag:
+                logger.warning(
+                    "Imaginary rho %.3g exceeds configured split coverage %.3g; "
+                    "continuing with split at configured max order",
+                    self._split_auto_rho_imag,
+                    max_rho_imag,
+                )
 
         self.helmholtz_split_order1_legacy_subtraction = bool(
             helmholtz_split_order1_legacy_subtraction
@@ -1109,7 +1180,96 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             self.helmholtz_split_term_tables[normalized_term_key] = tables
 
         if helmholtz_split_smooth_quad_order is None and self.helmholtz_split:
-            helmholtz_split_smooth_quad_order = self.quad_order
+            if auto_mode:
+                min_smooth = int(auto_cfg.get("smooth_quad_order_min", self.quad_order))
+                add_per_order = int(auto_cfg.get("smooth_quad_order_per_order", 1))
+                add_per_order_hard = int(
+                    auto_cfg.get("smooth_quad_order_per_order_hard", 1)
+                )
+                if add_per_order < 0 or add_per_order_hard < 0:
+                    raise ValueError(
+                        "smooth quadrature per-order increments must be non-negative"
+                    )
+
+                hard_rho_imag = float(
+                    auto_cfg.get(
+                        "smooth_quad_order_hard_rho_imag",
+                        4.0,
+                    )
+                )
+                hard_rho_real = float(
+                    auto_cfg.get("smooth_quad_order_hard_rho_real", 3.0)
+                )
+                if hard_rho_real <= 0.0:
+                    raise ValueError("smooth_quad_order_hard_rho_real must be > 0")
+
+                rho_real = float(getattr(self, "_split_auto_rho_real", 0.0))
+                rho_imag = float(getattr(self, "_split_auto_rho_imag", 0.0))
+                active_add_per_order = (
+                    add_per_order_hard
+                    if (rho_imag >= hard_rho_imag or rho_real >= hard_rho_real)
+                    else add_per_order
+                )
+
+                rho_boost_start = float(
+                    auto_cfg.get("smooth_quad_order_rho_boost_start", hard_rho_imag)
+                )
+                rho_boost_scale = float(
+                    auto_cfg.get("smooth_quad_order_rho_boost_scale", 1.0)
+                )
+                if rho_boost_scale < 0.0:
+                    raise ValueError("smooth_quad_order_rho_boost_scale must be >= 0")
+
+                rho_boost = int(
+                    math.ceil(max(0.0, rho_imag - rho_boost_start) * rho_boost_scale)
+                )
+
+                rho_boost_cap = auto_cfg.get("smooth_quad_order_rho_boost_cap", None)
+                if rho_boost_cap is not None:
+                    rho_boost = min(rho_boost, int(rho_boost_cap))
+
+                rho_real_boost_start = float(
+                    auto_cfg.get(
+                        "smooth_quad_order_real_boost_start",
+                        hard_rho_real,
+                    )
+                )
+                rho_real_boost_scale = float(
+                    auto_cfg.get("smooth_quad_order_real_boost_scale", 0.5)
+                )
+                if rho_real_boost_scale < 0.0:
+                    raise ValueError("smooth_quad_order_real_boost_scale must be >= 0")
+
+                rho_real_boost = int(
+                    math.ceil(
+                        max(0.0, rho_real - rho_real_boost_start) * rho_real_boost_scale
+                    )
+                )
+                rho_real_boost_cap = auto_cfg.get(
+                    "smooth_quad_order_real_boost_cap", None
+                )
+                if rho_real_boost_cap is not None:
+                    rho_real_boost = min(rho_real_boost, int(rho_real_boost_cap))
+
+                rho_boost += rho_real_boost
+
+                base_smooth_order = (
+                    self.quad_order
+                    + max(0, self.helmholtz_split_order - 1) * active_add_per_order
+                )
+                helmholtz_split_smooth_quad_order = max(
+                    min_smooth,
+                    base_smooth_order + rho_boost,
+                )
+
+                smooth_quad_order_max = auto_cfg.get("smooth_quad_order_max", None)
+                if smooth_quad_order_max is not None:
+                    helmholtz_split_smooth_quad_order = min(
+                        helmholtz_split_smooth_quad_order,
+                        int(smooth_quad_order_max),
+                    )
+            else:
+                helmholtz_split_smooth_quad_order = self.quad_order
 
         if helmholtz_split_smooth_quad_order is None:
             self.helmholtz_split_smooth_quad_order = None
@@ -1121,7 +1281,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
                 raise ValueError("helmholtz_split_smooth_quad_order must be >= 1")
 
         if self.helmholtz_split:
-            from sumpy.kernel import HelmholtzKernel, LaplaceKernel
+            from sumpy.kernel import HelmholtzKernel, LaplaceKernel, YukawaKernel
 
             from volumential.table_manager import ConstantKernel
 
@@ -1132,9 +1292,11 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
 
             out_knl = self.tree_indep.target_kernels[0]
             base_knl = out_knl.get_base_kernel()
-            if out_knl is not base_knl or not isinstance(base_knl, HelmholtzKernel):
+            if out_knl is not base_knl or not isinstance(
+                base_knl, (HelmholtzKernel, YukawaKernel)
+            ):
                 raise NotImplementedError(
-                    "helmholtz_split currently supports only base Helmholtz kernels"
+                    "helmholtz_split currently supports only base Helmholtz/Yukawa kernels"
                 )
 
             if base_knl.dim not in (2, 3):
@@ -1224,6 +1386,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         queue,
         table0,
         near_field_tables,
+        eval_dtype,
     ):
         payload = self._nearfield_device_payload_cache.get(cache_key)
         if payload is not None:
@@ -1252,14 +1415,14 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             table_entry_scales,
         ) = _prepare_table_data_and_entry_map(near_field_tables)
 
-        if table_data_combined.dtype != self.dtype:
-            table_data_combined = table_data_combined.astype(self.dtype)
-        if mode_nmlz_combined.dtype != self.dtype:
-            mode_nmlz_combined = mode_nmlz_combined.astype(self.dtype)
-        if exterior_mode_nmlz_combined.dtype != self.dtype:
-            exterior_mode_nmlz_combined = exterior_mode_nmlz_combined.astype(self.dtype)
-        if table_entry_scales.dtype != self.dtype:
-            table_entry_scales = table_entry_scales.astype(self.dtype)
+        if table_data_combined.dtype != eval_dtype:
+            table_data_combined = table_data_combined.astype(eval_dtype)
+        if mode_nmlz_combined.dtype != eval_dtype:
+            mode_nmlz_combined = mode_nmlz_combined.astype(eval_dtype)
+        if exterior_mode_nmlz_combined.dtype != eval_dtype:
+            exterior_mode_nmlz_combined = exterior_mode_nmlz_combined.astype(eval_dtype)
+        if table_entry_scales.dtype != eval_dtype:
+            table_entry_scales = table_entry_scales.astype(eval_dtype)
 
         table_data_shapes = {
             "n_tables": len(near_field_tables),
@@ -1414,12 +1577,28 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         for table in near_field_tables:
             table.symmetry_source_direction = symmetry_source_direction
 
+        configured_dtype = np.dtype(self.dtype)
+        if out_kernel.is_complex_valued:
+            if configured_dtype.kind == "c":
+                eval_dtype = configured_dtype
+            else:
+                eval_dtype = (
+                    np.complex64 if configured_dtype == np.float32 else np.complex128
+                )
+        else:
+            if configured_dtype.kind == "f":
+                eval_dtype = configured_dtype
+            else:
+                eval_dtype = (
+                    np.float32 if configured_dtype == np.complex64 else np.float64
+                )
+
         cache_key = (
             kname,
             tuple(int(np.asarray(tbl.data).ctypes.data) for tbl in near_field_tables),
             tuple(int(np.asarray(tbl.data).size) for tbl in near_field_tables),
             tuple(_table_data_fingerprint(tbl.data) for tbl in near_field_tables),
-            np.dtype(self.dtype).str,
+            np.dtype(eval_dtype).str,
             None
             if symmetry_source_direction is None
             else tuple(np.asarray(symmetry_source_direction, dtype=float).tolist()),
@@ -1429,6 +1608,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             queue,
             table0,
             near_field_tables,
+            eval_dtype,
         )
 
         base = payload["base"]
@@ -1722,32 +1902,100 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
                     and term_kind == "power_log"
                     and len(term_tables) == 1
                 ):
-                    beta_weighted_strength = (
-                        self._fold_helmholtz_split_log_alpha_into_strength(
-                            src_weights,
-                            float(term_tables[0].source_box_extent),
-                        )
-                    )
-
-                    beta_strength = obj_array_1d([beta_weighted_strength])
                     power_kernel = self._get_helmholtz_split_power_kernel(term_power)
-                    p2p_power = self._get_helmholtz_split_term_p2p(
-                        power_kernel,
-                        exclude_self=exclude_self,
+                    beta_mode = (
+                        str(
+                            self._helmholtz_split_auto_config.get(
+                                "power_log_single_table_beta_mode",
+                                "p2p",
+                            )
+                        )
+                        .strip()
+                        .lower()
                     )
 
-                    beta_kwargs = dict(shared_kwargs)
-                    if not exclude_self:
-                        beta_kwargs.pop("target_to_source", None)
+                    if beta_mode == "p2p":
+                        beta_kwargs = dict(split_shared_kwargs)
+                        if not exclude_self:
+                            beta_kwargs.pop("target_to_source", None)
 
-                    beta_power_term = _run_p2p_from_csr(
-                        p2p_power,
-                        beta_kwargs,
-                        strength_arg=beta_strength,
-                        max_nsources_in_one_box_arg=self.max_nsources_in_one_box,
-                    )
+                        if use_interp_smooth_quad:
+                            beta_strength_scalar = (
+                                self._fold_helmholtz_split_log_alpha_into_strength(
+                                    smooth_data["strength"],
+                                    float(term_tables[0].source_box_extent),
+                                    box_source_starts=smooth_data["source_kwargs"][
+                                        "box_source_starts"
+                                    ],
+                                    box_source_counts=smooth_data["source_kwargs"][
+                                        "box_source_counts_nonchild"
+                                    ],
+                                )
+                            )
+                        else:
+                            beta_strength_scalar = (
+                                self._fold_helmholtz_split_log_alpha_into_strength(
+                                    src_weights,
+                                    float(term_tables[0].source_box_extent),
+                                )
+                            )
 
-                    term_contribution = term_contribution + beta_power_term[0]
+                        beta_strength = obj_array_1d([beta_strength_scalar])
+                        p2p_power = self._get_helmholtz_split_term_p2p(
+                            power_kernel,
+                            exclude_self=exclude_self,
+                        )
+                        beta_power_term = _run_p2p_from_csr(
+                            p2p_power,
+                            beta_kwargs,
+                            strength_arg=beta_strength,
+                            max_nsources_in_one_box_arg=max_nsources_in_one_box,
+                        )
+                    elif beta_mode == "table":
+                        beta_mode_coefs = (
+                            self._fold_helmholtz_split_log_alpha_into_strength(
+                                src_func,
+                                float(term_tables[0].source_box_extent),
+                            )
+                        )
+
+                        power_term_key = _normalize_helmholtz_split_term_key(
+                            ("power", term_power)
+                        )
+                        power_term_tables = (
+                            self._get_or_autobuild_helmholtz_split_term_tables(
+                                power_term_key
+                            )
+                        )
+
+                        beta_power_term = self._eval_direct_helmholtz_split_term_table(
+                            target_boxes,
+                            neighbor_source_boxes_starts,
+                            neighbor_source_boxes_lists,
+                            beta_mode_coefs,
+                            power_kernel,
+                            power_term_tables,
+                            term_key=power_term_key,
+                        )
+                    else:
+                        raise ValueError(
+                            "power_log_single_table_beta_mode must be 'table' or 'p2p'"
+                        )
+
+                    beta_term = beta_power_term[0]
+                    if isinstance(term_contribution, cl.array.Array) and not isinstance(
+                        beta_term, cl.array.Array
+                    ):
+                        beta_term = cl.array.to_device(
+                            self.queue,
+                            np.ascontiguousarray(np.asarray(beta_term)),
+                        )
+                    elif isinstance(beta_term, cl.array.Array) and not isinstance(
+                        term_contribution, cl.array.Array
+                    ):
+                        beta_term = beta_term.get(self.queue)
+
+                    term_contribution = term_contribution + beta_term
 
                 term_scale = correction[0].dtype.type(term_coeff)
                 correction = obj_array_1d(
@@ -1845,6 +2093,151 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
 
         return cache[kname]
 
+    def _split_wave_number_parameter_name(self, base_knl):
+        if isinstance(base_knl, HelmholtzKernel):
+            return getattr(base_knl, "helmholtz_k_name", None)
+        if isinstance(base_knl, YukawaKernel):
+            return getattr(base_knl, "yukawa_lambda_name", None)
+        return None
+
+    def _split_wave_number(self, base_knl, *, what):
+        param_name = self._split_wave_number_parameter_name(base_knl)
+        if not isinstance(param_name, str) or not param_name:
+            raise RuntimeError(
+                f"{base_knl.__class__.__name__} does not expose a split parameter "
+                f"name while evaluating {what}"
+            )
+        if param_name not in self.kernel_extra_kwargs:
+            raise TypeError(
+                f"missing kernel parameter {param_name!r} for "
+                f"{base_knl.__class__.__name__} while evaluating {what}"
+            )
+
+        param = np.complex128(self.kernel_extra_kwargs[param_name])
+        if isinstance(base_knl, HelmholtzKernel):
+            return np.complex128(param)
+        if isinstance(base_knl, YukawaKernel):
+            if not np.isclose(np.imag(param), 0.0):
+                raise NotImplementedError(
+                    "Yukawa split mode requires real lam; use HelmholtzKernel "
+                    "for complex wave numbers"
+                )
+            return np.complex128(1j * np.real(param))
+
+        raise RuntimeError("split mode supports only Helmholtz/Yukawa kernels")
+
+    def _compute_split_rho_max(self):
+        if len(self.tree_indep.target_kernels) != 1:
+            raise RuntimeError("split rho estimation expects one target kernel")
+
+        out_knl = self.tree_indep.target_kernels[0]
+        base_knl = out_knl.get_base_kernel()
+        k = self._split_wave_number(base_knl, what="split auto planning")
+        k_abs = float(abs(k))
+
+        box_source_counts = self.tree.box_source_counts_nonchild.get(self.queue)
+        box_levels = self.tree.box_levels.get(self.queue)
+        active = np.where(box_source_counts > 0)[0]
+        if active.size == 0:
+            return 0.0
+
+        min_level = int(np.min(box_levels[active]))
+        h_max = float(self.tree.root_extent) * (0.5**min_level)
+        return k_abs * h_max
+
+    def _compute_split_rho_components(self):
+        if len(self.tree_indep.target_kernels) != 1:
+            raise RuntimeError("split rho estimation expects one target kernel")
+
+        out_knl = self.tree_indep.target_kernels[0]
+        base_knl = out_knl.get_base_kernel()
+        k = self._split_wave_number(base_knl, what="split auto planning")
+
+        box_source_counts = self.tree.box_source_counts_nonchild.get(self.queue)
+        box_levels = self.tree.box_levels.get(self.queue)
+        active = np.where(box_source_counts > 0)[0]
+        if active.size == 0:
+            return 0.0, 0.0
+
+        min_level = int(np.min(box_levels[active]))
+        h_max = float(self.tree.root_extent) * (0.5**min_level)
+        rho_real = abs(float(np.real(k))) * h_max
+        rho_imag = abs(float(np.imag(k))) * h_max
+        return rho_real, rho_imag
+
+    def _choose_auto_helmholtz_split_order(self, auto_cfg):
+        order_min = int(auto_cfg.get("order_min", 2))
+        order_max = int(auto_cfg.get("order_max", 12))
+        if order_max < order_min:
+            raise ValueError("order_max must be >= order_min")
+
+        if "rho_thresholds" in auto_cfg or "orders" in auto_cfg:
+            thresholds_real = auto_cfg.get("rho_thresholds", (0.5, 1.5, 3.0))
+            thresholds_imag = thresholds_real
+            if "orders" in auto_cfg:
+                orders = auto_cfg["orders"]
+            else:
+                orders = tuple(range(order_min, order_min + len(thresholds_real) + 1))
+        else:
+            # Default to geometric ladders for real/imag parts separately.
+            rho0_real = float(auto_cfg.get("rho_base_real", 0.25))
+            rho0_imag = float(auto_cfg.get("rho_base_imag", 0.5))
+            if rho0_real <= 0.0 or rho0_imag <= 0.0:
+                raise ValueError("rho_base_real and rho_base_imag must be positive")
+            count = max(0, order_max - order_min)
+            thresholds_real = tuple(rho0_real * (2.0**j) for j in range(count))
+            thresholds_imag = tuple(rho0_imag * (2.0**j) for j in range(count))
+            orders = tuple(range(order_min, order_max + 1))
+
+        if "rho_thresholds_real" in auto_cfg:
+            thresholds_real = tuple(auto_cfg["rho_thresholds_real"])
+        if "rho_thresholds_imag" in auto_cfg:
+            thresholds_imag = tuple(auto_cfg["rho_thresholds_imag"])
+
+        if "orders" not in auto_cfg:
+            if len(thresholds_real) != len(thresholds_imag):
+                raise ValueError(
+                    "rho_thresholds_real and rho_thresholds_imag must have the "
+                    "same length when orders are not provided"
+                )
+            orders = tuple(range(order_min, order_min + len(thresholds_real) + 1))
+
+        rho_real, rho_imag = self._compute_split_rho_components()
+        self._split_auto_rho_real = float(rho_real)
+        self._split_auto_rho_imag = float(rho_imag)
+        rho_max = max(rho_real, rho_imag)
+        selected = _select_split_order_from_rho_components(
+            rho_real,
+            rho_imag,
+            thresholds_real,
+            thresholds_imag,
+            orders,
+        )
+
+        if "orders" not in auto_cfg:
+            selected = max(order_min, min(order_max, selected))
+
+        coverage_max = max(
+            float(thresholds_real[-1]) if len(thresholds_real) else 0.0,
+            float(thresholds_imag[-1]) if len(thresholds_imag) else 0.0,
+        )
+        if coverage_max > 0.0 and rho_max > coverage_max:
+            logger.warning(
+                "rho_max=%.3g exceeds planner threshold coverage (max %.3g); "
+                "clamping split order to %d",
+                rho_max,
+                coverage_max,
+                selected,
+            )
+
+        logger.info(
+            "Auto-selected helmholtz_split_order=%d (rho_real=%.3g, rho_imag=%.3g)",
+            selected,
+            rho_real,
+            rho_imag,
+        )
+        return selected
+
     def _helmholtz_split_max_neighbor_distance(self):
         box_source_counts = self.tree.box_source_counts_nonchild.get(self.queue)
         box_levels = self.tree.box_levels.get(self.queue)
@@ -1864,11 +2257,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         if split_order < 1:
             raise ValueError("split_order must be >= 1")
 
-        k_name = helm_knl.helmholtz_k_name
-        if k_name not in self.kernel_extra_kwargs:
-            raise RuntimeError("missing Helmholtz wave number for split terms")
-
-        k = np.complex128(self.kernel_extra_kwargs[k_name])
+        k = self._split_wave_number(helm_knl, what="split terms")
         abs_k = float(np.abs(k))
         r_max = self._helmholtz_split_max_neighbor_distance()
         z_max = abs_k * r_max
@@ -1919,11 +2308,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         helm_knl, _ = self._helmholtz_split_kernels
         dim = int(helm_knl.dim)
         split_order = int(self.helmholtz_split_order)
-        k_name = helm_knl.helmholtz_k_name
-        if k_name not in self.kernel_extra_kwargs:
-            raise RuntimeError("missing Helmholtz wave number for split remainder")
-
-        k = np.complex128(self.kernel_extra_kwargs[k_name])
+        k = self._split_wave_number(helm_knl, what="split remainder")
         series_nmax = self._helmholtz_split_series_nmax(split_order)
 
         cache_key = (
@@ -1990,6 +2375,20 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             )
 
         return self.helmholtz_split_term_tables[normalized_term_key]
+
+    def _get_or_autobuild_helmholtz_split_term_tables(self, term_key):
+        normalized_term_key = _normalize_helmholtz_split_term_key(term_key)
+        if normalized_term_key in self.helmholtz_split_term_tables:
+            return self.helmholtz_split_term_tables[normalized_term_key]
+
+        if len(self.tree_indep.target_kernels) != 1:
+            raise RuntimeError(
+                "helmholtz split term table auto-build expects one target kernel"
+            )
+
+        out_knl = self.tree_indep.target_kernels[0]
+        self._autobuild_helmholtz_split_term_tables(out_knl, [normalized_term_key])
+        return self._get_helmholtz_split_term_tables(normalized_term_key)
 
     def _initialize_helmholtz_split_table_umbrella(self, out_knl):
         kname = repr(out_knl)
@@ -2322,53 +2721,108 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         imag_scale = np.array(1j, dtype=self.dtype)
         return obj_array_1d([out_real + out_imag * imag_scale])
 
-    def _get_helmholtz_split_log_alpha_per_source(self, table_root_extent):
+    def _get_helmholtz_split_log_alpha_per_source(
+        self,
+        table_root_extent,
+        *,
+        box_source_starts=None,
+        box_source_counts=None,
+    ):
         table_root_extent = float(table_root_extent)
         if table_root_extent <= 0.0:
             raise ValueError("table_root_extent must be positive")
 
-        cache_key = table_root_extent
-        if cache_key in self._helmholtz_split_log_alpha_per_source_cache:
-            return self._helmholtz_split_log_alpha_per_source_cache[cache_key]
+        if box_source_starts is None and box_source_counts is None:
+            cache_key = table_root_extent
+            if cache_key in self._helmholtz_split_log_alpha_per_source_cache:
+                return self._helmholtz_split_log_alpha_per_source_cache[cache_key]
 
-        box_source_starts = self.tree.box_source_starts.get(self.queue)
-        box_source_counts = self.tree.box_source_counts_nonchild.get(self.queue)
+            box_source_starts_h = self.tree.box_source_starts.get(self.queue)
+            box_source_counts_h = self.tree.box_source_counts_nonchild.get(self.queue)
+            use_cache = True
+        else:
+            if box_source_starts is None or box_source_counts is None:
+                raise ValueError(
+                    "box_source_starts and box_source_counts must be provided together"
+                )
+
+            if isinstance(box_source_starts, cl.array.Array):
+                box_source_starts_h = box_source_starts.get(self.queue)
+            else:
+                box_source_starts_h = np.asarray(box_source_starts)
+
+            if isinstance(box_source_counts, cl.array.Array):
+                box_source_counts_h = box_source_counts.get(self.queue)
+            else:
+                box_source_counts_h = np.asarray(box_source_counts)
+
+            use_cache = False
+
         box_levels = self.tree.box_levels.get(self.queue)
 
-        nsources = int(self.tree.nsources)
+        if len(box_source_starts_h) != len(box_levels):
+            raise ValueError("box_source_starts length must match number of boxes")
+        if len(box_source_counts_h) != len(box_levels):
+            raise ValueError("box_source_counts length must match number of boxes")
+
+        if box_source_starts_h.size == 0:
+            nsources = 0
+        else:
+            nsources = int(np.max(box_source_starts_h + box_source_counts_h))
         beta_host = np.zeros(nsources, dtype=np.float64)
         root_extent = float(self.tree.root_extent)
 
-        for ibox in range(len(box_source_starts)):
-            count = int(box_source_counts[ibox])
+        for ibox in range(len(box_source_starts_h)):
+            count = int(box_source_counts_h[ibox])
             if count <= 0:
                 continue
 
-            start = int(box_source_starts[ibox])
+            start = int(box_source_starts_h[ibox])
             stop = start + count
             box_extent = root_extent * (0.5 ** int(box_levels[ibox]))
             beta_value = np.log(box_extent / table_root_extent)
             beta_host[start:stop] = beta_value
 
         beta_host = np.ascontiguousarray(beta_host)
-        self._helmholtz_split_log_alpha_per_source_cache[cache_key] = beta_host
+        if use_cache:
+            self._helmholtz_split_log_alpha_per_source_cache[cache_key] = beta_host
         return beta_host
 
     def _fold_helmholtz_split_log_alpha_into_strength(
-        self, src_weights, table_root_extent
+        self,
+        src_weights,
+        table_root_extent,
+        *,
+        box_source_starts=None,
+        box_source_counts=None,
     ):
-        beta_host = self._get_helmholtz_split_log_alpha_per_source(table_root_extent)
+        beta_host = self._get_helmholtz_split_log_alpha_per_source(
+            table_root_extent,
+            box_source_starts=box_source_starts,
+            box_source_counts=box_source_counts,
+        )
 
         if isinstance(src_weights, cl.array.Array):
             dtype = np.dtype(src_weights.dtype)
-            dev_key = (float(table_root_extent), dtype.str)
-            beta_dev = self._helmholtz_split_log_alpha_per_source_dev_cache.get(dev_key)
-            if beta_dev is None:
+            use_cache = box_source_starts is None and box_source_counts is None
+            if use_cache:
+                dev_key = (float(table_root_extent), dtype.str)
+                beta_dev = self._helmholtz_split_log_alpha_per_source_dev_cache.get(
+                    dev_key
+                )
+                if beta_dev is None:
+                    beta_dev = cl.array.to_device(
+                        self.queue,
+                        beta_host.astype(dtype, copy=False),
+                    )
+                    self._helmholtz_split_log_alpha_per_source_dev_cache[dev_key] = (
+                        beta_dev
+                    )
+            else:
                 beta_dev = cl.array.to_device(
                     self.queue,
                     beta_host.astype(dtype, copy=False),
                 )
-                self._helmholtz_split_log_alpha_per_source_dev_cache[dev_key] = beta_dev
 
             return src_weights * beta_dev
 
@@ -2420,11 +2874,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
 
         helm_knl, _ = self._helmholtz_split_kernels
         dim = helm_knl.dim
-        k_name = helm_knl.helmholtz_k_name
-        if k_name not in self.kernel_extra_kwargs:
-            raise RuntimeError("missing Helmholtz wave number for split terms")
-
-        k = np.complex128(self.kernel_extra_kwargs[k_name])
+        k = self._split_wave_number(helm_knl, what="split terms")
 
         terms = []
 
@@ -2655,11 +3105,10 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             return None
 
         helm_knl, _ = self._helmholtz_split_kernels
-        k_name = helm_knl.helmholtz_k_name
-        if k_name not in self.kernel_extra_kwargs:
+        try:
+            k = self._split_wave_number(helm_knl, what="self diagonal limit")
+        except RuntimeError:
             return None
-
-        k = np.complex128(self.kernel_extra_kwargs[k_name])
         if helm_knl.dim == 3:
             return np.complex128(1j * k / (4.0 * np.pi))
 
@@ -3299,12 +3748,27 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
 
         near_field_tables = self.near_field_table[kname]
         table0 = near_field_tables[0]
+        configured_dtype = np.dtype(self.dtype)
+        if out_kernel.is_complex_valued:
+            if configured_dtype.kind == "c":
+                eval_dtype = configured_dtype
+            else:
+                eval_dtype = (
+                    np.complex64 if configured_dtype == np.float32 else np.complex128
+                )
+        else:
+            if configured_dtype.kind == "f":
+                eval_dtype = configured_dtype
+            else:
+                eval_dtype = (
+                    np.float32 if configured_dtype == np.complex64 else np.float64
+                )
         cache_key = (
             kname,
             tuple(int(np.asarray(tbl.data).ctypes.data) for tbl in near_field_tables),
             tuple(int(np.asarray(tbl.data).size) for tbl in near_field_tables),
             tuple(_table_data_fingerprint(tbl.data) for tbl in near_field_tables),
-            np.dtype(self.dtype).str,
+            np.dtype(eval_dtype).str,
             None
             if symmetry_source_direction is None
             else tuple(np.asarray(symmetry_source_direction, dtype=float).tolist()),
@@ -3314,6 +3778,7 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
             self.queue,
             table0,
             near_field_tables,
+            eval_dtype,
         )
 
         base = payload["base"]
@@ -3415,6 +3880,7 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
         queue,
         table0,
         near_field_tables,
+        eval_dtype,
     ):
         payload = self._nearfield_device_payload_cache.get(cache_key)
         if payload is not None:
@@ -3443,14 +3909,14 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
             table_entry_scales,
         ) = _prepare_table_data_and_entry_map(near_field_tables)
 
-        if table_data_combined.dtype != self.dtype:
-            table_data_combined = table_data_combined.astype(self.dtype)
-        if mode_nmlz_combined.dtype != self.dtype:
-            mode_nmlz_combined = mode_nmlz_combined.astype(self.dtype)
-        if exterior_mode_nmlz_combined.dtype != self.dtype:
-            exterior_mode_nmlz_combined = exterior_mode_nmlz_combined.astype(self.dtype)
-        if table_entry_scales.dtype != self.dtype:
-            table_entry_scales = table_entry_scales.astype(self.dtype)
+        if table_data_combined.dtype != eval_dtype:
+            table_data_combined = table_data_combined.astype(eval_dtype)
+        if mode_nmlz_combined.dtype != eval_dtype:
+            mode_nmlz_combined = mode_nmlz_combined.astype(eval_dtype)
+        if exterior_mode_nmlz_combined.dtype != eval_dtype:
+            exterior_mode_nmlz_combined = exterior_mode_nmlz_combined.astype(eval_dtype)
+        if table_entry_scales.dtype != eval_dtype:
+            table_entry_scales = table_entry_scales.astype(eval_dtype)
 
         table_data_shapes = {
             "n_tables": len(near_field_tables),

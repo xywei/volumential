@@ -42,6 +42,7 @@ import pyopencl as cl
 
 import volumential as vm
 from volumential.table_manager import NearFieldInteractionTableManager as NFTable
+from volumential.table_manager import TableRequest
 
 
 def get_table(queue, q_order=1, dim=2):
@@ -72,6 +73,83 @@ def test_case_id(ctx_factory, table_2d_order1):
 def test_get_table_2d_order1(table_2d_order1):
     table = table_2d_order1
     assert table.dim == 2
+
+
+def test_get_table_yukawa_requires_lambda(ctx_factory, tmp_path):
+    cl_ctx = ctx_factory()
+    queue = cl.CommandQueue(cl_ctx)
+
+    cache_file = tmp_path / "nft-yukawa-requires-lam.sqlite"
+    with NFTable(str(cache_file), progress_bar=False) as table_manager:
+        with pytest.raises(TypeError, match="missing kernel parameter"):
+            table_manager.get_table(
+                2,
+                "Yukawa",
+                q_order=1,
+                force_recompute=True,
+                queue=queue,
+            )
+
+
+def test_get_table_yukawa_builds_with_lambda(ctx_factory, tmp_path):
+    cl_ctx = ctx_factory()
+    queue = cl.CommandQueue(cl_ctx)
+
+    cache_file = tmp_path / "nft-yukawa-with-lam.sqlite"
+    with NFTable(str(cache_file), progress_bar=False) as table_manager:
+        table, _ = table_manager.get_table(
+            2,
+            "Yukawa",
+            q_order=1,
+            lam=3.0,
+            force_recompute=True,
+            queue=queue,
+        )
+
+    assert table.is_built
+    values = np.array([table.get_entry_data(i) for i in range(len(table.data))])
+    assert np.all(np.isfinite(values))
+
+
+def test_load_saved_yukawa_table_rejects_lambda_mismatch(ctx_factory, tmp_path):
+    cl_ctx = ctx_factory()
+    queue = cl.CommandQueue(cl_ctx)
+
+    cache_file = tmp_path / "nft-yukawa-lam-mismatch.sqlite"
+    with NFTable(str(cache_file), progress_bar=False) as table_manager:
+        table_manager.get_table(
+            2,
+            "Yukawa",
+            q_order=1,
+            lam=3.0,
+            force_recompute=True,
+            queue=queue,
+        )
+
+        request = TableRequest.from_args(2, "Yukawa", 1, 0)
+        with pytest.raises(KeyError, match="kernel parameter 'lam' mismatch"):
+            table_manager._load_saved_table_for_request(request, lam=5.0)
+
+
+def test_load_saved_yukawa_table_accepts_float32_roundtrip(ctx_factory, tmp_path):
+    cl_ctx = ctx_factory()
+    queue = cl.CommandQueue(cl_ctx)
+
+    cache_file = tmp_path / "nft-yukawa-lam-float32-roundtrip.sqlite"
+    with NFTable(str(cache_file), progress_bar=False) as table_manager:
+        table_manager.get_table(
+            2,
+            "Yukawa",
+            q_order=1,
+            lam=np.float32(0.1),
+            force_recompute=True,
+            queue=queue,
+        )
+
+        request = TableRequest.from_args(2, "Yukawa", 1, 0)
+        table = table_manager._load_saved_table_for_request(request, lam=0.1)
+
+    assert table.is_built
 
 
 def laplace_const_source_same_box(table_2d_order1, queue, q_order, dim=2):
