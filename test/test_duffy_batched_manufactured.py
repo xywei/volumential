@@ -81,7 +81,21 @@ def _tensor_box_integral(dim, order, func):
     for wg in wgrids:
         weights *= wg
 
-    values = np.asarray(func(*grids), dtype=np.float64)
+    values = np.asarray(func(*grids))
+    if np.iscomplexobj(values):
+        imag_max = float(np.max(np.abs(np.imag(values)))) if values.size else 0.0
+        real_scale = (
+            max(1.0, float(np.max(np.abs(np.real(values))))) if values.size else 1.0
+        )
+        imag_tol = 256.0 * np.finfo(np.float64).eps * real_scale
+        if imag_max > imag_tol:
+            raise AssertionError(
+                "expected negligible imaginary residue in manufactured "
+                f"integrand values, got max imag {imag_max:.3e}"
+            )
+        values = np.real(values)
+
+    values = np.asarray(values, dtype=np.float64)
     return float(np.sum(weights * values))
 
 
