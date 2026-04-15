@@ -317,7 +317,7 @@ def test_duffy_batched_gpu_yukawa_derivative_matches_finite_difference(
         target,
     )
 
-    rel_err = abs(table_dx.data[entry_id] + fd_target_derivative) / max(
+    rel_err = abs(table_dx.data[entry_id] - fd_target_derivative) / max(
         1.0, abs(fd_target_derivative)
     )
     assert rel_err < 1e-7
