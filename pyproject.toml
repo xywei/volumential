@@ -71,6 +71,9 @@ sumpy = { git = "https://gitlab.tiker.net/inducer/sumpy.git" }
 
 [tool.pytest.ini_options]
 testpaths = ["test"]
+markers = [
+  "full_accuracy: high-cost derivative accuracy tests, skipped unless --full-accuracy",
+]
 
 [tool.basedpyright]
 include = ["volumential/version.py"]
