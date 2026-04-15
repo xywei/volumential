@@ -1408,6 +1408,36 @@ def test_duffy_radial_adaptive_rejects_wrapped_kernel_scalar_path(monkeypatch):
     assert not seen["scalar_called"]
 
 
+def test_duffy_runtime_kernel_kwargs_reject_none_or_nonnumeric():
+    class FakeLoopyArg:
+        def __init__(self, name):
+            self.name = name
+
+    class FakeKernelArg:
+        def __init__(self, name):
+            self.loopy_arg = FakeLoopyArg(name)
+
+    class FakeKernel:
+        def get_args(self):
+            return [FakeKernelArg("lam")]
+
+    table = npt.NearFieldInteractionTable(
+        quad_order=2,
+        build_method="DuffyRadial",
+        dim=2,
+        sumpy_kernel=object(),
+        derive_kernel_func=False,
+        progress_bar=False,
+    )
+    table.integral_knl = FakeKernel()
+
+    with pytest.raises(TypeError, match="lam=None"):
+        table._extract_integral_kernel_runtime_kwargs({"lam": None})
+
+    with pytest.raises(TypeError, match="expected numeric scalar"):
+        table._extract_integral_kernel_runtime_kwargs({"lam": "abc"})
+
+
 def _get_cpu_queue_or_skip(ctx_factory):
     import pyopencl as cl
 

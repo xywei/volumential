@@ -444,16 +444,19 @@ Automatic Regime Planner
 
 For wide ranges of :math:`k` and mesh sizes, one fixed split order is often
 suboptimal. Volumential now provides a lightweight automatic planner that
-chooses split order from the dimensionless local scale
+chooses split order from the dimensionless local scales
 
 .. math::
 
-    \rho_{\max} = \max_{\ell\in\text{active levels}} |k| h_\ell,
+    \rho_{\mathrm{real}} &= \max_{\ell\in\text{active levels}} |\Re(k)| h_\ell, \\
+    \rho_{\mathrm{imag}} &= \max_{\ell\in\text{active levels}} |\Im(k)| h_\ell, \\
+    \rho_{\max} &= \max(\rho_{\mathrm{real}}, \rho_{\mathrm{imag}}),
 
 where :math:`h_\ell` is source-box extent at level :math:`\ell`.
 
 For Yukawa split mode, the planner uses the internal mapping
-:math:`k = i\,\lambda`, so :math:`|k|=|\lambda|` in the same formula.
+:math:`k = i\,\lambda`, so the same component-wise scales are formed from
+:math:`\Re(i\lambda)` and :math:`\Im(i\lambda)`.
 
 Default planner policy:
 

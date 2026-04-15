@@ -21,6 +21,7 @@ THE SOFTWARE.
 """
 
 import logging
+import numbers
 import time
 from dataclasses import dataclass
 from functools import partial
@@ -1383,7 +1384,19 @@ class NearFieldInteractionTable:
                 continue
 
             if name in kwargs:
-                kernel_kwargs[name] = kwargs[name]
+                value = kwargs[name]
+                if value is None:
+                    raise TypeError(
+                        "Invalid kernel parameter value for DuffyRadial table "
+                        f"build: {name}=None"
+                    )
+                if not isinstance(value, numbers.Number):
+                    raise TypeError(
+                        "Invalid kernel parameter value for DuffyRadial table "
+                        f"build: {name}={value!r} (expected numeric scalar)"
+                    )
+
+                kernel_kwargs[name] = value
             else:
                 missing.append(name)
 
