@@ -2350,6 +2350,14 @@ class NearFieldInteractionTable:
             self.has_normalizers = False
 
         if build_config.radial_rule == "adaptive":
+            if not self._scalar_duffy_fallback_is_safe():
+                raise RuntimeError(
+                    "Adaptive DuffyRadial scalar build is not supported for "
+                    f"wrapped kernel {self.integral_knl.__class__.__name__}; "
+                    "use a fixed tanh-sinh radial rule so the batched path can "
+                    "preserve wrapper postprocessing"
+                )
+
             logger.warning(
                 "Using scalar CPU-backed %dD DuffyRadial table builder "
                 "with adaptive radial rule",
@@ -2434,6 +2442,14 @@ class NearFieldInteractionTable:
                     kernel_kwargs=kernel_kwargs,
                 )
         else:
+            if not self._scalar_duffy_fallback_is_safe():
+                raise RuntimeError(
+                    "Scalar DuffyRadial build is not supported for wrapped "
+                    f"kernel {self.integral_knl.__class__.__name__}; use a "
+                    "batched-capable configuration to preserve wrapper "
+                    "postprocessing"
+                )
+
             logger.info(
                 "Falling back to scalar DuffyRadial table builder for %s",
                 self.integral_knl.__class__.__name__,
