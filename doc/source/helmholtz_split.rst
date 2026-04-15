@@ -491,9 +491,10 @@ Supported planner config keys:
   evaluation enabled (direct fallback is not performed because it would require
   matching direct near-field tables)
 
-By default, ``disable_split_if_outside_coverage`` is ``False``. Auto selection
-keeps split enabled, clamps to the highest configured split order, and emits
-warnings when :math:`|\Im(k)|h` exceeds configured coverage.
+  By default, ``disable_split_if_outside_coverage`` is ``False``. Auto
+  selection keeps split enabled, clamps to the highest configured split order,
+  and emits warnings when :math:`|\Im(k)|h` exceeds configured coverage.
+
 - ``smooth_quad_order_min``: floor for smooth quadrature order
 - ``smooth_quad_order_per_order``: increment per additional split order above 1
   for easy/moderate attenuation regimes (default ``1``)
