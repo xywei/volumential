@@ -111,6 +111,45 @@ def test_get_table_yukawa_builds_with_lambda(ctx_factory, tmp_path):
     assert np.all(np.isfinite(values))
 
 
+def test_get_table_laplace_dx_builds(ctx_factory, tmp_path):
+    cl_ctx = ctx_factory()
+    queue = cl.CommandQueue(cl_ctx)
+
+    cache_file = tmp_path / "nft-laplace-dx.sqlite"
+    with NFTable(str(cache_file), progress_bar=False) as table_manager:
+        table, _ = table_manager.get_table(
+            2,
+            "Laplace-Dx",
+            q_order=1,
+            force_recompute=True,
+            queue=queue,
+        )
+
+    assert table.is_built
+    values = np.array([table.get_entry_data(i) for i in range(len(table.data))])
+    assert np.all(np.isfinite(values))
+
+
+def test_get_table_yukawa_dx_builds_with_lambda(ctx_factory, tmp_path):
+    cl_ctx = ctx_factory()
+    queue = cl.CommandQueue(cl_ctx)
+
+    cache_file = tmp_path / "nft-yukawa-dx-with-lam.sqlite"
+    with NFTable(str(cache_file), progress_bar=False) as table_manager:
+        table, _ = table_manager.get_table(
+            2,
+            "Yukawa-Dx",
+            q_order=1,
+            lam=2.5,
+            force_recompute=True,
+            queue=queue,
+        )
+
+    assert table.is_built
+    values = np.array([table.get_entry_data(i) for i in range(len(table.data))])
+    assert np.all(np.isfinite(values))
+
+
 def test_load_saved_yukawa_table_rejects_lambda_mismatch(ctx_factory, tmp_path):
     cl_ctx = ctx_factory()
     queue = cl.CommandQueue(cl_ctx)

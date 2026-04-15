@@ -6,7 +6,12 @@ from pymbolic import var
 import pyopencl as cl
 
 from sumpy.point_calculus import CalculusPatch
-from sumpy.kernel import AxisTargetDerivative, ExpressionKernel, LaplaceKernel
+from sumpy.kernel import (
+    AxisTargetDerivative,
+    ExpressionKernel,
+    LaplaceKernel,
+    YukawaKernel,
+)
 
 import volumential.nearfield_potential_table as npt
 from volumential.table_manager import ConstantKernel
@@ -192,9 +197,7 @@ def test_duffy_batched_gpu_laplace_derivative_matches_finite_difference(
 
 
 @pytest.mark.parametrize("dim", [1, 2, 3])
-def test_duffy_batched_gpu_helmholtz_plane_wave_matches_exact_values(
-    ctx_factory, dim
-):
+def test_duffy_batched_gpu_helmholtz_plane_wave_matches_exact_values(ctx_factory, dim):
     queue = _get_gpu_queue_or_skip(ctx_factory)
 
     k = 1.7
@@ -253,3 +256,68 @@ def test_duffy_batched_gpu_helmholtz_plane_wave_matches_exact_values(
         1.0, abs(exact_target_derivative)
     )
     assert dpot_rel_err < 1e-8
+
+
+@pytest.mark.parametrize("dim", [2, 3])
+def test_duffy_batched_gpu_yukawa_derivative_matches_finite_difference(
+    ctx_factory, dim
+):
+    queue = _get_gpu_queue_or_skip(ctx_factory)
+
+    lam = 1.3
+    yukawa_knl = YukawaKernel(dim)
+    yukawa_dx_knl = AxisTargetDerivative(0, yukawa_knl)
+    lam_name = yukawa_knl.yukawa_lambda_name
+
+    yukawa_func = npt.sumpy_kernel_to_lambda(
+        yukawa_knl,
+        parameter_values={lam_name: lam},
+    )
+    yukawa_dx_func = npt.sumpy_kernel_to_lambda(
+        yukawa_dx_knl,
+        parameter_values={lam_name: lam},
+    )
+
+    regular_quad_order = 8 if dim == 2 else 6
+    radial_quad_order = 31 if dim == 2 else 21
+    legendre_order = 80 if dim == 2 else 30
+
+    table_dx = npt.NearFieldInteractionTable(
+        quad_order=1,
+        dim=dim,
+        build_method="DuffyRadial",
+        kernel_func=yukawa_dx_func,
+        kernel_type="rigid",
+        sumpy_kernel=yukawa_dx_knl,
+        progress_bar=False,
+    )
+    table_dx.build_table_via_duffy_radial(
+        queue=queue,
+        radial_rule="tanh-sinh-fast",
+        regular_quad_order=regular_quad_order,
+        radial_quad_order=radial_quad_order,
+        lam=lam,
+    )
+
+    case_id = _pick_far_positive_case_id(table_dx)
+    entry_id = table_dx.get_entry_index(0, 0, case_id)
+    target = np.asarray(table_dx.find_target_point(0, case_id), dtype=np.float64)
+
+    def potential_at(target_point):
+        return _tensor_box_integral(
+            dim,
+            legendre_order,
+            lambda *coords: yukawa_func(
+                *[coords[i] - target_point[i] for i in range(dim)]
+            ),
+        )
+
+    fd_target_derivative = _target_x_derivative_via_calculus_patch(
+        potential_at,
+        target,
+    )
+
+    rel_err = abs(table_dx.data[entry_id] + fd_target_derivative) / max(
+        1.0, abs(fd_target_derivative)
+    )
+    assert rel_err < 1e-7
