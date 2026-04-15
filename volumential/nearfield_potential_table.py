@@ -1847,36 +1847,53 @@ class NearFieldInteractionTable:
             )
 
         candidate_values = []
-        for regular_quad_order, radial_quad_order in candidates:
-            if use_batched_eval:
-                values = self._batched_duffy_values_for_local_indices(
-                    queue,
-                    invariant_info,
-                    sample_local_indices,
-                    radial_rule,
-                    regular_quad_order,
-                    radial_quad_order,
-                    mp_dps,
-                    kernel_kwargs=kernel_kwargs,
-                )
-            else:
-                values = []
-                for entry_id in sample_entry_ids:
-                    _, value = self.compute_table_entry_duffy_radial(
-                        entry_id,
-                        radial_rule=radial_rule,
-                        deg_theta=regular_quad_order,
-                        radial_quad_order=radial_quad_order,
-                        mp_dps=mp_dps,
-                    )
-                    values.append(value)
-                values = np.asarray(values)
+        reset_kernel_func = (
+            not use_batched_eval
+            and bool(kernel_kwargs)
+            and self.integral_knl is not None
+        )
+        previous_kernel_func = self.kernel_func
+        if reset_kernel_func:
+            self.kernel_func = sumpy_kernel_to_lambda(
+                self.integral_knl,
+                fallback_dim=self.dim,
+                parameter_values=kernel_kwargs,
+            )
 
-            if np.iscomplexobj(values):
-                values = values.astype(np.complex128)
-            else:
-                values = values.astype(np.float64)
-            candidate_values.append(values)
+        try:
+            for regular_quad_order, radial_quad_order in candidates:
+                if use_batched_eval:
+                    values = self._batched_duffy_values_for_local_indices(
+                        queue,
+                        invariant_info,
+                        sample_local_indices,
+                        radial_rule,
+                        regular_quad_order,
+                        radial_quad_order,
+                        mp_dps,
+                        kernel_kwargs=kernel_kwargs,
+                    )
+                else:
+                    values = []
+                    for entry_id in sample_entry_ids:
+                        _, value = self.compute_table_entry_duffy_radial(
+                            entry_id,
+                            radial_rule=radial_rule,
+                            deg_theta=regular_quad_order,
+                            radial_quad_order=radial_quad_order,
+                            mp_dps=mp_dps,
+                        )
+                        values.append(value)
+                    values = np.asarray(values)
+
+                if np.iscomplexobj(values):
+                    values = values.astype(np.complex128)
+                else:
+                    values = values.astype(np.float64)
+                candidate_values.append(values)
+        finally:
+            if reset_kernel_func:
+                self.kernel_func = previous_kernel_func
 
         reference_values = candidate_values[-1]
         rel_errors = []
