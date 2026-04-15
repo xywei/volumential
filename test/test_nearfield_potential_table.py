@@ -1464,6 +1464,23 @@ def test_duffy_runtime_kernel_kwargs_reject_none_or_nonnumeric():
         table._extract_integral_kernel_runtime_kwargs({"lam": np.inf})
 
 
+def test_batched_accumulation_dtype_promotes_for_complex_kernel():
+    class FakeKernel:
+        is_complex_valued = True
+
+    table = npt.NearFieldInteractionTable(
+        quad_order=2,
+        build_method="DuffyRadial",
+        dim=2,
+        sumpy_kernel=object(),
+        derive_kernel_func=False,
+        progress_bar=False,
+    )
+    table.integral_knl = FakeKernel()
+
+    assert table._get_batched_accumulation_dtype() is np.complex128
+
+
 def _get_cpu_queue_or_skip(ctx_factory):
     import pyopencl as cl
 

@@ -546,6 +546,19 @@ class NearFieldInteractionTable:
             return np.float64
         return value_dtype.type
 
+    def _get_batched_accumulation_dtype(self):
+        value_dtype = np.dtype(self.dtype)
+        if np.issubdtype(value_dtype, np.complexfloating):
+            return value_dtype.type
+
+        if self.integral_knl is None:
+            return value_dtype.type
+
+        if bool(getattr(self.integral_knl, "is_complex_valued", False)):
+            return np.complex128
+
+        return value_dtype.type
+
     # {{{ encode to table index
 
     def get_entry_index(self, source_mode_index, target_point_index, case_id):
@@ -1427,6 +1440,7 @@ class NearFieldInteractionTable:
         from sumpy.symbolic import SympyToPymbolicMapper, make_sym_vector
 
         geom_dtype = self._get_geom_dtype()
+        batched_value_dtype = self._get_batched_accumulation_dtype()
 
         dvec = make_sym_vector("d", self.dim)
         sac = SymbolicAssignmentCollection()
@@ -1564,8 +1578,10 @@ class NearFieldInteractionTable:
             ]
             + kernel_arg_types
             + [
-                lp.GlobalArg("result", self.dtype, "n_entries", is_output=True),
-                lp.TemporaryVariable("knl_scaling", self.dtype),
+                lp.GlobalArg(
+                    "result", batched_value_dtype, "n_entries", is_output=True
+                ),
+                lp.TemporaryVariable("knl_scaling", batched_value_dtype),
             ],
             name="duffy_invariant_fused_table",
             lang_version=(2018, 2),
@@ -1810,7 +1826,28 @@ class NearFieldInteractionTable:
         result = res["result"]
         if hasattr(result, "get"):
             result = result.get()
-        return np.ascontiguousarray(result, dtype=self.dtype)
+
+        result_arr = np.asarray(result)
+        table_dtype = np.dtype(self.dtype)
+        if np.issubdtype(table_dtype, np.floating) and np.iscomplexobj(result_arr):
+            if result_arr.size:
+                imag_max = float(np.max(np.abs(np.imag(result_arr))))
+                real_scale = max(1.0, float(np.max(np.abs(np.real(result_arr)))))
+            else:
+                imag_max = 0.0
+                real_scale = 1.0
+
+            imag_tol = 256.0 * np.finfo(np.float64).eps * real_scale
+            if imag_max > imag_tol:
+                raise RuntimeError(
+                    "Batched DuffyRadial kernel produced non-negligible "
+                    f"imaginary component for real table dtype (max imag "
+                    f"{imag_max:.3e}, tol {imag_tol:.3e})"
+                )
+
+            result_arr = np.real(result_arr)
+
+        return np.ascontiguousarray(result_arr, dtype=self.dtype)
 
     def _auto_tune_duffy_radial_orders(
         self,
