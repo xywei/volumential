@@ -50,7 +50,7 @@ where:
 - :math:`\beta_n(k)` are runtime coefficients,
 - :math:`\Psi_k` is the remaining smooth/higher-order part evaluated online.
 
-For split order :math:`p`, Volumential tables
+For split order :math:`p`, Volumential pretabulates
 :math:`\{\phi_1,\ldots,\phi_{p-1}\}` and evaluates
 
 .. math::

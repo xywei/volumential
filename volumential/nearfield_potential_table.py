@@ -318,7 +318,13 @@ def sumpy_kernel_to_lambda(sknl, fallback_dim=None, parameter_values=None):
     arg_names = symbols(var_names)
     args = [Symbol(var_name_prefix + str(i)) for i in range(dim)]
 
-    expr = sknl.get_expression(args) * sknl.get_global_scaling_const()
+    expr = (
+        sknl.postprocess_at_target(
+            sknl.postprocess_at_source(sknl.get_expression(args), args),
+            args,
+        )
+        * sknl.get_global_scaling_const()
+    )
     if parameter_values:
         subs_map = {}
         for name, value in parameter_values.items():
@@ -1394,6 +1400,11 @@ class NearFieldInteractionTable:
                     raise TypeError(
                         "Invalid kernel parameter value for DuffyRadial table "
                         f"build: {name}={value!r} (expected numeric scalar)"
+                    )
+                if not np.isfinite(value):
+                    raise TypeError(
+                        "Invalid kernel parameter value for DuffyRadial table "
+                        f"build: {name}={value!r} (expected finite numeric scalar)"
                     )
 
                 kernel_kwargs[name] = value

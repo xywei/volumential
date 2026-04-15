@@ -141,6 +141,26 @@ def test_sumpy_kernel_to_lambda_lambdifies_once(monkeypatch):
     assert call_count["n"] == 1
 
 
+def test_sumpy_kernel_to_lambda_applies_wrapper_postprocess():
+    class FakeKernel:
+        dim = 1
+
+        def get_expression(self, args):
+            return args[0]
+
+        def postprocess_at_source(self, expr, bvec):
+            return expr + 1
+
+        def postprocess_at_target(self, expr, bvec):
+            return 2 * expr
+
+        def get_global_scaling_const(self):
+            return 3
+
+    knl_func = npt.sumpy_kernel_to_lambda(FakeKernel())
+    assert knl_func(4.0) == 30.0
+
+
 def cheb_eval(dim, coefs, coords):
     if dim == 1:
         return chebval(coords[0], coefs)
@@ -1436,6 +1456,12 @@ def test_duffy_runtime_kernel_kwargs_reject_none_or_nonnumeric():
 
     with pytest.raises(TypeError, match="expected numeric scalar"):
         table._extract_integral_kernel_runtime_kwargs({"lam": "abc"})
+
+    with pytest.raises(TypeError, match="expected finite numeric scalar"):
+        table._extract_integral_kernel_runtime_kwargs({"lam": np.nan})
+
+    with pytest.raises(TypeError, match="expected finite numeric scalar"):
+        table._extract_integral_kernel_runtime_kwargs({"lam": np.inf})
 
 
 def _get_cpu_queue_or_skip(ctx_factory):

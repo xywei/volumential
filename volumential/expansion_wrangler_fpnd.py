@@ -2214,7 +2214,8 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             orders,
         )
 
-        selected = max(order_min, min(order_max, selected))
+        if "orders" not in auto_cfg:
+            selected = max(order_min, min(order_max, selected))
 
         coverage_max = max(
             float(thresholds_real[-1]) if len(thresholds_real) else 0.0,
