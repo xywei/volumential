@@ -2225,50 +2225,52 @@ class NearFieldInteractionTable:
                 parameter_values=kernel_kwargs,
             )
 
-        t_total_start = time.perf_counter()
+        try:
+            t_total_start = time.perf_counter()
 
-        t_invariant_start = time.perf_counter()
-        invariant_entry_ids = [
-            int(entry_id) for entry_id in self._get_invariant_entry_info()["entry_ids"]
-        ]
-        t_invariant_end = time.perf_counter()
-        self._progress_step()
+            t_invariant_start = time.perf_counter()
+            invariant_entry_ids = [
+                int(entry_id)
+                for entry_id in self._get_invariant_entry_info()["entry_ids"]
+            ]
+            t_invariant_end = time.perf_counter()
+            self._progress_step()
 
-        t_quadrature_start = time.perf_counter()
-        for entry_id in invariant_entry_ids:
-            _, entry_val = self.compute_table_entry_duffy_radial(
-                entry_id,
-                radial_rule=radial_rule,
-                deg_theta=deg_theta,
-                radial_quad_order=radial_quad_order,
-                mp_dps=mp_dps,
-            )
-            self.data[entry_id] = entry_val
-        t_quadrature_end = time.perf_counter()
-        self._progress_step()
+            t_quadrature_start = time.perf_counter()
+            for entry_id in invariant_entry_ids:
+                _, entry_val = self.compute_table_entry_duffy_radial(
+                    entry_id,
+                    radial_rule=radial_rule,
+                    deg_theta=deg_theta,
+                    radial_quad_order=radial_quad_order,
+                    mp_dps=mp_dps,
+                )
+                self.data[entry_id] = entry_val
+            t_quadrature_end = time.perf_counter()
+            self._progress_step()
 
-        # Keep table data symmetry-reduced to minimize cache/storage size.
-        # Call progress step for the legacy "symmetry fill" stage even though
-        # propagation is intentionally disabled.
-        t_symmetry_fill_start = time.perf_counter()
-        t_symmetry_fill_end = t_symmetry_fill_start
-        self._progress_step()
+            # Keep table data symmetry-reduced to minimize cache/storage size.
+            # Call progress step for the legacy "symmetry fill" stage even though
+            # propagation is intentionally disabled.
+            t_symmetry_fill_start = time.perf_counter()
+            t_symmetry_fill_end = t_symmetry_fill_start
+            self._progress_step()
 
-        self.table_data_is_symmetry_reduced = bool(np.isnan(self.data).any())
-        self.is_built = True
+            self.table_data_is_symmetry_reduced = bool(np.isnan(self.data).any())
+            self.is_built = True
 
-        t_total_end = time.perf_counter()
-        self.last_duffy_build_timings = {
-            "invariant_info_s": t_invariant_end - t_invariant_start,
-            "quadrature_s": t_quadrature_end - t_quadrature_start,
-            "scatter_s": 0.0,
-            "symmetry_fill_s": t_symmetry_fill_end - t_symmetry_fill_start,
-            "total_s": t_total_end - t_total_start,
-            "n_entries": int(len(invariant_entry_ids)),
-        }
-
-        if reset_kernel_func:
-            self.kernel_func = previous_kernel_func
+            t_total_end = time.perf_counter()
+            self.last_duffy_build_timings = {
+                "invariant_info_s": t_invariant_end - t_invariant_start,
+                "quadrature_s": t_quadrature_end - t_quadrature_start,
+                "scatter_s": 0.0,
+                "symmetry_fill_s": t_symmetry_fill_end - t_symmetry_fill_start,
+                "total_s": t_total_end - t_total_start,
+                "n_entries": int(len(invariant_entry_ids)),
+            }
+        finally:
+            if reset_kernel_func:
+                self.kernel_func = previous_kernel_func
 
     def build_table_via_duffy_radial(
         self,
