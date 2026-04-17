@@ -41,6 +41,26 @@ Execution Notes
 - Yukawa split mode requires real ``lam``; for mixed-complex wave numbers,
   use Helmholtz with ``k = i*lam``.
 
+Periodic Prototype
+------------------
+
+An initial Barnett-style periodization hook is available in
+``drive_volume_fmm`` (sumpy backend, 2D/3D):
+
+- ``periodic_near_shifts`` adds explicit near-image lattice copies
+  (``"nearest"`` for the nearest image ring).
+- ``periodic_near_target_boxes`` optionally restricts near-image evaluation
+  to a subset of target boxes.
+- ``periodic_far_operator`` accepts a precomputed root-level far operator
+  ``T_per`` that maps root multipole coefficients to root local coefficients.
+- ``periodic_cell_size`` sets the periodic cell lengths (defaults to
+  ``tree.root_extent`` in each dimension).
+
+This interface is intended for correctness prototyping and validation against
+trusted periodic references (Ewald/spectral-Ewald style) while the full
+periodic workflow in `issue #67 <https://github.com/xywei/volumential/issues/67>`_
+is completed.
+
 Validation in CI
 ----------------
 

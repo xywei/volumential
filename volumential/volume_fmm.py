@@ -29,6 +29,7 @@ import logging
 import os
 import inspect
 from dataclasses import replace
+from itertools import product
 
 import numpy as np
 
@@ -274,6 +275,392 @@ def _coerce_obj_array_like(values, like, queue):
         return coerced[0]
 
     return obj_array_1d(coerced)
+
+
+def _as_host_array(values, queue):
+    if hasattr(values, "with_queue"):
+        return np.asarray(values.with_queue(queue).get())
+    if hasattr(values, "get"):
+        return np.asarray(values.get(queue))
+    return np.asarray(values)
+
+
+def _normalize_periodic_cell_size(periodic_cell_size, dim, tree):
+    if periodic_cell_size is None:
+        cell_extent = float(abs(getattr(tree, "root_extent", 1.0)))
+        if not np.isfinite(cell_extent) or cell_extent <= 0:
+            raise ValueError("tree root_extent must be finite and positive")
+        return np.full(dim, cell_extent, dtype=np.float64)
+
+    cell_size = np.asarray(periodic_cell_size, dtype=np.float64)
+    if cell_size.ndim == 0:
+        cell_size = np.full(dim, float(cell_size), dtype=np.float64)
+    elif cell_size.shape != (dim,):
+        raise ValueError(
+            "periodic_cell_size must be scalar or length-dimension vector, "
+            f"got shape {cell_size.shape} for dimension {dim}"
+        )
+
+    if np.any(~np.isfinite(cell_size)) or np.any(cell_size <= 0):
+        raise ValueError("periodic_cell_size entries must be finite and positive")
+
+    return cell_size
+
+
+def _normalize_periodic_near_shifts(periodic_near_shifts, dim):
+    if periodic_near_shifts is None:
+        return np.empty((0, dim), dtype=np.int64)
+
+    if isinstance(periodic_near_shifts, str):
+        token = periodic_near_shifts.strip().lower()
+        if token in {"nearest", "barnett-nearest", "nn"}:
+            periodic_near_shifts = [
+                shift
+                for shift in product((-1, 0, 1), repeat=dim)
+                if any(component != 0 for component in shift)
+            ]
+        elif token in {"none", "off", "disabled"}:
+            return np.empty((0, dim), dtype=np.int64)
+        else:
+            raise ValueError(
+                "periodic_near_shifts string must be one of {'nearest', 'none'}"
+            )
+
+    shifts = np.asarray(periodic_near_shifts, dtype=np.int64)
+    if shifts.ndim == 1:
+        shifts = shifts.reshape(1, -1)
+
+    if shifts.ndim != 2 or shifts.shape[1] != dim:
+        raise ValueError(
+            "periodic_near_shifts must have shape (nshifts, dim), "
+            f"got {shifts.shape} for dim={dim}"
+        )
+
+    if shifts.size == 0:
+        return np.empty((0, dim), dtype=np.int64)
+
+    shifts = np.unique(shifts, axis=0)
+    keep_mask = np.any(shifts != 0, axis=1)
+    return shifts[keep_mask]
+
+
+def _periodic_shift_vectors_from_indices(shift_indices, cell_size):
+    if shift_indices.size == 0:
+        return np.empty((0, len(cell_size)), dtype=np.float64)
+    return shift_indices.astype(np.float64) * cell_size.reshape(1, -1)
+
+
+def _collect_target_point_ids_for_boxes(tree, target_boxes, queue):
+    if target_boxes is None:
+        return None
+
+    target_boxes_host = _as_host_array(target_boxes, queue).astype(np.int64, copy=False)
+    if target_boxes_host.ndim != 1:
+        raise ValueError("periodic_near_target_boxes must be a 1D array")
+
+    if target_boxes_host.size == 0:
+        return np.empty(0, dtype=np.int32)
+
+    box_target_starts = _as_host_array(tree.box_target_starts, queue)
+    box_target_counts = _as_host_array(tree.box_target_counts_nonchild, queue)
+
+    point_ids = []
+    nboxes = int(box_target_starts.size)
+    for box_id in map(int, target_boxes_host):
+        if box_id < 0 or box_id >= nboxes:
+            raise ValueError(
+                f"periodic_near_target_boxes contains out-of-range box id {box_id}"
+            )
+
+        start = int(box_target_starts[box_id])
+        count = int(box_target_counts[box_id])
+        if count <= 0:
+            continue
+        point_ids.extend(range(start, start + count))
+
+    if not point_ids:
+        return np.empty(0, dtype=np.int32)
+
+    return np.asarray(sorted(set(point_ids)), dtype=np.int32)
+
+
+def _find_root_box_id(tree, queue):
+    box_levels = _as_host_array(tree.box_levels, queue).astype(np.int64, copy=False)
+    root_candidates = np.flatnonzero(box_levels == 0)
+    if root_candidates.size != 1:
+        raise ValueError(
+            f"expected exactly one root box, got {int(root_candidates.size)} candidates"
+        )
+    return int(root_candidates[0]), int(box_levels.size)
+
+
+def _extract_box_row_host(values, box_id, nboxes):
+    values_host = np.asarray(values)
+    if values_host.ndim == 2:
+        if box_id >= values_host.shape[0]:
+            raise ValueError("box id exceeds expansion array rows")
+        return values_host[box_id].copy(), values_host
+
+    if values_host.ndim == 1:
+        if values_host.size % nboxes != 0:
+            raise ValueError(
+                "1D expansion array size is not divisible by number of boxes"
+            )
+
+        ncoeff = values_host.size // nboxes
+        start = box_id * ncoeff
+        end = start + ncoeff
+        return values_host[start:end].copy(), values_host
+
+    raise ValueError(
+        f"unsupported expansion array rank {values_host.ndim}; expected 1D or 2D arrays"
+    )
+
+
+def _inject_box_row(values_host, box_id, nboxes, row_values):
+    row_values = np.asarray(row_values, dtype=values_host.dtype)
+
+    if values_host.ndim == 2:
+        ncoeff = values_host.shape[1]
+        if row_values.size > ncoeff:
+            raise ValueError(
+                "periodic far operator produced too many local coefficients: "
+                f"{row_values.size} > {ncoeff}"
+            )
+        values_host[box_id, : row_values.size] += row_values
+        return values_host
+
+    ncoeff = values_host.size // nboxes
+    if row_values.size > ncoeff:
+        raise ValueError(
+            "periodic far operator produced too many local coefficients: "
+            f"{row_values.size} > {ncoeff}"
+        )
+    start = box_id * ncoeff
+    end = start + ncoeff
+    values_host[start : start + row_values.size] += row_values
+    if row_values.size < ncoeff:
+        values_host[start + row_values.size : end] += 0
+    return values_host
+
+
+def _resolve_periodic_far_operator_matrix(periodic_far_operator, out_kernel):
+    if isinstance(periodic_far_operator, dict):
+        kname = repr(out_kernel)
+        matrix = periodic_far_operator.get(kname, None)
+        if matrix is None:
+            try:
+                matrix = periodic_far_operator.get(out_kernel, None)
+            except TypeError:
+                matrix = None
+
+        if matrix is None:
+            raise KeyError(
+                f"missing periodic far operator matrix for output kernel {kname}"
+            )
+    else:
+        matrix = periodic_far_operator
+
+    matrix = np.asarray(matrix)
+    if matrix.ndim != 2:
+        raise ValueError(
+            f"periodic_far_operator matrices must be 2D, got ndim={matrix.ndim}"
+        )
+
+    return matrix
+
+
+def _apply_periodic_far_operator_to_locals(
+    *,
+    local_exps,
+    mpole_exps,
+    traversal,
+    wrangler,
+    periodic_far_operator,
+    queue,
+):
+    if periodic_far_operator is None:
+        return local_exps
+
+    root_box_id, nboxes = _find_root_box_id(traversal.tree, queue)
+
+    local_oa = _as_obj_array(local_exps)
+    mpole_oa = _as_obj_array(mpole_exps)
+
+    if len(mpole_oa) not in {1, len(local_oa)}:
+        raise NotImplementedError(
+            "periodic far operator currently supports either one source "
+            "expansion channel or one channel per output kernel"
+        )
+
+    updated_local = []
+    for out_idx, (out_kernel, local_values) in enumerate(
+        zip(wrangler.tree_indep.target_kernels, local_oa, strict=True)
+    ):
+        src_idx = 0 if len(mpole_oa) == 1 else out_idx
+        matrix = _resolve_periodic_far_operator_matrix(
+            periodic_far_operator, out_kernel
+        )
+
+        if isinstance(mpole_oa[src_idx], cl.array.Array):
+            mpole_host = mpole_oa[src_idx].get(queue)
+        else:
+            mpole_host = np.asarray(mpole_oa[src_idx])
+
+        mpole_row, _ = _extract_box_row_host(mpole_host, root_box_id, nboxes)
+
+        if matrix.shape[1] != mpole_row.size:
+            raise ValueError(
+                "periodic far operator matrix has incompatible column count: "
+                f"expected {mpole_row.size}, got {matrix.shape[1]}"
+            )
+
+        local_corr = matrix @ mpole_row
+
+        if isinstance(local_values, cl.array.Array):
+            local_host = local_values.get(queue)
+            local_host = _inject_box_row(local_host, root_box_id, nboxes, local_corr)
+            updated_local.append(cl.array.to_device(queue, local_host))
+        else:
+            local_host = np.asarray(local_values).copy()
+            local_host = _inject_box_row(local_host, root_box_id, nboxes, local_corr)
+            updated_local.append(local_host)
+
+    if isinstance(local_exps, np.ndarray) and local_exps.dtype == object:
+        return obj_array_1d(updated_local)
+    if len(updated_local) == 1:
+        return updated_local[0]
+    return obj_array_1d(updated_local)
+
+
+def _take_point_cloud_subset(points, point_ids, queue):
+    if point_ids is None:
+        return points
+
+    point_ids = np.asarray(point_ids, dtype=np.int32)
+
+    if isinstance(points, np.ndarray) and points.dtype == object:
+        axes = list(points)
+    elif isinstance(points, (list, tuple)):
+        axes = list(points)
+    else:
+        raise TypeError("point cloud must be an object array or sequence of axes")
+
+    if not axes:
+        raise ValueError("point cloud has no coordinate axes")
+
+    if isinstance(axes[0], cl.array.Array):
+        point_ids_dev = cl.array.to_device(queue, point_ids)
+        return obj_array_1d([cl.array.take(axis, point_ids_dev) for axis in axes])
+
+    return obj_array_1d([np.take(np.asarray(axis), point_ids) for axis in axes])
+
+
+def _scatter_subset_potential_to_full(subset_potential, point_ids, ntargets, queue):
+    point_ids = np.asarray(point_ids, dtype=np.int32)
+
+    if isinstance(subset_potential, cl.array.Array):
+        full_host = np.zeros(int(ntargets), dtype=subset_potential.dtype)
+        full_host[point_ids] = subset_potential.get(queue)
+        return cl.array.to_device(queue, full_host)
+
+    full_host = np.zeros(int(ntargets), dtype=np.asarray(subset_potential).dtype)
+    full_host[point_ids] = np.asarray(subset_potential)
+    return full_host
+
+
+def _eval_periodic_near_stencil_p2p(
+    *,
+    traversal,
+    wrangler,
+    src_weights,
+    shift_vectors,
+    periodic_near_target_boxes,
+    queue,
+):
+    if shift_vectors.size == 0:
+        return wrangler.output_zeros(), None
+
+    if len(src_weights) != 1:
+        raise NotImplementedError(
+            "periodic near-stencil evaluation currently supports one source field"
+        )
+
+    from sumpy import P2P
+
+    tree = traversal.tree
+    actx = wrangler.tree_indep._setup_actx
+    p2p = P2P(
+        wrangler.tree_indep.target_kernels,
+        exclude_self=False,
+        value_dtypes=[wrangler.dtype],
+    )
+
+    p2p_kwargs = {}
+    source_extra_kwargs = getattr(wrangler, "source_extra_kwargs", None)
+    if source_extra_kwargs is not None:
+        p2p_kwargs.update(source_extra_kwargs)
+
+    kernel_extra_kwargs = getattr(wrangler, "kernel_extra_kwargs", None)
+    if kernel_extra_kwargs is not None:
+        p2p_kwargs.update(kernel_extra_kwargs)
+
+    p2p_kwargs.pop("target_to_source", None)
+
+    point_ids = _collect_target_point_ids_for_boxes(
+        tree,
+        periodic_near_target_boxes,
+        queue,
+    )
+
+    if point_ids is not None and point_ids.size == 0:
+        return wrangler.output_zeros(), None
+
+    targets_eval = _take_point_cloud_subset(tree.targets, point_ids, queue)
+    ntargets = int(getattr(tree, "ntargets", targets_eval[0].size))
+
+    if isinstance(tree.sources, np.ndarray) and tree.sources.dtype == object:
+        source_axes = list(tree.sources)
+    else:
+        source_axes = list(tree.sources)
+
+    periodic_potentials = wrangler.output_zeros()
+
+    for shift in shift_vectors:
+        shift = np.asarray(shift, dtype=np.float64)
+        shifted_sources = obj_array_1d(
+            [
+                axis + np.array(shift[d], dtype=getattr(axis, "dtype", np.float64))
+                for d, axis in enumerate(source_axes)
+            ]
+        )
+
+        shifted_values = p2p(
+            actx,
+            targets_eval,
+            shifted_sources,
+            (src_weights[0],),
+            **p2p_kwargs,
+        )
+
+        shifted_values = obj_array_1d(list(shifted_values))
+
+        if point_ids is not None:
+            shifted_values = obj_array_1d(
+                [
+                    _scatter_subset_potential_to_full(
+                        pot_i,
+                        point_ids,
+                        ntargets,
+                        queue,
+                    )
+                    for pot_i in shifted_values
+                ]
+            )
+
+        periodic_potentials = _add_obj_arrays(periodic_potentials, shifted_values)
+
+    return periodic_potentials, None
 
 
 class _CombinedTimingFuture:
@@ -710,6 +1097,19 @@ def drive_volume_fmm(
     :arg reorder_potentials: Whether potentials should be in user order (if True,
         potentials are reordered into user order before return).
 
+    Optional periodic controls (sumpy backend, 2D/3D only):
+
+    :arg periodic_near_shifts: Lattice shifts for Barnett-style near-image
+        correction. Accepts an ``(nshifts, dim)`` integer array in cell units,
+        ``"nearest"`` for the nearest image ring, or ``"none"``.
+    :arg periodic_cell_size: Scalar or length-``dim`` vector of periodic cell
+        lengths. Defaults to ``tree.root_extent`` in each dimension.
+    :arg periodic_near_target_boxes: Optional subset of target box ids for
+        evaluating near-image corrections.
+    :arg periodic_far_operator: Precomputed periodic far operator ``T_per``
+        mapping root multipole coefficients to root local coefficients.
+        May be a single matrix or a dict keyed by output-kernel repr.
+
     Returns the potentials computed by *expansion_wrangler*.
     """
     wrangler = expansion_wrangler
@@ -742,6 +1142,15 @@ def drive_volume_fmm(
 
     list1_only = bool(kwargs.get("list1_only", False))
     auto_interpolate_targets = bool(kwargs.pop("auto_interpolate_targets", True))
+
+    periodic_near_shifts = kwargs.pop("periodic_near_shifts", None)
+    periodic_cell_size = kwargs.pop("periodic_cell_size", None)
+    periodic_near_target_boxes = kwargs.pop("periodic_near_target_boxes", None)
+    periodic_far_operator = kwargs.pop("periodic_far_operator", None)
+    periodic_enabled = (
+        periodic_near_shifts is not None or periodic_far_operator is not None
+    )
+    periodic_shift_vectors = np.empty((0, 0), dtype=np.float64)
 
     if "allow_list1_p2p_fallback" in kwargs:
         raise TypeError(
@@ -788,6 +1197,50 @@ def drive_volume_fmm(
             src_func = obj_array_1d([sf.get(queue) for sf in src_func])
 
     tree = getattr(traversal, "tree", None)
+
+    if periodic_enabled:
+        if not isinstance(expansion_wrangler, FPNDSumpyExpansionWrangler):
+            raise NotImplementedError(
+                "periodic support currently requires the sumpy wrangler backend"
+            )
+
+        if tree is None:
+            raise ValueError("periodic support requires traversal tree metadata")
+
+        tree_dim = int(getattr(tree, "dimensions", 0))
+        if tree_dim not in (2, 3):
+            raise NotImplementedError(
+                "periodic support is currently implemented for 2D and 3D only"
+            )
+
+        if ns != 1:
+            raise NotImplementedError(
+                "periodic support currently requires a single source field"
+            )
+
+        if periodic_far_operator is not None and periodic_near_shifts is None:
+            periodic_near_shifts = "nearest"
+
+        periodic_shift_indices = _normalize_periodic_near_shifts(
+            periodic_near_shifts,
+            tree_dim,
+        )
+        periodic_cell_size = _normalize_periodic_cell_size(
+            periodic_cell_size,
+            tree_dim,
+            tree,
+        )
+        periodic_shift_vectors = _periodic_shift_vectors_from_indices(
+            periodic_shift_indices,
+            periodic_cell_size,
+        )
+
+        if periodic_far_operator is not None and list1_only:
+            raise ValueError(
+                "periodic_far_operator requires list1_only=False because far "
+                "corrections are injected through local expansions"
+            )
+
     coincident_tree_guard_cache = getattr(
         wrangler, "_coincident_tree_guard_cache", None
     )
@@ -809,6 +1262,12 @@ def drive_volume_fmm(
         and tree is not None
         and not getattr(tree, "sources_are_targets", False)
     ):
+        if periodic_enabled:
+            raise NotImplementedError(
+                "periodic mode currently requires coincident source/target trees; "
+                "set auto_interpolate_targets=False and use sources_are_targets=True"
+            )
+
         logger.info(
             "non-coincident source/target tree detected; "
             "solving on source modes and interpolating to requested targets"
@@ -944,6 +1403,49 @@ def drive_volume_fmm(
             potentials = obj_array_1d([ref_pot])
         else:
             potentials = ref_pot
+
+        if periodic_enabled and periodic_shift_vectors.size:
+            periodic_near_potentials, periodic_near_timing = (
+                _eval_periodic_near_stencil_p2p(
+                    traversal=traversal,
+                    wrangler=wrangler,
+                    src_weights=src_weights,
+                    shift_vectors=periodic_shift_vectors,
+                    periodic_near_target_boxes=periodic_near_target_boxes,
+                    queue=queue,
+                )
+            )
+            if periodic_near_timing is not None:
+                recorder.add("eval_periodic_near", periodic_near_timing)
+            potentials = _add_obj_arrays(potentials, periodic_near_potentials)
+
+        if periodic_enabled and periodic_far_operator is not None:
+            periodic_local_exps = wrangler.local_expansion_zeros()
+            periodic_local_exps = _apply_periodic_far_operator_to_locals(
+                local_exps=periodic_local_exps,
+                mpole_exps=mpole_exps,
+                traversal=traversal,
+                wrangler=wrangler,
+                periodic_far_operator=periodic_far_operator,
+                queue=queue,
+            )
+            periodic_local_exps, periodic_refine_timing = wrangler.refine_locals(
+                traversal.level_start_target_or_target_parent_box_nrs,
+                traversal.target_or_target_parent_boxes,
+                periodic_local_exps,
+            )
+            if periodic_refine_timing is not None:
+                recorder.add("refine_periodic_locals", periodic_refine_timing)
+
+            periodic_local_result, periodic_eval_timing = wrangler.eval_locals(
+                traversal.level_start_target_box_nrs,
+                traversal.target_boxes,
+                periodic_local_exps,
+            )
+            if periodic_eval_timing is not None:
+                recorder.add("eval_periodic_locals", periodic_eval_timing)
+            potentials = _add_obj_arrays(potentials, periodic_local_result)
+
         _debug_nan_status("global_p2p", potentials)
 
         assert traversal.from_sep_close_smaller_starts is None
@@ -1025,6 +1527,22 @@ def drive_volume_fmm(
     recorder.add("eval_direct", timing_future)
     _debug_nan_status("fmm_l1_potentials", _as_obj_array(potentials)[0])
 
+    if periodic_enabled and periodic_shift_vectors.size:
+        periodic_near_potentials, periodic_near_timing = (
+            _eval_periodic_near_stencil_p2p(
+                traversal=traversal,
+                wrangler=wrangler,
+                src_weights=src_weights,
+                shift_vectors=periodic_shift_vectors,
+                periodic_near_target_boxes=periodic_near_target_boxes,
+                queue=queue,
+            )
+        )
+        if periodic_near_timing is not None:
+            recorder.add("eval_periodic_near", periodic_near_timing)
+        potentials = _add_obj_arrays(potentials, periodic_near_potentials)
+        _debug_nan_status("fmm_periodic_near_potentials", _as_obj_array(potentials)[0])
+
     # Return list 1 only, for debugging
     # 'list1_only' takes precedence over 'exclude_list1'
     if list1_only:
@@ -1062,6 +1580,17 @@ def drive_volume_fmm(
         traversal.from_sep_siblings_lists,
         mpole_exps,
     )
+
+    if periodic_enabled and periodic_far_operator is not None:
+        local_exps = _apply_periodic_far_operator_to_locals(
+            local_exps=local_exps,
+            mpole_exps=mpole_exps,
+            traversal=traversal,
+            wrangler=wrangler,
+            periodic_far_operator=periodic_far_operator,
+            queue=queue,
+        )
+
     _debug_nan_status("local_exps_after_m2l", local_exps[0])
     recorder.add("multipole_to_local", timing_future)
 

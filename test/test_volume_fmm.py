@@ -68,6 +68,122 @@ class _FakeQueueAwareArray:
         return self._ary
 
 
+def test_normalize_periodic_near_shifts_nearest_2d():
+    from volumential.volume_fmm import _normalize_periodic_near_shifts
+
+    shifts = _normalize_periodic_near_shifts("nearest", 2)
+    assert shifts.shape == (8, 2)
+    assert np.all(np.any(shifts != 0, axis=1))
+
+
+def test_normalize_periodic_near_shifts_nearest_3d():
+    from volumential.volume_fmm import _normalize_periodic_near_shifts
+
+    shifts = _normalize_periodic_near_shifts("nearest", 3)
+    assert shifts.shape == (26, 3)
+    assert np.all(np.any(shifts != 0, axis=1))
+
+
+def test_normalize_periodic_near_shifts_removes_zero_and_duplicates():
+    from volumential.volume_fmm import _normalize_periodic_near_shifts
+
+    shifts = _normalize_periodic_near_shifts([(0, 0), (1, 0), (1, 0), (-1, 0)], 2)
+    assert shifts.shape == (2, 2)
+    assert set(map(tuple, shifts.tolist())) == {(-1, 0), (1, 0)}
+
+
+def test_collect_target_point_ids_for_boxes():
+    from volumential.volume_fmm import _collect_target_point_ids_for_boxes
+
+    tree = SimpleNamespace(
+        box_target_starts=_FakeDeviceArray(np.array([0, 2, 2, 5], dtype=np.int32)),
+        box_target_counts_nonchild=_FakeDeviceArray(
+            np.array([2, 0, 3, 1], dtype=np.int32)
+        ),
+    )
+
+    point_ids = _collect_target_point_ids_for_boxes(
+        tree,
+        np.array([0, 2], dtype=np.int32),
+        queue=None,
+    )
+    assert np.array_equal(point_ids, np.array([0, 1, 2, 3, 4], dtype=np.int32))
+
+
+def test_normalize_periodic_cell_size_scalar_and_vector():
+    from volumential.volume_fmm import _normalize_periodic_cell_size
+
+    tree = SimpleNamespace(root_extent=2.5)
+
+    scalar_size = _normalize_periodic_cell_size(2.0, 3, tree)
+    assert np.array_equal(scalar_size, np.array([2.0, 2.0, 2.0]))
+
+    vector_size = _normalize_periodic_cell_size([1.0, 2.0], 2, tree)
+    assert np.array_equal(vector_size, np.array([1.0, 2.0]))
+
+
+def test_apply_periodic_far_operator_to_locals_numpy():
+    from volumential.volume_fmm import _apply_periodic_far_operator_to_locals
+
+    class _Kernel:
+        def __repr__(self):
+            return "LaplaceKernel(2)"
+
+    tree = SimpleNamespace(
+        box_levels=_FakeDeviceArray(np.array([1, 0, 2], dtype=np.int32))
+    )
+    traversal = SimpleNamespace(tree=tree)
+    wrangler = SimpleNamespace(
+        tree_indep=SimpleNamespace(target_kernels=[_Kernel()]),
+    )
+
+    local_exps = np.zeros((3, 4), dtype=np.float64)
+    mpole_exps = np.array(
+        [
+            [1.0, 2.0, 3.0, 4.0],
+            [10.0, 20.0, 30.0, 40.0],
+            [7.0, 8.0, 9.0, 10.0],
+        ],
+        dtype=np.float64,
+    )
+    operator = 2.0 * np.eye(4, dtype=np.float64)
+
+    updated = _apply_periodic_far_operator_to_locals(
+        local_exps=local_exps,
+        mpole_exps=mpole_exps,
+        traversal=traversal,
+        wrangler=wrangler,
+        periodic_far_operator=operator,
+        queue=None,
+    )
+
+    assert np.allclose(updated[1], np.array([20.0, 40.0, 60.0, 80.0]))
+    assert np.allclose(updated[0], 0.0)
+    assert np.allclose(updated[2], 0.0)
+
+
+def test_apply_periodic_far_operator_requires_kernel_key_match():
+    from volumential.volume_fmm import _apply_periodic_far_operator_to_locals
+
+    class _Kernel:
+        def __repr__(self):
+            return "LaplaceKernel(3)"
+
+    tree = SimpleNamespace(box_levels=_FakeDeviceArray(np.array([0], dtype=np.int32)))
+    traversal = SimpleNamespace(tree=tree)
+    wrangler = SimpleNamespace(tree_indep=SimpleNamespace(target_kernels=[_Kernel()]))
+
+    with pytest.raises(KeyError, match="missing periodic far operator matrix"):
+        _apply_periodic_far_operator_to_locals(
+            local_exps=np.zeros((1, 2), dtype=np.float64),
+            mpole_exps=np.ones((1, 2), dtype=np.float64),
+            traversal=traversal,
+            wrangler=wrangler,
+            periodic_far_operator={"LaplaceKernel(2)": np.eye(2)},
+            queue=None,
+        )
+
+
 def test_interpolation_target_coverage_avoids_pyopencl_reduction(monkeypatch):
     from volumential.volume_fmm import _ensure_interpolation_target_coverage
 
