@@ -14,6 +14,7 @@ from sumpy.kernel import (
 )
 
 import volumential.nearfield_potential_table as npt
+from test._duffy_test_utils import pick_far_positive_case_id
 from volumential.table_manager import ConstantKernel
 
 
@@ -60,14 +61,6 @@ def _get_gpu_queue_or_skip(ctx_factory):
     if not any(dev.type & cl.device_type.GPU for dev in ctx.devices):
         pytest.skip("manufactured batched checks run on GPU contexts only")
     return cl.CommandQueue(ctx)
-
-
-def _pick_far_positive_case_id(table):
-    case_vecs = np.asarray(table.interaction_case_vecs, dtype=np.int64)
-    positive_ids = [i for i, vec in enumerate(case_vecs) if np.all(vec > 0)]
-    if not positive_ids:
-        positive_ids = list(range(len(case_vecs)))
-    return max(positive_ids, key=lambda i: int(np.dot(case_vecs[i], case_vecs[i])))
 
 
 def _tensor_box_integral(dim, order, func):
@@ -196,7 +189,7 @@ def test_duffy_batched_gpu_laplace_derivative_matches_finite_difference(
         radial_quad_order=radial_quad_order,
     )
 
-    case_id = _pick_far_positive_case_id(table_dx)
+    case_id = pick_far_positive_case_id(table_dx)
     entry_id = table_dx.get_entry_index(0, 0, case_id)
     target = np.asarray(table_dx.find_target_point(0, case_id), dtype=np.float64)
 
@@ -265,7 +258,7 @@ def test_duffy_batched_gpu_helmholtz_plane_wave_matches_exact_values(ctx_factory
         radial_quad_order=21,
     )
 
-    case_id = _pick_far_positive_case_id(table)
+    case_id = pick_far_positive_case_id(table)
     entry_id = table.get_entry_index(0, 0, case_id)
     target_x = float(table.find_target_point(0, case_id)[0])
 
@@ -325,7 +318,7 @@ def test_duffy_batched_gpu_yukawa_derivative_matches_finite_difference(
         lam=lam,
     )
 
-    case_id = _pick_far_positive_case_id(table_dx)
+    case_id = pick_far_positive_case_id(table_dx)
     entry_id = table_dx.get_entry_index(0, 0, case_id)
     target = np.asarray(table_dx.find_target_point(0, case_id), dtype=np.float64)
 

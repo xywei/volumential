@@ -14,6 +14,7 @@ from sumpy.kernel import (
 from sumpy.point_calculus import CalculusPatch
 
 import volumential.nearfield_potential_table as npt
+from test._duffy_test_utils import pick_far_positive_case_id
 
 
 _FP64_GPU_QUEUE_CACHE = {}
@@ -57,14 +58,6 @@ def _get_non_intel_gpu_queue_or_skip():
     # Helmholtz full-accuracy cases are kept off Intel OpenCL due to known
     # complex-kernel backend instability on that driver stack.
     return _get_fp64_gpu_queue_or_skip(require_non_intel=True)
-
-
-def _pick_far_positive_case_id(table):
-    case_vecs = np.asarray(table.interaction_case_vecs, dtype=np.int64)
-    positive_ids = [i for i, vec in enumerate(case_vecs) if np.all(vec > 0)]
-    if not positive_ids:
-        positive_ids = list(range(len(case_vecs)))
-    return max(positive_ids, key=lambda i: int(np.dot(case_vecs[i], case_vecs[i])))
 
 
 def _tensor_box_integral_real(dim, order, func, *, box_extent=1.0):
@@ -364,7 +357,7 @@ def test_duffy_batched_scalar_full_accuracy_matrix(
         kernel_kwargs=kernel_kwargs,
     )
 
-    case_id = _pick_far_positive_case_id(scalar_table)
+    case_id = pick_far_positive_case_id(scalar_table)
     target_point_index = scalar_table.n_q_points // 2
     target = np.asarray(
         scalar_table.find_target_point(target_point_index, case_id),
@@ -463,7 +456,7 @@ def test_duffy_batched_derivative_full_accuracy_matrix(
         kernel_kwargs=kernel_kwargs,
     )
 
-    case_id = _pick_far_positive_case_id(target_table)
+    case_id = pick_far_positive_case_id(target_table)
     target_point_index = target_table.n_q_points // 2
     target = np.asarray(
         target_table.find_target_point(target_point_index, case_id),
