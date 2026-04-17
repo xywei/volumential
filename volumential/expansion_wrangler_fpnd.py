@@ -3092,6 +3092,52 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
 
         return sorted(set(source_box_levels))
 
+    def _split_term_autobuild_direction_kwargs(self, out_knl):
+        base_knl = out_knl.get_base_kernel()
+        wrapper_chain = self._extract_helmholtz_split_kernel_wrapper_chain(
+            out_knl,
+            base_knl,
+        )
+        directional_names = [
+            str(value) for kind, value in wrapper_chain if kind == "directional_source"
+        ]
+        if not directional_names:
+            return {}
+
+        unique_names = tuple(dict.fromkeys(directional_names))
+        if len(unique_names) != 1:
+            raise NotImplementedError(
+                "split term table auto-build supports at most one directional "
+                "source vector name"
+            )
+
+        dir_vec_name = unique_names[0]
+        if dir_vec_name not in self.source_extra_kwargs:
+            raise ValueError(
+                "missing directional source parameter "
+                f"{dir_vec_name!r} for split term table auto-build"
+            )
+
+        direction = _extract_symmetry_source_direction(
+            out_knl,
+            self.source_extra_kwargs,
+            self.queue,
+        )
+        if direction is None:
+            raise ValueError(
+                "split term table auto-build requires directional source values "
+                "that are present and constant across sources"
+            )
+
+        direction = np.asarray(direction, dtype=np.float64).ravel()
+        if direction.size != int(self.tree.dimensions):
+            raise ValueError(
+                "directional source vector for split term table auto-build has "
+                f"length {direction.size}; expected {self.tree.dimensions}"
+            )
+
+        return {dir_vec_name: direction}
+
     def _autobuild_helmholtz_split_term_tables(self, out_knl, missing_term_keys):
         if not missing_term_keys:
             return
@@ -3120,6 +3166,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             base_tables,
             missing_term_keys,
         )
+        directional_build_kwargs = self._split_term_autobuild_direction_kwargs(out_knl)
 
         from volumential.table_manager import NearFieldInteractionTableManager
 
@@ -3145,6 +3192,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
                             "queue": self.queue,
                             "build_config": build_config,
                         }
+                        get_table_kwargs.update(directional_build_kwargs)
                         if sumpy_knl is not None:
                             get_table_kwargs["sumpy_knl"] = sumpy_knl
 
