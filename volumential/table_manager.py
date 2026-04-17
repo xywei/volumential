@@ -71,6 +71,7 @@ _LEGACY_CACHE_BLOB_COLUMNS = {
 }
 _LEGACY_UNVERSIONED_SCHEMA_VERSION = "1.0.0"
 _TABLE_BUILD_METHOD = "DuffyRadial"
+_PERIODIC_OPERATOR_BUILD_METHOD = "BarnettPeriodicFar-v1"
 
 
 @dataclass(frozen=True)
@@ -528,6 +529,9 @@ class NearFieldInteractionTableManager:
         self.last_compute_timings = None
         self.last_load_timings = None
         self.last_get_table_timings = None
+        self.last_periodic_operator_compute_timings = None
+        self.last_periodic_operator_load_timings = None
+        self.last_get_periodic_operator_timings = None
 
         if read_only == "auto":
             try:
@@ -712,6 +716,34 @@ class NearFieldInteractionTableManager:
                 key TEXT PRIMARY KEY,
                 value_type TEXT NOT NULL,
                 value_text TEXT NOT NULL
+            )
+            """
+        )
+
+        self.datafile.execute(
+            """
+            CREATE TABLE IF NOT EXISTS periodic_operator_cache (
+                cache_key TEXT PRIMARY KEY,
+                dim INTEGER,
+                kernel_repr TEXT,
+                build_method TEXT,
+                payload BLOB NOT NULL
+            )
+            """
+        )
+
+        self.datafile.execute(
+            """
+            CREATE TABLE IF NOT EXISTS periodic_operator_cache_kwargs (
+                cache_key TEXT NOT NULL,
+                key TEXT NOT NULL,
+                value_type TEXT NOT NULL,
+                value_text TEXT NOT NULL,
+
+                PRIMARY KEY (cache_key, key),
+                FOREIGN KEY (cache_key)
+                    REFERENCES periodic_operator_cache (cache_key)
+                    ON DELETE CASCADE
             )
             """
         )
@@ -2053,6 +2085,201 @@ class NearFieldInteractionTableManager:
         table.kernel_type_cached = kernel_bundle.kernel_scale_type
 
         return table
+
+    def _periodic_operator_cache_key(self, cache_config):
+        return json.dumps(
+            _to_stable_jsonable(cache_config),
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+    def _load_periodic_operator_kwargs(self, cache_key):
+        rows = self.datafile.execute(
+            "SELECT key, value_type, value_text FROM periodic_operator_cache_kwargs "
+            "WHERE cache_key=?",
+            (cache_key,),
+        ).fetchall()
+
+        kwargs = {}
+        for row in rows:
+            kwargs[row["key"]] = _deserialize_scalar(
+                row["value_type"], row["value_text"]
+            )
+
+        return kwargs
+
+    def _store_periodic_operator_kwargs(self, cache_key, kwargs):
+        self.datafile.execute(
+            "DELETE FROM periodic_operator_cache_kwargs WHERE cache_key=?",
+            (cache_key,),
+        )
+
+        rows = []
+        for key, value in kwargs.items():
+            if value is None:
+                continue
+
+            try:
+                value_type, value_text = _serialize_scalar(value)
+            except TypeError:
+                continue
+
+            rows.append((cache_key, key, value_type, str(value_text)))
+
+        if rows:
+            self.datafile.executemany(
+                "INSERT INTO periodic_operator_cache_kwargs "
+                "(cache_key, key, value_type, value_text) VALUES (?, ?, ?, ?)",
+                rows,
+            )
+
+    def load_saved_periodic_far_operator(self, cache_config):
+        t_load_start = time.perf_counter()
+        cache_key = self._periodic_operator_cache_key(cache_config)
+
+        record = self.datafile.execute(
+            "SELECT payload FROM periodic_operator_cache WHERE cache_key=?",
+            (cache_key,),
+        ).fetchone()
+        t_record_fetch_end = time.perf_counter()
+
+        if record is None:
+            raise KeyError("missing periodic far operator cache record")
+
+        payload_blob = record["payload"]
+        try:
+            operator = _deserialize_array(payload_blob)
+        except Exception as exc:
+            raise KeyError("periodic far operator payload is corrupted") from exc
+
+        if operator.ndim != 2:
+            raise KeyError("periodic far operator payload must be a 2D array")
+
+        kwargs = self._load_periodic_operator_kwargs(cache_key)
+        t_load_end = time.perf_counter()
+
+        self.last_periodic_operator_load_timings = {
+            "record_fetch_s": t_record_fetch_end - t_load_start,
+            "kwargs_load_s": t_load_end - t_record_fetch_end,
+            "total_s": t_load_end - t_load_start,
+            "payload_bytes": len(payload_blob),
+        }
+
+        return operator, kwargs
+
+    def update_periodic_far_operator(
+        self,
+        cache_config,
+        operator_matrix,
+        build_method=_PERIODIC_OPERATOR_BUILD_METHOD,
+        **kwargs,
+    ):
+        if self._read_only:
+            raise RuntimeError(
+                "cannot update periodic operator cache in read-only mode"
+            )
+
+        operator = np.asarray(operator_matrix)
+        if operator.ndim != 2:
+            raise ValueError("periodic far operator must be a 2D array")
+
+        cache_key = self._periodic_operator_cache_key(cache_config)
+        payload_blob = _serialize_array(operator)
+
+        dim = cache_config.get("dim") if isinstance(cache_config, dict) else None
+        kernel_repr = None
+        if isinstance(cache_config, dict):
+            kernel_repr = cache_config.get("kernel_repr")
+            if kernel_repr is None:
+                kernel_repr = cache_config.get("kernel")
+
+        t_write_start = time.perf_counter()
+        self.datafile.execute(
+            """
+            INSERT INTO periodic_operator_cache (
+                cache_key, dim, kernel_repr, build_method, payload
+            ) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(cache_key) DO UPDATE SET
+                dim=excluded.dim,
+                kernel_repr=excluded.kernel_repr,
+                build_method=excluded.build_method,
+                payload=excluded.payload
+            """,
+            (cache_key, dim, kernel_repr, build_method, payload_blob),
+        )
+
+        self._store_periodic_operator_kwargs(
+            cache_key,
+            self._kwargs_for_cache_storage(kwargs),
+        )
+        self.datafile.commit()
+        t_write_end = time.perf_counter()
+
+        self.last_periodic_operator_compute_timings = {
+            "db_write_commit_s": t_write_end - t_write_start,
+            "total_s": t_write_end - t_write_start,
+            "payload_bytes": len(payload_blob),
+        }
+
+        return operator
+
+    def get_periodic_far_operator(
+        self,
+        cache_config,
+        *,
+        force_recompute=False,
+        compute_callback=None,
+    ):
+        t_get_start = time.perf_counter()
+
+        if not force_recompute:
+            try:
+                operator, loaded_kwargs = self.load_saved_periodic_far_operator(
+                    cache_config
+                )
+                t_get_end = time.perf_counter()
+                self.last_get_periodic_operator_timings = {
+                    "total_s": t_get_end - t_get_start,
+                    "is_recomputed": False,
+                    "compute": None,
+                    "load": self.last_periodic_operator_load_timings,
+                }
+                return operator, False, loaded_kwargs
+            except KeyError:
+                if self._read_only:
+                    raise RuntimeError(
+                        "periodic far operator cache miss in read-only mode"
+                    )
+
+        if compute_callback is None:
+            raise ValueError(
+                "compute_callback is required to build periodic far operator"
+            )
+
+        callback_result = compute_callback()
+        if isinstance(callback_result, tuple) and len(callback_result) == 2:
+            operator, build_kwargs = callback_result
+            if not isinstance(build_kwargs, dict):
+                raise TypeError("periodic far operator build kwargs must be a dict")
+        else:
+            operator = callback_result
+            build_kwargs = {}
+
+        operator = self.update_periodic_far_operator(
+            cache_config,
+            operator,
+            **build_kwargs,
+        )
+
+        t_get_end = time.perf_counter()
+        self.last_get_periodic_operator_timings = {
+            "total_s": t_get_end - t_get_start,
+            "is_recomputed": True,
+            "compute": self.last_periodic_operator_compute_timings,
+            "load": None,
+        }
+
+        return operator, True, build_kwargs
 
 
 # }}} End table dataset manager class

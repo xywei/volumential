@@ -201,6 +201,72 @@ def test_load_saved_yukawa_table_accepts_float32_roundtrip(ctx_factory, tmp_path
     assert table.is_built
 
 
+def test_periodic_far_operator_cache_roundtrip(tmp_path):
+    cache_file = tmp_path / "nft-periodic-operator.sqlite"
+    cache_config = {
+        "dim": 2,
+        "kernel_repr": "LaplaceKernel(2)",
+        "n_multipole_coeffs": 9,
+        "n_local_coeffs": 9,
+        "periodic_cell_size": [1.0, 1.0],
+        "near_shifts": [[-1, 0], [1, 0]],
+        "far_shift_radius": 3,
+    }
+    operator = np.arange(81, dtype=np.float64).reshape(9, 9)
+
+    with NFTable(str(cache_file), progress_bar=False) as table_manager:
+        table_manager.update_periodic_far_operator(
+            cache_config,
+            operator,
+            training_samples=32,
+            rng_seed=13,
+        )
+
+        loaded_operator, loaded_kwargs = table_manager.load_saved_periodic_far_operator(
+            cache_config
+        )
+
+    assert np.array_equal(loaded_operator, operator)
+    assert loaded_kwargs["training_samples"] == 32
+    assert loaded_kwargs["rng_seed"] == 13
+
+
+def test_get_periodic_far_operator_uses_cache(tmp_path):
+    cache_file = tmp_path / "nft-periodic-operator-get.sqlite"
+    cache_config = {
+        "dim": 3,
+        "kernel_repr": "LaplaceKernel(3)",
+        "n_multipole_coeffs": 16,
+        "n_local_coeffs": 16,
+    }
+
+    calls = {"count": 0}
+
+    def compute_callback():
+        calls["count"] += 1
+        return np.eye(16, dtype=np.float64), {"training_samples": 40}
+
+    with NFTable(str(cache_file), progress_bar=False) as table_manager:
+        operator_a, recomputed_a, kwargs_a = table_manager.get_periodic_far_operator(
+            cache_config,
+            force_recompute=False,
+            compute_callback=compute_callback,
+        )
+        operator_b, recomputed_b, kwargs_b = table_manager.get_periodic_far_operator(
+            cache_config,
+            force_recompute=False,
+            compute_callback=compute_callback,
+        )
+
+    assert calls["count"] == 1
+    assert recomputed_a is True
+    assert recomputed_b is False
+    assert kwargs_a["training_samples"] == 40
+    assert kwargs_b["training_samples"] == 40
+    assert np.array_equal(operator_a, np.eye(16))
+    assert np.array_equal(operator_b, np.eye(16))
+
+
 def laplace_const_source_same_box(table_2d_order1, queue, q_order, dim=2):
     if q_order == 1:
         nft = table_2d_order1

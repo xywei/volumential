@@ -53,8 +53,12 @@ An initial Barnett-style periodization hook is available in
   to a subset of target boxes.
 - ``periodic_far_operator`` accepts a precomputed root-level far operator
   ``T_per`` that maps root multipole coefficients to root local coefficients.
+  Passing ``"auto"`` builds/loads this operator offline.
 - ``periodic_cell_size`` sets the periodic cell lengths (defaults to
   ``tree.root_extent`` in each dimension).
+- ``periodic_far_operator_manager`` or
+  ``periodic_far_operator_cache_filename`` can reuse the same SQLite cache
+  backend used for near-field tables.
 
 This interface is intended for correctness prototyping and validation against
 trusted periodic references (Ewald/spectral-Ewald style) while the full

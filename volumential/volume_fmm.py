@@ -663,6 +663,440 @@ def _eval_periodic_near_stencil_p2p(
     return periodic_potentials, None
 
 
+def _coerce_obj_array_to_template(values_oa, template):
+    if isinstance(template, np.ndarray) and template.dtype == object:
+        return obj_array_1d(list(values_oa))
+
+    if len(values_oa) == 1:
+        return values_oa[0]
+
+    return obj_array_1d(list(values_oa))
+
+
+def _select_periodic_check_point_ids(
+    tree,
+    queue,
+    *,
+    periodic_near_target_boxes,
+    max_check_points,
+    rng,
+):
+    if periodic_near_target_boxes is None:
+        ntargets = int(getattr(tree, "ntargets", 0))
+        point_ids = np.arange(ntargets, dtype=np.int32)
+    else:
+        point_ids = _collect_target_point_ids_for_boxes(
+            tree,
+            periodic_near_target_boxes,
+            queue,
+        )
+
+    if point_ids is None or point_ids.size == 0:
+        raise ValueError("periodic far operator build requires non-empty target set")
+
+    if max_check_points is not None and point_ids.size > int(max_check_points):
+        selected = rng.choice(
+            point_ids,
+            size=int(max_check_points),
+            replace=False,
+        )
+        point_ids = np.asarray(np.sort(selected), dtype=np.int32)
+
+    return point_ids
+
+
+def _generate_periodic_far_shift_indices(dim, far_shift_radius, near_shift_indices):
+    radius = int(far_shift_radius)
+    if radius < 1:
+        raise ValueError("far_shift_radius must be >= 1")
+
+    near_set = set()
+    near_arr = np.asarray(near_shift_indices, dtype=np.int64)
+    if near_arr.size:
+        near_arr = near_arr.reshape(-1, dim)
+        near_set = {tuple(int(v) for v in shift) for shift in near_arr.tolist()}
+
+    far_shifts = []
+    for shift in product(range(-radius, radius + 1), repeat=dim):
+        if all(component == 0 for component in shift):
+            continue
+        if shift in near_set:
+            continue
+        far_shifts.append(shift)
+
+    if not far_shifts:
+        raise ValueError("far_shift_radius is too small; no far shifts remain")
+
+    return np.asarray(far_shifts, dtype=np.int64)
+
+
+def _build_local_response_matrix(
+    *,
+    wrangler,
+    traversal,
+    queue,
+    root_box_id,
+    nboxes,
+    n_local_coeffs,
+    check_point_ids,
+):
+    if len(wrangler.tree_indep.target_kernels) != 1:
+        raise NotImplementedError(
+            "periodic far operator build currently supports single-output kernels"
+        )
+
+    basis_dtype = np.result_type(np.dtype(wrangler.dtype), np.complex128)
+    response_matrix = np.zeros(
+        (int(check_point_ids.size), int(n_local_coeffs)),
+        dtype=basis_dtype,
+    )
+
+    for icoef in range(int(n_local_coeffs)):
+        local_exps = wrangler.local_expansion_zeros()
+        local_oa = _as_obj_array(local_exps)
+
+        local_values = local_oa[0]
+        basis_row = np.zeros(int(n_local_coeffs), dtype=basis_dtype)
+        basis_row[icoef] = 1
+
+        if isinstance(local_values, cl.array.Array):
+            local_host = local_values.get(queue)
+            local_host = _inject_box_row(local_host, root_box_id, nboxes, basis_row)
+            local_oa[0] = cl.array.to_device(queue, local_host)
+        else:
+            local_host = np.asarray(local_values).copy()
+            local_host = _inject_box_row(local_host, root_box_id, nboxes, basis_row)
+            local_oa[0] = local_host
+
+        local_exps = _coerce_obj_array_to_template(local_oa, local_exps)
+        local_exps, _ = wrangler.refine_locals(
+            traversal.level_start_target_or_target_parent_box_nrs,
+            traversal.target_or_target_parent_boxes,
+            local_exps,
+        )
+        local_result, _ = wrangler.eval_locals(
+            traversal.level_start_target_box_nrs,
+            traversal.target_boxes,
+            local_exps,
+        )
+
+        local_eval = _as_obj_array(local_result)[0]
+        if isinstance(local_eval, cl.array.Array):
+            local_eval_host = local_eval.get(queue)
+        else:
+            local_eval_host = np.asarray(local_eval)
+
+        response_matrix[:, icoef] = np.asarray(local_eval_host)[check_point_ids]
+
+    return response_matrix
+
+
+def _eval_shifted_p2p_on_targets(
+    *,
+    wrangler,
+    traversal,
+    src_strength,
+    shift_vectors,
+    target_point_ids,
+    queue,
+):
+    if len(wrangler.tree_indep.target_kernels) != 1:
+        raise NotImplementedError(
+            "periodic shifted P2P evaluation currently supports one output kernel"
+        )
+
+    from sumpy import P2P
+
+    tree = traversal.tree
+    actx = wrangler.tree_indep._setup_actx
+    targets_eval = _take_point_cloud_subset(tree.targets, target_point_ids, queue)
+
+    p2p = P2P(
+        wrangler.tree_indep.target_kernels,
+        exclude_self=False,
+        value_dtypes=[wrangler.dtype],
+    )
+
+    p2p_kwargs = {}
+    source_extra_kwargs = getattr(wrangler, "source_extra_kwargs", None)
+    if source_extra_kwargs is not None:
+        p2p_kwargs.update(source_extra_kwargs)
+
+    kernel_extra_kwargs = getattr(wrangler, "kernel_extra_kwargs", None)
+    if kernel_extra_kwargs is not None:
+        p2p_kwargs.update(kernel_extra_kwargs)
+
+    p2p_kwargs.pop("target_to_source", None)
+
+    if isinstance(tree.sources, np.ndarray) and tree.sources.dtype == object:
+        source_axes = list(tree.sources)
+    else:
+        source_axes = list(tree.sources)
+
+    total = None
+    for shift in shift_vectors:
+        shift = np.asarray(shift, dtype=np.float64)
+        shifted_sources = obj_array_1d(
+            [
+                axis + np.array(shift[d], dtype=getattr(axis, "dtype", np.float64))
+                for d, axis in enumerate(source_axes)
+            ]
+        )
+
+        (shifted_values,) = p2p(
+            actx,
+            targets_eval,
+            shifted_sources,
+            (src_strength,),
+            **p2p_kwargs,
+        )
+
+        if total is None:
+            total = shifted_values
+        else:
+            total = total + shifted_values
+
+    if total is None:
+        total = np.zeros(int(target_point_ids.size), dtype=np.dtype(wrangler.dtype))
+
+    if isinstance(total, cl.array.Array):
+        return total.get(queue)
+
+    return np.asarray(total)
+
+
+def build_periodic_far_operator(
+    traversal,
+    expansion_wrangler,
+    *,
+    periodic_cell_size=None,
+    periodic_near_shifts="nearest",
+    far_shift_radius=3,
+    n_training_samples=None,
+    rng_seed=13,
+    max_check_points=None,
+    periodic_near_target_boxes=None,
+    queue=None,
+    table_manager=None,
+    force_recompute=False,
+):
+    wrangler = expansion_wrangler
+    if not isinstance(wrangler, FPNDSumpyExpansionWrangler):
+        raise NotImplementedError(
+            "periodic far operator build currently supports only sumpy wranglers"
+        )
+
+    if queue is None:
+        queue = getattr(wrangler, "queue", None)
+    if queue is None:
+        raise TypeError("unable to infer command queue for periodic far operator build")
+
+    tree = traversal.tree
+    dim = int(getattr(tree, "dimensions", 0))
+    if dim not in (2, 3):
+        raise NotImplementedError("periodic far operator build supports 2D/3D only")
+
+    if len(wrangler.tree_indep.target_kernels) != 1:
+        raise NotImplementedError(
+            "periodic far operator build currently supports a single output kernel"
+        )
+
+    root_box_id, nboxes = _find_root_box_id(tree, queue)
+
+    periodic_cell_size = _normalize_periodic_cell_size(periodic_cell_size, dim, tree)
+    near_shift_indices = _normalize_periodic_near_shifts(periodic_near_shifts, dim)
+    far_shift_indices = _generate_periodic_far_shift_indices(
+        dim,
+        far_shift_radius,
+        near_shift_indices,
+    )
+    far_shift_vectors = _periodic_shift_vectors_from_indices(
+        far_shift_indices,
+        periodic_cell_size,
+    )
+
+    mpole_template = wrangler.multipole_expansion_zeros()
+    local_template = wrangler.local_expansion_zeros()
+    mpole_oa = _as_obj_array(mpole_template)
+    local_oa = _as_obj_array(local_template)
+
+    mpole_values = mpole_oa[0]
+    local_values = local_oa[0]
+
+    if isinstance(mpole_values, cl.array.Array):
+        mpole_template_host = mpole_values.get(queue)
+    else:
+        mpole_template_host = np.asarray(mpole_values)
+
+    if isinstance(local_values, cl.array.Array):
+        local_template_host = local_values.get(queue)
+    else:
+        local_template_host = np.asarray(local_values)
+
+    n_multipole_coeffs = int(
+        _extract_box_row_host(mpole_template_host, root_box_id, nboxes)[0].size
+    )
+    n_local_coeffs = int(
+        _extract_box_row_host(local_template_host, root_box_id, nboxes)[0].size
+    )
+
+    rng = np.random.default_rng(int(rng_seed))
+
+    default_max_check_points = max(4 * n_local_coeffs, 256)
+    if max_check_points is None:
+        max_check_points = default_max_check_points
+
+    check_point_ids = _select_periodic_check_point_ids(
+        tree,
+        queue,
+        periodic_near_target_boxes=periodic_near_target_boxes,
+        max_check_points=max_check_points,
+        rng=rng,
+    )
+    n_check_points = int(check_point_ids.size)
+    if n_check_points < n_local_coeffs:
+        raise ValueError(
+            "insufficient check points for periodic far operator build: "
+            f"need at least {n_local_coeffs}, got {n_check_points}"
+        )
+
+    if n_training_samples is None:
+        n_training_samples = max(2 * n_multipole_coeffs, n_multipole_coeffs + 16)
+    n_training_samples = int(n_training_samples)
+    if n_training_samples < n_multipole_coeffs:
+        raise ValueError(
+            "n_training_samples must be >= number of multipole coefficients "
+            f"({n_multipole_coeffs})"
+        )
+
+    cache_config = {
+        "kind": "periodic_far_operator",
+        "dim": dim,
+        "kernel_repr": repr(wrangler.tree_indep.target_kernels[0]),
+        "dtype": np.dtype(wrangler.dtype).str,
+        "n_multipole_coeffs": n_multipole_coeffs,
+        "n_local_coeffs": n_local_coeffs,
+        "periodic_cell_size": periodic_cell_size.tolist(),
+        "near_shift_indices": near_shift_indices.tolist(),
+        "far_shift_radius": int(far_shift_radius),
+        "n_training_samples": n_training_samples,
+        "max_check_points": int(max_check_points),
+        "rng_seed": int(rng_seed),
+    }
+
+    def _compute_periodic_operator():
+        response_matrix = _build_local_response_matrix(
+            wrangler=wrangler,
+            traversal=traversal,
+            queue=queue,
+            root_box_id=root_box_id,
+            nboxes=nboxes,
+            n_local_coeffs=n_local_coeffs,
+            check_point_ids=check_point_ids,
+        )
+        response_pinv = np.linalg.pinv(response_matrix, rcond=1e-12)
+
+        sample_matrix_m = np.zeros(
+            (n_multipole_coeffs, n_training_samples),
+            dtype=np.result_type(np.dtype(wrangler.dtype), np.complex128),
+        )
+        sample_matrix_l = np.zeros(
+            (n_local_coeffs, n_training_samples),
+            dtype=np.result_type(np.dtype(wrangler.dtype), np.complex128),
+        )
+
+        nsources = int(getattr(tree, "nsources", 0))
+        if nsources <= 0:
+            raise ValueError("periodic far operator build requires at least one source")
+
+        for isample in range(n_training_samples):
+            source_sample = rng.standard_normal(nsources)
+            source_sample = source_sample - np.mean(source_sample)
+            source_sample = np.asarray(source_sample, dtype=np.dtype(wrangler.dtype))
+
+            if isinstance(mpole_values, cl.array.Array):
+                source_sample_dev = cl.array.to_device(queue, source_sample)
+            else:
+                source_sample_dev = source_sample
+
+            source_sample_oa = obj_array_1d([source_sample_dev])
+            mpole_exps, _ = wrangler.form_multipoles(
+                traversal.level_start_source_box_nrs,
+                traversal.source_boxes,
+                source_sample_oa,
+            )
+            mpole_exps, _ = wrangler.coarsen_multipoles(
+                traversal.level_start_source_parent_box_nrs,
+                traversal.source_parent_boxes,
+                mpole_exps,
+            )
+
+            mpole_eval = _as_obj_array(mpole_exps)[0]
+            if isinstance(mpole_eval, cl.array.Array):
+                mpole_eval_host = mpole_eval.get(queue)
+            else:
+                mpole_eval_host = np.asarray(mpole_eval)
+
+            mpole_row, _ = _extract_box_row_host(mpole_eval_host, root_box_id, nboxes)
+
+            far_potential = _eval_shifted_p2p_on_targets(
+                wrangler=wrangler,
+                traversal=traversal,
+                src_strength=source_sample_dev,
+                shift_vectors=far_shift_vectors,
+                target_point_ids=check_point_ids,
+                queue=queue,
+            )
+
+            local_coeffs = response_pinv @ far_potential
+
+            sample_matrix_m[:, isample] = mpole_row
+            sample_matrix_l[:, isample] = local_coeffs
+
+        operator = sample_matrix_l @ np.linalg.pinv(sample_matrix_m, rcond=1e-12)
+
+        response_rank = int(np.linalg.matrix_rank(response_matrix))
+        sample_rank = int(np.linalg.matrix_rank(sample_matrix_m))
+        if response_rank < n_local_coeffs:
+            raise RuntimeError(
+                "periodic far operator build failed: local response matrix rank "
+                f"{response_rank} < {n_local_coeffs}"
+            )
+        if sample_rank < n_multipole_coeffs:
+            raise RuntimeError(
+                "periodic far operator build failed: sample multipole matrix rank "
+                f"{sample_rank} < {n_multipole_coeffs}"
+            )
+
+        residual = operator @ sample_matrix_m - sample_matrix_l
+        residual_l2 = float(np.linalg.norm(residual))
+
+        build_info = {
+            "n_check_points": n_check_points,
+            "n_training_samples": n_training_samples,
+            "response_rank": response_rank,
+            "sample_rank": sample_rank,
+            "residual_l2": residual_l2,
+        }
+
+        return operator, build_info
+
+    if table_manager is not None:
+        operator, is_recomputed, build_info = table_manager.get_periodic_far_operator(
+            cache_config,
+            force_recompute=force_recompute,
+            compute_callback=_compute_periodic_operator,
+        )
+        build_info = dict(build_info)
+        build_info["is_recomputed"] = bool(is_recomputed)
+        return operator, build_info
+
+    operator, build_info = _compute_periodic_operator()
+    build_info = dict(build_info)
+    build_info["is_recomputed"] = True
+    return operator, build_info
+
+
 class _CombinedTimingFuture:
     def __init__(self, futures):
         self.futures = [future for future in futures if future is not None]
@@ -1108,7 +1542,23 @@ def drive_volume_fmm(
         evaluating near-image corrections.
     :arg periodic_far_operator: Precomputed periodic far operator ``T_per``
         mapping root multipole coefficients to root local coefficients.
-        May be a single matrix or a dict keyed by output-kernel repr.
+        May be a single matrix, a dict keyed by output-kernel repr, or
+        ``"auto"`` to build/load ``T_per`` offline.
+    :arg periodic_far_operator_manager: Optional
+        :class:`volumential.table_manager.NearFieldInteractionTableManager`
+        used for loading/storing ``T_per`` in the same SQLite cache layer as
+        near-field tables.
+    :arg periodic_far_operator_cache_filename: Optional cache filename used when
+        ``periodic_far_operator="auto"`` and no manager is passed.
+    :arg periodic_far_shift_radius: Integer L-infinity radius used when building
+        ``T_per`` from shifted-image samples.
+    :arg periodic_far_training_samples: Number of random source samples used to
+        regress ``T_per``.
+    :arg periodic_far_rng_seed: RNG seed for ``T_per`` sample generation.
+    :arg periodic_far_max_check_points: Maximum number of check points used in
+        local-response fitting for ``T_per``.
+    :arg periodic_far_force_recompute: Rebuild ``T_per`` even when a cached
+        entry exists.
 
     Returns the potentials computed by *expansion_wrangler*.
     """
@@ -1147,6 +1597,17 @@ def drive_volume_fmm(
     periodic_cell_size = kwargs.pop("periodic_cell_size", None)
     periodic_near_target_boxes = kwargs.pop("periodic_near_target_boxes", None)
     periodic_far_operator = kwargs.pop("periodic_far_operator", None)
+    periodic_far_operator_manager = kwargs.pop("periodic_far_operator_manager", None)
+    periodic_far_operator_cache_filename = kwargs.pop(
+        "periodic_far_operator_cache_filename", None
+    )
+    periodic_far_shift_radius = kwargs.pop("periodic_far_shift_radius", 3)
+    periodic_far_training_samples = kwargs.pop("periodic_far_training_samples", None)
+    periodic_far_rng_seed = kwargs.pop("periodic_far_rng_seed", 13)
+    periodic_far_max_check_points = kwargs.pop("periodic_far_max_check_points", None)
+    periodic_far_force_recompute = bool(
+        kwargs.pop("periodic_far_force_recompute", False)
+    )
     periodic_enabled = (
         periodic_near_shifts is not None or periodic_far_operator is not None
     )
@@ -1239,6 +1700,83 @@ def drive_volume_fmm(
             raise ValueError(
                 "periodic_far_operator requires list1_only=False because far "
                 "corrections are injected through local expansions"
+            )
+
+        if isinstance(periodic_far_operator, str):
+            if periodic_far_operator.strip().lower() != "auto":
+                raise ValueError(
+                    "periodic_far_operator string must be 'auto' when provided"
+                )
+
+            if periodic_far_operator_manager is None:
+                if periodic_far_operator_cache_filename is not None:
+                    from volumential.table_manager import (
+                        NearFieldInteractionTableManager,
+                    )
+
+                    with NearFieldInteractionTableManager(
+                        periodic_far_operator_cache_filename,
+                        root_extent=float(tree.root_extent),
+                        read_only="auto",
+                    ) as periodic_cache_manager:
+                        periodic_far_operator, periodic_far_build_info = (
+                            build_periodic_far_operator(
+                                traversal,
+                                wrangler,
+                                periodic_cell_size=periodic_cell_size,
+                                periodic_near_shifts=periodic_shift_indices,
+                                far_shift_radius=periodic_far_shift_radius,
+                                n_training_samples=periodic_far_training_samples,
+                                rng_seed=periodic_far_rng_seed,
+                                max_check_points=periodic_far_max_check_points,
+                                periodic_near_target_boxes=periodic_near_target_boxes,
+                                queue=queue,
+                                table_manager=periodic_cache_manager,
+                                force_recompute=periodic_far_force_recompute,
+                            )
+                        )
+                else:
+                    periodic_far_operator, periodic_far_build_info = (
+                        build_periodic_far_operator(
+                            traversal,
+                            wrangler,
+                            periodic_cell_size=periodic_cell_size,
+                            periodic_near_shifts=periodic_shift_indices,
+                            far_shift_radius=periodic_far_shift_radius,
+                            n_training_samples=periodic_far_training_samples,
+                            rng_seed=periodic_far_rng_seed,
+                            max_check_points=periodic_far_max_check_points,
+                            periodic_near_target_boxes=periodic_near_target_boxes,
+                            queue=queue,
+                            table_manager=None,
+                            force_recompute=True,
+                        )
+                    )
+            else:
+                periodic_far_operator, periodic_far_build_info = (
+                    build_periodic_far_operator(
+                        traversal,
+                        wrangler,
+                        periodic_cell_size=periodic_cell_size,
+                        periodic_near_shifts=periodic_shift_indices,
+                        far_shift_radius=periodic_far_shift_radius,
+                        n_training_samples=periodic_far_training_samples,
+                        rng_seed=periodic_far_rng_seed,
+                        max_check_points=periodic_far_max_check_points,
+                        periodic_near_target_boxes=periodic_near_target_boxes,
+                        queue=queue,
+                        table_manager=periodic_far_operator_manager,
+                        force_recompute=periodic_far_force_recompute,
+                    )
+                )
+
+            logger.info(
+                "periodic far operator build: recomputed=%s, n_check_points=%s, "
+                "n_training_samples=%s, residual_l2=%s",
+                periodic_far_build_info.get("is_recomputed", True),
+                periodic_far_build_info.get("n_check_points", "n/a"),
+                periodic_far_build_info.get("n_training_samples", "n/a"),
+                periodic_far_build_info.get("residual_l2", "n/a"),
             )
 
     coincident_tree_guard_cache = getattr(
