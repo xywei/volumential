@@ -910,6 +910,8 @@ def drive_volume_fmm(
         )
 
         p2p_extra_kwargs = {}
+        if hasattr(wrangler, "source_extra_kwargs"):
+            p2p_extra_kwargs.update(wrangler.source_extra_kwargs)
         if hasattr(wrangler, "kernel_extra_kwargs"):
             p2p_extra_kwargs.update(wrangler.kernel_extra_kwargs)
 

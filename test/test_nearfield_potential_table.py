@@ -161,6 +161,29 @@ def test_sumpy_kernel_to_lambda_applies_wrapper_postprocess():
     assert knl_func(4.0) == 30.0
 
 
+def test_kernel_displacement_uses_target_minus_source_for_sumpy_kernels():
+    from sumpy.kernel import AxisTargetDerivative, LaplaceKernel, YukawaKernel
+
+    assert npt._kernel_uses_target_minus_source_displacement(LaplaceKernel(2))
+    assert npt._kernel_uses_target_minus_source_displacement(YukawaKernel(2))
+    assert npt._kernel_uses_target_minus_source_displacement(
+        AxisTargetDerivative(0, YukawaKernel(2))
+    )
+
+
+def test_kernel_derivatives_require_identity_online_symmetry_maps():
+    from sumpy.kernel import AxisTargetDerivative, LaplaceKernel, YukawaKernel
+
+    assert not npt._kernel_requires_identity_online_symmetry_maps(LaplaceKernel(2))
+    assert not npt._kernel_requires_identity_online_symmetry_maps(YukawaKernel(2))
+    assert npt._kernel_requires_identity_online_symmetry_maps(
+        AxisTargetDerivative(0, LaplaceKernel(2))
+    )
+    assert npt._kernel_requires_identity_online_symmetry_maps(
+        AxisTargetDerivative(0, YukawaKernel(2))
+    )
+
+
 def cheb_eval(dim, coefs, coords):
     if dim == 1:
         return chebval(coords[0], coefs)
@@ -420,6 +443,94 @@ def test_directional_source_orbit_updates_when_direction_changes():
     assert not np.array_equal(scales_x, scales_y)
 
 
+@pytest.mark.parametrize(
+    "kernel,symmetry_source_direction",
+    [
+        (
+            pytest.param(
+                "axis-target",
+                np.array([1.0, 0.0]),
+                id="axis-target-derivative",
+            )
+        ),
+        (
+            pytest.param(
+                "directional-source",
+                np.array([1.0, 0.0]),
+                id="directional-source-derivative",
+            )
+        ),
+    ],
+)
+def test_online_symmetry_maps_match_orbit_canonical_signs(
+    kernel,
+    symmetry_source_direction,
+):
+    from sumpy.kernel import (
+        AxisTargetDerivative,
+        DirectionalSourceDerivative,
+        LaplaceKernel,
+    )
+
+    if kernel == "axis-target":
+        sumpy_kernel = AxisTargetDerivative(0, LaplaceKernel(2))
+        symmetry_source_direction = None
+    else:
+        sumpy_kernel = DirectionalSourceDerivative(LaplaceKernel(2), "dir_vec")
+
+    table = npt.NearFieldInteractionTable(
+        quad_order=3,
+        dim=2,
+        build_method="DuffyRadial",
+        kernel_func=npt.constant_one,
+        kernel_type="inv_power",
+        sumpy_kernel=sumpy_kernel,
+        derive_kernel_func=False,
+        symmetry_source_direction=symmetry_source_direction,
+        progress_bar=False,
+    )
+
+    symmetry_maps = table._get_online_symmetry_maps()
+    mode_qpoint_map = np.asarray(symmetry_maps["mode_qpoint_map"], dtype=np.int32)
+    mode_case_map = np.asarray(symmetry_maps["mode_case_map"], dtype=np.int32)
+    mode_case_scale = np.asarray(symmetry_maps["mode_case_scale"])
+
+    assert mode_case_scale.shape == (table.n_q_points, table.n_cases)
+    assert np.all(np.isin(mode_case_scale, [-1, 1]))
+    assert np.any(mode_case_scale < 0)
+
+    orbit_info = table._get_orbit_canonical_info()
+    canonical_scales = np.asarray(orbit_info["canonical_scales"], dtype=np.float64)
+
+    rng = np.random.default_rng(seed=29)
+    for _ in range(48):
+        source_mode_id = int(rng.integers(0, table.n_q_points))
+        target_point_id = int(rng.integers(0, table.n_q_points))
+        case_id = int(rng.integers(0, table.n_cases))
+
+        full_entry_id = (
+            case_id * table.n_pairs
+            + source_mode_id * table.n_q_points
+            + target_point_id
+        )
+
+        source_mode_id_sym = int(mode_qpoint_map[source_mode_id, source_mode_id])
+        target_point_id_sym = int(mode_qpoint_map[source_mode_id, target_point_id])
+        case_id_sym = int(mode_case_map[source_mode_id, case_id])
+        transformed_entry_id = (
+            case_id_sym * table.n_pairs
+            + source_mode_id_sym * table.n_q_points
+            + target_point_id_sym
+        )
+
+        mapped_sign = float(mode_case_scale[source_mode_id, case_id])
+        canonical_sign = (
+            canonical_scales[full_entry_id] / canonical_scales[transformed_entry_id]
+        )
+
+        assert np.isclose(mapped_sign, canonical_sign)
+
+
 def test_duffy_radial_routes_queue_to_batched_builder(monkeypatch):
     table = npt.NearFieldInteractionTable(
         quad_order=2,
@@ -464,6 +575,70 @@ def test_duffy_radial_routes_queue_to_batched_builder(monkeypatch):
 
     assert seen["called"]
     assert seen["queue"] is q
+
+
+def test_duffy_radial_emits_structured_builder_logs(monkeypatch, caplog):
+    table = npt.NearFieldInteractionTable(
+        quad_order=2,
+        build_method="DuffyRadial",
+        dim=2,
+        sumpy_kernel=object(),
+        derive_kernel_func=False,
+        progress_bar=False,
+    )
+
+    class FakeDevice:
+        name = "fake-device"
+
+    class FakeQueue:
+        device = FakeDevice()
+
+    def fake_build_normalizer_table(self, pool=None, pb=None):
+        self.mode_normalizers[:] = 1
+
+    def fake_batched(
+        self,
+        queue,
+        radial_rule,
+        deg_theta,
+        radial_quad_order,
+        mp_dps,
+        kernel_kwargs=None,
+    ):
+        self.is_built = True
+        self.last_duffy_build_timings = {
+            "invariant_info_s": 0.01,
+            "quadrature_s": 0.02,
+            "scatter_s": 0.03,
+            "total_s": 0.04,
+            "n_entries": 5,
+        }
+
+    monkeypatch.setattr(
+        npt.NearFieldInteractionTable,
+        "build_normalizer_table",
+        fake_build_normalizer_table,
+    )
+    monkeypatch.setattr(
+        npt.NearFieldInteractionTable,
+        "build_table_via_duffy_radial_batched",
+        fake_batched,
+    )
+
+    with caplog.at_level("INFO", logger=npt.logger.name):
+        table.build_table_via_duffy_radial(queue=FakeQueue())
+
+    messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == npt.logger.name
+    ]
+    assert any("[duffy:start]" in message for message in messages)
+    assert any(
+        "[duffy:builder] mode=batched" in message and "device=fake-device" in message
+        for message in messages
+    )
+    assert any("[duffy:done] mode=batched" in message for message in messages)
 
 
 def test_build_table_uses_supplied_cl_ctx_when_queue_missing(monkeypatch):

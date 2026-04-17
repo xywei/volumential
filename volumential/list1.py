@@ -333,27 +333,9 @@ class NearFieldFromCSR(NearFieldEvalBase):
         if ("infer_kernel_scaling" in self.extra_kwargs) and (
             self.extra_kwargs["infer_kernel_scaling"]
         ):
-            # Laplace 2D
-            if self._is_laplace_kernel(2):
-                logger.info("scaling for LapKnl2D")
-                code = "BOX_extent * BOX_extent / \
-                        (table_root_extent * table_root_extent)"
-
-            elif self._is_axis_target_derivative_of_laplace(2):
+            if self._is_axis_target_derivative_of_laplace(2):
                 logger.info("scaling for Grad(LapKnl2D)")
                 code = "BOX_extent / table_root_extent"
-
-            # Constant 2D
-            elif self._is_constant_kernel(2):
-                logger.info("scaling for CstKnl2D")
-                code = "BOX_extent * BOX_extent / \
-                        (table_root_extent * table_root_extent)"
-
-            # Laplace 3D
-            elif self._is_laplace_kernel(3):
-                logger.info("scaling for Lapknl3D")
-                code = "BOX_extent * BOX_extent / \
-                        (table_root_extent * table_root_extent)"
 
             elif self._is_axis_target_derivative_of_laplace(3):
                 logger.info("scaling for Grad(LapKnl3D)")
@@ -366,6 +348,24 @@ class NearFieldFromCSR(NearFieldEvalBase):
             elif self._is_axis_source_derivative_of_laplace(3):
                 logger.info("scaling for SourceGrad(LapKnl3D)")
                 code = "BOX_extent / table_root_extent"
+
+            # Laplace 2D
+            elif self._is_laplace_kernel(2):
+                logger.info("scaling for LapKnl2D")
+                code = "BOX_extent * BOX_extent / \
+                        (table_root_extent * table_root_extent)"
+
+            # Constant 2D
+            elif self._is_constant_kernel(2):
+                logger.info("scaling for CstKnl2D")
+                code = "BOX_extent * BOX_extent / \
+                        (table_root_extent * table_root_extent)"
+
+            # Laplace 3D
+            elif self._is_laplace_kernel(3):
+                logger.info("scaling for Lapknl3D")
+                code = "BOX_extent * BOX_extent / \
+                        (table_root_extent * table_root_extent)"
 
             # Constant 3D
             elif self._is_constant_kernel(3):
@@ -401,8 +401,24 @@ class NearFieldFromCSR(NearFieldEvalBase):
         if ("infer_kernel_scaling" in self.extra_kwargs) and (
             self.extra_kwargs["infer_kernel_scaling"]
         ):
+            if self._is_axis_target_derivative_of_laplace(2):
+                logger.info("no displacement for Grad(LapKnl2D)")
+                code = "0.0"
+
+            elif self._is_axis_target_derivative_of_laplace(3):
+                logger.info("no displacement for Grad(LapKnl3D)")
+                code = "0.0"
+
+            elif self._is_axis_source_derivative_of_laplace(2):
+                logger.info("no displacement for SourceGrad(LapKnl2D)")
+                code = "0.0"
+
+            elif self._is_axis_source_derivative_of_laplace(3):
+                logger.info("no displacement for SourceGrad(LapKnl3D)")
+                code = "0.0"
+
             # Laplace 2D
-            if self._is_laplace_kernel(2):
+            elif self._is_laplace_kernel(2):
                 logger.info("displacement for laplace 2D")
                 s = "-0.5 / PI * scaling * \
                         log(BOX_extent / table_root_extent) * \
@@ -422,22 +438,6 @@ class NearFieldFromCSR(NearFieldEvalBase):
             # Constant 3D
             elif self._is_constant_kernel(3):
                 logger.info("no displacement for CstKnl3D")
-                code = "0.0"
-
-            elif self._is_axis_target_derivative_of_laplace(2):
-                logger.info("no displacement for Grad(LapKnl2D)")
-                code = "0.0"
-
-            elif self._is_axis_target_derivative_of_laplace(3):
-                logger.info("no displacement for Grad(LapKnl3D)")
-                code = "0.0"
-
-            elif self._is_axis_source_derivative_of_laplace(2):
-                logger.info("no displacement for SourceGrad(LapKnl2D)")
-                code = "0.0"
-
-            elif self._is_axis_source_derivative_of_laplace(3):
-                logger.info("no displacement for SourceGrad(LapKnl3D)")
                 code = "0.0"
             else:
                 logger.warning(
@@ -578,10 +578,11 @@ class NearFieldFromCSR(NearFieldEvalBase):
                         <> source_mode_id_sym = mode_qpoint_map[source_mode_id, source_mode_id]
                         <> target_point_id_sym = mode_qpoint_map[source_mode_id, target_point_id]
                         <> case_id_sym = mode_case_map[source_mode_id, case_id]
+                        <> mode_map_sign = mode_case_scale[source_mode_id, case_id]
                         <> pair_id = source_mode_id_sym * n_q_points + target_point_id_sym
                         <> entry_id_full = case_id_sym * (n_q_points * n_q_points) + pair_id
                         <> entry_id = table_entry_ids[entry_id_full]
-                        <> entry_sign = table_entry_scales[entry_id_full]
+                        <> entry_sign = table_entry_scales[entry_id_full] * mode_map_sign
                         <> has_entry = entry_id >= 0
 
                         <> displacement = COMPUTE_DISPLACEMENT
@@ -653,6 +654,11 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 ),
                 loopy.GlobalArg("mode_qpoint_map", np.int32, "n_q_points, n_q_points"),
                 loopy.GlobalArg("mode_case_map", np.int32, "n_q_points, n_cases"),
+                loopy.GlobalArg(
+                    "mode_case_scale",
+                    potential_dtype,
+                    "n_q_points, n_cases",
+                ),
                 loopy.GlobalArg("source_boxes", np.int32, "n_source_boxes"),
                 loopy.GlobalArg("box_centers", None, "dim, aligned_nboxes"),
                 loopy.GlobalArg(
@@ -684,7 +690,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
     def get_cache_key(self):
         return (
             type(self).__name__,
-            "kernel-v9",
+            "kernel-v10",
             self.name,
             self.kname,
             "complex_kernel=" + str(self.integral_kernel.is_complex_valued),
@@ -718,6 +724,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
         exterior_mode_nmlz_combined = kwargs.pop("exterior_mode_nmlz_combined")
         mode_qpoint_map = kwargs.pop("mode_qpoint_map")
         mode_case_map = kwargs.pop("mode_case_map")
+        mode_case_scale = kwargs.pop("mode_case_scale")
         table_entry_ids = kwargs.pop("table_entry_ids")
         table_entry_scales = kwargs.pop("table_entry_scales")
         root_extent = kwargs.pop("root_extent")
@@ -835,6 +842,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
             table_entry_scales=table_entry_scales,
             mode_qpoint_map=mode_qpoint_map,
             mode_case_map=mode_case_map,
+            mode_case_scale=mode_case_scale,
             n_tgt_boxes=len(target_boxes),
             neighbor_source_boxes_starts=neighbor_source_boxes_starts,
             root_extent=root_extent,

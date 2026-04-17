@@ -1,4 +1,3 @@
-
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
 __license__ = """
@@ -259,6 +258,150 @@ def test_box_quad_3(longrun):
 
     assert np.allclose(val, 0, atol=1e-8)
     assert np.allclose(err, 0, atol=1e-8)
+
+
+def _unit_square_volume_integral(func):
+    val, err = sint.qquad(
+        func,
+        0.0,
+        1.0,
+        0.0,
+        1.0,
+        args=(),
+        tol=1e-11,
+        rtol=1e-11,
+        maxitero=60,
+        maxiteri=60,
+        vec_func=True,
+        minitero=2,
+        miniteri=2,
+    )
+    return float(val), float(err)
+
+
+def _unit_square_boundary_integral(boundary_func):
+    pieces = [
+        lambda t: boundary_func(np.zeros_like(t), t),
+        lambda t: boundary_func(np.ones_like(t), t),
+        lambda t: boundary_func(t, np.zeros_like(t)),
+        lambda t: boundary_func(t, np.ones_like(t)),
+    ]
+
+    total_val = 0.0
+    total_err = 0.0
+    for piece in pieces:
+        val, err = sint.quad(
+            piece,
+            0.0,
+            1.0,
+            args=(),
+            tol=1e-11,
+            rtol=1e-11,
+            maxiter=60,
+            vec_func=True,
+            miniter=2,
+        )
+        total_val += float(val)
+        total_err += float(err)
+
+    return total_val, total_err
+
+
+def test_first_green_identity_unit_square():
+    def u(x, y):
+        return x * x + 2.0 * x * y + 3.0 * y * y + x + 1.0
+
+    def v(x, y):
+        return x * x * x - x * y + y * y + 2.0
+
+    def du_dx(x, y):
+        return 2.0 * x + 2.0 * y + 1.0
+
+    def du_dy(x, y):
+        return 2.0 * x + 6.0 * y
+
+    def dv_dx(x, y):
+        return 3.0 * x * x - y
+
+    def dv_dy(x, y):
+        return -x + 2.0 * y
+
+    def lap_v(x, y):
+        return 6.0 * x + 2.0
+
+    lhs, lhs_err = _unit_square_volume_integral(
+        lambda x, y: (
+            du_dx(x, y) * dv_dx(x, y)
+            + du_dy(x, y) * dv_dy(x, y)
+            + u(x, y) * lap_v(x, y)
+        )
+    )
+
+    rhs, rhs_err = _unit_square_boundary_integral(
+        lambda x, y: (
+            (
+                np.where(np.isclose(x, 0.0), -1.0, 0.0)
+                + np.where(np.isclose(x, 1.0), 1.0, 0.0)
+            )
+            * u(x, y)
+            * dv_dx(x, y)
+            + (
+                np.where(np.isclose(y, 0.0), -1.0, 0.0)
+                + np.where(np.isclose(y, 1.0), 1.0, 0.0)
+            )
+            * u(x, y)
+            * dv_dy(x, y)
+        )
+    )
+
+    assert abs(lhs - rhs) < max(1e-9, 100.0 * (lhs_err + rhs_err))
+
+
+def test_second_green_identity_unit_square():
+    def u(x, y):
+        return x * x + 2.0 * x * y + 3.0 * y * y + x + 1.0
+
+    def v(x, y):
+        return x * x * x - x * y + y * y + 2.0
+
+    def du_dx(x, y):
+        return 2.0 * x + 2.0 * y + 1.0
+
+    def du_dy(x, y):
+        return 2.0 * x + 6.0 * y
+
+    def dv_dx(x, y):
+        return 3.0 * x * x - y
+
+    def dv_dy(x, y):
+        return -x + 2.0 * y
+
+    def lap_u(x, y):
+        return 8.0 + 0.0 * x + 0.0 * y
+
+    def lap_v(x, y):
+        return 6.0 * x + 2.0
+
+    lhs, lhs_err = _unit_square_volume_integral(
+        lambda x, y: u(x, y) * lap_v(x, y) - v(x, y) * lap_u(x, y)
+    )
+
+    rhs, rhs_err = _unit_square_boundary_integral(
+        lambda x, y: (
+            (
+                np.where(np.isclose(x, 0.0), -1.0, 0.0)
+                + np.where(np.isclose(x, 1.0), 1.0, 0.0)
+            )
+            * (u(x, y) * dv_dx(x, y) - v(x, y) * du_dx(x, y))
+            + (
+                np.where(np.isclose(y, 0.0), -1.0, 0.0)
+                + np.where(np.isclose(y, 1.0), 1.0, 0.0)
+            )
+            * (u(x, y) * dv_dy(x, y) - v(x, y) * du_dy(x, y))
+        )
+    )
+
+    assert abs(lhs - rhs) < max(1e-9, 100.0 * (lhs_err + rhs_err))
 
 
 # vim: filetype=pyopencl.python:fdm=marker
