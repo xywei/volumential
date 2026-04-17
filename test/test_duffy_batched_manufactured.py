@@ -14,8 +14,12 @@ from sumpy.kernel import (
 )
 
 import volumential.nearfield_potential_table as npt
-from test._duffy_test_utils import pick_far_positive_case_id
 from volumential.table_manager import ConstantKernel
+
+try:
+    from _duffy_test_utils import pick_far_positive_case_id
+except ImportError:
+    from test._duffy_test_utils import pick_far_positive_case_id
 
 
 class _Laplace1DKernel(ExpressionKernel):

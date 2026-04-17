@@ -14,7 +14,11 @@ from sumpy.kernel import (
 from sumpy.point_calculus import CalculusPatch
 
 import volumential.nearfield_potential_table as npt
-from test._duffy_test_utils import pick_far_positive_case_id
+
+try:
+    from _duffy_test_utils import pick_far_positive_case_id
+except ImportError:
+    from test._duffy_test_utils import pick_far_positive_case_id
 
 
 _FP64_GPU_QUEUE_CACHE = {}
