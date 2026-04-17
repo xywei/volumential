@@ -281,15 +281,21 @@ def _unit_square_volume_integral(func):
 
 def _unit_square_boundary_integral(boundary_func):
     pieces = [
-        lambda t: boundary_func(np.zeros_like(t), t),
-        lambda t: boundary_func(np.ones_like(t), t),
-        lambda t: boundary_func(t, np.zeros_like(t)),
-        lambda t: boundary_func(t, np.ones_like(t)),
+        (lambda t: (np.zeros_like(t), t), (-1.0, 0.0)),
+        (lambda t: (np.ones_like(t), t), (1.0, 0.0)),
+        (lambda t: (t, np.zeros_like(t)), (0.0, -1.0)),
+        (lambda t: (t, np.ones_like(t)), (0.0, 1.0)),
     ]
 
     total_val = 0.0
     total_err = 0.0
-    for piece in pieces:
+    for coord_fn, normal in pieces:
+        nx, ny = normal
+
+        def piece(t, coord_fn=coord_fn, nx=nx, ny=ny):
+            x, y = coord_fn(t)
+            return boundary_func(x, y, nx, ny)
+
         val, err = sint.quad(
             piece,
             0.0,
@@ -307,57 +313,7 @@ def _unit_square_boundary_integral(boundary_func):
     return total_val, total_err
 
 
-def test_first_green_identity_unit_square():
-    def u(x, y):
-        return x * x + 2.0 * x * y + 3.0 * y * y + x + 1.0
-
-    def v(x, y):
-        return x * x * x - x * y + y * y + 2.0
-
-    def du_dx(x, y):
-        return 2.0 * x + 2.0 * y + 1.0
-
-    def du_dy(x, y):
-        return 2.0 * x + 6.0 * y
-
-    def dv_dx(x, y):
-        return 3.0 * x * x - y
-
-    def dv_dy(x, y):
-        return -x + 2.0 * y
-
-    def lap_v(x, y):
-        return 6.0 * x + 2.0
-
-    lhs, lhs_err = _unit_square_volume_integral(
-        lambda x, y: (
-            du_dx(x, y) * dv_dx(x, y)
-            + du_dy(x, y) * dv_dy(x, y)
-            + u(x, y) * lap_v(x, y)
-        )
-    )
-
-    rhs, rhs_err = _unit_square_boundary_integral(
-        lambda x, y: (
-            (
-                np.where(np.isclose(x, 0.0), -1.0, 0.0)
-                + np.where(np.isclose(x, 1.0), 1.0, 0.0)
-            )
-            * u(x, y)
-            * dv_dx(x, y)
-            + (
-                np.where(np.isclose(y, 0.0), -1.0, 0.0)
-                + np.where(np.isclose(y, 1.0), 1.0, 0.0)
-            )
-            * u(x, y)
-            * dv_dy(x, y)
-        )
-    )
-
-    assert abs(lhs - rhs) < max(1e-9, 100.0 * (lhs_err + rhs_err))
-
-
-def test_second_green_identity_unit_square():
+def _manufactured_green_solution():
     def u(x, y):
         return x * x + 2.0 * x * y + 3.0 * y * y + x + 1.0
 
@@ -382,22 +338,61 @@ def test_second_green_identity_unit_square():
     def lap_v(x, y):
         return 6.0 * x + 2.0
 
+    return {
+        "u": u,
+        "v": v,
+        "du_dx": du_dx,
+        "du_dy": du_dy,
+        "dv_dx": dv_dx,
+        "dv_dy": dv_dy,
+        "lap_u": lap_u,
+        "lap_v": lap_v,
+    }
+
+
+def test_first_green_identity_unit_square():
+    sol = _manufactured_green_solution()
+    u = sol["u"]
+    du_dx = sol["du_dx"]
+    du_dy = sol["du_dy"]
+    dv_dx = sol["dv_dx"]
+    dv_dy = sol["dv_dy"]
+    lap_v = sol["lap_v"]
+
+    lhs, lhs_err = _unit_square_volume_integral(
+        lambda x, y: (
+            du_dx(x, y) * dv_dx(x, y)
+            + du_dy(x, y) * dv_dy(x, y)
+            + u(x, y) * lap_v(x, y)
+        )
+    )
+
+    rhs, rhs_err = _unit_square_boundary_integral(
+        lambda x, y, nx, ny: u(x, y) * (nx * dv_dx(x, y) + ny * dv_dy(x, y))
+    )
+
+    assert abs(lhs - rhs) < max(1e-9, 100.0 * (lhs_err + rhs_err))
+
+
+def test_second_green_identity_unit_square():
+    sol = _manufactured_green_solution()
+    u = sol["u"]
+    v = sol["v"]
+    du_dx = sol["du_dx"]
+    du_dy = sol["du_dy"]
+    dv_dx = sol["dv_dx"]
+    dv_dy = sol["dv_dy"]
+    lap_u = sol["lap_u"]
+    lap_v = sol["lap_v"]
+
     lhs, lhs_err = _unit_square_volume_integral(
         lambda x, y: u(x, y) * lap_v(x, y) - v(x, y) * lap_u(x, y)
     )
 
     rhs, rhs_err = _unit_square_boundary_integral(
-        lambda x, y: (
-            (
-                np.where(np.isclose(x, 0.0), -1.0, 0.0)
-                + np.where(np.isclose(x, 1.0), 1.0, 0.0)
-            )
-            * (u(x, y) * dv_dx(x, y) - v(x, y) * du_dx(x, y))
-            + (
-                np.where(np.isclose(y, 0.0), -1.0, 0.0)
-                + np.where(np.isclose(y, 1.0), 1.0, 0.0)
-            )
-            * (u(x, y) * dv_dy(x, y) - v(x, y) * du_dy(x, y))
+        lambda x, y, nx, ny: (
+            nx * (u(x, y) * dv_dx(x, y) - v(x, y) * du_dx(x, y))
+            + ny * (u(x, y) * dv_dy(x, y) - v(x, y) * du_dy(x, y))
         )
     )
 

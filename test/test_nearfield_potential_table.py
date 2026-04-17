@@ -443,22 +443,44 @@ def test_directional_source_orbit_updates_when_direction_changes():
     assert not np.array_equal(scales_x, scales_y)
 
 
+def test_online_symmetry_maps_update_when_direction_changes():
+    from sumpy.kernel import DirectionalSourceDerivative, LaplaceKernel
+
+    table = npt.NearFieldInteractionTable(
+        quad_order=3,
+        dim=2,
+        build_method="DuffyRadial",
+        kernel_func=npt.constant_one,
+        kernel_type="inv_power",
+        sumpy_kernel=DirectionalSourceDerivative(LaplaceKernel(2), "dir_vec"),
+        derive_kernel_func=False,
+        symmetry_source_direction=np.array([1.0, 0.0]),
+        progress_bar=False,
+    )
+
+    maps_x = table._get_online_symmetry_maps()
+    scales_x = np.asarray(maps_x["mode_case_scale"], dtype=np.int8).copy()
+
+    table.symmetry_source_direction = np.array([0.0, 1.0])
+    maps_y = table._get_online_symmetry_maps()
+    scales_y = np.asarray(maps_y["mode_case_scale"], dtype=np.int8).copy()
+
+    assert scales_x.shape == scales_y.shape
+    assert not np.array_equal(scales_x, scales_y)
+
+
 @pytest.mark.parametrize(
     "kernel,symmetry_source_direction",
     [
-        (
-            pytest.param(
-                "axis-target",
-                np.array([1.0, 0.0]),
-                id="axis-target-derivative",
-            )
+        pytest.param(
+            "axis-target",
+            None,
+            id="axis-target-derivative",
         ),
-        (
-            pytest.param(
-                "directional-source",
-                np.array([1.0, 0.0]),
-                id="directional-source-derivative",
-            )
+        pytest.param(
+            "directional-source",
+            np.array([1.0, 0.0]),
+            id="directional-source-derivative",
         ),
     ],
 )
@@ -474,7 +496,6 @@ def test_online_symmetry_maps_match_orbit_canonical_signs(
 
     if kernel == "axis-target":
         sumpy_kernel = AxisTargetDerivative(0, LaplaceKernel(2))
-        symmetry_source_direction = None
     else:
         sumpy_kernel = DirectionalSourceDerivative(LaplaceKernel(2), "dir_vec")
 

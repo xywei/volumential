@@ -562,23 +562,48 @@ def _extract_symmetry_source_direction(out_kernel, source_extra_kwargs, queue):
     if not dir_vec_name or dir_vec_name not in source_extra_kwargs:
         return None
 
+    dim = int(dknl.dim)
     dir_vec = source_extra_kwargs[dir_vec_name]
+
+    def _constant_component_value(comp_data):
+        arr = np.asarray(comp_data).ravel()
+        if arr.size == 0:
+            return None
+
+        if np.iscomplexobj(arr):
+            arr_c = np.asarray(arr, dtype=np.complex128)
+            if not np.all(np.isclose(np.imag(arr_c), 0.0)):
+                raise ValueError(
+                    "symmetry_source_direction must be real-valued for all sources"
+                )
+            arr = np.real(arr_c)
+
+        arr = np.asarray(arr, dtype=np.float64)
+        first = float(arr.ravel()[0])
+        if arr.size > 1 and not np.allclose(arr, first):
+            raise ValueError(
+                "symmetry_source_direction must be constant across sources"
+            )
+        return first
 
     if isinstance(dir_vec, cl.array.Array):
         dir_vec_h = np.asarray(dir_vec.get(queue=queue))
-        if dir_vec_h.size == 0:
-            return None
+    else:
+        dir_vec_h = np.asarray(dir_vec)
 
+    if dir_vec_h.size == 0:
+        return None
+
+    if dir_vec_h.dtype != object:
         if dir_vec_h.ndim == 1:
-            if dir_vec_h.size != int(dknl.dim):
+            if dir_vec_h.size != dim:
                 raise ValueError(
-                    "symmetry_source_direction must have one constant component "
-                    f"per axis (expected length {int(dknl.dim)}, got {dir_vec_h.size})"
+                    "symmetry_source_direction must have one component per axis "
+                    f"(expected length {dim}, got {dir_vec_h.size})"
                 )
             return np.asarray(dir_vec_h, dtype=np.float64)
 
         if dir_vec_h.ndim == 2:
-            dim = int(dknl.dim)
             if dir_vec_h.shape[0] == dim:
                 comp_rows = dir_vec_h
             elif dir_vec_h.shape[1] == dim:
@@ -586,20 +611,15 @@ def _extract_symmetry_source_direction(out_kernel, source_extra_kwargs, queue):
             else:
                 raise ValueError(
                     "symmetry_source_direction has incompatible shape "
-                    f"{dir_vec_h.shape}; expected ({dim}, nsources)"
+                    f"{dir_vec_h.shape}; expected ({dim}, nsources) or (nsources, {dim})"
                 )
 
             comps = []
             for comp_row in comp_rows:
-                row = np.asarray(comp_row).ravel()
-                if row.size == 0:
+                comp_val = _constant_component_value(comp_row)
+                if comp_val is None:
                     return None
-                first = float(row[0])
-                if row.size > 1 and not np.allclose(row, first):
-                    raise ValueError(
-                        "symmetry_source_direction must be constant across sources"
-                    )
-                comps.append(first)
+                comps.append(comp_val)
 
             return np.asarray(comps, dtype=np.float64)
 
@@ -608,30 +628,29 @@ def _extract_symmetry_source_direction(out_kernel, source_extra_kwargs, queue):
             f"{dir_vec_h.ndim}D array"
         )
 
+    try:
+        components = list(dir_vec)
+    except TypeError as exc:
+        raise ValueError(
+            "symmetry_source_direction must be vector-like with one component per axis"
+        ) from exc
+
+    if len(components) != dim:
+        raise ValueError(
+            "symmetry_source_direction must have one component per axis "
+            f"(expected {dim}, got {len(components)})"
+        )
+
     comps = []
-    for comp in dir_vec:
+    for comp in components:
         if isinstance(comp, cl.array.Array):
-            size = int(np.prod(comp.shape))
-            if size == 0:
-                return None
-            first = float(np.asarray(comp[0].get(queue=queue)).ravel()[0])
-            if size > 1:
-                last = float(np.asarray(comp[-1].get(queue=queue)).ravel()[0])
-                if not np.allclose(last, first):
-                    raise ValueError(
-                        "symmetry_source_direction must be constant across sources"
-                    )
-            comps.append(first)
+            comp_h = np.asarray(comp.get(queue=queue))
         else:
-            arr = np.asarray(comp).ravel()
-            if arr.size == 0:
-                return None
-            first = float(arr[0])
-            if arr.size > 1 and not np.allclose(arr, first):
-                raise ValueError(
-                    "symmetry_source_direction must be constant across sources"
-                )
-            comps.append(first)
+            comp_h = np.asarray(comp)
+        comp_val = _constant_component_value(comp_h)
+        if comp_val is None:
+            return None
+        comps.append(comp_val)
 
     return np.asarray(comps, dtype=np.float64)
 
@@ -1236,8 +1255,6 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         self._helmholtz_split_base_source_box_levels = None
         self._helmholtz_split_log_alpha_per_source_cache = {}
         self._helmholtz_split_log_alpha_per_source_dev_cache = {}
-        self._split_directional_smooth_quad_clamped = False
-
         self.helmholtz_split_term_tables = {}
         if helmholtz_split_term_tables is None:
             helmholtz_split_term_tables = {}
@@ -1946,7 +1963,9 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         if _split_out_kernel is None:
             _split_out_kernel = self.tree_indep.target_kernels[0]
 
-        self._set_active_split_kernel(_split_out_kernel)
+        _, _, effective_split_smooth_quad_order = self._set_active_split_kernel(
+            _split_out_kernel
+        )
 
         shared_kwargs = {}
         shared_kwargs.update(self.self_extra_kwargs)
@@ -1961,7 +1980,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
                 self.queue, shared_kwargs["target_to_source"]
             )
 
-        smooth_quad_order = self.helmholtz_split_smooth_quad_order
+        smooth_quad_order = effective_split_smooth_quad_order
         smooth_quad_order_int = (
             int(smooth_quad_order) if smooth_quad_order is not None else None
         )
@@ -2427,31 +2446,31 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         )
         self._helmholtz_split_constant_kernel = ConstantKernel(base_knl.dim)
 
+        effective_split_smooth_quad_order = self.helmholtz_split_smooth_quad_order
+
         has_directional_source_wrapper = any(
             kind == "directional_source" for kind, _ in wrapper_chain
         )
         if (
             has_directional_source_wrapper
-            and self.helmholtz_split_smooth_quad_order is not None
-            and self.helmholtz_split_smooth_quad_order > self.quad_order
+            and effective_split_smooth_quad_order is not None
+            and effective_split_smooth_quad_order > self.quad_order
         ):
-            if not getattr(self, "_split_directional_smooth_quad_clamped", False):
-                logger.warning(
-                    "split smooth quad order %d requested for directional source "
-                    "derivatives; clamping to base quadrature order %d",
-                    self.helmholtz_split_smooth_quad_order,
-                    self.quad_order,
-                )
-            self.helmholtz_split_smooth_quad_order = int(self.quad_order)
-            self._split_directional_smooth_quad_clamped = True
+            logger.warning(
+                "split smooth quad order %d requested for directional source "
+                "derivatives; clamping to base quadrature order %d",
+                effective_split_smooth_quad_order,
+                self.quad_order,
+            )
+            effective_split_smooth_quad_order = int(self.quad_order)
 
-        return base_knl, wrapper_chain
+        return base_knl, wrapper_chain, effective_split_smooth_quad_order
 
     def _split_list1_extra_kwargs_for_out_kernel(self, out_knl):
         if not self.helmholtz_split:
             return self.list1_extra_kwargs
 
-        base_knl, wrapper_chain = self._set_active_split_kernel(out_knl)
+        base_knl, wrapper_chain, _ = self._set_active_split_kernel(out_knl)
         derivative_order = int(len(wrapper_chain))
 
         list1_kwargs = dict(self.list1_extra_kwargs)

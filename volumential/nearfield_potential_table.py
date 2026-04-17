@@ -1180,8 +1180,50 @@ class NearFieldInteractionTable:
             rel[root_b] = t
             rank[root_a] += 1
 
+    def _symmetry_source_direction_key(self, symmetry_source_direction=None):
+        direction = (
+            self.symmetry_source_direction
+            if symmetry_source_direction is None
+            else symmetry_source_direction
+        )
+
+        if direction is None:
+            return None
+
+        direction_arr = np.asarray(direction, dtype=np.float64).ravel()
+        expected_dim = int(self.dim)
+        if direction_arr.size != expected_dim:
+            raise ValueError(
+                "symmetry_source_direction has incompatible shape "
+                f"{direction_arr.shape}; expected ({expected_dim},)"
+            )
+
+        if not np.all(np.isfinite(direction_arr)):
+            raise ValueError(
+                "symmetry_source_direction must contain only finite values"
+            )
+
+        return tuple(float(val) for val in direction_arr.tolist())
+
+    def _get_online_symmetry_maps(self, symmetry_source_direction=None):
+        direction_key = self._symmetry_source_direction_key(symmetry_source_direction)
+        return self._get_online_symmetry_maps_cached(direction_key)
+
     @memoize_method
-    def _get_online_symmetry_maps(self):
+    def _get_online_symmetry_maps_cached(self, symmetry_source_direction_key):
+        runtime_source_direction = None
+        if symmetry_source_direction_key is not None:
+            runtime_source_direction = np.asarray(
+                symmetry_source_direction_key,
+                dtype=np.float64,
+            )
+            expected_shape = (int(self.dim),)
+            if runtime_source_direction.shape != expected_shape:
+                raise ValueError(
+                    "symmetry_source_direction has incompatible shape "
+                    f"{runtime_source_direction.shape}; expected {expected_shape}"
+                )
+
         mode_qpoint_map = np.empty((self.n_q_points, self.n_q_points), dtype=np.int32)
         mode_case_map = np.empty((self.n_q_points, self.n_cases), dtype=np.int32)
         mode_case_scale = np.empty((self.n_q_points, self.n_cases), dtype=np.int8)
@@ -1195,7 +1237,7 @@ class NearFieldInteractionTable:
         kernel = self.integral_knl
         self._attach_directional_symmetry_metadata(
             kernel,
-            self.symmetry_source_direction,
+            runtime_source_direction,
         )
         kernel_constraint, kernel_sign_eval = _kernel_symmetry_meta(kernel)
 
@@ -1691,7 +1733,17 @@ class NearFieldInteractionTable:
                 )
 
             if has_vector:
-                vec = np.asarray(kwargs[dir_vec_name], dtype=np.float64).ravel()
+                raw_vec = np.asarray(kwargs[dir_vec_name])
+                if np.iscomplexobj(raw_vec):
+                    imag = np.imag(np.asarray(raw_vec, dtype=np.complex128)).ravel()
+                    if imag.size and not np.all(np.isclose(imag, 0.0)):
+                        raise TypeError(
+                            "Invalid directional source parameter value for DuffyRadial "
+                            f"table build: {dir_vec_name!r} must be real"
+                        )
+                    raw_vec = np.real(raw_vec)
+
+                vec = np.asarray(raw_vec, dtype=np.float64).ravel()
                 if vec.size != self.dim:
                     raise ValueError(
                         "Invalid directional source parameter value for DuffyRadial "

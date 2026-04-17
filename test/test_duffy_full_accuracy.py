@@ -126,7 +126,19 @@ def _target_x_derivative_via_calculus_patch(potential_at, target, h):
 
     deriv_values = cpatch.dx(values)
     center_index = int(np.argmin(np.abs(cpatch.x - target[0])))
-    return float(deriv_values[center_index])
+    center_value = float(deriv_values[center_index])
+
+    try:
+        centered = float(cpatch.eval_at_center(deriv_values))
+    except Exception:
+        return center_value
+
+    if not np.isfinite(centered):
+        return center_value
+    if not np.isclose(centered, center_value, rtol=1.0e-3, atol=1.0e-14):
+        return center_value
+
+    return centered
 
 
 def _target_x_derivative_via_fd4(potential_at, target, h):
