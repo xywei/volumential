@@ -1647,12 +1647,14 @@ class NearFieldInteractionTable:
             return {}
 
         kernel_kwargs = {}
-        missing = []
+        required_names = []
         for kernel_arg in get_args():
             loopy_arg = getattr(kernel_arg, "loopy_arg", None)
             name = getattr(loopy_arg, "name", None)
             if not name:
                 continue
+
+            required_names.append(name)
 
             if name in kwargs:
                 value = kwargs[name]
@@ -1673,15 +1675,6 @@ class NearFieldInteractionTable:
                     )
 
                 kernel_kwargs[name] = value
-            else:
-                missing.append(name)
-
-        if missing:
-            missing_list = ", ".join(sorted(missing))
-            raise ValueError(
-                "Missing required kernel parameter value(s) for DuffyRadial "
-                f"table build: {missing_list}"
-            )
 
         def _coerce_real_direction_component(name, value):
             if value is None:
@@ -1782,6 +1775,14 @@ class NearFieldInteractionTable:
             missing_list = ", ".join(component_names)
             raise ValueError(
                 "Missing directional source parameter value(s) for DuffyRadial "
+                f"table build: {missing_list}"
+            )
+
+        missing = [name for name in required_names if name not in kernel_kwargs]
+        if missing:
+            missing_list = ", ".join(sorted(missing))
+            raise ValueError(
+                "Missing required kernel parameter value(s) for DuffyRadial "
                 f"table build: {missing_list}"
             )
 

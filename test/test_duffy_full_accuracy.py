@@ -54,6 +54,8 @@ def _get_fp64_gpu_queue_or_skip(*, require_non_intel=False):
 
 
 def _get_non_intel_gpu_queue_or_skip():
+    # Helmholtz full-accuracy cases are kept off Intel OpenCL due to known
+    # complex-kernel backend instability on that driver stack.
     return _get_fp64_gpu_queue_or_skip(require_non_intel=True)
 
 
@@ -512,6 +514,8 @@ def test_duffy_batched_derivative_full_accuracy_matrix(
         h=cfg["fd_h"] * source_box_extent,
     )
 
+    # Sign conventions for source/target derivative wrappers differ by kernel;
+    # these magnitude checks are sign-tolerant while antisymmetry pins the sign.
     rel_target_error = min(
         abs(target_table_value - fd_target_derivative),
         abs(target_table_value + fd_target_derivative),

@@ -601,6 +601,16 @@ def _extract_symmetry_source_direction(out_kernel, source_extra_kwargs, queue):
                     "symmetry_source_direction must have one component per axis "
                     f"(expected length {dim}, got {dir_vec_h.size})"
                 )
+
+            if np.iscomplexobj(dir_vec_h):
+                imag = np.imag(np.asarray(dir_vec_h, dtype=np.complex128)).ravel()
+                if imag.size and not np.all(np.isclose(imag, 0.0)):
+                    raise ValueError(
+                        "symmetry_source_direction must be real-valued with one "
+                        f"component per axis (expected length {dim})"
+                    )
+                dir_vec_h = np.real(dir_vec_h)
+
             return np.asarray(dir_vec_h, dtype=np.float64)
 
         if dir_vec_h.ndim == 2:
@@ -1172,6 +1182,23 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
                     split_reason,
                 )
                 self.helmholtz_split = False
+
+        if self.helmholtz_split:
+            base_table_supported, base_table_reason = (
+                self._split_base_table_support_status()
+            )
+            if not base_table_supported:
+                if helmholtz_split is None:
+                    logger.info(
+                        "[split:disable] %s",
+                        base_table_reason,
+                    )
+                    self.helmholtz_split = False
+                else:
+                    raise RuntimeError(
+                        "helmholtz_split requires Laplace-backed near-field tables; "
+                        f"{base_table_reason}"
+                    )
 
         if self.helmholtz_split:
             auto_enabled = bool(auto_cfg.get("enabled", False))
@@ -2351,9 +2378,10 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
 
         return "__" + "__".join(parts)
 
-    def _apply_helmholtz_split_kernel_wrappers(self, kernel):
+    @staticmethod
+    def _apply_helmholtz_split_kernel_wrappers_with_chain(kernel, wrapper_chain):
         wrapped = kernel
-        for kind, value in reversed(self._helmholtz_split_kernel_wrapper_chain):
+        for kind, value in reversed(wrapper_chain):
             if kind == "axis_target":
                 wrapped = AxisTargetDerivative(int(value), wrapped)
             elif kind == "axis_source":
@@ -2364,6 +2392,64 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
                 raise RuntimeError(f"unsupported split wrapper kind: {kind}")
 
         return wrapped
+
+    def _apply_helmholtz_split_kernel_wrappers(self, kernel):
+        return self._apply_helmholtz_split_kernel_wrappers_with_chain(
+            kernel,
+            self._helmholtz_split_kernel_wrapper_chain,
+        )
+
+    @staticmethod
+    def _split_table_kernel(table):
+        table_kernel = getattr(table, "integral_knl", None)
+        if table_kernel is None:
+            table_kernel = getattr(table, "sumpy_kernel", None)
+        return table_kernel
+
+    def _split_base_table_support_status(self):
+        target_kernels = list(self.tree_indep.target_kernels)
+        if not target_kernels:
+            return False, "no target kernels"
+
+        for out_knl in target_kernels:
+            base_knl = out_knl.get_base_kernel()
+            wrapper_chain = self._extract_helmholtz_split_kernel_wrapper_chain(
+                out_knl,
+                base_knl,
+            )
+
+            expected_kernel = self._apply_helmholtz_split_kernel_wrappers_with_chain(
+                LaplaceKernel(base_knl.dim),
+                wrapper_chain,
+            )
+            expected_repr = repr(expected_kernel)
+
+            table_key = repr(out_knl)
+            base_tables = self.near_field_table.get(table_key, [])
+            if not base_tables:
+                return (
+                    False,
+                    f"missing near-field tables for {table_key}",
+                )
+
+            for lev, table in enumerate(base_tables):
+                table_kernel = self._split_table_kernel(table)
+                if table_kernel is None:
+                    return (
+                        False,
+                        f"{table_key} level {lev} is missing table kernel metadata "
+                        "(cache-key design cannot disambiguate split base kernel)",
+                    )
+
+                table_repr = repr(table_kernel)
+                if table_repr != expected_repr:
+                    return (
+                        False,
+                        f"{table_key} level {lev} kernel mismatch: expected "
+                        f"{expected_repr}, got {table_repr} (cache-key design)",
+                    )
+
+        return True, ""
 
     def _split_target_kernel_support_status(self):
         from sumpy.kernel import HelmholtzKernel, YukawaKernel

@@ -1,7 +1,8 @@
 M1 Kernel Coverage
 ==================
 
-This page summarizes the first production kernel milestone (issue #63):
+This page summarizes the first production kernel milestone
+(`issue #63 <https://github.com/xywei/volumential/issues/63>`_):
 Laplace, Helmholtz, and Yukawa for free-space workloads.
 
 Capability Matrix
@@ -54,4 +55,4 @@ Related Follow-up
 -----------------
 
 Source-derivative and mixed derivative support matrix completion is tracked
-separately in issue #71.
+separately in `issue #71 <https://github.com/xywei/volumential/issues/71>`_.
