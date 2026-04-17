@@ -992,7 +992,94 @@ def _get_laplace_3d_table(queue, table_path, q_order):
     return table
 
 
-def _get_laplace_2d_table(queue, table_path, q_order):
+def _get_laplace_3d_dx_table(queue, table_path, q_order, *, source_box_level=None):
+    from volumential.nearfield_potential_table import DuffyBuildConfig
+    from volumential.table_manager import NearFieldInteractionTableManager
+
+    if q_order <= 2:
+        regular_quad_order = 6
+        radial_quad_order = 21
+    else:
+        regular_quad_order = 8
+        radial_quad_order = 31
+
+    with NearFieldInteractionTableManager(
+        str(table_path), root_extent=2.0, queue=queue
+    ) as tm:
+        build_config = DuffyBuildConfig(
+            radial_rule="tanh-sinh-fast",
+            regular_quad_order=regular_quad_order,
+            radial_quad_order=radial_quad_order,
+        )
+        get_table_kwargs = {
+            "force_recompute": False,
+            "queue": queue,
+            "build_config": build_config,
+        }
+        if source_box_level is not None:
+            get_table_kwargs["source_box_level"] = int(source_box_level)
+
+        table, _ = tm.get_table(
+            3,
+            "Laplace-Dx",
+            q_order,
+            **get_table_kwargs,
+        )
+
+    return table
+
+
+def _get_laplace_3d_axis_source_derivative_table(
+    queue,
+    table_path,
+    q_order,
+    axis,
+    *,
+    source_box_level=None,
+):
+    from sumpy.kernel import AxisSourceDerivative, LaplaceKernel
+
+    from volumential.nearfield_potential_table import DuffyBuildConfig
+    from volumential.table_manager import NearFieldInteractionTableManager
+
+    if q_order <= 2:
+        regular_quad_order = 6
+        radial_quad_order = 21
+    else:
+        regular_quad_order = 8
+        radial_quad_order = 31
+
+    sumpy_knl = AxisSourceDerivative(int(axis), LaplaceKernel(3))
+    kernel_type = f"Laplace-S{int(axis)}"
+
+    with NearFieldInteractionTableManager(
+        str(table_path), root_extent=2.0, queue=queue
+    ) as tm:
+        build_config = DuffyBuildConfig(
+            radial_rule="tanh-sinh-fast",
+            regular_quad_order=regular_quad_order,
+            radial_quad_order=radial_quad_order,
+        )
+        get_table_kwargs = {
+            "force_recompute": False,
+            "queue": queue,
+            "build_config": build_config,
+            "sumpy_knl": sumpy_knl,
+        }
+        if source_box_level is not None:
+            get_table_kwargs["source_box_level"] = int(source_box_level)
+
+        table, _ = tm.get_table(
+            3,
+            kernel_type,
+            q_order,
+            **get_table_kwargs,
+        )
+
+    return table
+
+
+def _get_laplace_2d_table(queue, table_path, q_order, *, source_box_level=None):
     from volumential.nearfield_potential_table import DuffyBuildConfig
     from volumential.table_manager import NearFieldInteractionTableManager
 
@@ -1007,16 +1094,264 @@ def _get_laplace_2d_table(queue, table_path, q_order):
             regular_quad_order=regular_quad_order,
             radial_quad_order=radial_quad_order,
         )
+        get_table_kwargs = {
+            "force_recompute": False,
+            "queue": queue,
+            "build_config": build_config,
+        }
+        if source_box_level is not None:
+            get_table_kwargs["source_box_level"] = int(source_box_level)
+
         table, _ = tm.get_table(
             2,
             "Laplace",
             q_order,
-            force_recompute=False,
-            queue=queue,
-            build_config=build_config,
+            **get_table_kwargs,
         )
 
     return table
+
+
+def _get_laplace_2d_dx_table(
+    queue,
+    table_path,
+    q_order,
+    *,
+    source_box_level=None,
+    max_source_box_level=None,
+):
+    from volumential.nearfield_potential_table import DuffyBuildConfig
+    from volumential.table_manager import NearFieldInteractionTableManager
+
+    regular_quad_order = max(8, 4 * q_order)
+    radial_quad_order = max(21, 10 * q_order)
+
+    with NearFieldInteractionTableManager(
+        str(table_path), root_extent=2.0, queue=queue
+    ) as tm:
+        build_config = DuffyBuildConfig(
+            radial_rule="tanh-sinh-fast",
+            regular_quad_order=regular_quad_order,
+            radial_quad_order=radial_quad_order,
+        )
+        if max_source_box_level is None:
+            get_table_kwargs = {
+                "force_recompute": False,
+                "queue": queue,
+                "build_config": build_config,
+            }
+            if source_box_level is not None:
+                get_table_kwargs["source_box_level"] = int(source_box_level)
+
+            table, _ = tm.get_table(
+                2,
+                "Laplace-Dx",
+                q_order,
+                **get_table_kwargs,
+            )
+            return table
+
+        tables = []
+        for source_box_level in range(max_source_box_level + 1):
+            table, _ = tm.get_table(
+                2,
+                "Laplace-Dx",
+                q_order,
+                source_box_level=source_box_level,
+                force_recompute=False,
+                queue=queue,
+                build_config=build_config,
+            )
+            tables.append(table)
+
+    return tables
+
+
+def _get_yukawa_2d_dx_table(
+    queue,
+    table_path,
+    q_order,
+    lam,
+    *,
+    source_box_level=None,
+    max_source_box_level=None,
+):
+    from volumential.nearfield_potential_table import DuffyBuildConfig
+    from volumential.table_manager import NearFieldInteractionTableManager
+
+    regular_quad_order = max(8, 4 * q_order)
+    radial_quad_order = max(21, 10 * q_order)
+
+    with NearFieldInteractionTableManager(
+        str(table_path), root_extent=2.0, queue=queue
+    ) as tm:
+        build_config = DuffyBuildConfig(
+            radial_rule="tanh-sinh-fast",
+            regular_quad_order=regular_quad_order,
+            radial_quad_order=radial_quad_order,
+        )
+        if max_source_box_level is None:
+            get_table_kwargs = {
+                "force_recompute": False,
+                "queue": queue,
+                "build_config": build_config,
+                "lam": lam,
+            }
+            if source_box_level is not None:
+                get_table_kwargs["source_box_level"] = int(source_box_level)
+
+            table, _ = tm.get_table(
+                2,
+                "Yukawa-Dx",
+                q_order,
+                **get_table_kwargs,
+            )
+            return table
+
+        tables = []
+        for source_box_level in range(max_source_box_level + 1):
+            table, _ = tm.get_table(
+                2,
+                "Yukawa-Dx",
+                q_order,
+                source_box_level=source_box_level,
+                force_recompute=False,
+                queue=queue,
+                build_config=build_config,
+                lam=lam,
+            )
+            tables.append(table)
+
+    return tables
+
+
+def _get_laplace_2d_axis_source_derivative_table(
+    queue,
+    table_path,
+    q_order,
+    axis,
+    *,
+    source_box_level=None,
+    max_source_box_level=None,
+):
+    from sumpy.kernel import AxisSourceDerivative, LaplaceKernel
+
+    from volumential.nearfield_potential_table import DuffyBuildConfig
+    from volumential.table_manager import NearFieldInteractionTableManager
+
+    regular_quad_order = max(8, 4 * q_order)
+    radial_quad_order = max(21, 10 * q_order)
+
+    sumpy_knl = AxisSourceDerivative(int(axis), LaplaceKernel(2))
+    kernel_type = f"Laplace-S{int(axis)}"
+
+    with NearFieldInteractionTableManager(
+        str(table_path), root_extent=2.0, queue=queue
+    ) as tm:
+        build_config = DuffyBuildConfig(
+            radial_rule="tanh-sinh-fast",
+            regular_quad_order=regular_quad_order,
+            radial_quad_order=radial_quad_order,
+        )
+        if max_source_box_level is None:
+            get_table_kwargs = {
+                "force_recompute": False,
+                "queue": queue,
+                "build_config": build_config,
+                "sumpy_knl": sumpy_knl,
+            }
+            if source_box_level is not None:
+                get_table_kwargs["source_box_level"] = int(source_box_level)
+
+            table, _ = tm.get_table(
+                2,
+                kernel_type,
+                q_order,
+                **get_table_kwargs,
+            )
+            return table
+
+        tables = []
+        for source_box_level in range(max_source_box_level + 1):
+            table, _ = tm.get_table(
+                2,
+                kernel_type,
+                q_order,
+                source_box_level=source_box_level,
+                force_recompute=False,
+                queue=queue,
+                build_config=build_config,
+                sumpy_knl=sumpy_knl,
+            )
+            tables.append(table)
+
+    return tables
+
+
+def _get_yukawa_2d_axis_source_derivative_table(
+    queue,
+    table_path,
+    q_order,
+    lam,
+    axis,
+    *,
+    source_box_level=None,
+    max_source_box_level=None,
+):
+    from sumpy.kernel import AxisSourceDerivative, YukawaKernel
+
+    from volumential.nearfield_potential_table import DuffyBuildConfig
+    from volumential.table_manager import NearFieldInteractionTableManager
+
+    regular_quad_order = max(8, 4 * q_order)
+    radial_quad_order = max(21, 10 * q_order)
+
+    sumpy_knl = AxisSourceDerivative(int(axis), YukawaKernel(2))
+    kernel_type = f"Yukawa-S{int(axis)}"
+
+    with NearFieldInteractionTableManager(
+        str(table_path), root_extent=2.0, queue=queue
+    ) as tm:
+        build_config = DuffyBuildConfig(
+            radial_rule="tanh-sinh-fast",
+            regular_quad_order=regular_quad_order,
+            radial_quad_order=radial_quad_order,
+        )
+        if max_source_box_level is None:
+            get_table_kwargs = {
+                "force_recompute": False,
+                "queue": queue,
+                "build_config": build_config,
+                "sumpy_knl": sumpy_knl,
+                "lam": lam,
+            }
+            if source_box_level is not None:
+                get_table_kwargs["source_box_level"] = int(source_box_level)
+
+            table, _ = tm.get_table(
+                2,
+                kernel_type,
+                q_order,
+                **get_table_kwargs,
+            )
+            return table
+
+        tables = []
+        for source_box_level in range(max_source_box_level + 1):
+            table, _ = tm.get_table(
+                2,
+                kernel_type,
+                q_order,
+                source_box_level=source_box_level,
+                force_recompute=False,
+                queue=queue,
+                build_config=build_config,
+                sumpy_knl=sumpy_knl,
+                lam=lam,
+            )
+            tables.append(table)
+
+    return tables
 
 
 def _get_yukawa_2d_tables(queue, table_path, q_order, lam, *, max_source_box_level):
@@ -1050,6 +1385,185 @@ def _get_yukawa_2d_tables(queue, table_path, q_order, lam, *, max_source_box_lev
             tables.append(table)
 
     return tables
+
+
+def _build_helmholtz_2d_output_table(
+    queue,
+    q_order,
+    wave_number,
+    *,
+    source_box_level,
+    out_kernel=None,
+    source_direction=None,
+):
+    from sumpy.kernel import HelmholtzKernel
+
+    import volumential.nearfield_potential_table as npt
+
+    source_box_level = int(source_box_level)
+    if out_kernel is None:
+        out_kernel = HelmholtzKernel(2)
+
+    base_knl = out_kernel.get_base_kernel()
+    kernel_kwargs = {base_knl.helmholtz_k_name: wave_number}
+    kernel_kwargs.update(
+        _build_directional_parameter_values(out_kernel, source_direction)
+    )
+
+    table = npt.NearFieldInteractionTable(
+        quad_order=q_order,
+        dim=2,
+        build_method="DuffyRadial",
+        kernel_func=npt.sumpy_kernel_to_lambda(
+            out_kernel,
+            parameter_values=kernel_kwargs,
+        ),
+        kernel_type="helmholtz-rigid",
+        sumpy_kernel=out_kernel,
+        source_box_extent=2.0 * (2 ** (-source_box_level)),
+        dtype=np.complex128,
+        progress_bar=False,
+    )
+    table.source_box_level = source_box_level
+    table.table_root_extent = 2.0
+    table.build_table_via_duffy_radial(
+        queue=queue,
+        radial_rule="tanh-sinh-fast",
+        regular_quad_order=max(8, 4 * q_order),
+        radial_quad_order=max(21, 10 * q_order),
+        **kernel_kwargs,
+    )
+
+    return table
+
+
+def _build_yukawa_2d_output_table(
+    queue,
+    q_order,
+    lam,
+    *,
+    source_box_level,
+    out_kernel=None,
+    source_direction=None,
+):
+    from sumpy.kernel import YukawaKernel
+
+    import volumential.nearfield_potential_table as npt
+
+    source_box_level = int(source_box_level)
+    if out_kernel is None:
+        out_kernel = YukawaKernel(2)
+
+    base_knl = out_kernel.get_base_kernel()
+    kernel_kwargs = {base_knl.yukawa_lambda_name: lam}
+    kernel_kwargs.update(
+        _build_directional_parameter_values(out_kernel, source_direction)
+    )
+
+    table = npt.NearFieldInteractionTable(
+        quad_order=q_order,
+        dim=2,
+        build_method="DuffyRadial",
+        kernel_func=npt.sumpy_kernel_to_lambda(
+            out_kernel,
+            parameter_values=kernel_kwargs,
+        ),
+        kernel_type="yukawa-rigid",
+        sumpy_kernel=out_kernel,
+        source_box_extent=2.0 * (2 ** (-source_box_level)),
+        dtype=np.float64,
+        progress_bar=False,
+    )
+    table.source_box_level = source_box_level
+    table.table_root_extent = 2.0
+    table.build_table_via_duffy_radial(
+        queue=queue,
+        radial_rule="tanh-sinh-fast",
+        regular_quad_order=max(8, 4 * q_order),
+        radial_quad_order=max(21, 10 * q_order),
+        **kernel_kwargs,
+    )
+
+    return table
+
+
+def _build_laplace_output_table(
+    queue,
+    dim,
+    q_order,
+    *,
+    source_box_level,
+    out_kernel=None,
+    source_direction=None,
+):
+    from sumpy.kernel import LaplaceKernel
+
+    import volumential.nearfield_potential_table as npt
+
+    source_box_level = int(source_box_level)
+    if out_kernel is None:
+        out_kernel = LaplaceKernel(dim)
+
+    kernel_kwargs = _build_directional_parameter_values(out_kernel, source_direction)
+    value_dtype = np.complex128 if out_kernel.is_complex_valued else np.float64
+
+    if dim == 2:
+        regular_quad_order = max(8, 4 * q_order)
+        radial_quad_order = max(21, 10 * q_order)
+    elif dim == 3:
+        if q_order <= 2:
+            regular_quad_order = 6
+            radial_quad_order = 21
+        else:
+            regular_quad_order = 8
+            radial_quad_order = 31
+    else:
+        raise NotImplementedError(
+            f"laplace table helper only supports 2D/3D, got {dim}"
+        )
+
+    table = npt.NearFieldInteractionTable(
+        quad_order=q_order,
+        dim=dim,
+        build_method="DuffyRadial",
+        kernel_func=npt.sumpy_kernel_to_lambda(
+            out_kernel,
+            parameter_values=kernel_kwargs,
+        ),
+        kernel_type="laplace-rigid",
+        sumpy_kernel=out_kernel,
+        source_box_extent=2.0 * (2 ** (-source_box_level)),
+        dtype=value_dtype,
+        progress_bar=False,
+    )
+    table.source_box_level = source_box_level
+    table.table_root_extent = 2.0
+    table.build_table_via_duffy_radial(
+        queue=queue,
+        radial_rule="tanh-sinh-fast",
+        regular_quad_order=regular_quad_order,
+        radial_quad_order=radial_quad_order,
+        **kernel_kwargs,
+    )
+
+    return table
+
+
+def _build_helmholtz_2d_derivative_table(
+    queue,
+    q_order,
+    wave_number,
+    out_kernel,
+    *,
+    source_box_level,
+):
+    return _build_helmholtz_2d_output_table(
+        queue,
+        q_order,
+        wave_number,
+        source_box_level=source_box_level,
+        out_kernel=out_kernel,
+    )
 
 
 def _make_radial_power_kernel(dim, power):
@@ -1228,6 +1742,309 @@ def _make_fixed_helmholtz_3d_kernel(k):
     return _FixedHelmholtz3DKernel(k)
 
 
+def _apply_axis_derivative_wrappers_to_kernel(wrapper_template, base_kernel):
+    from sumpy.kernel import (
+        AxisSourceDerivative,
+        AxisTargetDerivative,
+        DirectionalSourceDerivative,
+    )
+
+    if wrapper_template is None:
+        return base_kernel
+
+    wrappers = []
+    cur = wrapper_template
+    while isinstance(
+        cur,
+        (AxisTargetDerivative, AxisSourceDerivative, DirectionalSourceDerivative),
+    ):
+        if isinstance(cur, AxisTargetDerivative):
+            wrappers.append(("target", int(cur.axis)))
+        elif isinstance(cur, AxisSourceDerivative):
+            wrappers.append(("source", int(cur.axis)))
+        else:
+            wrappers.append(("directional_source", str(cur.dir_vec_name)))
+        cur = cur.inner_kernel
+
+    if cur is not wrapper_template and hasattr(cur, "inner_kernel"):
+        raise NotImplementedError(
+            "unsupported derivative wrapper chain in kernel template"
+        )
+
+    rebound = base_kernel
+    for kind, axis in reversed(wrappers):
+        if kind == "target":
+            rebound = AxisTargetDerivative(axis, rebound)
+        elif kind == "source":
+            rebound = AxisSourceDerivative(axis, rebound)
+        else:
+            rebound = DirectionalSourceDerivative(rebound, axis)
+
+    return rebound
+
+
+def _extract_directional_source_names(kernel):
+    from sumpy.kernel import DirectionalSourceDerivative
+
+    names = []
+    cur = kernel
+    while hasattr(cur, "inner_kernel"):
+        if isinstance(cur, DirectionalSourceDerivative):
+            names.append(str(cur.dir_vec_name))
+        cur = cur.inner_kernel
+    return tuple(names)
+
+
+def _normalize_directional_source_kwargs(
+    queue,
+    out_kernel,
+    source_extra_kwargs,
+    *,
+    nsources,
+):
+    if source_extra_kwargs is None:
+        return {}
+
+    normalized = dict(source_extra_kwargs)
+    nsources = int(nsources)
+    dim = int(out_kernel.dim)
+
+    for dir_name in _extract_directional_source_names(out_kernel):
+        if dir_name not in normalized:
+            continue
+
+        value = normalized[dir_name]
+
+        if isinstance(value, cl.array.Array):
+            value_h = np.asarray(value.get(queue))
+            if value_h.ndim == 2:
+                if value_h.shape[0] == dim:
+                    comps = [value_h[iaxis, :] for iaxis in range(dim)]
+                elif value_h.shape[1] == dim:
+                    comps = [value_h[:, iaxis] for iaxis in range(dim)]
+                else:
+                    raise ValueError(
+                        f"source_extra_kwargs[{dir_name!r}] has shape "
+                        f"{value_h.shape}; expected ({dim}, {nsources}) or "
+                        f"({nsources}, {dim})"
+                    )
+            elif value_h.ndim == 1 and value_h.size == dim:
+                comps = [
+                    np.array([value_h[iaxis]], dtype=np.float64) for iaxis in range(dim)
+                ]
+            else:
+                raise ValueError(
+                    f"source_extra_kwargs[{dir_name!r}] must encode {dim} components"
+                )
+        elif isinstance(value, np.ndarray) and value.dtype == object:
+            comps = list(value)
+        else:
+            value_arr = np.asarray(value)
+            if value_arr.dtype == object:
+                comps = list(value_arr.ravel())
+            elif value_arr.ndim == 2:
+                if value_arr.shape[0] == dim:
+                    comps = [value_arr[iaxis, :] for iaxis in range(dim)]
+                elif value_arr.shape[1] == dim:
+                    comps = [value_arr[:, iaxis] for iaxis in range(dim)]
+                else:
+                    raise ValueError(
+                        f"source_extra_kwargs[{dir_name!r}] has shape "
+                        f"{value_arr.shape}; expected ({dim}, {nsources}) or "
+                        f"({nsources}, {dim})"
+                    )
+            else:
+                flat = value_arr.ravel()
+                if flat.size == dim:
+                    comps = [
+                        np.array([flat[iaxis]], dtype=np.float64)
+                        for iaxis in range(dim)
+                    ]
+                elif dim == 1:
+                    comps = [flat]
+                else:
+                    raise ValueError(
+                        f"source_extra_kwargs[{dir_name!r}] must encode {dim} components"
+                    )
+
+        if len(comps) != dim:
+            raise ValueError(
+                f"source_extra_kwargs[{dir_name!r}] must provide {dim} components, "
+                f"got {len(comps)}"
+            )
+
+        norm_comps_h = []
+        for comp in comps:
+            if isinstance(comp, cl.array.Array):
+                comp_host = np.asarray(comp.get(queue)).ravel()
+            else:
+                comp_host = np.asarray(comp).ravel()
+
+            if comp_host.size == nsources:
+                comp_data = np.ascontiguousarray(comp_host.astype(np.float64))
+            elif comp_host.size == 1:
+                comp_data = np.full(nsources, float(comp_host[0]), dtype=np.float64)
+            else:
+                raise ValueError(
+                    f"source_extra_kwargs[{dir_name!r}] component has size "
+                    f"{comp_host.size}; expected 1 or {nsources}"
+                )
+            norm_comps_h.append(comp_data)
+
+        normalized[dir_name] = cl.array.to_device(
+            queue,
+            np.ascontiguousarray(np.stack(norm_comps_h, axis=0)),
+        )
+
+    return normalized
+
+
+def _build_directional_parameter_values(out_kernel, source_direction):
+    dir_names = _extract_directional_source_names(out_kernel)
+    if not dir_names:
+        return {}
+
+    if source_direction is None:
+        raise ValueError(
+            "source_direction must be provided for directional source derivative kernels"
+        )
+
+    param_values = {}
+    if isinstance(source_direction, dict):
+        direction_by_name = {
+            str(name): np.asarray(vec, dtype=np.float64)
+            for name, vec in source_direction.items()
+        }
+    else:
+        direction_vec = np.asarray(source_direction, dtype=np.float64)
+        direction_by_name = {name: direction_vec for name in dir_names}
+
+    dim = int(out_kernel.dim)
+    for dir_name in dir_names:
+        if dir_name not in direction_by_name:
+            raise ValueError(f"missing source_direction entry for {dir_name!r}")
+
+        direction_vec = np.asarray(
+            direction_by_name[dir_name], dtype=np.float64
+        ).ravel()
+        if direction_vec.size != dim:
+            raise ValueError(
+                f"source_direction[{dir_name!r}] must have length {dim}, "
+                f"got {direction_vec.size}"
+            )
+
+        for iaxis in range(dim):
+            param_values[f"{dir_name}{iaxis}"] = float(direction_vec[iaxis])
+
+    return param_values
+
+
+def _build_helmholtz_3d_output_table(
+    queue,
+    q_order,
+    wave_number,
+    *,
+    source_box_level,
+    out_kernel=None,
+    source_direction=None,
+):
+    import volumential.nearfield_potential_table as npt
+
+    if q_order <= 2:
+        regular_quad_order = 6
+        radial_quad_order = 21
+    else:
+        regular_quad_order = 8
+        radial_quad_order = 31
+
+    source_box_level = int(source_box_level)
+    base_knl = _make_fixed_helmholtz_3d_kernel(wave_number)
+    output_knl = _apply_axis_derivative_wrappers_to_kernel(out_kernel, base_knl)
+    kernel_kwargs = _build_directional_parameter_values(output_knl, source_direction)
+
+    table = npt.NearFieldInteractionTable(
+        quad_order=q_order,
+        dim=3,
+        build_method="DuffyRadial",
+        kernel_func=npt.sumpy_kernel_to_lambda(
+            output_knl,
+            parameter_values=kernel_kwargs,
+        ),
+        kernel_type="helmholtz-rigid",
+        sumpy_kernel=output_knl,
+        source_box_extent=2.0 * (2 ** (-source_box_level)),
+        dtype=np.complex128,
+        progress_bar=False,
+    )
+    table.source_box_level = source_box_level
+    table.table_root_extent = 2.0
+    table.build_table_via_duffy_radial(
+        queue=queue,
+        radial_rule="tanh-sinh-fast",
+        regular_quad_order=regular_quad_order,
+        radial_quad_order=radial_quad_order,
+        **kernel_kwargs,
+    )
+
+    return table
+
+
+def _build_yukawa_3d_output_table(
+    queue,
+    q_order,
+    lam,
+    *,
+    source_box_level,
+    out_kernel=None,
+    source_direction=None,
+):
+    from sumpy.kernel import YukawaKernel
+
+    import volumential.nearfield_potential_table as npt
+
+    if q_order <= 2:
+        regular_quad_order = 6
+        radial_quad_order = 21
+    else:
+        regular_quad_order = 8
+        radial_quad_order = 31
+
+    source_box_level = int(source_box_level)
+    base_knl = YukawaKernel(3)
+    output_knl = _apply_axis_derivative_wrappers_to_kernel(out_kernel, base_knl)
+    base_output_knl = output_knl.get_base_kernel()
+    kernel_kwargs = {base_output_knl.yukawa_lambda_name: lam}
+    kernel_kwargs.update(
+        _build_directional_parameter_values(output_knl, source_direction)
+    )
+
+    table = npt.NearFieldInteractionTable(
+        quad_order=q_order,
+        dim=3,
+        build_method="DuffyRadial",
+        kernel_func=npt.sumpy_kernel_to_lambda(
+            output_knl,
+            parameter_values=kernel_kwargs,
+        ),
+        kernel_type="yukawa-rigid",
+        sumpy_kernel=output_knl,
+        source_box_extent=2.0 * (2 ** (-source_box_level)),
+        dtype=np.float64,
+        progress_bar=False,
+    )
+    table.source_box_level = source_box_level
+    table.table_root_extent = 2.0
+    table.build_table_via_duffy_radial(
+        queue=queue,
+        radial_rule="tanh-sinh-fast",
+        regular_quad_order=regular_quad_order,
+        radial_quad_order=radial_quad_order,
+        **kernel_kwargs,
+    )
+
+    return table
+
+
 def _helmholtz_complex_source_profile_2d(x, y):
     amp = np.exp(-35.0 * ((x + 0.11) ** 2 + (y - 0.07) ** 2))
     phase = 0.9 * x - 0.3 * y
@@ -1336,6 +2153,8 @@ def _run_3d_helmholtz_pde_case(
     helmholtz_split_smooth_quad_order=None,
     helmholtz_split_term_tables=None,
     helmholtz_split_order1_legacy_subtraction=False,
+    out_kernel=None,
+    source_extra_kwargs=None,
     compute_pde_residual=True,
     patch_h=0.28,
     patch_order=5,
@@ -1374,6 +2193,17 @@ def _run_3d_helmholtz_pde_case(
     )
 
     knl = HelmholtzKernel(dim)
+    out_knl = out_kernel if out_kernel is not None else knl
+
+    if source_extra_kwargs is None:
+        source_extra_kwargs = {}
+    source_extra_kwargs = _normalize_directional_source_kwargs(
+        queue,
+        out_knl,
+        source_extra_kwargs,
+        nsources=source_vals_host.size,
+    )
+
     expn_factory = DefaultExpansionFactory()
     local_expn_class = expn_factory.get_local_expansion_class(knl)
     mpole_expn_class = expn_factory.get_multipole_expansion_class(knl)
@@ -1382,7 +2212,7 @@ def _run_3d_helmholtz_pde_case(
         ctx,
         partial(mpole_expn_class, knl),
         partial(local_expn_class, knl),
-        [knl],
+        [out_knl],
         exclude_self=True,
     )
 
@@ -1400,6 +2230,7 @@ def _run_3d_helmholtz_pde_case(
         dtype=np.complex128,
         fmm_level_to_order=lambda kernel, kernel_args, tree, lev: fmm_order,
         quad_order=q_order,
+        source_extra_kwargs=source_extra_kwargs,
         kernel_extra_kwargs={knl.helmholtz_k_name: wave_number},
         self_extra_kwargs=self_extra_kwargs,
         helmholtz_split=helmholtz_split,
@@ -1468,6 +2299,10 @@ def _run_2d_helmholtz_pde_case(
     helmholtz_split_auto_config=None,
     helmholtz_split_term_tables=None,
     helmholtz_split_order1_legacy_subtraction=False,
+    out_kernel=None,
+    source_extra_kwargs=None,
+    list1_extra_kwargs=None,
+    direct_evaluation=False,
     compute_pde_residual=True,
     patch_h=0.36,
     patch_order=7,
@@ -1509,11 +2344,22 @@ def _run_2d_helmholtz_pde_case(
     local_expn_class = expn_factory.get_local_expansion_class(knl)
     mpole_expn_class = expn_factory.get_multipole_expansion_class(knl)
 
+    out_knl = out_kernel if out_kernel is not None else knl
+
+    if source_extra_kwargs is None:
+        source_extra_kwargs = {}
+    source_extra_kwargs = _normalize_directional_source_kwargs(
+        queue,
+        out_knl,
+        source_extra_kwargs,
+        nsources=source_vals_host.size,
+    )
+
     tree_indep = FPNDTreeIndependentDataForWrangler(
         ctx,
         partial(mpole_expn_class, knl),
         partial(local_expn_class, knl),
-        [knl],
+        [out_knl],
         exclude_self=True,
     )
 
@@ -1531,8 +2377,10 @@ def _run_2d_helmholtz_pde_case(
         dtype=np.complex128,
         fmm_level_to_order=lambda kernel, kernel_args, tree, lev: fmm_order,
         quad_order=q_order,
+        source_extra_kwargs=source_extra_kwargs,
         kernel_extra_kwargs={knl.helmholtz_k_name: wave_number},
         self_extra_kwargs=self_extra_kwargs,
+        list1_extra_kwargs=list1_extra_kwargs,
         helmholtz_split=helmholtz_split,
         helmholtz_split_order=helmholtz_split_order,
         helmholtz_split_smooth_quad_order=helmholtz_split_smooth_quad_order,
@@ -1549,7 +2397,7 @@ def _run_2d_helmholtz_pde_case(
         wrangler,
         weighted_sources,
         source_vals,
-        direct_evaluation=False,
+        direct_evaluation=direct_evaluation,
         list1_only=False,
     )
 
@@ -1581,22 +2429,26 @@ def _run_2d_helmholtz_pde_case(
     return result
 
 
-def _run_2d_yukawa_split_case(
+def _run_2d_helmholtz_multi_output_case(
     ctx,
     queue,
     near_field_table,
     *,
+    target_kernels,
     q_order,
     nlevels,
     fmm_order,
-    lam,
+    wave_number,
     helmholtz_split=False,
     helmholtz_split_order=1,
-    helmholtz_split_auto_config=None,
+    helmholtz_split_smooth_quad_order=None,
+    source_extra_kwargs=None,
+    list1_extra_kwargs=None,
+    direct_evaluation=False,
     return_state=False,
 ):
     from sumpy.expansion import DefaultExpansionFactory
-    from sumpy.kernel import YukawaKernel
+    from sumpy.kernel import HelmholtzKernel
 
     from volumential.expansion_wrangler_fpnd import (
         FPNDExpansionWrangler,
@@ -1604,10 +2456,9 @@ def _run_2d_yukawa_split_case(
     )
     from volumential.volume_fmm import drive_volume_fmm
 
-    if np.imag(np.complex128(lam)) != 0.0:
-        raise NotImplementedError(
-            "Yukawa FMM path currently requires real lam; use HelmholtzKernel for mixed complex k"
-        )
+    target_kernels = list(target_kernels)
+    if not target_kernels:
+        raise ValueError("target_kernels cannot be empty")
 
     dim = 2
     mesh = mg.MeshGen2D(q_order, nlevels, -0.5, 0.5, queue=queue)
@@ -1624,14 +2475,149 @@ def _run_2d_yukawa_split_case(
     x = source_coords_host[0]
     y = source_coords_host[1]
 
+    source_vals_host = _helmholtz_complex_source_profile_2d(x, y)
+    source_vals = cl.array.to_device(
+        queue,
+        np.ascontiguousarray(source_vals_host.astype(np.complex128)),
+    )
+
+    knl = HelmholtzKernel(dim)
+    expn_factory = DefaultExpansionFactory()
+    local_expn_class = expn_factory.get_local_expansion_class(knl)
+    mpole_expn_class = expn_factory.get_multipole_expansion_class(knl)
+
+    if source_extra_kwargs is None:
+        source_extra_kwargs = {}
+    for out_knl in target_kernels:
+        source_extra_kwargs = _normalize_directional_source_kwargs(
+            queue,
+            out_knl,
+            source_extra_kwargs,
+            nsources=source_vals_host.size,
+        )
+
+    tree_indep = FPNDTreeIndependentDataForWrangler(
+        ctx,
+        partial(mpole_expn_class, knl),
+        partial(local_expn_class, knl),
+        target_kernels,
+        exclude_self=True,
+    )
+
+    self_extra_kwargs = {}
+    if tree.sources_are_targets:
+        self_extra_kwargs = {
+            "target_to_source": np.arange(tree.ntargets, dtype=np.int32)
+        }
+
+    wrangler = FPNDExpansionWrangler(
+        tree_indep=tree_indep,
+        queue=queue,
+        traversal=traversal,
+        near_field_table=near_field_table,
+        dtype=np.complex128,
+        fmm_level_to_order=lambda kernel, kernel_args, tree, lev: fmm_order,
+        quad_order=q_order,
+        source_extra_kwargs=source_extra_kwargs,
+        kernel_extra_kwargs={knl.helmholtz_k_name: wave_number},
+        self_extra_kwargs=self_extra_kwargs,
+        list1_extra_kwargs=list1_extra_kwargs,
+        helmholtz_split=helmholtz_split,
+        helmholtz_split_order=helmholtz_split_order,
+        helmholtz_split_smooth_quad_order=helmholtz_split_smooth_quad_order,
+    )
+
+    weighted_sources = source_vals * source_weights
+    fmm_potentials = drive_volume_fmm(
+        traversal,
+        wrangler,
+        weighted_sources,
+        source_vals,
+        direct_evaluation=direct_evaluation,
+        list1_only=False,
+    )
+
+    result = {
+        "potentials": fmm_potentials,
+        "n_points": int(source_vals_host.size),
+    }
+    if return_state:
+        result["wrangler"] = wrangler
+        result["traversal"] = traversal
+
+    return result
+
+
+def _run_2d_yukawa_split_case(
+    ctx,
+    queue,
+    near_field_table,
+    *,
+    q_order,
+    nlevels,
+    fmm_order,
+    lam,
+    helmholtz_split=False,
+    helmholtz_split_order=1,
+    helmholtz_split_smooth_quad_order=None,
+    helmholtz_split_auto_config=None,
+    out_kernel=None,
+    source_extra_kwargs=None,
+    direct_evaluation=False,
+    return_state=False,
+):
+    from sumpy.expansion import DefaultExpansionFactory
+    from sumpy.kernel import YukawaKernel
+
+    from volumential.expansion_wrangler_fpnd import (
+        FPNDExpansionWrangler,
+        FPNDTreeIndependentDataForWrangler,
+    )
+    from volumential.volume_fmm import drive_volume_fmm
+
+    if np.imag(np.complex128(lam)) != 0.0:
+        raise NotImplementedError(
+            "Yukawa FMM path currently requires real lam; use HelmholtzKernel for mixed complex k"
+        )
+
+    if source_extra_kwargs is None:
+        source_extra_kwargs = {}
+
+    dim = 2
+    mesh = mg.MeshGen2D(q_order, nlevels, -0.5, 0.5, queue=queue)
+    q_points, source_weights, tree, traversal = mg.build_geometry_info(
+        ctx,
+        queue,
+        dim,
+        q_order,
+        mesh,
+        bbox=np.array([[-0.5, 0.5]] * dim, dtype=np.float64),
+    )
+
+    source_coords_host = np.array([coords.get(queue) for coords in q_points])
+    x = source_coords_host[0]
+    y = source_coords_host[1]
+
+    knl = YukawaKernel(dim)
+    out_knl = out_kernel if out_kernel is not None else knl
+
     source_vals_host = np.exp(-35.0 * ((x + 0.11) ** 2 + (y - 0.07) ** 2))
-    value_dtype = np.complex128 if helmholtz_split else np.float64
+    source_extra_kwargs = _normalize_directional_source_kwargs(
+        queue,
+        out_knl,
+        source_extra_kwargs,
+        nsources=source_vals_host.size,
+    )
+
+    is_complex_output = bool(getattr(out_knl, "is_complex_valued", False))
+    value_dtype = (
+        np.complex128 if (helmholtz_split or is_complex_output) else np.float64
+    )
     source_vals = cl.array.to_device(
         queue,
         np.ascontiguousarray(source_vals_host.astype(value_dtype)),
     )
 
-    knl = YukawaKernel(dim)
     expn_factory = DefaultExpansionFactory()
     local_expn_class = expn_factory.get_local_expansion_class(knl)
     mpole_expn_class = expn_factory.get_multipole_expansion_class(knl)
@@ -1640,7 +2626,7 @@ def _run_2d_yukawa_split_case(
         ctx,
         partial(mpole_expn_class, knl),
         partial(local_expn_class, knl),
-        [knl],
+        [out_knl],
         exclude_self=True,
     )
 
@@ -1658,10 +2644,12 @@ def _run_2d_yukawa_split_case(
         dtype=value_dtype,
         fmm_level_to_order=lambda kernel, kernel_args, tree, lev: fmm_order,
         quad_order=q_order,
+        source_extra_kwargs=source_extra_kwargs,
         kernel_extra_kwargs={knl.yukawa_lambda_name: lam},
         self_extra_kwargs=self_extra_kwargs,
         helmholtz_split=helmholtz_split,
         helmholtz_split_order=helmholtz_split_order,
+        helmholtz_split_smooth_quad_order=helmholtz_split_smooth_quad_order,
         helmholtz_split_auto_config=helmholtz_split_auto_config,
     )
 
@@ -1671,7 +2659,137 @@ def _run_2d_yukawa_split_case(
         wrangler,
         weighted_sources,
         source_vals,
-        direct_evaluation=False,
+        direct_evaluation=direct_evaluation,
+        list1_only=False,
+    )
+
+    result = {
+        "potentials": fmm_potentials,
+        "n_points": int(source_vals_host.size),
+    }
+
+    if return_state:
+        result["wrangler"] = wrangler
+        result["traversal"] = traversal
+
+    return result
+
+
+def _run_3d_yukawa_split_case(
+    ctx,
+    queue,
+    near_field_table,
+    *,
+    q_order,
+    nlevels,
+    fmm_order,
+    lam,
+    helmholtz_split=False,
+    helmholtz_split_order=1,
+    helmholtz_split_smooth_quad_order=None,
+    helmholtz_split_auto_config=None,
+    out_kernel=None,
+    source_extra_kwargs=None,
+    direct_evaluation=False,
+    return_state=False,
+):
+    from sumpy.expansion import DefaultExpansionFactory
+    from sumpy.kernel import YukawaKernel
+
+    from volumential.expansion_wrangler_fpnd import (
+        FPNDExpansionWrangler,
+        FPNDTreeIndependentDataForWrangler,
+    )
+    from volumential.volume_fmm import drive_volume_fmm
+
+    if np.imag(np.complex128(lam)) != 0.0:
+        raise NotImplementedError(
+            "Yukawa FMM path currently requires real lam; use HelmholtzKernel for mixed complex k"
+        )
+
+    if source_extra_kwargs is None:
+        source_extra_kwargs = {}
+
+    dim = 3
+    mesh = mg.MeshGen3D(q_order, nlevels, -0.5, 0.5, queue=queue)
+    q_points, source_weights, tree, traversal = mg.build_geometry_info(
+        ctx,
+        queue,
+        dim,
+        q_order,
+        mesh,
+        bbox=np.array([[-0.5, 0.5]] * dim, dtype=np.float64),
+    )
+
+    source_coords_host = np.array([coords.get(queue) for coords in q_points])
+    x = source_coords_host[0]
+    y = source_coords_host[1]
+    z = source_coords_host[2]
+
+    knl = YukawaKernel(dim)
+    out_knl = out_kernel if out_kernel is not None else knl
+
+    source_vals_host = np.exp(
+        -14.0 * ((x + 0.1) ** 2 + (y - 0.08) ** 2 + (z + 0.06) ** 2)
+    )
+    source_extra_kwargs = _normalize_directional_source_kwargs(
+        queue,
+        out_knl,
+        source_extra_kwargs,
+        nsources=source_vals_host.size,
+    )
+
+    is_complex_output = bool(getattr(out_knl, "is_complex_valued", False))
+    value_dtype = (
+        np.complex128 if (helmholtz_split or is_complex_output) else np.float64
+    )
+    source_vals = cl.array.to_device(
+        queue,
+        np.ascontiguousarray(source_vals_host.astype(value_dtype)),
+    )
+
+    expn_factory = DefaultExpansionFactory()
+    local_expn_class = expn_factory.get_local_expansion_class(knl)
+    mpole_expn_class = expn_factory.get_multipole_expansion_class(knl)
+
+    tree_indep = FPNDTreeIndependentDataForWrangler(
+        ctx,
+        partial(mpole_expn_class, knl),
+        partial(local_expn_class, knl),
+        [out_knl],
+        exclude_self=True,
+    )
+
+    self_extra_kwargs = {}
+    if tree.sources_are_targets:
+        self_extra_kwargs = {
+            "target_to_source": np.arange(tree.ntargets, dtype=np.int32)
+        }
+
+    wrangler = FPNDExpansionWrangler(
+        tree_indep=tree_indep,
+        queue=queue,
+        traversal=traversal,
+        near_field_table=near_field_table,
+        dtype=value_dtype,
+        fmm_level_to_order=lambda kernel, kernel_args, tree, lev: fmm_order,
+        quad_order=q_order,
+        source_extra_kwargs=source_extra_kwargs,
+        kernel_extra_kwargs={knl.yukawa_lambda_name: lam},
+        self_extra_kwargs=self_extra_kwargs,
+        helmholtz_split=helmholtz_split,
+        helmholtz_split_order=helmholtz_split_order,
+        helmholtz_split_smooth_quad_order=helmholtz_split_smooth_quad_order,
+        helmholtz_split_auto_config=helmholtz_split_auto_config,
+    )
+
+    weighted_sources = source_vals * source_weights.astype(value_dtype)
+    (fmm_potentials,) = drive_volume_fmm(
+        traversal,
+        wrangler,
+        weighted_sources,
+        source_vals,
+        direct_evaluation=direct_evaluation,
         list1_only=False,
     )
 
@@ -2354,6 +3472,450 @@ def test_list1_helmholtz_infer_scaling_rejected():
         )
 
 
+def test_list1_laplace_derivative_infer_scaling_is_first_order():
+    from sumpy.kernel import AxisSourceDerivative, AxisTargetDerivative, LaplaceKernel
+
+    from volumential.list1 import NearFieldFromCSR
+
+    table_shapes = {
+        "n_tables": 1,
+        "n_q_points": 1,
+        "n_cases": 1,
+        "n_table_entries": 1,
+    }
+
+    for out_knl in (
+        AxisTargetDerivative(0, LaplaceKernel(3)),
+        AxisSourceDerivative(1, LaplaceKernel(3)),
+    ):
+        near_field = NearFieldFromCSR(out_knl, table_shapes, potential_kind=1)
+        scaling = "".join(near_field.codegen_compute_scaling().split())
+        assert scaling == "sbox_extent/table_root_extent"
+
+
+def test_list1_laplace_2d_derivative_infer_scaling_has_no_log_displacement():
+    from sumpy.kernel import AxisSourceDerivative, AxisTargetDerivative, LaplaceKernel
+
+    from volumential.list1 import NearFieldFromCSR
+
+    table_shapes = {
+        "n_tables": 1,
+        "n_q_points": 1,
+        "n_cases": 1,
+        "n_table_entries": 1,
+    }
+
+    for out_knl in (
+        AxisTargetDerivative(0, LaplaceKernel(2)),
+        AxisSourceDerivative(1, LaplaceKernel(2)),
+    ):
+        near_field = NearFieldFromCSR(out_knl, table_shapes, potential_kind=1)
+        displacement = "".join(near_field.codegen_compute_displacement().split())
+        assert displacement == "0.0"
+
+
+def test_source_kernel_derivation_preserves_source_derivatives():
+    from sumpy.kernel import AxisSourceDerivative, AxisTargetDerivative, LaplaceKernel
+
+    from volumential.expansion_wrangler_fpnd import (
+        _derive_source_kernels_from_target_kernels,
+    )
+
+    base_knl = LaplaceKernel(3)
+
+    (source_knl,) = _derive_source_kernels_from_target_kernels(
+        [AxisTargetDerivative(1, AxisSourceDerivative(0, base_knl))]
+    )
+    assert isinstance(source_knl, AxisSourceDerivative)
+    assert source_knl.axis == 0
+    assert source_knl.inner_kernel == base_knl
+
+    (source_knl_no_source_deriv,) = _derive_source_kernels_from_target_kernels(
+        [AxisTargetDerivative(2, base_knl)]
+    )
+    assert source_knl_no_source_deriv == base_knl
+
+
+def test_volume_fmm_3d_laplace_source_target_derivative_antisymmetry(tmp_path):
+    from sumpy.expansion import DefaultExpansionFactory
+    from sumpy.kernel import AxisSourceDerivative, AxisTargetDerivative, LaplaceKernel
+
+    from volumential.expansion_wrangler_fpnd import (
+        FPNDExpansionWrangler,
+        FPNDTreeIndependentDataForWrangler,
+    )
+    from volumential.volume_fmm import drive_volume_fmm
+
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 2
+    nlevels = 3
+    fmm_order = 10
+    axis = 0
+    alpha = 20.0
+    dim = 3
+
+    target_table = _get_laplace_3d_dx_table(
+        queue,
+        tmp_path / "nft-laplace3d-target-dx-antisym.sqlite",
+        q_order,
+        source_box_level=nlevels,
+    )
+    source_table = _get_laplace_3d_axis_source_derivative_table(
+        queue,
+        tmp_path / "nft-laplace3d-source-dx-antisym.sqlite",
+        q_order,
+        axis,
+        source_box_level=nlevels,
+    )
+
+    mesh = mg.MeshGen3D(q_order, nlevels, -0.5, 0.5, queue=queue)
+    q_points, source_weights, tree, traversal = mg.build_geometry_info(
+        ctx,
+        queue,
+        dim,
+        q_order,
+        mesh,
+        bbox=np.array([[-0.5, 0.5]] * dim, dtype=np.float64),
+    )
+
+    source_coords_host = np.array([coords.get(queue) for coords in q_points])
+    x = source_coords_host[0]
+    y = source_coords_host[1]
+    z = source_coords_host[2]
+
+    r2 = x * x + y * y + z * z
+    source_vals = cl.array.to_device(
+        queue,
+        np.ascontiguousarray(
+            (2 * dim * alpha - 4 * alpha * alpha * r2) * np.exp(-alpha * r2)
+        ),
+    )
+
+    base_knl = LaplaceKernel(dim)
+
+    def _run_case(out_knl, near_field_table, *, list1_only=False, exclude_list1=False):
+        expn_factory = DefaultExpansionFactory()
+        local_expn_class = expn_factory.get_local_expansion_class(base_knl)
+        mpole_expn_class = expn_factory.get_multipole_expansion_class(base_knl)
+
+        tree_indep = FPNDTreeIndependentDataForWrangler(
+            ctx,
+            partial(mpole_expn_class, base_knl),
+            partial(local_expn_class, base_knl),
+            [out_knl],
+            exclude_self=True,
+        )
+
+        self_extra_kwargs = {}
+        if tree.sources_are_targets:
+            self_extra_kwargs = {
+                "target_to_source": np.arange(tree.ntargets, dtype=np.int32)
+            }
+
+        wrangler = FPNDExpansionWrangler(
+            tree_indep=tree_indep,
+            queue=queue,
+            traversal=traversal,
+            near_field_table=near_field_table,
+            dtype=np.float64,
+            fmm_level_to_order=lambda kernel, kernel_args, tree, lev: fmm_order,
+            quad_order=q_order,
+            self_extra_kwargs=self_extra_kwargs,
+        )
+
+        (potentials,) = drive_volume_fmm(
+            traversal,
+            wrangler,
+            source_vals * source_weights,
+            source_vals,
+            direct_evaluation=False,
+            list1_only=list1_only,
+            exclude_list1=exclude_list1,
+        )
+
+        return potentials.get(queue)
+
+    full_target = _run_case(
+        AxisTargetDerivative(axis, base_knl),
+        target_table,
+    )
+    full_source = _run_case(
+        AxisSourceDerivative(axis, base_knl),
+        source_table,
+    )
+
+    far_target = _run_case(
+        AxisTargetDerivative(axis, base_knl),
+        target_table,
+        exclude_list1=True,
+    )
+    far_source = _run_case(
+        AxisSourceDerivative(axis, base_knl),
+        source_table,
+        exclude_list1=True,
+    )
+
+    assert np.linalg.norm(far_target) > 1.0e-12
+
+    rel_full_antisym = np.linalg.norm(full_source + full_target) / max(
+        1.0, np.linalg.norm(full_target)
+    )
+    rel_far_antisym = np.linalg.norm(far_source + far_target) / max(
+        1.0, np.linalg.norm(far_target)
+    )
+
+    assert rel_full_antisym < 1.0e-5
+    assert rel_far_antisym < 1.0e-5
+
+
+def test_volume_fmm_3d_laplace_target_derivative_list1_preserves_odd_x_symmetry(
+    tmp_path,
+):
+    from sumpy.expansion import DefaultExpansionFactory
+    from sumpy.kernel import AxisTargetDerivative, LaplaceKernel
+
+    from volumential.expansion_wrangler_fpnd import (
+        FPNDExpansionWrangler,
+        FPNDTreeIndependentDataForWrangler,
+    )
+    from volumential.volume_fmm import drive_volume_fmm
+
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 2
+    nlevels = 3
+    fmm_order = 10
+    dim = 3
+    axis = 0
+
+    target_table = _get_laplace_3d_dx_table(
+        queue,
+        tmp_path / "nft-laplace3d-target-dx-list1-odd-sym.sqlite",
+        q_order,
+        source_box_level=nlevels,
+    )
+
+    mesh = mg.MeshGen3D(q_order, nlevels, -0.5, 0.5, queue=queue)
+    q_points, source_weights, tree, traversal = mg.build_geometry_info(
+        ctx,
+        queue,
+        dim,
+        q_order,
+        mesh,
+        bbox=np.array([[-0.5, 0.5]] * dim, dtype=np.float64),
+    )
+
+    source_coords_host = np.array([coords.get(queue) for coords in q_points])
+    source_vals = cl.array.to_device(
+        queue,
+        np.ascontiguousarray(np.ones(source_coords_host.shape[1], dtype=np.float64)),
+    )
+
+    base_knl = LaplaceKernel(dim)
+
+    expn_factory = DefaultExpansionFactory()
+    local_expn_class = expn_factory.get_local_expansion_class(base_knl)
+    mpole_expn_class = expn_factory.get_multipole_expansion_class(base_knl)
+
+    tree_indep = FPNDTreeIndependentDataForWrangler(
+        ctx,
+        partial(mpole_expn_class, base_knl),
+        partial(local_expn_class, base_knl),
+        [AxisTargetDerivative(axis, base_knl)],
+        exclude_self=True,
+    )
+
+    self_extra_kwargs = {}
+    if tree.sources_are_targets:
+        self_extra_kwargs = {
+            "target_to_source": np.arange(tree.ntargets, dtype=np.int32)
+        }
+
+    wrangler = FPNDExpansionWrangler(
+        tree_indep=tree_indep,
+        queue=queue,
+        traversal=traversal,
+        near_field_table=target_table,
+        dtype=np.float64,
+        fmm_level_to_order=lambda kernel, kernel_args, tree, lev: fmm_order,
+        quad_order=q_order,
+        self_extra_kwargs=self_extra_kwargs,
+    )
+
+    (target_dx_list1_only,) = drive_volume_fmm(
+        traversal,
+        wrangler,
+        source_vals * source_weights,
+        source_vals,
+        direct_evaluation=False,
+        list1_only=True,
+    )
+    target_dx_host = target_dx_list1_only.get(queue)
+
+    assert np.linalg.norm(target_dx_host) > 1.0e-12
+
+    source_points = np.ascontiguousarray(source_coords_host.T)
+
+    def _key(point):
+        return tuple(np.round(point, decimals=12).tolist())
+
+    point_to_index = {_key(point): i for i, point in enumerate(source_points)}
+
+    odd_errors = []
+    for i, point in enumerate(source_points):
+        mirrored = point.copy()
+        mirrored[axis] *= -1.0
+        j = point_to_index.get(_key(mirrored))
+        if j is None:
+            continue
+        odd_errors.append(target_dx_host[i] + target_dx_host[j])
+
+    assert len(odd_errors) == source_points.shape[0]
+
+    rel_odd_symmetry = np.linalg.norm(odd_errors) / max(
+        1.0,
+        np.linalg.norm(target_dx_host),
+    )
+    assert rel_odd_symmetry < 1.0e-10
+
+
+def test_volume_fmm_3d_laplace_target_derivative_matches_scalar_fd_sign(tmp_path):
+    from sumpy.expansion import DefaultExpansionFactory
+    from sumpy.kernel import AxisTargetDerivative, LaplaceKernel
+    from sumpy.point_calculus import CalculusPatch
+
+    from volumential.expansion_wrangler_fpnd import (
+        FPNDExpansionWrangler,
+        FPNDTreeIndependentDataForWrangler,
+    )
+    from volumential.volume_fmm import drive_volume_fmm, interpolate_volume_potential
+
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 2
+    nlevels = 3
+    fmm_order = 12
+    alpha = 80.0
+    dim = 3
+    axis = 0
+
+    scalar_table = _get_laplace_3d_table(
+        queue,
+        tmp_path / "nft-laplace3d-scalar-sign-check.sqlite",
+        q_order,
+    )
+    target_table = _get_laplace_3d_dx_table(
+        queue,
+        tmp_path / "nft-laplace3d-target-dx-sign-check.sqlite",
+        q_order,
+        source_box_level=nlevels,
+    )
+
+    mesh = mg.MeshGen3D(q_order, nlevels, -0.5, 0.5, queue=queue)
+    q_points, source_weights, tree, traversal = mg.build_geometry_info(
+        ctx,
+        queue,
+        dim,
+        q_order,
+        mesh,
+        bbox=np.array([[-0.5, 0.5]] * dim, dtype=np.float64),
+    )
+
+    source_coords_host = np.array([coords.get(queue) for coords in q_points])
+    x = source_coords_host[0]
+    y = source_coords_host[1]
+    z = source_coords_host[2]
+    r2 = x * x + y * y + z * z
+    source_vals = cl.array.to_device(
+        queue,
+        np.ascontiguousarray(
+            (2 * dim * alpha - 4 * alpha * alpha * r2) * np.exp(-alpha * r2)
+        ),
+    )
+
+    base_knl = LaplaceKernel(dim)
+
+    expn_factory = DefaultExpansionFactory()
+    local_expn_class = expn_factory.get_local_expansion_class(base_knl)
+    mpole_expn_class = expn_factory.get_multipole_expansion_class(base_knl)
+
+    self_extra_kwargs = {}
+    if tree.sources_are_targets:
+        self_extra_kwargs = {
+            "target_to_source": np.arange(tree.ntargets, dtype=np.int32)
+        }
+
+    def _run_case(out_knl, table):
+        tree_indep = FPNDTreeIndependentDataForWrangler(
+            ctx,
+            partial(mpole_expn_class, base_knl),
+            partial(local_expn_class, base_knl),
+            [out_knl],
+            exclude_self=True,
+        )
+
+        wrangler = FPNDExpansionWrangler(
+            tree_indep=tree_indep,
+            queue=queue,
+            traversal=traversal,
+            near_field_table=table,
+            dtype=np.float64,
+            fmm_level_to_order=lambda kernel, kernel_args, tree, lev: fmm_order,
+            quad_order=q_order,
+            self_extra_kwargs=self_extra_kwargs,
+        )
+
+        (potentials,) = drive_volume_fmm(
+            traversal,
+            wrangler,
+            source_vals * source_weights,
+            source_vals,
+            direct_evaluation=False,
+            list1_only=False,
+        )
+
+        return wrangler, potentials
+
+    wr_scalar, u = _run_case(base_knl, scalar_table)
+    wr_target, target_dx = _run_case(AxisTargetDerivative(axis, base_knl), target_table)
+
+    patch = CalculusPatch(center=[0.03, 0.05, 0.07], h=0.12, order=5)
+    patch_targets = np.empty(3, dtype=object)
+    patch_targets[0] = cl.array.to_device(queue, np.ascontiguousarray(patch.x))
+    patch_targets[1] = cl.array.to_device(queue, np.ascontiguousarray(patch.y))
+    patch_targets[2] = cl.array.to_device(queue, np.ascontiguousarray(patch.z))
+
+    u_patch = interpolate_volume_potential(
+        patch_targets,
+        traversal,
+        wr_scalar,
+        u,
+    ).get(queue)
+    target_dx_patch = interpolate_volume_potential(
+        patch_targets,
+        traversal,
+        wr_target,
+        target_dx,
+    ).get(queue)
+    fd_dx_patch = patch.dx(u_patch)
+
+    rel_match = np.linalg.norm(target_dx_patch - fd_dx_patch) / max(
+        1.0,
+        np.linalg.norm(fd_dx_patch),
+    )
+    rel_opposite = np.linalg.norm(target_dx_patch + fd_dx_patch) / max(
+        1.0,
+        np.linalg.norm(fd_dx_patch),
+    )
+
+    assert rel_match < 0.5
+    assert rel_match < 0.5 * rel_opposite
+
+
 @pytest.mark.parametrize(
     ("q_order", "max_rel_pde_residual"),
     [
@@ -2600,6 +4162,1784 @@ def test_volume_fmm_2d_yukawa_split_order2_runs(tmp_path):
     assert not np.allclose(pot, pot_half_lam, rtol=1.0e-8, atol=1.0e-10)
     assert split["n_points"] > 0
     assert split_half_lam["n_points"] > 0
+
+
+def test_volume_fmm_2d_yukawa_split_scalar_tracks_nonsplit(tmp_path):
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 4
+    lam = 8.0
+    nlevels = 3
+
+    split_table = _get_laplace_2d_table(
+        queue,
+        tmp_path / "nft-yukawa2d-split-scalar-laplace-q4.sqlite",
+        q_order,
+    )
+    direct_table = _get_yukawa_2d_tables(
+        queue,
+        tmp_path / "nft-yukawa2d-direct-scalar-q4.sqlite",
+        q_order,
+        lam,
+        max_source_box_level=nlevels,
+    )[nlevels]
+
+    split = _run_2d_yukawa_split_case(
+        ctx,
+        queue,
+        split_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=16,
+        lam=lam,
+        helmholtz_split=True,
+        helmholtz_split_order=2,
+    )
+    direct = _run_2d_yukawa_split_case(
+        ctx,
+        queue,
+        direct_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=16,
+        lam=lam,
+        helmholtz_split=False,
+    )
+
+    split_pot = split["potentials"].get(queue)
+    direct_pot = direct["potentials"].get(queue)
+    assert np.all(np.isfinite(split_pot))
+    assert np.all(np.isfinite(direct_pot))
+
+    rel_diff = np.linalg.norm(split_pot - direct_pot) / max(
+        1.0,
+        np.linalg.norm(direct_pot),
+    )
+    assert rel_diff < 1.0e-4, (
+        "2D Yukawa scalar split/nonsplit mismatch is too large "
+        f"(rel_diff={rel_diff:.3e})"
+    )
+
+
+def test_volume_fmm_2d_helmholtz_split_scalar_tracks_nonsplit(tmp_path):
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 4
+    wave_number = 8.0
+    nlevels = 3
+
+    split_table = _get_laplace_2d_table(
+        queue,
+        tmp_path / "nft-helmholtz2d-split-scalar-laplace-q4.sqlite",
+        q_order,
+    )
+    direct_table = _build_helmholtz_2d_output_table(
+        queue,
+        q_order,
+        wave_number,
+        source_box_level=nlevels,
+    )
+
+    split = _run_2d_helmholtz_pde_case(
+        ctx,
+        queue,
+        split_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=16,
+        wave_number=wave_number,
+        helmholtz_split=True,
+        helmholtz_split_order=2,
+        compute_pde_residual=False,
+        return_state=True,
+    )
+    direct = _run_2d_helmholtz_pde_case(
+        ctx,
+        queue,
+        direct_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=16,
+        wave_number=wave_number,
+        helmholtz_split=False,
+        compute_pde_residual=False,
+        return_state=True,
+    )
+
+    split_pot = split["potentials"].get(queue)
+    direct_pot = direct["potentials"].get(queue)
+    assert np.all(np.isfinite(split_pot))
+    assert np.all(np.isfinite(direct_pot))
+
+    rel_diff = np.linalg.norm(split_pot - direct_pot) / max(
+        1.0,
+        np.linalg.norm(direct_pot),
+    )
+    assert rel_diff < 1.0e-4, (
+        "2D Helmholtz scalar split/nonsplit mismatch is too large "
+        f"(rel_diff={rel_diff:.3e})"
+    )
+
+
+def test_volume_fmm_2d_yukawa_split_axis_target_derivative_tracks_nonsplit(tmp_path):
+    from sumpy.kernel import AxisTargetDerivative, YukawaKernel
+
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 4
+    lam = 8.0
+    nlevels = 3
+    out_knl = AxisTargetDerivative(0, YukawaKernel(2))
+
+    split_table = _get_laplace_2d_dx_table(
+        queue,
+        tmp_path / "nft-yukawa2d-split-dx-laplace-q4.sqlite",
+        q_order,
+        source_box_level=nlevels,
+    )
+    direct_table = _get_yukawa_2d_dx_table(
+        queue,
+        tmp_path / "nft-yukawa2d-direct-dx-q4.sqlite",
+        q_order,
+        lam,
+        source_box_level=nlevels,
+    )
+
+    split = _run_2d_yukawa_split_case(
+        ctx,
+        queue,
+        split_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=16,
+        lam=lam,
+        helmholtz_split=True,
+        helmholtz_split_order=2,
+        out_kernel=out_knl,
+    )
+    direct = _run_2d_yukawa_split_case(
+        ctx,
+        queue,
+        direct_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=16,
+        lam=lam,
+        helmholtz_split=False,
+        out_kernel=out_knl,
+    )
+
+    split_pot = split["potentials"].get(queue)
+    direct_pot = direct["potentials"].get(queue)
+    assert np.all(np.isfinite(split_pot))
+    assert np.all(np.isfinite(direct_pot))
+
+    rel_diff = np.linalg.norm(split_pot - direct_pot) / max(
+        1.0,
+        np.linalg.norm(direct_pot),
+    )
+    assert rel_diff < 1.0e-2, (
+        "2D Yukawa target-derivative split/nonsplit mismatch is too large "
+        f"(rel_diff={rel_diff:.3e})"
+    )
+
+
+def test_volume_fmm_2d_yukawa_split_axis_source_derivative_tracks_nonsplit(tmp_path):
+    from sumpy.kernel import AxisSourceDerivative, YukawaKernel
+
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 4
+    lam = 8.0
+    nlevels = 3
+    axis = 0
+    out_knl = AxisSourceDerivative(axis, YukawaKernel(2))
+
+    split_table = _get_laplace_2d_axis_source_derivative_table(
+        queue,
+        tmp_path / "nft-yukawa2d-split-sx-laplace-q4.sqlite",
+        q_order,
+        axis,
+        source_box_level=nlevels,
+    )
+    direct_table = _get_yukawa_2d_axis_source_derivative_table(
+        queue,
+        tmp_path / "nft-yukawa2d-direct-sx-q4.sqlite",
+        q_order,
+        lam,
+        axis,
+        source_box_level=nlevels,
+    )
+
+    split = _run_2d_yukawa_split_case(
+        ctx,
+        queue,
+        split_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=16,
+        lam=lam,
+        helmholtz_split=True,
+        helmholtz_split_order=2,
+        out_kernel=out_knl,
+    )
+    direct = _run_2d_yukawa_split_case(
+        ctx,
+        queue,
+        direct_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=16,
+        lam=lam,
+        helmholtz_split=False,
+        out_kernel=out_knl,
+    )
+
+    split_pot = split["potentials"].get(queue)
+    direct_pot = direct["potentials"].get(queue)
+    assert np.all(np.isfinite(split_pot))
+    assert np.all(np.isfinite(direct_pot))
+
+    rel_diff = np.linalg.norm(split_pot - direct_pot) / max(
+        1.0,
+        np.linalg.norm(direct_pot),
+    )
+    assert rel_diff < 1.0e-2, (
+        "2D Yukawa source-derivative split/nonsplit mismatch is too large "
+        f"(rel_diff={rel_diff:.3e})"
+    )
+
+
+def test_volume_fmm_2d_helmholtz_split_axis_target_derivative_tracks_nonsplit(
+    tmp_path,
+):
+    from sumpy.kernel import AxisTargetDerivative, HelmholtzKernel
+
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 4
+    wave_number = 8.0
+    nlevels = 3
+    out_knl = AxisTargetDerivative(0, HelmholtzKernel(2))
+
+    split_table = _get_laplace_2d_dx_table(
+        queue,
+        tmp_path / "nft-helmholtz2d-split-dx-laplace-q4.sqlite",
+        q_order,
+        source_box_level=nlevels,
+    )
+    direct_table = _build_helmholtz_2d_derivative_table(
+        queue,
+        q_order,
+        wave_number,
+        out_knl,
+        source_box_level=nlevels,
+    )
+
+    split = _run_2d_helmholtz_pde_case(
+        ctx,
+        queue,
+        split_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=16,
+        wave_number=wave_number,
+        helmholtz_split=True,
+        helmholtz_split_order=2,
+        out_kernel=out_knl,
+        compute_pde_residual=False,
+        return_state=True,
+    )
+    direct = _run_2d_helmholtz_pde_case(
+        ctx,
+        queue,
+        direct_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=16,
+        wave_number=wave_number,
+        helmholtz_split=False,
+        out_kernel=out_knl,
+        compute_pde_residual=False,
+        return_state=True,
+    )
+
+    split_pot = split["potentials"].get(queue)
+    direct_pot = direct["potentials"].get(queue)
+    assert np.all(np.isfinite(split_pot))
+    assert np.all(np.isfinite(direct_pot))
+
+    rel_diff = np.linalg.norm(split_pot - direct_pot) / max(
+        1.0,
+        np.linalg.norm(direct_pot),
+    )
+    assert rel_diff < 1.0e-2, (
+        "2D Helmholtz target-derivative split/nonsplit mismatch is too large "
+        f"(rel_diff={rel_diff:.3e})"
+    )
+
+
+def test_volume_fmm_2d_helmholtz_split_axis_source_derivative_tracks_nonsplit(
+    tmp_path,
+):
+    from sumpy.kernel import AxisSourceDerivative, HelmholtzKernel
+
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 4
+    wave_number = 8.0
+    nlevels = 3
+    axis = 0
+    out_knl = AxisSourceDerivative(axis, HelmholtzKernel(2))
+
+    split_table = _get_laplace_2d_axis_source_derivative_table(
+        queue,
+        tmp_path / "nft-helmholtz2d-split-sx-laplace-q4.sqlite",
+        q_order,
+        axis,
+        source_box_level=nlevels,
+    )
+    direct_table = _build_helmholtz_2d_derivative_table(
+        queue,
+        q_order,
+        wave_number,
+        out_knl,
+        source_box_level=nlevels,
+    )
+
+    split = _run_2d_helmholtz_pde_case(
+        ctx,
+        queue,
+        split_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=16,
+        wave_number=wave_number,
+        helmholtz_split=True,
+        helmholtz_split_order=2,
+        out_kernel=out_knl,
+        compute_pde_residual=False,
+        return_state=True,
+    )
+    direct = _run_2d_helmholtz_pde_case(
+        ctx,
+        queue,
+        direct_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=16,
+        wave_number=wave_number,
+        helmholtz_split=False,
+        out_kernel=out_knl,
+        compute_pde_residual=False,
+        return_state=True,
+    )
+
+    split_pot = split["potentials"].get(queue)
+    direct_pot = direct["potentials"].get(queue)
+    assert np.all(np.isfinite(split_pot))
+    assert np.all(np.isfinite(direct_pot))
+
+    rel_diff = np.linalg.norm(split_pot - direct_pot) / max(
+        1.0,
+        np.linalg.norm(direct_pot),
+    )
+    assert rel_diff < 1.0e-2, (
+        "2D Helmholtz source-derivative split/nonsplit mismatch is too large "
+        f"(rel_diff={rel_diff:.3e})"
+    )
+
+
+def test_volume_fmm_3d_helmholtz_split_axis_target_derivative_tracks_nonsplit(
+    tmp_path,
+):
+    from sumpy.kernel import AxisTargetDerivative, HelmholtzKernel
+
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 3
+    wave_number = 8.0
+    nlevels = 3
+    out_knl = AxisTargetDerivative(0, HelmholtzKernel(3))
+
+    split_table = _get_laplace_3d_dx_table(
+        queue,
+        tmp_path / "nft-helmholtz3d-split-dx-laplace-q3.sqlite",
+        q_order,
+        source_box_level=nlevels,
+    )
+    direct_table = _build_helmholtz_3d_output_table(
+        queue,
+        q_order,
+        wave_number,
+        source_box_level=nlevels,
+        out_kernel=out_knl,
+    )
+
+    split = _run_3d_helmholtz_pde_case(
+        ctx,
+        queue,
+        split_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=16,
+        wave_number=wave_number,
+        helmholtz_split=True,
+        helmholtz_split_order=2,
+        out_kernel=out_knl,
+        compute_pde_residual=False,
+        return_state=True,
+    )
+    direct = _run_3d_helmholtz_pde_case(
+        ctx,
+        queue,
+        direct_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=16,
+        wave_number=wave_number,
+        helmholtz_split=False,
+        out_kernel=out_knl,
+        compute_pde_residual=False,
+        return_state=True,
+    )
+
+    split_pot = split["potentials"].get(queue)
+    direct_pot = direct["potentials"].get(queue)
+    assert np.all(np.isfinite(split_pot))
+    assert np.all(np.isfinite(direct_pot))
+
+    rel_diff = np.linalg.norm(split_pot - direct_pot) / max(
+        1.0,
+        np.linalg.norm(direct_pot),
+    )
+    assert rel_diff < 1.0e-2, (
+        "3D Helmholtz target-derivative split/nonsplit mismatch is too large "
+        f"(rel_diff={rel_diff:.3e})"
+    )
+
+
+def test_volume_fmm_3d_helmholtz_split_axis_source_derivative_tracks_nonsplit(
+    tmp_path,
+):
+    from sumpy.kernel import AxisSourceDerivative, HelmholtzKernel
+
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 3
+    wave_number = 8.0
+    nlevels = 3
+    axis = 0
+    out_knl = AxisSourceDerivative(axis, HelmholtzKernel(3))
+
+    split_table = _get_laplace_3d_axis_source_derivative_table(
+        queue,
+        tmp_path / "nft-helmholtz3d-split-sx-laplace-q3.sqlite",
+        q_order,
+        axis,
+        source_box_level=nlevels,
+    )
+    direct_table = _build_helmholtz_3d_output_table(
+        queue,
+        q_order,
+        wave_number,
+        source_box_level=nlevels,
+        out_kernel=out_knl,
+    )
+
+    split = _run_3d_helmholtz_pde_case(
+        ctx,
+        queue,
+        split_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=16,
+        wave_number=wave_number,
+        helmholtz_split=True,
+        helmholtz_split_order=2,
+        out_kernel=out_knl,
+        compute_pde_residual=False,
+        return_state=True,
+    )
+    direct = _run_3d_helmholtz_pde_case(
+        ctx,
+        queue,
+        direct_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=16,
+        wave_number=wave_number,
+        helmholtz_split=False,
+        out_kernel=out_knl,
+        compute_pde_residual=False,
+        return_state=True,
+    )
+
+    split_pot = split["potentials"].get(queue)
+    direct_pot = direct["potentials"].get(queue)
+    assert np.all(np.isfinite(split_pot))
+    assert np.all(np.isfinite(direct_pot))
+
+    rel_diff = np.linalg.norm(split_pot - direct_pot) / max(
+        1.0,
+        np.linalg.norm(direct_pot),
+    )
+    assert rel_diff < 1.0e-2, (
+        "3D Helmholtz source-derivative split/nonsplit mismatch is too large "
+        f"(rel_diff={rel_diff:.3e})"
+    )
+
+
+def test_volume_fmm_2d_helmholtz_split_directional_source_derivative_tracks_direct(
+    tmp_path,
+):
+    from sumpy.kernel import DirectionalSourceDerivative, HelmholtzKernel, LaplaceKernel
+
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 4
+    wave_number = 8.0
+    nlevels = 3
+    source_direction = np.array([1.0, 0.0], dtype=np.float64)
+    split_table = _build_laplace_output_table(
+        queue,
+        2,
+        q_order,
+        source_box_level=nlevels,
+        out_kernel=DirectionalSourceDerivative(LaplaceKernel(2), "dir_vec"),
+        source_direction=source_direction,
+    )
+    out_knl = DirectionalSourceDerivative(HelmholtzKernel(2), "dir_vec")
+
+    split = _run_2d_helmholtz_pde_case(
+        ctx,
+        queue,
+        split_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=20,
+        wave_number=wave_number,
+        helmholtz_split=True,
+        helmholtz_split_order=1,
+        out_kernel=out_knl,
+        source_extra_kwargs={"dir_vec": source_direction},
+        compute_pde_residual=False,
+        return_state=True,
+    )
+    direct = _run_2d_helmholtz_pde_case(
+        ctx,
+        queue,
+        split_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=20,
+        wave_number=wave_number,
+        helmholtz_split=False,
+        out_kernel=out_knl,
+        source_extra_kwargs={"dir_vec": source_direction},
+        direct_evaluation=True,
+        compute_pde_residual=False,
+        return_state=True,
+    )
+
+    split_pot = split["potentials"].get(queue)
+    direct_pot = direct["potentials"].get(queue)
+    assert np.all(np.isfinite(split_pot))
+    assert np.all(np.isfinite(direct_pot))
+
+    rel_diff = np.linalg.norm(split_pot - direct_pot) / max(
+        1.0,
+        np.linalg.norm(direct_pot),
+    )
+    assert rel_diff < 2.0e-2, (
+        "2D Helmholtz directional-source split/direct mismatch is too large "
+        f"(rel_diff={rel_diff:.3e})"
+    )
+
+
+def test_volume_fmm_2d_helmholtz_split_supports_multiple_output_kernels(tmp_path):
+    from sumpy.kernel import AxisTargetDerivative, HelmholtzKernel
+
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 4
+    wave_number = 8.0
+    nlevels = 3
+    scalar_knl = HelmholtzKernel(2)
+    target_knl = AxisTargetDerivative(0, HelmholtzKernel(2))
+    target_kernels = [scalar_knl, target_knl]
+
+    split_tables = {
+        repr(scalar_knl): _get_laplace_2d_table(
+            queue,
+            tmp_path / "nft-helmholtz2d-multi-split-scalar-q4.sqlite",
+            q_order,
+            source_box_level=nlevels,
+        ),
+        repr(target_knl): _get_laplace_2d_dx_table(
+            queue,
+            tmp_path / "nft-helmholtz2d-multi-split-dx-q4.sqlite",
+            q_order,
+            source_box_level=nlevels,
+        ),
+    }
+    direct_tables = {
+        repr(scalar_knl): _build_helmholtz_2d_output_table(
+            queue,
+            q_order,
+            wave_number,
+            source_box_level=nlevels,
+            out_kernel=scalar_knl,
+        ),
+        repr(target_knl): _build_helmholtz_2d_output_table(
+            queue,
+            q_order,
+            wave_number,
+            source_box_level=nlevels,
+            out_kernel=target_knl,
+        ),
+    }
+
+    split = _run_2d_helmholtz_multi_output_case(
+        ctx,
+        queue,
+        split_tables,
+        target_kernels=target_kernels,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=20,
+        wave_number=wave_number,
+        helmholtz_split=True,
+        helmholtz_split_order=1,
+        return_state=True,
+    )
+    direct = _run_2d_helmholtz_multi_output_case(
+        ctx,
+        queue,
+        direct_tables,
+        target_kernels=target_kernels,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=20,
+        wave_number=wave_number,
+        helmholtz_split=False,
+        return_state=True,
+    )
+
+    split_pots = split["potentials"]
+    direct_pots = direct["potentials"]
+    assert isinstance(split_pots, np.ndarray) and split_pots.dtype == object
+    assert isinstance(direct_pots, np.ndarray) and direct_pots.dtype == object
+    assert len(split_pots) == 2
+    assert len(direct_pots) == 2
+
+    for idx, label in enumerate(["scalar", "target-derivative"]):
+        split_val = split_pots[idx].get(queue)
+        direct_val = direct_pots[idx].get(queue)
+        rel_diff = np.linalg.norm(split_val - direct_val) / max(
+            1.0,
+            np.linalg.norm(direct_val),
+        )
+        assert rel_diff < 1.0e-2, (
+            f"2D Helmholtz multi-output split mismatch for {label} is too large "
+            f"(rel_diff={rel_diff:.3e})"
+        )
+
+    assert split["wrangler"].helmholtz_split
+
+
+def test_volume_fmm_2d_helmholtz_split_accepts_infer_kernel_scaling(tmp_path):
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 4
+    wave_number = 8.0
+    split_table = _get_laplace_2d_table(
+        queue,
+        tmp_path / "nft-helmholtz2d-infer-scaling-split-q4.sqlite",
+        q_order,
+    )
+
+    baseline = _run_2d_helmholtz_pde_case(
+        ctx,
+        queue,
+        split_table,
+        q_order=q_order,
+        nlevels=3,
+        fmm_order=20,
+        wave_number=wave_number,
+        helmholtz_split=True,
+        helmholtz_split_order=1,
+        compute_pde_residual=False,
+        return_state=True,
+    )
+    inferred = _run_2d_helmholtz_pde_case(
+        ctx,
+        queue,
+        split_table,
+        q_order=q_order,
+        nlevels=3,
+        fmm_order=20,
+        wave_number=wave_number,
+        helmholtz_split=True,
+        helmholtz_split_order=1,
+        list1_extra_kwargs={"infer_kernel_scaling": True},
+        compute_pde_residual=False,
+        return_state=True,
+    )
+
+    base_pot = baseline["potentials"].get(queue)
+    inferred_pot = inferred["potentials"].get(queue)
+    rel_diff = np.linalg.norm(inferred_pot - base_pot) / max(
+        1.0, np.linalg.norm(base_pot)
+    )
+    assert rel_diff < 1.0e-10
+    assert not inferred["wrangler"].list1_extra_kwargs["infer_kernel_scaling"]
+
+
+def test_volume_fmm_2d_helmholtz_split_default_auto_enabled(tmp_path):
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 4
+    wave_number = 8.0
+    nlevels = 3
+    split_table = _get_laplace_2d_table(
+        queue,
+        tmp_path / "nft-helmholtz2d-default-split-q4.sqlite",
+        q_order,
+        source_box_level=nlevels,
+    )
+
+    auto = _run_2d_helmholtz_pde_case(
+        ctx,
+        queue,
+        split_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=20,
+        wave_number=wave_number,
+        helmholtz_split=None,
+        helmholtz_split_order=1,
+        compute_pde_residual=False,
+        return_state=True,
+    )
+    explicit_off = _run_2d_helmholtz_pde_case(
+        ctx,
+        queue,
+        split_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=20,
+        wave_number=wave_number,
+        helmholtz_split=False,
+        helmholtz_split_order=1,
+        compute_pde_residual=False,
+        return_state=True,
+    )
+
+    assert auto["wrangler"].helmholtz_split
+    assert not explicit_off["wrangler"].helmholtz_split
+
+
+@pytest.mark.full_accuracy
+@pytest.mark.parametrize("base_kind", ["helmholtz", "yukawa"])
+def test_volume_fmm_2d_split_full_accuracy_combination_sweep(tmp_path, base_kind):
+    from sumpy.kernel import (
+        AxisSourceDerivative,
+        AxisTargetDerivative,
+        DirectionalSourceDerivative,
+        HelmholtzKernel,
+        LaplaceKernel,
+        YukawaKernel,
+    )
+
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 4
+    nlevels = 5
+    fmm_order = 24
+    axis = 0
+    source_direction = np.array([1.0, 0.0], dtype=np.float64)
+
+    if base_kind == "helmholtz":
+        param = 8.0
+        base_knl = HelmholtzKernel(2)
+
+        def build_direct_table(out_knl):
+            return _build_helmholtz_2d_output_table(
+                queue,
+                q_order,
+                param,
+                source_box_level=nlevels,
+                out_kernel=out_knl,
+                source_direction=source_direction,
+            )
+
+        def run_case(table, *, split_enabled, split_order, out_knl, source_kwargs):
+            return _run_2d_helmholtz_pde_case(
+                ctx,
+                queue,
+                table,
+                q_order=q_order,
+                nlevels=nlevels,
+                fmm_order=fmm_order,
+                wave_number=param,
+                helmholtz_split=split_enabled,
+                helmholtz_split_order=split_order,
+                out_kernel=out_knl,
+                source_extra_kwargs=source_kwargs,
+                compute_pde_residual=False,
+                return_state=True,
+            )
+
+    elif base_kind == "yukawa":
+        param = 8.0
+        base_knl = YukawaKernel(2)
+
+        def build_direct_table(out_knl):
+            return _build_yukawa_2d_output_table(
+                queue,
+                q_order,
+                param,
+                source_box_level=nlevels,
+                out_kernel=out_knl,
+                source_direction=source_direction,
+            )
+
+        def run_case(table, *, split_enabled, split_order, out_knl, source_kwargs):
+            return _run_2d_yukawa_split_case(
+                ctx,
+                queue,
+                table,
+                q_order=q_order,
+                nlevels=nlevels,
+                fmm_order=fmm_order,
+                lam=param,
+                helmholtz_split=split_enabled,
+                helmholtz_split_order=split_order,
+                out_kernel=out_knl,
+                source_extra_kwargs=source_kwargs,
+                return_state=True,
+            )
+
+    else:
+        raise ValueError(f"unsupported base_kind {base_kind!r}")
+
+    directional_split_table = _build_laplace_output_table(
+        queue,
+        2,
+        q_order,
+        source_box_level=nlevels,
+        out_kernel=DirectionalSourceDerivative(LaplaceKernel(2), "dir_vec"),
+        source_direction=source_direction,
+    )
+
+    case_specs = [
+        {
+            "label": "scalar",
+            "out_knl": base_knl,
+            "split_table": _get_laplace_2d_table(
+                queue,
+                tmp_path / f"nft-{base_kind}-combo-split-scalar-q4.sqlite",
+                q_order,
+                source_box_level=nlevels,
+            ),
+            "split_order": 4,
+            "tol": 1.0e-6,
+            "source_kwargs": None,
+        },
+        {
+            "label": "target-derivative",
+            "out_knl": AxisTargetDerivative(axis, base_knl),
+            "split_table": _get_laplace_2d_dx_table(
+                queue,
+                tmp_path / f"nft-{base_kind}-combo-split-dx-q4.sqlite",
+                q_order,
+                source_box_level=nlevels,
+            ),
+            "split_order": 4,
+            "tol": 1.0e-6,
+            "source_kwargs": None,
+        },
+        {
+            "label": "source-derivative",
+            "out_knl": AxisSourceDerivative(axis, base_knl),
+            "split_table": _get_laplace_2d_axis_source_derivative_table(
+                queue,
+                tmp_path / f"nft-{base_kind}-combo-split-sx-q4.sqlite",
+                q_order,
+                axis,
+                source_box_level=nlevels,
+            ),
+            "split_order": 4,
+            "tol": 1.0e-6,
+            "source_kwargs": None,
+        },
+        {
+            "label": "directional-source",
+            "out_knl": DirectionalSourceDerivative(base_knl, "dir_vec"),
+            "split_table": directional_split_table,
+            "split_order": 1,
+            "tol": 2.0e-5,
+            "source_kwargs": {"dir_vec": source_direction},
+        },
+    ]
+
+    for spec in case_specs:
+        direct_table = build_direct_table(spec["out_knl"])
+
+        split = run_case(
+            spec["split_table"],
+            split_enabled=True,
+            split_order=spec["split_order"],
+            out_knl=spec["out_knl"],
+            source_kwargs=spec["source_kwargs"],
+        )
+        direct = run_case(
+            direct_table,
+            split_enabled=False,
+            split_order=spec["split_order"],
+            out_knl=spec["out_knl"],
+            source_kwargs=spec["source_kwargs"],
+        )
+
+        split_pot = split["potentials"].get(queue)
+        direct_pot = direct["potentials"].get(queue)
+        rel_diff = np.linalg.norm(split_pot - direct_pot) / max(
+            1.0,
+            np.linalg.norm(direct_pot),
+        )
+
+        assert rel_diff < spec["tol"], (
+            f"{base_kind} 2D split full-accuracy combination sweep failed for "
+            f"{spec['label']} (rel_diff={rel_diff:.3e}, tol={spec['tol']:.3e})"
+        )
+
+
+@pytest.mark.full_accuracy
+def test_volume_fmm_2d_yukawa_split_full_accuracy_tracks_nonsplit_outputs(tmp_path):
+    from sumpy.kernel import AxisSourceDerivative, AxisTargetDerivative, YukawaKernel
+
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 4
+    lam = 8.0
+    nlevels = 5
+    split_order = 4
+    fmm_order = 24
+    axis = 0
+
+    split_scalar_table = _get_laplace_2d_table(
+        queue,
+        tmp_path / "nft-yukawa2d-fullacc-split-scalar-laplace-q4.sqlite",
+        q_order,
+    )
+    split_target_table = _get_laplace_2d_dx_table(
+        queue,
+        tmp_path / "nft-yukawa2d-fullacc-split-dx-laplace-q4.sqlite",
+        q_order,
+        source_box_level=nlevels,
+    )
+    split_source_table = _get_laplace_2d_axis_source_derivative_table(
+        queue,
+        tmp_path / "nft-yukawa2d-fullacc-split-sx-laplace-q4.sqlite",
+        q_order,
+        axis,
+        source_box_level=nlevels,
+    )
+
+    direct_scalar_table = _get_yukawa_2d_tables(
+        queue,
+        tmp_path / "nft-yukawa2d-fullacc-direct-scalar-q4.sqlite",
+        q_order,
+        lam,
+        max_source_box_level=nlevels,
+    )[nlevels]
+    direct_target_table = _get_yukawa_2d_dx_table(
+        queue,
+        tmp_path / "nft-yukawa2d-fullacc-direct-dx-q4.sqlite",
+        q_order,
+        lam,
+        source_box_level=nlevels,
+    )
+    direct_source_table = _get_yukawa_2d_axis_source_derivative_table(
+        queue,
+        tmp_path / "nft-yukawa2d-fullacc-direct-sx-q4.sqlite",
+        q_order,
+        lam,
+        axis,
+        source_box_level=nlevels,
+    )
+
+    target_knl = AxisTargetDerivative(axis, YukawaKernel(2))
+    source_knl = AxisSourceDerivative(axis, YukawaKernel(2))
+
+    split_scalar = _run_2d_yukawa_split_case(
+        ctx,
+        queue,
+        split_scalar_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=fmm_order,
+        lam=lam,
+        helmholtz_split=True,
+        helmholtz_split_order=split_order,
+    )
+    direct_scalar = _run_2d_yukawa_split_case(
+        ctx,
+        queue,
+        direct_scalar_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=fmm_order,
+        lam=lam,
+        helmholtz_split=False,
+    )
+
+    split_target = _run_2d_yukawa_split_case(
+        ctx,
+        queue,
+        split_target_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=fmm_order,
+        lam=lam,
+        helmholtz_split=True,
+        helmholtz_split_order=split_order,
+        out_kernel=target_knl,
+    )
+    direct_target = _run_2d_yukawa_split_case(
+        ctx,
+        queue,
+        direct_target_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=fmm_order,
+        lam=lam,
+        helmholtz_split=False,
+        out_kernel=target_knl,
+    )
+
+    split_source = _run_2d_yukawa_split_case(
+        ctx,
+        queue,
+        split_source_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=fmm_order,
+        lam=lam,
+        helmholtz_split=True,
+        helmholtz_split_order=split_order,
+        out_kernel=source_knl,
+    )
+    direct_source = _run_2d_yukawa_split_case(
+        ctx,
+        queue,
+        direct_source_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=fmm_order,
+        lam=lam,
+        helmholtz_split=False,
+        out_kernel=source_knl,
+    )
+
+    def rel_diff(split_out, direct_out):
+        split_pot = split_out["potentials"].get(queue)
+        direct_pot = direct_out["potentials"].get(queue)
+        return np.linalg.norm(split_pot - direct_pot) / max(
+            1.0, np.linalg.norm(direct_pot)
+        )
+
+    scalar_rel = rel_diff(split_scalar, direct_scalar)
+    target_rel = rel_diff(split_target, direct_target)
+    source_rel = rel_diff(split_source, direct_source)
+
+    assert scalar_rel < 1.0e-6, f"Yukawa split scalar rel_diff={scalar_rel:.3e}"
+    assert target_rel < 1.0e-6, f"Yukawa split target rel_diff={target_rel:.3e}"
+    assert source_rel < 1.0e-6, f"Yukawa split source rel_diff={source_rel:.3e}"
+
+
+@pytest.mark.full_accuracy
+def test_volume_fmm_2d_helmholtz_split_full_accuracy_tracks_nonsplit_outputs(tmp_path):
+    from sumpy.kernel import AxisSourceDerivative, AxisTargetDerivative, HelmholtzKernel
+
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 4
+    wave_number = 8.0
+    nlevels = 4
+    split_order = 4
+    fmm_order = 24
+    axis = 0
+
+    split_scalar_table = _get_laplace_2d_table(
+        queue,
+        tmp_path / "nft-helmholtz2d-fullacc-split-scalar-laplace-q4.sqlite",
+        q_order,
+    )
+    split_target_table = _get_laplace_2d_dx_table(
+        queue,
+        tmp_path / "nft-helmholtz2d-fullacc-split-dx-laplace-q4.sqlite",
+        q_order,
+        source_box_level=nlevels,
+    )
+    split_source_table = _get_laplace_2d_axis_source_derivative_table(
+        queue,
+        tmp_path / "nft-helmholtz2d-fullacc-split-sx-laplace-q4.sqlite",
+        q_order,
+        axis,
+        source_box_level=nlevels,
+    )
+
+    target_knl = AxisTargetDerivative(axis, HelmholtzKernel(2))
+    source_knl = AxisSourceDerivative(axis, HelmholtzKernel(2))
+
+    direct_scalar_table = _build_helmholtz_2d_output_table(
+        queue,
+        q_order,
+        wave_number,
+        source_box_level=nlevels,
+    )
+    direct_target_table = _build_helmholtz_2d_output_table(
+        queue,
+        q_order,
+        wave_number,
+        source_box_level=nlevels,
+        out_kernel=target_knl,
+    )
+    direct_source_table = _build_helmholtz_2d_output_table(
+        queue,
+        q_order,
+        wave_number,
+        source_box_level=nlevels,
+        out_kernel=source_knl,
+    )
+
+    split_scalar = _run_2d_helmholtz_pde_case(
+        ctx,
+        queue,
+        split_scalar_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=fmm_order,
+        wave_number=wave_number,
+        helmholtz_split=True,
+        helmholtz_split_order=split_order,
+        compute_pde_residual=False,
+        return_state=True,
+    )
+    direct_scalar = _run_2d_helmholtz_pde_case(
+        ctx,
+        queue,
+        direct_scalar_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=fmm_order,
+        wave_number=wave_number,
+        helmholtz_split=False,
+        compute_pde_residual=False,
+        return_state=True,
+    )
+
+    split_target = _run_2d_helmholtz_pde_case(
+        ctx,
+        queue,
+        split_target_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=fmm_order,
+        wave_number=wave_number,
+        helmholtz_split=True,
+        helmholtz_split_order=split_order,
+        out_kernel=target_knl,
+        compute_pde_residual=False,
+        return_state=True,
+    )
+    direct_target = _run_2d_helmholtz_pde_case(
+        ctx,
+        queue,
+        direct_target_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=fmm_order,
+        wave_number=wave_number,
+        helmholtz_split=False,
+        out_kernel=target_knl,
+        compute_pde_residual=False,
+        return_state=True,
+    )
+
+    split_source = _run_2d_helmholtz_pde_case(
+        ctx,
+        queue,
+        split_source_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=fmm_order,
+        wave_number=wave_number,
+        helmholtz_split=True,
+        helmholtz_split_order=split_order,
+        out_kernel=source_knl,
+        compute_pde_residual=False,
+        return_state=True,
+    )
+    direct_source = _run_2d_helmholtz_pde_case(
+        ctx,
+        queue,
+        direct_source_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=fmm_order,
+        wave_number=wave_number,
+        helmholtz_split=False,
+        out_kernel=source_knl,
+        compute_pde_residual=False,
+        return_state=True,
+    )
+
+    def rel_diff(split_out, direct_out):
+        split_pot = split_out["potentials"].get(queue)
+        direct_pot = direct_out["potentials"].get(queue)
+        return np.linalg.norm(split_pot - direct_pot) / max(
+            1.0, np.linalg.norm(direct_pot)
+        )
+
+    scalar_rel = rel_diff(split_scalar, direct_scalar)
+    target_rel = rel_diff(split_target, direct_target)
+    source_rel = rel_diff(split_source, direct_source)
+
+    assert scalar_rel < 1.0e-6, f"Helmholtz split scalar rel_diff={scalar_rel:.3e}"
+    assert target_rel < 1.0e-6, f"Helmholtz split target rel_diff={target_rel:.3e}"
+    assert source_rel < 1.0e-6, f"Helmholtz split source rel_diff={source_rel:.3e}"
+
+
+@pytest.mark.full_accuracy
+def test_volume_fmm_2d_helmholtz_split_directional_source_full_accuracy_tracks_nonsplit(
+    tmp_path,
+):
+    from sumpy.kernel import DirectionalSourceDerivative, HelmholtzKernel, LaplaceKernel
+
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 4
+    wave_number = 8.0
+    nlevels = 5
+    source_direction = np.array([1.0, 0.0], dtype=np.float64)
+    out_knl = DirectionalSourceDerivative(HelmholtzKernel(2), "dir_vec")
+
+    split_table = _build_laplace_output_table(
+        queue,
+        2,
+        q_order,
+        source_box_level=nlevels,
+        out_kernel=DirectionalSourceDerivative(LaplaceKernel(2), "dir_vec"),
+        source_direction=source_direction,
+    )
+    direct_table = _build_helmholtz_2d_output_table(
+        queue,
+        q_order,
+        wave_number,
+        source_box_level=nlevels,
+        out_kernel=out_knl,
+        source_direction=source_direction,
+    )
+
+    split = _run_2d_helmholtz_pde_case(
+        ctx,
+        queue,
+        split_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=24,
+        wave_number=wave_number,
+        helmholtz_split=True,
+        helmholtz_split_order=1,
+        out_kernel=out_knl,
+        source_extra_kwargs={"dir_vec": source_direction},
+        compute_pde_residual=False,
+        return_state=True,
+    )
+    direct = _run_2d_helmholtz_pde_case(
+        ctx,
+        queue,
+        direct_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=24,
+        wave_number=wave_number,
+        helmholtz_split=False,
+        out_kernel=out_knl,
+        source_extra_kwargs={"dir_vec": source_direction},
+        compute_pde_residual=False,
+        return_state=True,
+    )
+
+    split_pot = split["potentials"].get(queue)
+    direct_pot = direct["potentials"].get(queue)
+    rel_diff = np.linalg.norm(split_pot - direct_pot) / max(
+        1.0,
+        np.linalg.norm(direct_pot),
+    )
+    assert rel_diff < 2.0e-5, (
+        f"Helmholtz 2D directional-source split rel_diff is too large ({rel_diff:.3e})"
+    )
+
+
+@pytest.mark.full_accuracy
+def test_volume_fmm_2d_yukawa_split_directional_source_full_accuracy_tracks_nonsplit(
+    tmp_path,
+):
+    from sumpy.kernel import DirectionalSourceDerivative, LaplaceKernel, YukawaKernel
+
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 4
+    lam = 8.0
+    nlevels = 5
+    source_direction = np.array([1.0, 0.0], dtype=np.float64)
+    out_knl = DirectionalSourceDerivative(YukawaKernel(2), "dir_vec")
+
+    split_table = _build_laplace_output_table(
+        queue,
+        2,
+        q_order,
+        source_box_level=nlevels,
+        out_kernel=DirectionalSourceDerivative(LaplaceKernel(2), "dir_vec"),
+        source_direction=source_direction,
+    )
+    direct_table = _build_yukawa_2d_output_table(
+        queue,
+        q_order,
+        lam,
+        source_box_level=nlevels,
+        out_kernel=out_knl,
+        source_direction=source_direction,
+    )
+
+    split = _run_2d_yukawa_split_case(
+        ctx,
+        queue,
+        split_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=24,
+        lam=lam,
+        helmholtz_split=True,
+        helmholtz_split_order=1,
+        out_kernel=out_knl,
+        source_extra_kwargs={"dir_vec": source_direction},
+        return_state=True,
+    )
+    direct = _run_2d_yukawa_split_case(
+        ctx,
+        queue,
+        direct_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=24,
+        lam=lam,
+        helmholtz_split=False,
+        out_kernel=out_knl,
+        source_extra_kwargs={"dir_vec": source_direction},
+        return_state=True,
+    )
+
+    split_pot = split["potentials"].get(queue)
+    direct_pot = direct["potentials"].get(queue)
+    rel_diff = np.linalg.norm(split_pot - direct_pot) / max(
+        1.0,
+        np.linalg.norm(direct_pot),
+    )
+    assert rel_diff < 2.0e-5, (
+        f"Yukawa 2D directional-source split rel_diff is too large ({rel_diff:.3e})"
+    )
+
+
+@pytest.mark.full_accuracy
+def test_volume_fmm_3d_helmholtz_split_full_accuracy_tracks_nonsplit_outputs(tmp_path):
+    from sumpy.kernel import AxisSourceDerivative, AxisTargetDerivative, HelmholtzKernel
+
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 4
+    wave_number = 8.0
+    nlevels = 3
+    split_order = 4
+    fmm_order = 24
+    axis = 0
+
+    split_scalar_table = _get_laplace_3d_table(
+        queue,
+        tmp_path / "nft-helmholtz3d-fullacc-split-scalar-laplace-q4.sqlite",
+        q_order,
+    )
+    split_target_table = _get_laplace_3d_dx_table(
+        queue,
+        tmp_path / "nft-helmholtz3d-fullacc-split-dx-laplace-q4.sqlite",
+        q_order,
+        source_box_level=nlevels,
+    )
+    split_source_table = _get_laplace_3d_axis_source_derivative_table(
+        queue,
+        tmp_path / "nft-helmholtz3d-fullacc-split-sx-laplace-q4.sqlite",
+        q_order,
+        axis,
+        source_box_level=nlevels,
+    )
+
+    target_knl = AxisTargetDerivative(axis, HelmholtzKernel(3))
+    source_knl = AxisSourceDerivative(axis, HelmholtzKernel(3))
+
+    direct_scalar_table = _build_helmholtz_3d_output_table(
+        queue,
+        q_order,
+        wave_number,
+        source_box_level=nlevels,
+    )
+    direct_target_table = _build_helmholtz_3d_output_table(
+        queue,
+        q_order,
+        wave_number,
+        source_box_level=nlevels,
+        out_kernel=target_knl,
+    )
+    direct_source_table = _build_helmholtz_3d_output_table(
+        queue,
+        q_order,
+        wave_number,
+        source_box_level=nlevels,
+        out_kernel=source_knl,
+    )
+
+    split_scalar = _run_3d_helmholtz_pde_case(
+        ctx,
+        queue,
+        split_scalar_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=fmm_order,
+        wave_number=wave_number,
+        helmholtz_split=True,
+        helmholtz_split_order=split_order,
+        compute_pde_residual=False,
+        return_state=True,
+    )
+    direct_scalar = _run_3d_helmholtz_pde_case(
+        ctx,
+        queue,
+        direct_scalar_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=fmm_order,
+        wave_number=wave_number,
+        helmholtz_split=False,
+        compute_pde_residual=False,
+        return_state=True,
+    )
+
+    split_target = _run_3d_helmholtz_pde_case(
+        ctx,
+        queue,
+        split_target_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=fmm_order,
+        wave_number=wave_number,
+        helmholtz_split=True,
+        helmholtz_split_order=split_order,
+        out_kernel=target_knl,
+        compute_pde_residual=False,
+        return_state=True,
+    )
+    direct_target = _run_3d_helmholtz_pde_case(
+        ctx,
+        queue,
+        direct_target_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=fmm_order,
+        wave_number=wave_number,
+        helmholtz_split=False,
+        out_kernel=target_knl,
+        compute_pde_residual=False,
+        return_state=True,
+    )
+
+    split_source = _run_3d_helmholtz_pde_case(
+        ctx,
+        queue,
+        split_source_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=fmm_order,
+        wave_number=wave_number,
+        helmholtz_split=True,
+        helmholtz_split_order=split_order,
+        out_kernel=source_knl,
+        compute_pde_residual=False,
+        return_state=True,
+    )
+    direct_source = _run_3d_helmholtz_pde_case(
+        ctx,
+        queue,
+        direct_source_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=fmm_order,
+        wave_number=wave_number,
+        helmholtz_split=False,
+        out_kernel=source_knl,
+        compute_pde_residual=False,
+        return_state=True,
+    )
+
+    def rel_diff(split_out, direct_out):
+        split_pot = split_out["potentials"].get(queue)
+        direct_pot = direct_out["potentials"].get(queue)
+        return np.linalg.norm(split_pot - direct_pot) / max(
+            1.0, np.linalg.norm(direct_pot)
+        )
+
+    scalar_rel = rel_diff(split_scalar, direct_scalar)
+    target_rel = rel_diff(split_target, direct_target)
+    source_rel = rel_diff(split_source, direct_source)
+
+    assert scalar_rel < 1.0e-6, f"Helmholtz 3D split scalar rel_diff={scalar_rel:.3e}"
+    assert target_rel < 1.0e-6, f"Helmholtz 3D split target rel_diff={target_rel:.3e}"
+    assert source_rel < 1.0e-6, f"Helmholtz 3D split source rel_diff={source_rel:.3e}"
+
+
+@pytest.mark.full_accuracy
+def test_volume_fmm_3d_yukawa_split_full_accuracy_tracks_nonsplit_outputs(tmp_path):
+    from sumpy.kernel import AxisSourceDerivative, AxisTargetDerivative, YukawaKernel
+
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 4
+    lam = 8.0
+    nlevels = 3
+    split_order = 4
+    fmm_order = 24
+    axis = 0
+
+    split_scalar_table = _get_laplace_3d_table(
+        queue,
+        tmp_path / "nft-yukawa3d-fullacc-split-scalar-laplace-q4.sqlite",
+        q_order,
+    )
+    split_target_table = _get_laplace_3d_dx_table(
+        queue,
+        tmp_path / "nft-yukawa3d-fullacc-split-dx-laplace-q4.sqlite",
+        q_order,
+        source_box_level=nlevels,
+    )
+    split_source_table = _get_laplace_3d_axis_source_derivative_table(
+        queue,
+        tmp_path / "nft-yukawa3d-fullacc-split-sx-laplace-q4.sqlite",
+        q_order,
+        axis,
+        source_box_level=nlevels,
+    )
+
+    target_knl = AxisTargetDerivative(axis, YukawaKernel(3))
+    source_knl = AxisSourceDerivative(axis, YukawaKernel(3))
+
+    direct_scalar_table = _build_yukawa_3d_output_table(
+        queue,
+        q_order,
+        lam,
+        source_box_level=nlevels,
+    )
+    direct_target_table = _build_yukawa_3d_output_table(
+        queue,
+        q_order,
+        lam,
+        source_box_level=nlevels,
+        out_kernel=target_knl,
+    )
+    direct_source_table = _build_yukawa_3d_output_table(
+        queue,
+        q_order,
+        lam,
+        source_box_level=nlevels,
+        out_kernel=source_knl,
+    )
+
+    split_scalar = _run_3d_yukawa_split_case(
+        ctx,
+        queue,
+        split_scalar_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=fmm_order,
+        lam=lam,
+        helmholtz_split=True,
+        helmholtz_split_order=split_order,
+        return_state=True,
+    )
+    direct_scalar = _run_3d_yukawa_split_case(
+        ctx,
+        queue,
+        direct_scalar_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=fmm_order,
+        lam=lam,
+        helmholtz_split=False,
+        return_state=True,
+    )
+
+    split_target = _run_3d_yukawa_split_case(
+        ctx,
+        queue,
+        split_target_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=fmm_order,
+        lam=lam,
+        helmholtz_split=True,
+        helmholtz_split_order=split_order,
+        out_kernel=target_knl,
+        return_state=True,
+    )
+    direct_target = _run_3d_yukawa_split_case(
+        ctx,
+        queue,
+        direct_target_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=fmm_order,
+        lam=lam,
+        helmholtz_split=False,
+        out_kernel=target_knl,
+        return_state=True,
+    )
+
+    split_source = _run_3d_yukawa_split_case(
+        ctx,
+        queue,
+        split_source_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=fmm_order,
+        lam=lam,
+        helmholtz_split=True,
+        helmholtz_split_order=split_order,
+        out_kernel=source_knl,
+        return_state=True,
+    )
+    direct_source = _run_3d_yukawa_split_case(
+        ctx,
+        queue,
+        direct_source_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=fmm_order,
+        lam=lam,
+        helmholtz_split=False,
+        out_kernel=source_knl,
+        return_state=True,
+    )
+
+    def rel_diff(split_out, direct_out):
+        split_pot = split_out["potentials"].get(queue)
+        direct_pot = direct_out["potentials"].get(queue)
+        return np.linalg.norm(split_pot - direct_pot) / max(
+            1.0, np.linalg.norm(direct_pot)
+        )
+
+    scalar_rel = rel_diff(split_scalar, direct_scalar)
+    target_rel = rel_diff(split_target, direct_target)
+    source_rel = rel_diff(split_source, direct_source)
+
+    assert scalar_rel < 1.0e-6, f"Yukawa 3D split scalar rel_diff={scalar_rel:.3e}"
+    assert target_rel < 1.0e-6, f"Yukawa 3D split target rel_diff={target_rel:.3e}"
+    assert source_rel < 1.0e-6, f"Yukawa 3D split source rel_diff={source_rel:.3e}"
+
+
+def test_volume_fmm_2d_yukawa_split_directional_source_derivative_tracks_direct(
+    tmp_path,
+):
+    from sumpy.kernel import DirectionalSourceDerivative, LaplaceKernel, YukawaKernel
+
+    ctx = _create_non_intel_opencl_context_or_skip()
+    queue = cl.CommandQueue(ctx)
+
+    q_order = 4
+    lam = 8.0
+    nlevels = 3
+    source_direction = np.array([1.0, 0.0], dtype=np.float64)
+    split_table = _build_laplace_output_table(
+        queue,
+        2,
+        q_order,
+        source_box_level=nlevels,
+        out_kernel=DirectionalSourceDerivative(LaplaceKernel(2), "dir_vec"),
+        source_direction=source_direction,
+    )
+    out_knl = DirectionalSourceDerivative(YukawaKernel(2), "dir_vec")
+
+    split = _run_2d_yukawa_split_case(
+        ctx,
+        queue,
+        split_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=20,
+        lam=lam,
+        helmholtz_split=True,
+        helmholtz_split_order=1,
+        out_kernel=out_knl,
+        source_extra_kwargs={"dir_vec": source_direction},
+        return_state=True,
+    )
+    direct = _run_2d_yukawa_split_case(
+        ctx,
+        queue,
+        split_table,
+        q_order=q_order,
+        nlevels=nlevels,
+        fmm_order=20,
+        lam=lam,
+        helmholtz_split=False,
+        out_kernel=out_knl,
+        source_extra_kwargs={"dir_vec": source_direction},
+        direct_evaluation=True,
+        return_state=True,
+    )
+
+    split_pot = split["potentials"].get(queue)
+    direct_pot = direct["potentials"].get(queue)
+    assert np.all(np.isfinite(split_pot))
+    assert np.all(np.isfinite(direct_pot))
+
+    rel_diff = np.linalg.norm(split_pot - direct_pot) / max(
+        1.0,
+        np.linalg.norm(direct_pot),
+    )
+    assert rel_diff < 2.0e-2, (
+        "2D Yukawa directional-source split/direct mismatch is too large "
+        f"(rel_diff={rel_diff:.3e})"
+    )
 
 
 def test_volume_fmm_2d_yukawa_complex_lambda_rejected():

@@ -66,6 +66,7 @@ def pytest_addoption(parser):
     """Add extra command line options.
 
     --longrun  Skip expensive tests unless told otherwise.
+    --full-accuracy  Enable very expensive high-accuracy regression tests.
 
     """
     parser.addoption(
@@ -75,10 +76,24 @@ def pytest_addoption(parser):
         default=False,
         help="enable longrundecorated tests",
     )
+    parser.addoption(
+        "--full-accuracy",
+        action="store_true",
+        dest="full_accuracy",
+        default=False,
+        help="enable full_accuracy marked tests",
+    )
 
 
 def pytest_collection_modifyitems(config, items):
+    run_full_accuracy = bool(config.getoption("full_accuracy"))
+
     for item in items:
+        if "full_accuracy" in item.keywords and not run_full_accuracy:
+            item.add_marker(
+                pytest.mark.skip(reason="needs --full-accuracy option to run")
+            )
+
         callspec = getattr(item, "callspec", None)
         if callspec is None or "ctx_factory" not in callspec.params:
             continue

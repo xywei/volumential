@@ -11,6 +11,7 @@ Welcome to Volumential's Documentation!
    :caption: Contents:
 
    intro
+   m1_kernels
    nearfield_symmetry
    helmholtz_split
    install

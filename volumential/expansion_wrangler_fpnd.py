@@ -38,6 +38,7 @@ from sumpy.fmm import (
     SumpyTreeIndependentDataForWrangler,
 )
 from sumpy.kernel import (
+    AxisSourceDerivative,
     AxisTargetDerivative,
     DirectionalSourceDerivative,
     ExpressionKernel,
@@ -561,33 +562,141 @@ def _extract_symmetry_source_direction(out_kernel, source_extra_kwargs, queue):
     if not dir_vec_name or dir_vec_name not in source_extra_kwargs:
         return None
 
+    dim = int(dknl.dim)
     dir_vec = source_extra_kwargs[dir_vec_name]
-    comps = []
-    for comp in dir_vec:
-        if isinstance(comp, cl.array.Array):
-            size = int(np.prod(comp.shape))
-            if size == 0:
-                return None
-            first = float(np.asarray(comp[0].get(queue=queue)).ravel()[0])
-            if size > 1:
-                last = float(np.asarray(comp[-1].get(queue=queue)).ravel()[0])
-                if not np.allclose(last, first):
-                    raise ValueError(
-                        "symmetry_source_direction must be constant across sources"
-                    )
-            comps.append(first)
-        else:
-            arr = np.asarray(comp).ravel()
-            if arr.size == 0:
-                return None
-            first = float(arr[0])
-            if arr.size > 1 and not np.allclose(arr, first):
+
+    def _constant_component_value(comp_data):
+        arr = np.asarray(comp_data).ravel()
+        if arr.size == 0:
+            return None
+
+        if np.iscomplexobj(arr):
+            arr_c = np.asarray(arr, dtype=np.complex128)
+            if not np.all(np.isclose(np.imag(arr_c), 0.0)):
                 raise ValueError(
-                    "symmetry_source_direction must be constant across sources"
+                    "symmetry_source_direction must be real-valued for all sources"
                 )
-            comps.append(first)
+            arr = np.real(arr_c)
+
+        arr = np.asarray(arr, dtype=np.float64)
+        first = float(arr.ravel()[0])
+        if arr.size > 1 and not np.allclose(arr, first):
+            raise ValueError(
+                "symmetry_source_direction must be constant across sources"
+            )
+        return first
+
+    if isinstance(dir_vec, cl.array.Array):
+        dir_vec_h = np.asarray(dir_vec.get(queue=queue))
+    else:
+        dir_vec_h = np.asarray(dir_vec)
+
+    if dir_vec_h.size == 0:
+        return None
+
+    if dir_vec_h.dtype != object:
+        if dir_vec_h.ndim == 1:
+            if dir_vec_h.size != dim:
+                raise ValueError(
+                    "symmetry_source_direction must have one component per axis "
+                    f"(expected length {dim}, got {dir_vec_h.size})"
+                )
+
+            if np.iscomplexobj(dir_vec_h):
+                imag = np.imag(np.asarray(dir_vec_h, dtype=np.complex128)).ravel()
+                if imag.size and not np.all(np.isclose(imag, 0.0)):
+                    raise ValueError(
+                        "symmetry_source_direction must be real-valued with one "
+                        f"component per axis (expected length {dim})"
+                    )
+                dir_vec_h = np.real(dir_vec_h)
+
+            return np.asarray(dir_vec_h, dtype=np.float64)
+
+        if dir_vec_h.ndim == 2:
+            if dir_vec_h.shape[0] == dim:
+                comp_rows = dir_vec_h
+            elif dir_vec_h.shape[1] == dim:
+                comp_rows = dir_vec_h.T
+            else:
+                raise ValueError(
+                    "symmetry_source_direction has incompatible shape "
+                    f"{dir_vec_h.shape}; expected ({dim}, nsources) or (nsources, {dim})"
+                )
+
+            comps = []
+            for comp_row in comp_rows:
+                comp_val = _constant_component_value(comp_row)
+                if comp_val is None:
+                    return None
+                comps.append(comp_val)
+
+            return np.asarray(comps, dtype=np.float64)
+
+        raise ValueError(
+            "symmetry_source_direction must be a vector or matrix, got "
+            f"{dir_vec_h.ndim}D array"
+        )
+
+    try:
+        components = list(dir_vec)
+    except TypeError as exc:
+        raise ValueError(
+            "symmetry_source_direction must be vector-like with one component per axis"
+        ) from exc
+
+    if len(components) != dim:
+        raise ValueError(
+            "symmetry_source_direction must have one component per axis "
+            f"(expected {dim}, got {len(components)})"
+        )
+
+    comps = []
+    for comp in components:
+        if isinstance(comp, cl.array.Array):
+            comp_h = np.asarray(comp.get(queue=queue))
+        else:
+            comp_h = np.asarray(comp)
+        comp_val = _constant_component_value(comp_h)
+        if comp_val is None:
+            return None
+        comps.append(comp_val)
 
     return np.asarray(comps, dtype=np.float64)
+
+
+def _derive_source_kernels_from_target_kernels(target_kernels):
+    from pytools import single_valued
+    from sumpy.kernel import TargetTransformationRemover
+
+    txr = TargetTransformationRemover()
+
+    if not target_kernels:
+        return None
+
+    try:
+        source_knl = single_valued(txr(knl) for knl in target_kernels)
+    except ValueError as exc:
+        raise ValueError(
+            "target kernels must share a single source-side kernel "
+            "after removing target derivatives"
+        ) from exc
+
+    return (source_knl,)
+
+
+def _target_kernels_include_source_derivatives(target_kernels):
+    if target_kernels is None:
+        return False
+
+    for knl in target_kernels:
+        cur_knl = knl
+        while cur_knl is not None:
+            if isinstance(cur_knl, (AxisSourceDerivative, DirectionalSourceDerivative)):
+                return True
+            cur_knl = getattr(cur_knl, "inner_kernel", None)
+
+    return False
 
 
 def _prepare_table_data_and_entry_map(table_levels):
@@ -718,6 +827,11 @@ class FPNDSumpyTreeIndependentDataForWrangler(
         strength_usage=None,
         source_kernels=None,
     ):
+        if source_kernels is None and not _target_kernels_include_source_derivatives(
+            target_kernels
+        ):
+            source_kernels = _derive_source_kernels_from_target_kernels(target_kernels)
+
         queue = cl.CommandQueue(cl_context)
         actx = PyOpenCLArrayContext(queue)
         super_kwargs = dict(
@@ -849,7 +963,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         kernel_extra_kwargs=None,
         self_extra_kwargs=None,
         list1_extra_kwargs=None,
-        helmholtz_split=False,
+        helmholtz_split=None,
         helmholtz_split_order=1,
         helmholtz_split_smooth_quad_order=None,
         helmholtz_split_auto_config=None,
@@ -867,8 +981,14 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         If ``helmholtz_split`` is true, near-field table lookups are interpreted as
         Laplace contributions and list1 receives an additional online
         Helmholtz-minus-Laplace correction from neighbor-only direct evaluation.
-        This mode currently supports exactly one base Helmholtz target kernel in
-        2D or 3D.
+        This mode supports Helmholtz/Yukawa output kernels in 2D or 3D,
+        including axis target/source and directional source derivative wrappers.
+        For multiple output kernels, split correction currently runs with
+        ``helmholtz_split_order=1``.
+
+        If ``helmholtz_split`` is ``None`` (default), split mode is enabled
+        automatically for supported Helmholtz/Yukawa target kernels and
+        disabled otherwise.
 
         ``helmholtz_split_order`` controls how many *non-smooth* correction
         terms are handled by prebuilt near-field split tables. Values mean:
@@ -1057,11 +1177,45 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
 
         if list1_extra_kwargs is None:
             list1_extra_kwargs = {}
+        else:
+            list1_extra_kwargs = dict(list1_extra_kwargs)
 
-        self.helmholtz_split = bool(helmholtz_split)
+        self._split_user_list1_extra_kwargs = dict(list1_extra_kwargs)
+        self._helmholtz_split_multi_output = False
+
+        self.helmholtz_split = (
+            True if helmholtz_split is None else bool(helmholtz_split)
+        )
         auto_cfg = dict(helmholtz_split_auto_config or {})
         self._helmholtz_split_auto_config = dict(auto_cfg)
         auto_mode = False
+
+        if self.helmholtz_split:
+            split_supported, split_reason = self._split_target_kernel_support_status()
+            if not split_supported:
+                logger.info(
+                    "[split:disable] unsupported target kernels: %s",
+                    split_reason,
+                )
+                self.helmholtz_split = False
+
+        if self.helmholtz_split:
+            base_table_supported, base_table_reason = (
+                self._split_base_table_support_status()
+            )
+            if not base_table_supported:
+                if helmholtz_split is None:
+                    logger.info(
+                        "[split:disable] %s",
+                        base_table_reason,
+                    )
+                    self.helmholtz_split = False
+                else:
+                    raise RuntimeError(
+                        "helmholtz_split requires Laplace-backed near-field tables; "
+                        f"{base_table_reason}"
+                    )
+
         if self.helmholtz_split:
             auto_enabled = bool(auto_cfg.get("enabled", False))
             auto_mode = auto_enabled or (
@@ -1081,6 +1235,17 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
 
         if self.helmholtz_split_order < 1:
             raise ValueError("helmholtz_split_order must be >= 1")
+
+        if self.helmholtz_split and len(self.tree_indep.target_kernels) > 1:
+            self._helmholtz_split_multi_output = True
+            if self.helmholtz_split_order > 1:
+                logger.warning(
+                    "split order %d requested with %d target kernels; "
+                    "clamping to order 1 for multi-output split mode",
+                    self.helmholtz_split_order,
+                    len(self.tree_indep.target_kernels),
+                )
+                self.helmholtz_split_order = 1
 
         if auto_mode and self.helmholtz_split:
             max_rho_imag = float(auto_cfg.get("rho_imag_split_max", 8.0))
@@ -1110,10 +1275,8 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             helmholtz_split_order1_legacy_subtraction
         )
 
-        self._helmholtz_split_p2p_helm = None
-        self._helmholtz_split_p2p_lap = None
-        self._helmholtz_split_p2p_helm_include_self = None
-        self._helmholtz_split_p2p_lap_include_self = None
+        self._helmholtz_split_p2p_pair_cache = {}
+        self._helmholtz_split_p2p_pair_include_self_cache = {}
         self._helmholtz_split_term_p2p = {}
         self._helmholtz_split_term_p2p_include_self = {}
         self._helmholtz_split_remainder_p2p = None
@@ -1125,6 +1288,9 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         self._helmholtz_split_constant_kernel = None
         self._helmholtz_split_power_kernels = {}
         self._helmholtz_split_power_log_kernels = {}
+        self._helmholtz_split_kernel_wrapper_chain = ()
+        self._helmholtz_split_kernel_wrapper_suffix = ""
+        self._helmholtz_split_wrapper_derivative_order = 0
         self._helmholtz_split_smooth_interp_cache = {}
         self._helmholtz_split_table_cache_filename = None
         self._helmholtz_split_table_cache_root_extent = None
@@ -1132,7 +1298,6 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         self._helmholtz_split_base_source_box_levels = None
         self._helmholtz_split_log_alpha_per_source_cache = {}
         self._helmholtz_split_log_alpha_per_source_dev_cache = {}
-
         self.helmholtz_split_term_tables = {}
         if helmholtz_split_term_tables is None:
             helmholtz_split_term_tables = {}
@@ -1280,24 +1445,34 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             if self.helmholtz_split_smooth_quad_order < 1:
                 raise ValueError("helmholtz_split_smooth_quad_order must be >= 1")
 
+        self._helmholtz_split_smooth_quad_order_requested = (
+            self.helmholtz_split_smooth_quad_order
+        )
+
         if self.helmholtz_split:
             from sumpy.kernel import HelmholtzKernel, LaplaceKernel, YukawaKernel
 
             from volumential.table_manager import ConstantKernel
 
-            if len(self.tree_indep.target_kernels) != 1:
-                raise NotImplementedError(
-                    "helmholtz_split currently supports exactly one target kernel"
-                )
-
             out_knl = self.tree_indep.target_kernels[0]
             base_knl = out_knl.get_base_kernel()
-            if out_knl is not base_knl or not isinstance(
-                base_knl, (HelmholtzKernel, YukawaKernel)
-            ):
+
+            if not isinstance(base_knl, (HelmholtzKernel, YukawaKernel)):
                 raise NotImplementedError(
-                    "helmholtz_split currently supports only base Helmholtz/Yukawa kernels"
+                    "helmholtz_split currently supports only Helmholtz/Yukawa "
+                    "kernels (optionally wrapped by supported derivatives)"
                 )
+
+            wrapper_chain = self._extract_helmholtz_split_kernel_wrapper_chain(
+                out_knl,
+                base_knl,
+            )
+
+            self._helmholtz_split_kernel_wrapper_chain = wrapper_chain
+            self._helmholtz_split_kernel_wrapper_suffix = (
+                self._format_helmholtz_split_kernel_wrapper_suffix(wrapper_chain)
+            )
+            self._helmholtz_split_wrapper_derivative_order = int(len(wrapper_chain))
 
             if base_knl.dim not in (2, 3):
                 raise NotImplementedError(
@@ -1340,37 +1515,64 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
                         "to enable auto-build"
                     )
 
-            list1_extra_kwargs = dict(list1_extra_kwargs)
             if list1_extra_kwargs.get("infer_kernel_scaling", False):
-                raise RuntimeError(
-                    "helmholtz_split does not support infer_kernel_scaling; "
-                    "provide explicit split scaling/displacement only"
+                logger.info(
+                    "[split:init] infer_kernel_scaling requested; overriding with "
+                    "split-aware scaling/displacement policy"
                 )
 
-            list1_extra_kwargs.setdefault("infer_kernel_scaling", False)
-            if base_knl.dim == 3:
-                list1_extra_kwargs.setdefault(
-                    "kernel_scaling_code",
-                    "BOX_extent * BOX_extent / (table_root_extent * table_root_extent)",
-                )
-                list1_extra_kwargs.setdefault("kernel_displacement_code", "0.0")
-            else:
-                list1_extra_kwargs.setdefault(
-                    "kernel_scaling_code",
-                    "BOX_extent * BOX_extent / (table_root_extent * table_root_extent)",
-                )
-                list1_extra_kwargs.setdefault(
-                    "kernel_displacement_code",
-                    f"-0.5 / {np.pi!r} * scaling * "
-                    "log(BOX_extent / table_root_extent) * "
-                    "mode_nmlz[table_lev, sid]",
-                )
+            list1_extra_kwargs["infer_kernel_scaling"] = False
+            list1_extra_kwargs.setdefault(
+                "kernel_scaling_code",
+                self._helmholtz_split_list1_scaling_code(base_knl.dim),
+            )
+            list1_extra_kwargs.setdefault(
+                "kernel_displacement_code",
+                self._helmholtz_split_list1_displacement_code(base_knl.dim),
+            )
 
             self._helmholtz_split_kernels = (
-                base_knl,
-                LaplaceKernel(base_knl.dim),
+                self._apply_helmholtz_split_kernel_wrappers(base_knl),
+                self._apply_helmholtz_split_kernel_wrappers(
+                    LaplaceKernel(base_knl.dim)
+                ),
             )
             self._helmholtz_split_constant_kernel = ConstantKernel(base_knl.dim)
+
+            wrapper_summary = (
+                ",".join(f"{kind}:{value}" for kind, value in wrapper_chain)
+                if wrapper_chain
+                else "none"
+            )
+            term_key_summary = (
+                ",".join(
+                    _format_helmholtz_split_term_key(term_key)
+                    for term_key in sorted(self.helmholtz_split_term_tables)
+                )
+                if self.helmholtz_split_term_tables
+                else "none"
+            )
+
+            if auto_mode:
+                rho_real = float(getattr(self, "_split_auto_rho_real", 0.0))
+                rho_imag = float(getattr(self, "_split_auto_rho_imag", 0.0))
+                rho_summary = f"{rho_real:.3g},{rho_imag:.3g}"
+            else:
+                rho_summary = "n/a"
+
+            logger.info(
+                "[split:init] dim=%d out=%s base=%s wrappers=%s order=%d "
+                "smooth_q=%s auto=%s rho=%s term_keys=%s",
+                base_knl.dim,
+                out_knl.__class__.__name__,
+                base_knl.__class__.__name__,
+                wrapper_summary,
+                self.helmholtz_split_order,
+                self.helmholtz_split_smooth_quad_order,
+                auto_mode,
+                rho_summary,
+                term_key_summary,
+            )
         self.list1_extra_kwargs = list1_extra_kwargs
         self._table_layout_validation_cache = set()
         self._nearfield_device_payload_cache = OrderedDict()
@@ -1406,6 +1608,12 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             queue, symmetry_maps["mode_qpoint_map"]
         )
         mode_case_map_dev = cl.array.to_device(queue, symmetry_maps["mode_case_map"])
+        mode_case_scale = symmetry_maps.get("mode_case_scale")
+        if mode_case_scale is None:
+            mode_case_scale = np.ones(
+                (table0.n_q_points, table0.n_cases),
+                dtype=np.int8,
+            )
 
         (
             table_data_combined,
@@ -1423,6 +1631,8 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             exterior_mode_nmlz_combined = exterior_mode_nmlz_combined.astype(eval_dtype)
         if table_entry_scales.dtype != eval_dtype:
             table_entry_scales = table_entry_scales.astype(eval_dtype)
+        if mode_case_scale.dtype != eval_dtype:
+            mode_case_scale = mode_case_scale.astype(eval_dtype)
 
         table_data_shapes = {
             "n_tables": len(near_field_tables),
@@ -1437,6 +1647,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             "case_indices_dev": case_indices_dev,
             "mode_qpoint_map_dev": mode_qpoint_map_dev,
             "mode_case_map_dev": mode_case_map_dev,
+            "mode_case_scale_dev": cl.array.to_device(queue, mode_case_scale),
             "table_data_dev": cl.array.to_device(queue, table_data_combined),
             "mode_nmlz_dev": cl.array.to_device(queue, mode_nmlz_combined),
             "exterior_mode_nmlz_dev": cl.array.to_device(
@@ -1616,6 +1827,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         case_indices_dev = payload["case_indices_dev"]
         mode_qpoint_map_dev = payload["mode_qpoint_map_dev"]
         mode_case_map_dev = payload["mode_case_map_dev"]
+        mode_case_scale_dev = payload["mode_case_scale_dev"]
         table_data_shapes = payload["table_data_shapes"]
         assert table_data_shapes["n_q_points"] == len(table0.mode_normalizers)
 
@@ -1671,6 +1883,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             case_indices=case_indices_dev,
             mode_qpoint_map=mode_qpoint_map_dev,
             mode_case_map=mode_case_map_dev,
+            mode_case_scale=mode_case_scale_dev,
             encoding_base=base,
             encoding_shift=shift,
             mode_nmlz_combined=mode_nmlz_combined,
@@ -1713,13 +1926,21 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         events = []
         for i in range(len(self.tree_indep.target_kernels)):
             # print("processing near-field of out_kernel", i)
+            out_knl = self.tree_indep.target_kernels[i]
+            kernel_list1_extra_kwargs = None
+            if self.helmholtz_split:
+                kernel_list1_extra_kwargs = (
+                    self._split_list1_extra_kwargs_for_out_kernel(out_knl)
+                )
+
             pot[i], evt = self.eval_direct_single_out_kernel(
                 pot[i],
-                self.tree_indep.target_kernels[i],
+                out_knl,
                 target_boxes,
                 neighbor_source_boxes_starts,
                 neighbor_source_boxes_lists,
                 mode_coefs,
+                list1_extra_kwargs=kernel_list1_extra_kwargs,
             )
             events.append(evt)
 
@@ -1735,12 +1956,55 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         neighbor_source_boxes_lists,
         src_weights,
         src_func=None,
+        _split_out_kernel=None,
     ):
         if not self.helmholtz_split:
             return self.output_zeros(), SumpyTimingFuture(self.queue, [])
 
+        if _split_out_kernel is None and len(self.tree_indep.target_kernels) > 1:
+            if self.helmholtz_split_order > 1:
+                raise NotImplementedError(
+                    "multi-output split correction currently supports split_order=1"
+                )
+
+            corrections = []
+            aggregated_events = []
+            for out_knl in self.tree_indep.target_kernels:
+                corr_i, timing_i = self.eval_direct_helmholtz_split_correction(
+                    target_boxes,
+                    neighbor_source_boxes_starts,
+                    neighbor_source_boxes_lists,
+                    src_weights,
+                    src_func=src_func,
+                    _split_out_kernel=out_knl,
+                )
+                aggregated_events.extend(getattr(timing_i, "events", []) or [])
+                corr_i_oa = (
+                    corr_i
+                    if isinstance(corr_i, np.ndarray) and corr_i.dtype == object
+                    else obj_array_1d([corr_i])
+                )
+                if len(corr_i_oa) != 1:
+                    raise RuntimeError(
+                        "split correction per output kernel must have one component"
+                    )
+                corrections.append(corr_i_oa[0])
+
+            return (
+                obj_array_1d(corrections),
+                SumpyTimingFuture(self.queue, aggregated_events),
+            )
+
+        if _split_out_kernel is None:
+            _split_out_kernel = self.tree_indep.target_kernels[0]
+
+        _, _, effective_split_smooth_quad_order = self._set_active_split_kernel(
+            _split_out_kernel
+        )
+
         shared_kwargs = {}
         shared_kwargs.update(self.self_extra_kwargs)
+        shared_kwargs.update(self.source_extra_kwargs)
         shared_kwargs.update(self.box_source_list_kwargs())
         shared_kwargs.update(self.box_target_list_kwargs())
 
@@ -1751,7 +2015,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
                 self.queue, shared_kwargs["target_to_source"]
             )
 
-        smooth_quad_order = self.helmholtz_split_smooth_quad_order
+        smooth_quad_order = effective_split_smooth_quad_order
         smooth_quad_order_int = (
             int(smooth_quad_order) if smooth_quad_order is not None else None
         )
@@ -2035,44 +2299,29 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
     def _get_helmholtz_split_p2p_pair(self, *, exclude_self):
         from sumpy import P2PFromCSR
 
-        if exclude_self:
-            if (
-                self._helmholtz_split_p2p_helm is None
-                or self._helmholtz_split_p2p_lap is None
-            ):
-                helm_knl, lap_knl = self._helmholtz_split_kernels
-                self._helmholtz_split_p2p_helm = P2PFromCSR(
-                    [helm_knl],
-                    True,
-                    value_dtypes=[self.dtype],
-                )
-                self._helmholtz_split_p2p_lap = P2PFromCSR(
-                    [lap_knl],
-                    True,
-                    value_dtypes=[self.dtype],
-                )
-            return self._helmholtz_split_p2p_helm, self._helmholtz_split_p2p_lap
-
-        if (
-            self._helmholtz_split_p2p_helm_include_self is None
-            or self._helmholtz_split_p2p_lap_include_self is None
-        ):
-            helm_knl, lap_knl = self._helmholtz_split_kernels
-            self._helmholtz_split_p2p_helm_include_self = P2PFromCSR(
-                [helm_knl],
-                False,
-                value_dtypes=[self.dtype],
-            )
-            self._helmholtz_split_p2p_lap_include_self = P2PFromCSR(
-                [lap_knl],
-                False,
-                value_dtypes=[self.dtype],
-            )
-
-        return (
-            self._helmholtz_split_p2p_helm_include_self,
-            self._helmholtz_split_p2p_lap_include_self,
+        wrapper_key = tuple(self._helmholtz_split_kernel_wrapper_chain)
+        cache = (
+            self._helmholtz_split_p2p_pair_cache
+            if exclude_self
+            else self._helmholtz_split_p2p_pair_include_self_cache
         )
+
+        if wrapper_key not in cache:
+            helm_knl, lap_knl = self._helmholtz_split_kernels
+            cache[wrapper_key] = (
+                P2PFromCSR(
+                    [helm_knl],
+                    bool(exclude_self),
+                    value_dtypes=[self.dtype],
+                ),
+                P2PFromCSR(
+                    [lap_knl],
+                    bool(exclude_self),
+                    value_dtypes=[self.dtype],
+                ),
+            )
+
+        return cache[wrapper_key]
 
     def _get_helmholtz_split_term_p2p(self, term_kernel, *, exclude_self):
         from sumpy import P2PFromCSR
@@ -2093,7 +2342,271 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
 
         return cache[kname]
 
+    def _extract_helmholtz_split_kernel_wrapper_chain(self, out_knl, base_knl):
+        wrappers = []
+        cur_knl = out_knl
+
+        while cur_knl is not base_knl:
+            if isinstance(cur_knl, AxisTargetDerivative):
+                wrappers.append(("axis_target", int(cur_knl.axis)))
+                cur_knl = cur_knl.inner_kernel
+                continue
+
+            if isinstance(cur_knl, AxisSourceDerivative):
+                wrappers.append(("axis_source", int(cur_knl.axis)))
+                cur_knl = cur_knl.inner_kernel
+                continue
+
+            if isinstance(cur_knl, DirectionalSourceDerivative):
+                wrappers.append(("directional_source", str(cur_knl.dir_vec_name)))
+                cur_knl = cur_knl.inner_kernel
+                continue
+
+            raise NotImplementedError(
+                "helmholtz_split currently supports only axis target/source "
+                "derivative wrappers around Helmholtz/Yukawa kernels"
+            )
+
+        return tuple(wrappers)
+
+    def _format_helmholtz_split_kernel_wrapper_suffix(self, wrappers):
+        if not wrappers:
+            return ""
+
+        parts = []
+        for kind, value in wrappers:
+            if kind == "axis_target":
+                parts.append(f"td{int(value)}")
+            elif kind == "axis_source":
+                parts.append(f"sd{int(value)}")
+            elif kind == "directional_source":
+                parts.append(f"sdir_{value}")
+            else:
+                raise RuntimeError(f"unsupported split wrapper kind: {kind}")
+
+        return "__" + "__".join(parts)
+
+    @staticmethod
+    def _apply_helmholtz_split_kernel_wrappers_with_chain(kernel, wrapper_chain):
+        wrapped = kernel
+        for kind, value in reversed(wrapper_chain):
+            if kind == "axis_target":
+                wrapped = AxisTargetDerivative(int(value), wrapped)
+            elif kind == "axis_source":
+                wrapped = AxisSourceDerivative(int(value), wrapped)
+            elif kind == "directional_source":
+                wrapped = DirectionalSourceDerivative(wrapped, str(value))
+            else:
+                raise RuntimeError(f"unsupported split wrapper kind: {kind}")
+
+        return wrapped
+
+    def _apply_helmholtz_split_kernel_wrappers(self, kernel):
+        return self._apply_helmholtz_split_kernel_wrappers_with_chain(
+            kernel,
+            self._helmholtz_split_kernel_wrapper_chain,
+        )
+
+    @staticmethod
+    def _split_table_kernel(table):
+        table_kernel = getattr(table, "integral_knl", None)
+        if table_kernel is None:
+            table_kernel = getattr(table, "sumpy_kernel", None)
+        return table_kernel
+
+    def _split_base_table_support_status(self):
+        target_kernels = list(self.tree_indep.target_kernels)
+        if not target_kernels:
+            return False, "no target kernels"
+
+        for out_knl in target_kernels:
+            base_knl = out_knl.get_base_kernel()
+            wrapper_chain = self._extract_helmholtz_split_kernel_wrapper_chain(
+                out_knl,
+                base_knl,
+            )
+
+            expected_kernel = self._apply_helmholtz_split_kernel_wrappers_with_chain(
+                LaplaceKernel(base_knl.dim),
+                wrapper_chain,
+            )
+            expected_repr = repr(expected_kernel)
+
+            table_key = repr(out_knl)
+            base_tables = self.near_field_table.get(table_key, [])
+            if not base_tables:
+                return (
+                    False,
+                    f"missing near-field tables for {table_key}",
+                )
+
+            for lev, table in enumerate(base_tables):
+                table_kernel = self._split_table_kernel(table)
+                if table_kernel is None:
+                    return (
+                        False,
+                        f"{table_key} level {lev} is missing table kernel metadata "
+                        "(cache-key design cannot disambiguate split base kernel)",
+                    )
+
+                table_repr = repr(table_kernel)
+                if table_repr != expected_repr:
+                    return (
+                        False,
+                        f"{table_key} level {lev} kernel mismatch: expected "
+                        f"{expected_repr}, got {table_repr} (cache-key design)",
+                    )
+
+        return True, ""
+
+    def _split_target_kernel_support_status(self):
+        from sumpy.kernel import HelmholtzKernel, YukawaKernel
+
+        target_kernels = list(self.tree_indep.target_kernels)
+        if not target_kernels:
+            return False, "no target kernels"
+
+        base_dim = None
+        base_kind = None
+        base_param_name = None
+
+        for out_knl in target_kernels:
+            base_knl = out_knl.get_base_kernel()
+            if not isinstance(base_knl, (HelmholtzKernel, YukawaKernel)):
+                return (
+                    False,
+                    f"{out_knl.__class__.__name__} is not a Helmholtz/Yukawa kernel",
+                )
+
+            if int(base_knl.dim) not in (2, 3):
+                return False, f"unsupported dimension {base_knl.dim}"
+
+            try:
+                self._extract_helmholtz_split_kernel_wrapper_chain(out_knl, base_knl)
+            except NotImplementedError as exc:
+                return False, str(exc)
+
+            param_name = self._split_wave_number_parameter_name(base_knl)
+            if not isinstance(param_name, str) or not param_name:
+                return (
+                    False,
+                    f"{base_knl.__class__.__name__} missing split parameter name",
+                )
+
+            if base_dim is None:
+                base_dim = int(base_knl.dim)
+                base_kind = type(base_knl)
+                base_param_name = param_name
+            else:
+                if int(base_knl.dim) != base_dim:
+                    return False, "mixed dimensions in split target kernels"
+                if type(base_knl) is not base_kind:
+                    return (
+                        False,
+                        "mixed Helmholtz/Yukawa base kernels in split mode are unsupported",
+                    )
+                if param_name != base_param_name:
+                    return (
+                        False,
+                        "mixed split parameter names across target kernels are unsupported",
+                    )
+
+        return True, ""
+
+    def _set_active_split_kernel(self, out_knl):
+        from sumpy.kernel import HelmholtzKernel, LaplaceKernel, YukawaKernel
+
+        from volumential.table_manager import ConstantKernel
+
+        base_knl = out_knl.get_base_kernel()
+        if not isinstance(base_knl, (HelmholtzKernel, YukawaKernel)):
+            raise NotImplementedError(
+                "split mode currently supports only Helmholtz/Yukawa output kernels"
+            )
+
+        wrapper_chain = self._extract_helmholtz_split_kernel_wrapper_chain(
+            out_knl,
+            base_knl,
+        )
+
+        self._helmholtz_split_kernel_wrapper_chain = wrapper_chain
+        self._helmholtz_split_kernel_wrapper_suffix = (
+            self._format_helmholtz_split_kernel_wrapper_suffix(wrapper_chain)
+        )
+        self._helmholtz_split_wrapper_derivative_order = int(len(wrapper_chain))
+        self._helmholtz_split_kernels = (
+            self._apply_helmholtz_split_kernel_wrappers(base_knl),
+            self._apply_helmholtz_split_kernel_wrappers(LaplaceKernel(base_knl.dim)),
+        )
+        self._helmholtz_split_constant_kernel = ConstantKernel(base_knl.dim)
+
+        effective_split_smooth_quad_order = getattr(
+            self,
+            "_helmholtz_split_smooth_quad_order_requested",
+            self.helmholtz_split_smooth_quad_order,
+        )
+
+        has_directional_source_wrapper = any(
+            kind == "directional_source" for kind, _ in wrapper_chain
+        )
+        if (
+            has_directional_source_wrapper
+            and effective_split_smooth_quad_order is not None
+            and effective_split_smooth_quad_order > self.quad_order
+        ):
+            logger.warning(
+                "split smooth quad order %d requested for directional source "
+                "derivatives; clamping to base quadrature order %d",
+                effective_split_smooth_quad_order,
+                self.quad_order,
+            )
+            effective_split_smooth_quad_order = int(self.quad_order)
+
+        return base_knl, wrapper_chain, effective_split_smooth_quad_order
+
+    def _split_list1_extra_kwargs_for_out_kernel(self, out_knl):
+        if not self.helmholtz_split:
+            return self.list1_extra_kwargs
+
+        base_knl, wrapper_chain, _ = self._set_active_split_kernel(out_knl)
+        derivative_order = int(len(wrapper_chain))
+
+        list1_kwargs = dict(self.list1_extra_kwargs)
+        user_kwargs = self._split_user_list1_extra_kwargs
+        list1_kwargs["infer_kernel_scaling"] = False
+
+        if "kernel_scaling_code" not in user_kwargs:
+            list1_kwargs["kernel_scaling_code"] = (
+                self._helmholtz_split_list1_scaling_code(
+                    base_knl.dim,
+                    derivative_order=derivative_order,
+                )
+            )
+
+        if "kernel_displacement_code" not in user_kwargs:
+            list1_kwargs["kernel_displacement_code"] = (
+                self._helmholtz_split_list1_displacement_code(
+                    base_knl.dim,
+                    derivative_order=derivative_order,
+                )
+            )
+
+        return list1_kwargs
+
+    def _helmholtz_split_kernel_type_name(self, base_name):
+        suffix = self._helmholtz_split_kernel_wrapper_suffix
+        if suffix:
+            return f"{base_name}{suffix}"
+        return base_name
+
     def _split_wave_number_parameter_name(self, base_knl):
+        get_base_kernel = getattr(base_knl, "get_base_kernel", None)
+        if callable(get_base_kernel):
+            try:
+                base_knl = get_base_kernel()
+            except Exception:
+                pass
+
         if isinstance(base_knl, HelmholtzKernel):
             return getattr(base_knl, "helmholtz_k_name", None)
         if isinstance(base_knl, YukawaKernel):
@@ -2101,6 +2614,13 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         return None
 
     def _split_wave_number(self, base_knl, *, what):
+        get_base_kernel = getattr(base_knl, "get_base_kernel", None)
+        if callable(get_base_kernel):
+            try:
+                base_knl = get_base_kernel()
+            except Exception:
+                pass
+
         param_name = self._split_wave_number_parameter_name(base_knl)
         if not isinstance(param_name, str) or not param_name:
             raise RuntimeError(
@@ -2127,13 +2647,14 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         raise RuntimeError("split mode supports only Helmholtz/Yukawa kernels")
 
     def _compute_split_rho_max(self):
-        if len(self.tree_indep.target_kernels) != 1:
-            raise RuntimeError("split rho estimation expects one target kernel")
+        if not self.tree_indep.target_kernels:
+            return 0.0
 
-        out_knl = self.tree_indep.target_kernels[0]
-        base_knl = out_knl.get_base_kernel()
-        k = self._split_wave_number(base_knl, what="split auto planning")
-        k_abs = float(abs(k))
+        k_abs = 0.0
+        for out_knl in self.tree_indep.target_kernels:
+            base_knl = out_knl.get_base_kernel()
+            k = self._split_wave_number(base_knl, what="split auto planning")
+            k_abs = max(k_abs, float(abs(k)))
 
         box_source_counts = self.tree.box_source_counts_nonchild.get(self.queue)
         box_levels = self.tree.box_levels.get(self.queue)
@@ -2146,12 +2667,16 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         return k_abs * h_max
 
     def _compute_split_rho_components(self):
-        if len(self.tree_indep.target_kernels) != 1:
-            raise RuntimeError("split rho estimation expects one target kernel")
+        if not self.tree_indep.target_kernels:
+            return 0.0, 0.0
 
-        out_knl = self.tree_indep.target_kernels[0]
-        base_knl = out_knl.get_base_kernel()
-        k = self._split_wave_number(base_knl, what="split auto planning")
+        k_real_abs = 0.0
+        k_imag_abs = 0.0
+        for out_knl in self.tree_indep.target_kernels:
+            base_knl = out_knl.get_base_kernel()
+            k = self._split_wave_number(base_knl, what="split auto planning")
+            k_real_abs = max(k_real_abs, abs(float(np.real(k))))
+            k_imag_abs = max(k_imag_abs, abs(float(np.imag(k))))
 
         box_source_counts = self.tree.box_source_counts_nonchild.get(self.queue)
         box_levels = self.tree.box_levels.get(self.queue)
@@ -2161,8 +2686,8 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
 
         min_level = int(np.min(box_levels[active]))
         h_max = float(self.tree.root_extent) * (0.5**min_level)
-        rho_real = abs(float(np.real(k))) * h_max
-        rho_imag = abs(float(np.imag(k))) * h_max
+        rho_real = k_real_abs * h_max
+        rho_imag = k_imag_abs * h_max
         return rho_real, rho_imag
 
     def _choose_auto_helmholtz_split_order(self, auto_cfg):
@@ -2317,16 +2842,18 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             float(np.real(k)),
             float(np.imag(k)),
             int(series_nmax),
+            tuple(self._helmholtz_split_kernel_wrapper_chain),
         )
         if cache_key not in self._helmholtz_split_remainder_kernel_cache:
+            base_remainder_kernel = _HelmholtzSplitSeriesRemainderKernel(
+                dim,
+                np.real(k),
+                np.imag(k),
+                split_order,
+                series_nmax,
+            )
             self._helmholtz_split_remainder_kernel_cache[cache_key] = (
-                _HelmholtzSplitSeriesRemainderKernel(
-                    dim,
-                    np.real(k),
-                    np.imag(k),
-                    split_order,
-                    series_nmax,
-                )
+                self._apply_helmholtz_split_kernel_wrappers(base_remainder_kernel)
             )
 
         remainder_kernel = self._helmholtz_split_remainder_kernel_cache[cache_key]
@@ -2488,12 +3015,20 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
 
         if kind == "power":
             if power == 0:
+                if self._helmholtz_split_kernel_wrapper_chain:
+                    return (
+                        self._helmholtz_split_kernel_type_name("Constant"),
+                        self._get_helmholtz_split_power_kernel(power),
+                    )
                 return "Constant", None
-            return f"SplitPower{power}", self._get_helmholtz_split_power_kernel(power)
+            return (
+                self._helmholtz_split_kernel_type_name(f"SplitPower{power}"),
+                self._get_helmholtz_split_power_kernel(power),
+            )
 
         if kind == "power_log":
             return (
-                f"SplitPowerLog{power}",
+                self._helmholtz_split_kernel_type_name(f"SplitPowerLog{power}"),
                 self._get_helmholtz_split_power_log_kernel(power),
             )
 
@@ -2557,6 +3092,52 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
 
         return sorted(set(source_box_levels))
 
+    def _split_term_autobuild_direction_kwargs(self, out_knl):
+        base_knl = out_knl.get_base_kernel()
+        wrapper_chain = self._extract_helmholtz_split_kernel_wrapper_chain(
+            out_knl,
+            base_knl,
+        )
+        directional_names = [
+            str(value) for kind, value in wrapper_chain if kind == "directional_source"
+        ]
+        if not directional_names:
+            return {}
+
+        unique_names = tuple(dict.fromkeys(directional_names))
+        if len(unique_names) != 1:
+            raise NotImplementedError(
+                "split term table auto-build supports at most one directional "
+                "source vector name"
+            )
+
+        dir_vec_name = unique_names[0]
+        if dir_vec_name not in self.source_extra_kwargs:
+            raise ValueError(
+                "missing directional source parameter "
+                f"{dir_vec_name!r} for split term table auto-build"
+            )
+
+        direction = _extract_symmetry_source_direction(
+            out_knl,
+            self.source_extra_kwargs,
+            self.queue,
+        )
+        if direction is None:
+            raise ValueError(
+                "split term table auto-build requires directional source values "
+                "that are present and constant across sources"
+            )
+
+        direction = np.asarray(direction, dtype=np.float64).ravel()
+        if direction.size != int(self.tree.dimensions):
+            raise ValueError(
+                "directional source vector for split term table auto-build has "
+                f"length {direction.size}; expected {self.tree.dimensions}"
+            )
+
+        return {dir_vec_name: direction}
+
     def _autobuild_helmholtz_split_term_tables(self, out_knl, missing_term_keys):
         if not missing_term_keys:
             return
@@ -2585,6 +3166,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             base_tables,
             missing_term_keys,
         )
+        directional_build_kwargs = self._split_term_autobuild_direction_kwargs(out_knl)
 
         from volumential.table_manager import NearFieldInteractionTableManager
 
@@ -2610,6 +3192,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
                             "queue": self.queue,
                             "build_config": build_config,
                         }
+                        get_table_kwargs.update(directional_build_kwargs)
                         if sumpy_knl is not None:
                             get_table_kwargs["sumpy_knl"] = sumpy_knl
 
@@ -2632,20 +3215,63 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
                 exc,
             )
 
-    def _helmholtz_split_term_scaling_code(self, term_key):
+    def _helmholtz_split_term_scaling_code(self, term_key, *, derivative_order=None):
         kind, power = _normalize_helmholtz_split_term_key(term_key)
         if kind not in {"power", "power_log"}:
             raise RuntimeError(
                 f"unsupported split term kind for single-table scaling: {kind}"
             )
 
-        exponent = int(self.tree.dimensions) + int(power)
-        if exponent <= 0:
+        if derivative_order is None:
+            derivative_order = self._helmholtz_split_wrapper_derivative_order
+
+        exponent = int(self.tree.dimensions) + int(power) - int(derivative_order)
+        if exponent == 0:
             return "1.0"
 
+        if exponent > 0:
+            box_factor = " * ".join(["BOX_extent"] * exponent)
+            table_factor = " * ".join(["table_root_extent"] * exponent)
+            return f"({box_factor}) / ({table_factor})"
+
+        exponent = -exponent
         box_factor = " * ".join(["BOX_extent"] * exponent)
         table_factor = " * ".join(["table_root_extent"] * exponent)
-        return f"({box_factor}) / ({table_factor})"
+        return f"({table_factor}) / ({box_factor})"
+
+    def _helmholtz_split_list1_scaling_code(self, dim, *, derivative_order=None):
+        if derivative_order is None:
+            derivative_order = self._helmholtz_split_wrapper_derivative_order
+        derivative_order = int(derivative_order)
+        if int(dim) == 2 and derivative_order == 0:
+            exponent = 2
+        elif int(dim) == 2:
+            exponent = 2 - derivative_order
+        else:
+            exponent = int(dim) - 1 - derivative_order
+
+        if exponent == 0:
+            return "1.0"
+        if exponent > 0:
+            box_factor = " * ".join(["BOX_extent"] * exponent)
+            table_factor = " * ".join(["table_root_extent"] * exponent)
+            return f"({box_factor}) / ({table_factor})"
+
+        exponent = -exponent
+        box_factor = " * ".join(["BOX_extent"] * exponent)
+        table_factor = " * ".join(["table_root_extent"] * exponent)
+        return f"({table_factor}) / ({box_factor})"
+
+    def _helmholtz_split_list1_displacement_code(self, dim, *, derivative_order=None):
+        if derivative_order is None:
+            derivative_order = self._helmholtz_split_wrapper_derivative_order
+        if int(dim) == 2 and int(derivative_order) == 0:
+            return (
+                f"-0.5 / {np.pi!r} * scaling * "
+                "log(BOX_extent / table_root_extent) * "
+                "mode_nmlz[table_lev, sid]"
+            )
+        return "0.0"
 
     def _eval_direct_helmholtz_split_term_table(
         self,
@@ -2836,7 +3462,8 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             raise ValueError("power must be non-negative")
 
         if power == 0:
-            return self._helmholtz_split_constant_kernel
+            base_kernel = self._helmholtz_split_constant_kernel
+            return self._apply_helmholtz_split_kernel_wrappers(base_kernel)
 
         if power not in self._helmholtz_split_power_kernels:
             self._helmholtz_split_power_kernels[power] = _RadialPowerKernel(
@@ -2844,7 +3471,9 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
                 power,
             )
 
-        return self._helmholtz_split_power_kernels[power]
+        return self._apply_helmholtz_split_kernel_wrappers(
+            self._helmholtz_split_power_kernels[power]
+        )
 
     def _get_helmholtz_split_power_log_kernel(self, power):
         power = int(power)
@@ -2857,7 +3486,9 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
                 power,
             )
 
-        return self._helmholtz_split_power_log_kernels[power]
+        return self._apply_helmholtz_split_kernel_wrappers(
+            self._helmholtz_split_power_log_kernels[power]
+        )
 
     def _helmholtz_split_extra_terms(self):
         """Return pretabulated non-smooth split terms and coefficients.
@@ -3103,6 +3734,9 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
     def _helmholtz_split_self_diagonal_limit(self):
         if not self.helmholtz_split:
             return None
+
+        if self._helmholtz_split_kernel_wrapper_chain:
+            return np.complex128(0.0)
 
         helm_knl, _ = self._helmholtz_split_kernels
         try:
@@ -3842,6 +4476,7 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
             case_indices=case_indices_dev,
             mode_qpoint_map=mode_qpoint_map_dev,
             mode_case_map=mode_case_map_dev,
+            mode_case_scale=payload["mode_case_scale_dev"],
             encoding_base=base,
             encoding_shift=shift,
             mode_nmlz_combined=mode_nmlz_combined,
@@ -3900,6 +4535,12 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
             queue, symmetry_maps["mode_qpoint_map"]
         )
         mode_case_map_dev = cl.array.to_device(queue, symmetry_maps["mode_case_map"])
+        mode_case_scale = symmetry_maps.get("mode_case_scale")
+        if mode_case_scale is None:
+            mode_case_scale = np.ones(
+                (table0.n_q_points, table0.n_cases),
+                dtype=np.int8,
+            )
 
         (
             table_data_combined,
@@ -3917,6 +4558,8 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
             exterior_mode_nmlz_combined = exterior_mode_nmlz_combined.astype(eval_dtype)
         if table_entry_scales.dtype != eval_dtype:
             table_entry_scales = table_entry_scales.astype(eval_dtype)
+        if mode_case_scale.dtype != eval_dtype:
+            mode_case_scale = mode_case_scale.astype(eval_dtype)
 
         table_data_shapes = {
             "n_tables": len(near_field_tables),
@@ -3931,6 +4574,7 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
             "case_indices_dev": case_indices_dev,
             "mode_qpoint_map_dev": mode_qpoint_map_dev,
             "mode_case_map_dev": mode_case_map_dev,
+            "mode_case_scale_dev": cl.array.to_device(queue, mode_case_scale),
             "table_data_dev": cl.array.to_device(queue, table_data_combined),
             "mode_nmlz_dev": cl.array.to_device(queue, mode_nmlz_combined),
             "exterior_mode_nmlz_dev": cl.array.to_device(

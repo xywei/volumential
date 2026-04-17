@@ -134,6 +134,58 @@ def _kernel_symmetry_meta(kernel):
     return (lambda s, p: True), (lambda s, p: 1)
 
 
+def _kernel_requires_identity_online_symmetry_maps(kernel):
+    """Return whether online source-mode symmetry maps must be identity.
+
+    The online maps in :meth:`NearFieldInteractionTable._get_online_symmetry_maps`
+    assume the full sign/permutation group acts without kernel-side constraints
+    and with unit sign. This holds for scalar Laplace/Yukawa kernels, but not for
+    derivative wrappers (axis/directional source or target derivatives).
+
+    For constrained/sign-changing kernels, applying those generic maps can route
+    (source_mode, target_point, case) to non-equivalent entries and break basic
+    physical symmetries (e.g. odd/even parity). In that case, keep runtime maps
+    as identity and rely on the precomputed entry-id/sign maps instead.
+    """
+
+    if kernel is None:
+        return False
+
+    dim = int(getattr(kernel, "dim", 0) or 0)
+    if dim <= 0:
+        return False
+
+    from itertools import permutations, product
+
+    constraint, sign_eval = _kernel_symmetry_meta(kernel)
+    for sign_tuple in product([-1, 1], repeat=dim):
+        for perm_tuple in permutations(range(dim)):
+            if not constraint(sign_tuple, perm_tuple):
+                return True
+            if int(sign_eval(sign_tuple, perm_tuple)) != 1:
+                return True
+
+    return False
+
+
+def _kernel_uses_target_minus_source_displacement(kernel):
+    """Return whether kernel evaluation should use (target - source).
+
+    Sumpy translation-invariant kernels are expressed in terms of the displacement
+    vector from source to target. Feeding (source - target) is equivalent for even
+    scalar kernels, but flips odd derivatives. Use (target - source) for all
+    sumpy-like kernels so scalar/derivative signs stay consistent across table,
+    P2P, and far-field evaluation paths.
+    """
+
+    if kernel is None:
+        return False
+
+    return hasattr(kernel, "get_expression") and hasattr(
+        kernel, "get_global_scaling_const"
+    )
+
+
 @dataclass(frozen=True)
 class DuffyBuildConfig:
     radial_rule: str = "tanh-sinh-fast"
@@ -546,6 +598,19 @@ class NearFieldInteractionTable:
             return np.float64
         return value_dtype.type
 
+    def _get_batched_accumulation_dtype(self):
+        value_dtype = np.dtype(self.dtype)
+        if np.issubdtype(value_dtype, np.complexfloating):
+            return value_dtype.type
+
+        if self.integral_knl is None:
+            return value_dtype.type
+
+        if bool(getattr(self.integral_knl, "is_complex_valued", False)):
+            return np.complex128
+
+        return value_dtype.type
+
     # {{{ encode to table index
 
     def get_entry_index(self, source_mode_index, target_point_index, case_id):
@@ -934,11 +999,18 @@ class NearFieldInteractionTable:
             target_point_index=entry_info["target_point_index"],
             case_index=entry_info["case_index"],
         )
+        use_target_minus_source = _kernel_uses_target_minus_source_displacement(
+            self.integral_knl
+        )
 
         def integrand(x, y):
-            return source_mode(x, y) * kernel_func(
-                x - target_point[0], y - target_point[1]
-            )
+            if use_target_minus_source:
+                shifted0 = target_point[0] - x
+                shifted1 = target_point[1] - y
+            else:
+                shifted0 = x - target_point[0]
+                shifted1 = y - target_point[1]
+            return source_mode(x, y) * kernel_func(shifted0, shifted1)
 
         if self.dim == 2:
             integral, error = squad.box_quad_duffy_radial(
@@ -958,7 +1030,10 @@ class NearFieldInteractionTable:
 
             def integrand_nd(*coords):
                 source_val = source_mode(*coords)
-                shifted = [coords[i] - target_point[i] for i in range(self.dim)]
+                if use_target_minus_source:
+                    shifted = [target_point[i] - coords[i] for i in range(self.dim)]
+                else:
+                    shifted = [coords[i] - target_point[i] for i in range(self.dim)]
                 return source_val * kernel_func(*shifted)
 
             bounds = [(0.0, self.source_box_extent) for _ in range(self.dim)]
@@ -1105,42 +1180,168 @@ class NearFieldInteractionTable:
             rel[root_b] = t
             rank[root_a] += 1
 
+    def _symmetry_source_direction_key(self, symmetry_source_direction=None):
+        direction = (
+            self.symmetry_source_direction
+            if symmetry_source_direction is None
+            else symmetry_source_direction
+        )
+
+        if direction is None:
+            return None
+
+        direction_arr = np.asarray(direction, dtype=np.float64).ravel()
+        expected_dim = int(self.dim)
+        if direction_arr.size != expected_dim:
+            raise ValueError(
+                "symmetry_source_direction has incompatible shape "
+                f"{direction_arr.shape}; expected ({expected_dim},)"
+            )
+
+        if not np.all(np.isfinite(direction_arr)):
+            raise ValueError(
+                "symmetry_source_direction must contain only finite values"
+            )
+
+        return tuple(float(val) for val in direction_arr.tolist())
+
+    def _get_online_symmetry_maps(self, symmetry_source_direction=None):
+        direction_key = self._symmetry_source_direction_key(symmetry_source_direction)
+        return self._get_online_symmetry_maps_cached(direction_key)
+
     @memoize_method
-    def _get_online_symmetry_maps(self):
+    def _get_online_symmetry_maps_cached(self, symmetry_source_direction_key):
+        runtime_source_direction = None
+        if symmetry_source_direction_key is not None:
+            runtime_source_direction = np.asarray(
+                symmetry_source_direction_key,
+                dtype=np.float64,
+            )
+            expected_shape = (int(self.dim),)
+            if runtime_source_direction.shape != expected_shape:
+                raise ValueError(
+                    "symmetry_source_direction has incompatible shape "
+                    f"{runtime_source_direction.shape}; expected {expected_shape}"
+                )
+
         mode_qpoint_map = np.empty((self.n_q_points, self.n_q_points), dtype=np.int32)
         mode_case_map = np.empty((self.n_q_points, self.n_cases), dtype=np.int32)
+        mode_case_scale = np.empty((self.n_q_points, self.n_cases), dtype=np.int8)
+
         all_mode_axes = self._get_all_mode_axes()
         case_vecs = np.asarray(self.interaction_case_vecs, dtype=np.int32)
         multi_shape = (self.quad_order,) * self.dim
 
+        from itertools import permutations, product
+
+        kernel = self.integral_knl
+        self._attach_directional_symmetry_metadata(
+            kernel,
+            runtime_source_direction,
+        )
+        kernel_constraint, kernel_sign_eval = _kernel_symmetry_meta(kernel)
+
+        transforms = []
+        for sign_tuple in product([-1, 1], repeat=self.dim):
+            sgn = np.asarray(sign_tuple, dtype=np.int32)
+            neg_axes = sgn < 0
+
+            for perm_tuple in permutations(range(self.dim)):
+                if not kernel_constraint(sign_tuple, perm_tuple):
+                    continue
+
+                perm = np.asarray(perm_tuple, dtype=np.int32)
+
+                mapped_axes = all_mode_axes
+                if np.any(neg_axes):
+                    mapped_axes = mapped_axes.copy()
+                    mapped_axes[:, neg_axes] = (
+                        self.quad_order - 1 - mapped_axes[:, neg_axes]
+                    )
+                mapped_axes = mapped_axes[:, perm]
+                transform_mode_map = np.ravel_multi_index(
+                    mapped_axes.T,
+                    multi_shape,
+                ).astype(np.int32)
+
+                mapped_case_vecs = case_vecs * sgn
+                mapped_case_vecs = mapped_case_vecs[:, perm]
+                encoded = np.array(
+                    [
+                        self.case_encode(case_vec.tolist())
+                        for case_vec in mapped_case_vecs
+                    ],
+                    dtype=np.int64,
+                )
+                transform_case_map = self.case_indices[encoded].astype(np.int32)
+
+                transform_sign = int(kernel_sign_eval(sign_tuple, perm_tuple))
+                if transform_sign not in {-1, 1}:
+                    raise RuntimeError(
+                        "kernel symmetry transform sign must be +/-1, got "
+                        f"{transform_sign}"
+                    )
+
+                transforms.append(
+                    (
+                        transform_mode_map,
+                        transform_case_map,
+                        np.int8(transform_sign),
+                        tuple(int(val) for val in sign_tuple),
+                        tuple(int(val) for val in perm_tuple),
+                    )
+                )
+
+        if not transforms:
+            identity_mode = np.arange(self.n_q_points, dtype=np.int32)
+            identity_case = np.arange(self.n_cases, dtype=np.int32)
+            transforms = [
+                (
+                    identity_mode,
+                    identity_case,
+                    np.int8(1),
+                    (1,) * self.dim,
+                    tuple(range(self.dim)),
+                )
+            ]
+
         for source_mode_index in range(self.n_q_points):
-            source_axes = all_mode_axes[source_mode_index].astype(np.int64)
-            s1 = np.sign((self.quad_order - 0.5) / 2.0 - source_axes)
-            reflected_source = source_axes.copy()
-            reflected_source[s1 < 0] = self.quad_order - 1 - reflected_source[s1 < 0]
-            s2 = np.argsort(np.abs(reflected_source), kind="stable")
+            best_score = None
+            best_mode_map = None
+            best_case_map = None
+            best_sign = np.int8(1)
 
-            mapped_axes = all_mode_axes
-            if np.any(s1 < 0):
-                mapped_axes = mapped_axes.copy()
-                mapped_axes[:, s1 < 0] = self.quad_order - 1 - mapped_axes[:, s1 < 0]
-            mapped_axes = mapped_axes[:, s2]
-            mode_qpoint_map[source_mode_index, :] = np.ravel_multi_index(
-                mapped_axes.T,
-                multi_shape,
-            ).astype(np.int32)
+            for (
+                transform_mode_map,
+                transform_case_map,
+                transform_sign,
+                sign_tuple,
+                perm_tuple,
+            ) in transforms:
+                mapped_source_mode = int(transform_mode_map[source_mode_index])
+                score = (
+                    mapped_source_mode,
+                    0 if int(transform_sign) > 0 else 1,
+                    perm_tuple,
+                    tuple(0 if val > 0 else 1 for val in sign_tuple),
+                )
+                if best_score is None or score < best_score:
+                    best_score = score
+                    best_mode_map = transform_mode_map
+                    best_case_map = transform_case_map
+                    best_sign = transform_sign
 
-            mapped_case_vecs = case_vecs * s1.astype(np.int32)
-            mapped_case_vecs = mapped_case_vecs[:, s2]
-            encoded = np.array(
-                [self.case_encode(case_vec.tolist()) for case_vec in mapped_case_vecs],
-                dtype=np.int64,
-            )
-            mode_case_map[source_mode_index, :] = self.case_indices[encoded]
+            if best_mode_map is None or best_case_map is None:
+                raise RuntimeError("failed to select online symmetry transform")
+
+            mode_qpoint_map[source_mode_index, :] = best_mode_map
+            mode_case_map[source_mode_index, :] = best_case_map
+            mode_case_scale[source_mode_index, :] = best_sign
 
         return {
             "mode_qpoint_map": mode_qpoint_map,
             "mode_case_map": mode_case_map,
+            "mode_case_scale": mode_case_scale,
         }
 
     def _get_orbit_canonical_info(self):
@@ -1362,12 +1563,76 @@ class NearFieldInteractionTable:
 
         return base_kernel is self.integral_knl
 
+    def _iter_kernel_wrapper_chain(self):
+        kernel = self.integral_knl
+        while kernel is not None:
+            yield kernel
+            kernel = getattr(kernel, "inner_kernel", None)
+
+    def _directional_source_names(self):
+        names = []
+        seen = set()
+
+        for kernel in self._iter_kernel_wrapper_chain():
+            if kernel.__class__.__name__ != "DirectionalSourceDerivative":
+                continue
+
+            dir_vec_name = str(getattr(kernel, "dir_vec_name", ""))
+            if not dir_vec_name:
+                continue
+
+            if dir_vec_name not in seen:
+                names.append(dir_vec_name)
+                seen.add(dir_vec_name)
+
+        return tuple(names)
+
+    def _has_directional_source_wrapper(self):
+        return bool(self._directional_source_names())
+
+    def _directional_source_component_names(self):
+        component_names = []
+        for dir_vec_name in self._directional_source_names():
+            for iaxis in range(self.dim):
+                component_names.append(f"{dir_vec_name}{iaxis}")
+        return tuple(component_names)
+
+    def _get_fused_duffy_expr_maps(self):
+        if self.integral_knl is None:
+            return []
+
+        if not self._has_directional_source_wrapper():
+            return [self.integral_knl.get_code_transformer()]
+
+        base_kernel = self.integral_knl
+        get_base_kernel = getattr(self.integral_knl, "get_base_kernel", None)
+        if callable(get_base_kernel):
+            try:
+                base_kernel = get_base_kernel()
+            except Exception:
+                base_kernel = self.integral_knl
+
+        get_transform = getattr(base_kernel, "get_code_transformer", None)
+        if callable(get_transform):
+            return [get_transform()]
+
+        return []
+
     def _prepare_loopy_kernel_for_integral_kernel(self, loopy_knl):
         """Apply kernel-specific loopy callable registrations if needed."""
         if self.integral_knl is None:
             return loopy_knl
 
-        prepare = getattr(self.integral_knl, "prepare_loopy_kernel", None)
+        prepare_kernel = self.integral_knl
+        if self._has_directional_source_wrapper():
+            get_base_kernel = getattr(self.integral_knl, "get_base_kernel", None)
+            if callable(get_base_kernel):
+                try:
+                    prepare_kernel = get_base_kernel()
+                except Exception:
+                    prepare_kernel = self.integral_knl
+
+        prepare = getattr(prepare_kernel, "prepare_loopy_kernel", None)
         if prepare is None:
             return loopy_knl
 
@@ -1382,12 +1647,14 @@ class NearFieldInteractionTable:
             return {}
 
         kernel_kwargs = {}
-        missing = []
+        required_names = []
         for kernel_arg in get_args():
             loopy_arg = getattr(kernel_arg, "loopy_arg", None)
             name = getattr(loopy_arg, "name", None)
             if not name:
                 continue
+
+            required_names.append(name)
 
             if name in kwargs:
                 value = kwargs[name]
@@ -1408,9 +1675,110 @@ class NearFieldInteractionTable:
                     )
 
                 kernel_kwargs[name] = value
-            else:
-                missing.append(name)
 
+        def _coerce_real_direction_component(name, value):
+            if value is None:
+                raise TypeError(
+                    "Invalid directional source parameter value for DuffyRadial "
+                    f"table build: {name}=None"
+                )
+
+            if isinstance(value, np.ndarray):
+                flat = np.asarray(value).ravel()
+                if flat.size != 1:
+                    raise TypeError(
+                        "Invalid directional source parameter value for DuffyRadial "
+                        f"table build: {name} has {flat.size} entries (expected scalar)"
+                    )
+                value = flat[0]
+
+            if not isinstance(value, numbers.Number):
+                raise TypeError(
+                    "Invalid directional source parameter value for DuffyRadial "
+                    f"table build: {name}={value!r} (expected numeric scalar)"
+                )
+
+            value_c = np.complex128(value)
+            if not np.isfinite(value_c):
+                raise TypeError(
+                    "Invalid directional source parameter value for DuffyRadial "
+                    f"table build: {name}={value!r} (expected finite scalar)"
+                )
+
+            if not np.isclose(np.imag(value_c), 0.0):
+                raise TypeError(
+                    "Invalid directional source parameter value for DuffyRadial "
+                    f"table build: {name}={value!r} (expected real scalar)"
+                )
+
+            return float(np.real(value_c))
+
+        for dir_vec_name in self._directional_source_names():
+            component_names = [f"{dir_vec_name}{iaxis}" for iaxis in range(self.dim)]
+            has_vector = dir_vec_name in kwargs
+            has_components = [name in kwargs for name in component_names]
+
+            if has_vector and any(has_components):
+                raise TypeError(
+                    "Directional source parameters for DuffyRadial table build "
+                    f"are ambiguous for {dir_vec_name!r}; provide either {dir_vec_name!r} "
+                    "or component-wise entries, not both"
+                )
+
+            if has_vector:
+                raw_vec = np.asarray(kwargs[dir_vec_name])
+                if np.iscomplexobj(raw_vec):
+                    imag = np.imag(np.asarray(raw_vec, dtype=np.complex128)).ravel()
+                    if imag.size and not np.all(np.isclose(imag, 0.0)):
+                        raise TypeError(
+                            "Invalid directional source parameter value for DuffyRadial "
+                            f"table build: {dir_vec_name!r} must be real"
+                        )
+                    raw_vec = np.real(raw_vec)
+
+                vec = np.asarray(raw_vec, dtype=np.float64).ravel()
+                if vec.size != self.dim:
+                    raise ValueError(
+                        "Invalid directional source parameter value for DuffyRadial "
+                        f"table build: {dir_vec_name!r} must have length {self.dim}, "
+                        f"got {vec.size}"
+                    )
+                if not np.all(np.isfinite(vec)):
+                    raise TypeError(
+                        "Invalid directional source parameter value for DuffyRadial "
+                        f"table build: {dir_vec_name!r} must contain finite values"
+                    )
+                for iaxis, comp_name in enumerate(component_names):
+                    kernel_kwargs[comp_name] = float(vec[iaxis])
+                continue
+
+            if all(has_components):
+                for comp_name in component_names:
+                    kernel_kwargs[comp_name] = _coerce_real_direction_component(
+                        comp_name,
+                        kwargs[comp_name],
+                    )
+                continue
+
+            if any(has_components):
+                missing_components = [
+                    name
+                    for has_name, name in zip(has_components, component_names)
+                    if not has_name
+                ]
+                missing_list = ", ".join(missing_components)
+                raise ValueError(
+                    "Missing directional source parameter value(s) for DuffyRadial "
+                    f"table build: {missing_list}"
+                )
+
+            missing_list = ", ".join(component_names)
+            raise ValueError(
+                "Missing directional source parameter value(s) for DuffyRadial "
+                f"table build: {missing_list}"
+            )
+
+        missing = [name for name in required_names if name not in kernel_kwargs]
         if missing:
             missing_list = ", ".join(sorted(missing))
             raise ValueError(
@@ -1427,6 +1795,7 @@ class NearFieldInteractionTable:
         from sumpy.symbolic import SympyToPymbolicMapper, make_sym_vector
 
         geom_dtype = self._get_geom_dtype()
+        batched_value_dtype = self._get_batched_accumulation_dtype()
 
         dvec = make_sym_vector("d", self.dim)
         sac = SymbolicAssignmentCollection()
@@ -1443,7 +1812,7 @@ class NearFieldInteractionTable:
         loopy_insns = to_loopy_insns(
             sac.assignments.items(),
             vector_names=set(),
-            pymbolic_expr_maps=[self.integral_knl.get_code_transformer()],
+            pymbolic_expr_maps=self._get_fused_duffy_expr_maps(),
             retain_names=[result_name],
             complex_dtype=np.complex128,
         )
@@ -1467,18 +1836,29 @@ class NearFieldInteractionTable:
         )
 
         kernel_arg_types = []
+        kernel_arg_names = set()
         if self.integral_knl is not None:
             get_args = getattr(self.integral_knl, "get_args", None)
             if get_args is not None:
                 for kernel_arg in get_args():
                     loopy_arg = getattr(kernel_arg, "loopy_arg", None)
                     if loopy_arg is not None:
+                        kernel_arg_names.add(loopy_arg.name)
                         kernel_arg_types.append(loopy_arg)
+
+        for component_name in self._directional_source_component_names():
+            if component_name in kernel_arg_names:
+                continue
+            kernel_arg_names.add(component_name)
+            kernel_arg_types.append(lp.ValueArg(component_name, geom_dtype))
 
         setup_lines = ["<> active = 1"]
         len_terms = []
         dist_terms = []
         basis_terms = []
+        use_target_minus_source = _kernel_uses_target_minus_source_displacement(
+            self.integral_knl
+        )
         interp_eps = 8 * np.finfo(np.dtype(geom_dtype)).eps
         for iaxis in range(self.dim):
             len_name = f"len{iaxis}"
@@ -1491,13 +1871,17 @@ class NearFieldInteractionTable:
             hit_mode_name = f"hit_mode{iaxis}"
             hit_any_name = f"hit_any{iaxis}"
             num_name = f"num{iaxis}"
+            if use_target_minus_source:
+                dist_expr = f"target_points[{iaxis}, ientry] - {q_name}"
+            else:
+                dist_expr = f"{q_name} - target_points[{iaxis}, ientry]"
             setup_lines.extend(
                 [
                     f"<> {len_name} = (decomposition_targets[{iaxis}, ientry] if node_sign[{iaxis}, inode] < 0 else source_box_extent - decomposition_targets[{iaxis}, ientry])",
                     f"<> {pos_name} = ({len_name} > 0)",
                     f"active = active and {pos_name}",
                     f"<> {q_name} = decomposition_targets[{iaxis}, ientry] + node_sign[{iaxis}, inode] * {len_name} * node_u[{iaxis}, inode]",
-                    f"<> {d_name} = ({q_name} - target_points[{iaxis}, ientry] if {pos_name} else 1)",
+                    f"<> {d_name} = ({dist_expr} if {pos_name} else 1)",
                 ]
             )
             if self.quad_order == 1:
@@ -1564,8 +1948,10 @@ class NearFieldInteractionTable:
             ]
             + kernel_arg_types
             + [
-                lp.GlobalArg("result", self.dtype, "n_entries", is_output=True),
-                lp.TemporaryVariable("knl_scaling", self.dtype),
+                lp.GlobalArg(
+                    "result", batched_value_dtype, "n_entries", is_output=True
+                ),
+                lp.TemporaryVariable("knl_scaling", batched_value_dtype),
             ],
             name="duffy_invariant_fused_table",
             lang_version=(2018, 2),
@@ -1810,7 +2196,28 @@ class NearFieldInteractionTable:
         result = res["result"]
         if hasattr(result, "get"):
             result = result.get()
-        return np.ascontiguousarray(result, dtype=self.dtype)
+
+        result_arr = np.asarray(result)
+        table_dtype = np.dtype(self.dtype)
+        if np.issubdtype(table_dtype, np.floating) and np.iscomplexobj(result_arr):
+            if result_arr.size:
+                imag_max = float(np.max(np.abs(np.imag(result_arr))))
+                real_scale = max(1.0, float(np.max(np.abs(np.real(result_arr)))))
+            else:
+                imag_max = 0.0
+                real_scale = 1.0
+
+            imag_tol = 256.0 * np.finfo(np.float64).eps * real_scale
+            if imag_max > imag_tol:
+                raise RuntimeError(
+                    "Batched DuffyRadial kernel produced non-negligible "
+                    f"imaginary component for real table dtype (max imag "
+                    f"{imag_max:.3e}, tol {imag_tol:.3e})"
+                )
+
+            result_arr = np.real(result_arr)
+
+        return np.ascontiguousarray(result_arr, dtype=self.dtype)
 
     def _auto_tune_duffy_radial_orders(
         self,
@@ -2361,6 +2768,44 @@ class NearFieldInteractionTable:
             kernel_kwargs=kernel_kwargs,
         )
 
+        kernel_name = (
+            self.integral_knl.__class__.__name__
+            if self.integral_knl is not None
+            else "<no-sumpy-kernel>"
+        )
+        source_level = getattr(self, "source_box_level", "n/a")
+        logger.info(
+            "[duffy:start] dim=%d q=%d kernel=%s level=%s extent=%.6g "
+            "dtype=%s rule=%s regular_q=%s radial_q=%s",
+            self.dim,
+            self.quad_order,
+            kernel_name,
+            source_level,
+            float(self.source_box_extent),
+            np.dtype(self.dtype).name,
+            build_config.radial_rule,
+            build_config.regular_quad_order,
+            build_config.radial_quad_order,
+        )
+
+        def _log_duffy_finish(builder_mode):
+            timings = self.last_duffy_build_timings or {}
+            logger.info(
+                "[duffy:done] mode=%s dim=%d kernel=%s entries=%s total=%.3fs "
+                "quad=%.3fs invariant=%.3fs scatter=%.3fs normalizer=%.3fs",
+                builder_mode,
+                self.dim,
+                kernel_name,
+                timings.get("n_entries", "n/a"),
+                float(
+                    timings.get("total_with_normalizer_s", timings.get("total_s", 0.0))
+                ),
+                float(timings.get("quadrature_s", 0.0)),
+                float(timings.get("invariant_info_s", 0.0)),
+                float(timings.get("scatter_s", 0.0)),
+                float(timings.get("normalizer_s", 0.0)),
+            )
+
         if self.pb is not None:
             self.pb.draw()
 
@@ -2382,10 +2827,10 @@ class NearFieldInteractionTable:
                     "preserve wrapper postprocessing"
                 )
 
-            logger.warning(
-                "Using scalar CPU-backed %dD DuffyRadial table builder "
-                "with adaptive radial rule",
+            logger.info(
+                "[duffy:builder] mode=scalar-adaptive dim=%d kernel=%s",
                 self.dim,
+                kernel_name,
             )
             return_value = self._build_table_via_duffy_radial_scalar(
                 radial_rule=build_config.radial_rule,
@@ -2399,6 +2844,7 @@ class NearFieldInteractionTable:
                 self.last_duffy_build_timings["total_with_normalizer_s"] = (
                     self.last_duffy_build_timings["total_s"] + normalizer_s
                 )
+            _log_duffy_finish("scalar-adaptive")
             if self.pb is not None:
                 self.pb.finished()
             return return_value
@@ -2432,8 +2878,12 @@ class NearFieldInteractionTable:
             ):
                 raise ValueError("queue context does not match cl_ctx")
 
-            logger.warning(
-                "Using batched GPU-backed %dD DuffyRadial table builder", self.dim
+            device_name = getattr(getattr(queue, "device", None), "name", "unknown")
+            logger.info(
+                "[duffy:builder] mode=batched dim=%d kernel=%s device=%s",
+                self.dim,
+                kernel_name,
+                device_name,
             )
             try:
                 return_value = self.build_table_via_duffy_radial_batched(
@@ -2458,6 +2908,11 @@ class NearFieldInteractionTable:
                     self.integral_knl.__class__.__name__,
                     type(exc).__name__,
                 )
+                logger.info(
+                    "[duffy:builder] mode=scalar-fallback dim=%d kernel=%s",
+                    self.dim,
+                    kernel_name,
+                )
                 return_value = self._build_table_via_duffy_radial_scalar(
                     build_config.radial_rule,
                     int(build_config.regular_quad_order),
@@ -2475,8 +2930,9 @@ class NearFieldInteractionTable:
                 )
 
             logger.info(
-                "Falling back to scalar DuffyRadial table builder for %s",
-                self.integral_knl.__class__.__name__,
+                "[duffy:builder] mode=scalar dim=%d kernel=%s",
+                self.dim,
+                kernel_name,
             )
             return_value = self._build_table_via_duffy_radial_scalar(
                 build_config.radial_rule,
@@ -2490,6 +2946,7 @@ class NearFieldInteractionTable:
             self.last_duffy_build_timings["total_with_normalizer_s"] = (
                 self.last_duffy_build_timings["total_s"] + normalizer_s
             )
+        _log_duffy_finish("batched" if use_batched_builder else "scalar")
         if self.pb is not None:
             self.pb.finished()
         return return_value
@@ -2499,7 +2956,7 @@ class NearFieldInteractionTable:
     # {{{ build table (driver)
 
     def build_table(self, cl_ctx=None, queue=None, build_config=None, **kwargs):
-        logger.info("Building table with Duffy+radial method")
+        logger.info("[duffy] build_table invoked")
         self.build_table_via_duffy_radial(
             queue=queue,
             cl_ctx=cl_ctx,
@@ -2738,14 +3195,27 @@ class NearFieldInteractionTable:
         if "extra_kernel_kwarg_types" in kwargs:
             extra_kernel_kwarg_types = kwargs["extra_kernel_kwarg_types"]
 
+        use_target_minus_source = _kernel_uses_target_minus_source_displacement(
+            self.integral_knl
+        )
+        if use_target_minus_source:
+            dist_assignment = """
+                        <> dist[iaxis] = (target_point[iaxis]
+                            - quad_points[iaxis, iqpt])
+            """
+        else:
+            dist_assignment = """
+                        <> dist[iaxis] = (quad_points[iaxis, iqpt]
+                            - target_point[iaxis])
+            """
+
         lpknl = lp.make_kernel(
             "{ [iqpt, iaxis]: 0<=iqpt<n_q_points and 0<=iaxis<dim }",
             [
-                """
+                f"""
                 for iqpt
                     for iaxis
-                        <> dist[iaxis] = (quad_points[iaxis, iqpt]
-                            - target_point[iaxis])
+{dist_assignment}
                     end
                 end
                 """
