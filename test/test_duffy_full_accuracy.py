@@ -169,8 +169,9 @@ def _contract_table_for_source_values(
     table_dtype = np.dtype(getattr(table, "dtype", np.float64))
     out = np.array(0, dtype=table_dtype)
     for source_mode_index, value in enumerate(source_values):
-        entry_id = table.get_entry_index(source_mode_index, target_point_index, case_id)
-        out = out + value * table.data[entry_id]
+        pair_id = source_mode_index * table.n_q_points + target_point_index
+        full_entry_id = case_id * table.n_pairs + pair_id
+        out = out + value * table.get_entry_data(full_entry_id)
     return out.item()
 
 

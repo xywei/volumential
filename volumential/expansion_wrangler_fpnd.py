@@ -676,13 +676,27 @@ def _derive_source_kernels_from_target_kernels(target_kernels):
 
     try:
         source_knl = single_valued(txr(knl) for knl in target_kernels)
-    except Exception as exc:
+    except ValueError as exc:
         raise ValueError(
             "target kernels must share a single source-side kernel "
             "after removing target derivatives"
         ) from exc
 
     return (source_knl,)
+
+
+def _target_kernels_include_source_derivatives(target_kernels):
+    if target_kernels is None:
+        return False
+
+    for knl in target_kernels:
+        cur_knl = knl
+        while cur_knl is not None:
+            if isinstance(cur_knl, (AxisSourceDerivative, DirectionalSourceDerivative)):
+                return True
+            cur_knl = getattr(cur_knl, "inner_kernel", None)
+
+    return False
 
 
 def _prepare_table_data_and_entry_map(table_levels):
@@ -813,7 +827,9 @@ class FPNDSumpyTreeIndependentDataForWrangler(
         strength_usage=None,
         source_kernels=None,
     ):
-        if source_kernels is None:
+        if source_kernels is None and not _target_kernels_include_source_derivatives(
+            target_kernels
+        ):
             source_kernels = _derive_source_kernels_from_target_kernels(target_kernels)
 
         queue = cl.CommandQueue(cl_context)
@@ -1429,6 +1445,10 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             if self.helmholtz_split_smooth_quad_order < 1:
                 raise ValueError("helmholtz_split_smooth_quad_order must be >= 1")
 
+        self._helmholtz_split_smooth_quad_order_requested = (
+            self.helmholtz_split_smooth_quad_order
+        )
+
         if self.helmholtz_split:
             from sumpy.kernel import HelmholtzKernel, LaplaceKernel, YukawaKernel
 
@@ -1453,22 +1473,6 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
                 self._format_helmholtz_split_kernel_wrapper_suffix(wrapper_chain)
             )
             self._helmholtz_split_wrapper_derivative_order = int(len(wrapper_chain))
-
-            has_directional_source_wrapper = any(
-                kind == "directional_source" for kind, _ in wrapper_chain
-            )
-            if (
-                has_directional_source_wrapper
-                and self.helmholtz_split_smooth_quad_order is not None
-                and self.helmholtz_split_smooth_quad_order > self.quad_order
-            ):
-                logger.warning(
-                    "split smooth quad order %d requested for directional source "
-                    "derivatives; clamping to base quadrature order %d",
-                    self.helmholtz_split_smooth_quad_order,
-                    self.quad_order,
-                )
-                self.helmholtz_split_smooth_quad_order = int(self.quad_order)
 
             if base_knl.dim not in (2, 3):
                 raise NotImplementedError(
@@ -1511,7 +1515,6 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
                         "to enable auto-build"
                     )
 
-            list1_extra_kwargs = dict(list1_extra_kwargs)
             if list1_extra_kwargs.get("infer_kernel_scaling", False):
                 logger.info(
                     "[split:init] infer_kernel_scaling requested; overriding with "
@@ -1965,8 +1968,9 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
                 )
 
             corrections = []
+            aggregated_events = []
             for out_knl in self.tree_indep.target_kernels:
-                corr_i, _ = self.eval_direct_helmholtz_split_correction(
+                corr_i, timing_i = self.eval_direct_helmholtz_split_correction(
                     target_boxes,
                     neighbor_source_boxes_starts,
                     neighbor_source_boxes_lists,
@@ -1974,6 +1978,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
                     src_func=src_func,
                     _split_out_kernel=out_knl,
                 )
+                aggregated_events.extend(getattr(timing_i, "events", []) or [])
                 corr_i_oa = (
                     corr_i
                     if isinstance(corr_i, np.ndarray) and corr_i.dtype == object
@@ -1985,7 +1990,10 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
                     )
                 corrections.append(corr_i_oa[0])
 
-            return obj_array_1d(corrections), SumpyTimingFuture(self.queue, [])
+            return (
+                obj_array_1d(corrections),
+                SumpyTimingFuture(self.queue, aggregated_events),
+            )
 
         if _split_out_kernel is None:
             _split_out_kernel = self.tree_indep.target_kernels[0]
@@ -2532,7 +2540,11 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         )
         self._helmholtz_split_constant_kernel = ConstantKernel(base_knl.dim)
 
-        effective_split_smooth_quad_order = self.helmholtz_split_smooth_quad_order
+        effective_split_smooth_quad_order = getattr(
+            self,
+            "_helmholtz_split_smooth_quad_order_requested",
+            self.helmholtz_split_smooth_quad_order,
+        )
 
         has_directional_source_wrapper = any(
             kind == "directional_source" for kind, _ in wrapper_chain
