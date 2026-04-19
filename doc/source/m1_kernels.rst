@@ -44,7 +44,7 @@ Execution Notes
 Periodic Prototype
 ------------------
 
-An initial Barnett-style periodization hook is available in
+A near/far periodic periodization hook is available in
 ``drive_volume_fmm`` (sumpy backend, 2D/3D):
 
 - Set ``periodic=True`` to enable periodic mode explicitly.
@@ -80,6 +80,43 @@ This interface is intended for correctness prototyping and validation against
 trusted periodic references (Ewald/spectral-Ewald style) while the full
 periodic workflow in `issue #67 <https://github.com/xywei/volumential/issues/67>`_
 is completed.
+
+The example script ``examples/periodic_laplace_benchmark.py`` includes a
+wrap-around dipole reproduction with plots and uses true volume source modes
+(quadrature values and weights), not point-source particles:
+
+.. code-block:: bash
+
+   python examples/periodic_laplace_benchmark.py
+
+This generates interpolated field maps, relative-error maps
+(``|u-u_ref| / ||u_ref||_2``), a seam-crossing line cut, and an adaptive-grid
+overlay plot; all solves and reported accuracy metrics remain on the volume
+quadrature targets.
+
+The default wrap-pair figure mode now enables source-adaptive refinement via
+modal-tail indicators. Use ``--no-adaptive-refine`` to force uniform meshes.
+
+For custom adaptive settings:
+
+.. code-block:: bash
+
+   python examples/periodic_laplace_benchmark.py \
+     --mode wrap-pair-figure \
+     --adaptive-refine \
+     --adaptive-tail-tol 8e-2 \
+     --adaptive-max-loops 3
+
+In adaptive mode, same-level-colleague closure is disabled for mesh updates so
+the refinement can remain spatially localized instead of collapsing to a
+uniformly refined mesh.
+
+Reference for the underlying near/far periodic decomposition viewpoint:
+
+- Alex H. Barnett, Gary R. Marple, Shravan Veerapaneni, and Lin Zhao,
+  "A Unified Integral Equation Scheme for Doubly Periodic Laplace and Stokes
+  Boundary Value Problems in Two Dimensions," Commun. Pure Appl. Math.
+  71(8):1694-1741, 2018. doi:10.1002/cpa.21759
 
 Validation in CI
 ----------------

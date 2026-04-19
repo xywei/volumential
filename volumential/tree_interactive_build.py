@@ -210,6 +210,9 @@ def _enforce_level_restriction(tob):
         _env_int("VOLUMENTIAL_LEVEL_RESTRICTION_PROFILE_LOG_INTERVAL", 50_000),
     )
     log_every = max(1, _env_int("VOLUMENTIAL_LEVEL_RESTRICTION_LOG_EVERY", 1))
+    enforce_same_level_colleagues = not _env_flag(
+        "VOLUMENTIAL_DISABLE_SAME_LEVEL_COLLEAGUES"
+    )
 
     max_splits = _env_int("VOLUMENTIAL_LEVEL_RESTRICTION_MAX_ITERS", 0)
     if max_splits <= 0:
@@ -358,12 +361,13 @@ def _enforce_level_restriction(tob):
 
         worklist.append((cell_level, cell_index))
 
-        min_colleague_level = leaf_level + 1
-        for offset in neighbor_offsets:
-            neighbor_index = tuple(
-                leaf_index[iaxis] + offset[iaxis] for iaxis in range(dim)
-            )
-            add_requirement(leaf_level, neighbor_index, min_colleague_level)
+        if enforce_same_level_colleagues:
+            min_colleague_level = leaf_level + 1
+            for offset in neighbor_offsets:
+                neighbor_index = tuple(
+                    leaf_index[iaxis] + offset[iaxis] for iaxis in range(dim)
+                )
+                add_requirement(leaf_level, neighbor_index, min_colleague_level)
 
         for new_level, new_index in new_children:
             min_neighbor_level = new_level - 1

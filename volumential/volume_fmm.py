@@ -313,7 +313,7 @@ def _normalize_periodic_near_shifts(periodic_near_shifts, dim):
 
     if isinstance(periodic_near_shifts, str):
         token = periodic_near_shifts.strip().lower()
-        if token in {"nearest", "barnett-nearest", "nn"}:
+        if token in {"nearest", "nn"}:
             periodic_near_shifts = [
                 shift
                 for shift in product((-1, 0, 1), repeat=dim)
@@ -2093,7 +2093,7 @@ def drive_volume_fmm(
         If ``periodic=False``, passing periodic modifier kwargs raises
         :class:`ValueError`.
 
-    :arg periodic_near_shifts: Lattice shifts for Barnett-style near-image
+    :arg periodic_near_shifts: Lattice shifts for nearest-ring near-image
         correction. Accepts an ``(nshifts, dim)`` integer array in cell units,
         ``"nearest"`` for the nearest image ring, or ``"none"``.
     :arg periodic_cell_size: Scalar or length-``dim`` vector of periodic cell
