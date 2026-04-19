@@ -225,6 +225,254 @@ _PARITY_FMM_GAP_CASE_MATRIX = (
 )
 
 
+_PARITY_DERIVATIVE_CASE_MATRIX = (
+    {
+        "id": "SMOKE-DERIV-TARGET-2D-a0",
+        "tier": "smoke",
+        "dim": 2,
+        "scenario": "random_independent",
+        "rng_seed": 1701,
+        "nsources": 48,
+        "ntargets": 44,
+        "k_max": 24,
+        "far_shift_radius": 3,
+        "cell_scale": (1.0, 1.0),
+        "derivative_kind": "target",
+        "axis": 0,
+        "tol_rel": 1.0e-10,
+    },
+    {
+        "id": "SMOKE-DERIV-SOURCE-2D-a1",
+        "tier": "smoke",
+        "dim": 2,
+        "scenario": "random_independent",
+        "rng_seed": 1702,
+        "nsources": 48,
+        "ntargets": 44,
+        "k_max": 24,
+        "far_shift_radius": 3,
+        "cell_scale": (1.0, 1.0),
+        "derivative_kind": "source",
+        "axis": 1,
+        "tol_rel": 1.0e-10,
+    },
+    {
+        "id": "SMOKE-DERIV-TARGET-3D-a2",
+        "tier": "smoke",
+        "dim": 3,
+        "scenario": "random_independent",
+        "rng_seed": 1703,
+        "nsources": 56,
+        "ntargets": 52,
+        "k_max": 10,
+        "far_shift_radius": 2,
+        "cell_scale": (1.0, 1.0, 1.0),
+        "derivative_kind": "target",
+        "axis": 2,
+        "tol_rel": 1.0e-10,
+    },
+    {
+        "id": "SMOKE-DERIV-SOURCE-3D-a0",
+        "tier": "smoke",
+        "dim": 3,
+        "scenario": "random_independent",
+        "rng_seed": 1704,
+        "nsources": 56,
+        "ntargets": 52,
+        "k_max": 10,
+        "far_shift_radius": 2,
+        "cell_scale": (1.0, 1.0, 1.0),
+        "derivative_kind": "source",
+        "axis": 0,
+        "tol_rel": 1.0e-10,
+    },
+    {
+        "id": "FULL-DERIV-TARGET-RND-2D-a0",
+        "tier": "full_accuracy",
+        "dim": 2,
+        "scenario": "random_independent",
+        "rng_seed": 1711,
+        "nsources": 64,
+        "ntargets": 56,
+        "k_max": 24,
+        "far_shift_radius": 3,
+        "cell_scale": (1.0, 1.0),
+        "derivative_kind": "target",
+        "axis": 0,
+        "tol_rel": 1.0e-10,
+    },
+    {
+        "id": "FULL-DERIV-SOURCE-RND-2D-a1",
+        "tier": "full_accuracy",
+        "dim": 2,
+        "scenario": "random_independent",
+        "rng_seed": 1712,
+        "nsources": 64,
+        "ntargets": 56,
+        "k_max": 24,
+        "far_shift_radius": 3,
+        "cell_scale": (1.0, 1.0),
+        "derivative_kind": "source",
+        "axis": 1,
+        "tol_rel": 1.0e-10,
+    },
+    {
+        "id": "FULL-DERIV-TARGET-WRAP-2D-a0",
+        "tier": "full_accuracy",
+        "dim": 2,
+        "scenario": "wrap_close_pair",
+        "rng_seed": 1713,
+        "nsources": 64,
+        "ntargets": 56,
+        "k_max": 24,
+        "far_shift_radius": 3,
+        "cell_scale": (1.0, 1.0),
+        "derivative_kind": "target",
+        "axis": 0,
+        "tol_rel": 1.0e-10,
+    },
+    {
+        "id": "FULL-DERIV-SOURCE-ANISO-2D-a1",
+        "tier": "full_accuracy",
+        "dim": 2,
+        "scenario": "random_independent",
+        "rng_seed": 1714,
+        "nsources": 64,
+        "ntargets": 56,
+        "k_max": 24,
+        "far_shift_radius": 3,
+        "cell_scale": (1.35, 0.85),
+        "derivative_kind": "source",
+        "axis": 1,
+        "tol_rel": 1.0e-10,
+    },
+    {
+        "id": "FULL-DERIV-TARGET-RND-3D-a2",
+        "tier": "full_accuracy",
+        "dim": 3,
+        "scenario": "random_independent",
+        "rng_seed": 1721,
+        "nsources": 72,
+        "ntargets": 64,
+        "k_max": 10,
+        "far_shift_radius": 2,
+        "cell_scale": (1.0, 1.0, 1.0),
+        "derivative_kind": "target",
+        "axis": 2,
+        "tol_rel": 1.0e-10,
+    },
+    {
+        "id": "FULL-DERIV-SOURCE-RND-3D-a0",
+        "tier": "full_accuracy",
+        "dim": 3,
+        "scenario": "random_independent",
+        "rng_seed": 1722,
+        "nsources": 72,
+        "ntargets": 64,
+        "k_max": 10,
+        "far_shift_radius": 2,
+        "cell_scale": (1.0, 1.0, 1.0),
+        "derivative_kind": "source",
+        "axis": 0,
+        "tol_rel": 1.0e-10,
+    },
+    {
+        "id": "FULL-DERIV-TARGET-WRAP-3D-a2",
+        "tier": "full_accuracy",
+        "dim": 3,
+        "scenario": "wrap_close_pair",
+        "rng_seed": 1723,
+        "nsources": 72,
+        "ntargets": 64,
+        "k_max": 10,
+        "far_shift_radius": 2,
+        "cell_scale": (1.0, 1.0, 1.0),
+        "derivative_kind": "target",
+        "axis": 2,
+        "tol_rel": 1.0e-10,
+    },
+    {
+        "id": "FULL-DERIV-SOURCE-ANISO-3D-a2",
+        "tier": "full_accuracy",
+        "dim": 3,
+        "scenario": "random_independent",
+        "rng_seed": 1724,
+        "nsources": 72,
+        "ntargets": 64,
+        "k_max": 10,
+        "far_shift_radius": 2,
+        "cell_scale": (1.30, 0.90, 1.55),
+        "derivative_kind": "source",
+        "axis": 2,
+        "tol_rel": 1.0e-10,
+    },
+)
+
+
+_PARITY_DERIVATIVE_FMM_GAP_CASE_MATRIX = (
+    {
+        "id": "FULL-DERIV-FMM-GAP-TARGET-2D-q1-l4-a0",
+        "tier": "full_accuracy",
+        "dim": 2,
+        "derivative_kind": "target",
+        "axis": 0,
+        "q_order": 1,
+        "nlevels": 4,
+        "rng_seed": 1731,
+        "k_max": 24,
+        "far_shift_radius": 3,
+        "fmm_order": 6,
+        "target_tol_rel": 1.0e-10,
+        "sanity_upper_rel": 1.0,
+    },
+    {
+        "id": "FULL-DERIV-FMM-GAP-SOURCE-2D-q1-l4-a1",
+        "tier": "full_accuracy",
+        "dim": 2,
+        "derivative_kind": "source",
+        "axis": 1,
+        "q_order": 1,
+        "nlevels": 4,
+        "rng_seed": 1732,
+        "k_max": 24,
+        "far_shift_radius": 3,
+        "fmm_order": 6,
+        "target_tol_rel": 1.0e-10,
+        "sanity_upper_rel": 1.0,
+    },
+    {
+        "id": "FULL-DERIV-FMM-GAP-TARGET-3D-q1-l3-a2",
+        "tier": "full_accuracy",
+        "dim": 3,
+        "derivative_kind": "target",
+        "axis": 2,
+        "q_order": 1,
+        "nlevels": 3,
+        "rng_seed": 1733,
+        "k_max": 10,
+        "far_shift_radius": 2,
+        "fmm_order": 5,
+        "target_tol_rel": 1.0e-10,
+        "sanity_upper_rel": 1.0,
+    },
+    {
+        "id": "FULL-DERIV-FMM-GAP-SOURCE-3D-q1-l3-a0",
+        "tier": "full_accuracy",
+        "dim": 3,
+        "derivative_kind": "source",
+        "axis": 0,
+        "q_order": 1,
+        "nlevels": 3,
+        "rng_seed": 1734,
+        "k_max": 10,
+        "far_shift_radius": 2,
+        "fmm_order": 5,
+        "target_tol_rel": 1.0e-10,
+        "sanity_upper_rel": 1.0,
+    },
+)
+
+
 def _case_params_by_tier(case_matrix, tier):
     return [
         pytest.param(case_spec, id=case_spec["id"])
@@ -265,6 +513,92 @@ def _spectral_periodic_laplace_reference(
     tgt_phase = np.exp(1j * (tgt_points @ kvec.T))
     volume = float(np.prod(cell_size))
     ref = (tgt_phase * (rho_k / k2).reshape(1, -1)).sum(axis=1) / volume
+    return np.real(ref)
+
+
+def _laplace_spectral_symbol_for_kernel_reference(*, kernel, kvec):
+    try:
+        from sumpy.kernel import (
+            AxisSourceDerivative,
+            AxisTargetDerivative,
+            LaplaceKernel,
+        )
+    except Exception:
+        AxisTargetDerivative = ()
+        AxisSourceDerivative = ()
+        LaplaceKernel = ()
+
+    kvec = np.asarray(kvec, dtype=np.float64)
+    dim = int(kvec.shape[1])
+    symbol = np.ones(kvec.shape[0], dtype=np.complex128)
+
+    current = kernel
+    for _ in range(64):
+        if isinstance(current, LaplaceKernel):
+            if int(getattr(current, "dim", -1)) != dim:
+                raise ValueError(
+                    "kernel dimension does not match Fourier mode dimension"
+                )
+            return symbol
+
+        if isinstance(current, AxisTargetDerivative):
+            axis = int(getattr(current, "axis", -1))
+            if axis < 0 or axis >= dim:
+                raise ValueError(f"invalid target derivative axis={axis} for dim={dim}")
+            symbol *= 1j * kvec[:, axis]
+            current = getattr(current, "inner_kernel", None)
+            continue
+
+        if isinstance(current, AxisSourceDerivative):
+            axis = int(getattr(current, "axis", -1))
+            if axis < 0 or axis >= dim:
+                raise ValueError(f"invalid source derivative axis={axis} for dim={dim}")
+            symbol *= -1j * kvec[:, axis]
+            current = getattr(current, "inner_kernel", None)
+            continue
+
+        break
+
+    raise NotImplementedError(f"unsupported periodic derivative kernel: {repr(kernel)}")
+
+
+def _spectral_periodic_laplace_reference_for_kernel(
+    *,
+    src_points,
+    strengths,
+    tgt_points,
+    cell_size,
+    k_max,
+    kernel,
+):
+    src_points = np.asarray(src_points, dtype=np.float64)
+    tgt_points = np.asarray(tgt_points, dtype=np.float64)
+    strengths = np.asarray(strengths, dtype=np.float64)
+    cell_size = np.asarray(cell_size, dtype=np.float64)
+
+    dim = src_points.shape[1]
+    if tgt_points.shape[1] != dim:
+        raise ValueError("source/target dimensions do not match")
+
+    mode_list = [
+        mode
+        for mode in product(range(-int(k_max), int(k_max) + 1), repeat=dim)
+        if any(comp != 0 for comp in mode)
+    ]
+    if not mode_list:
+        return np.zeros(tgt_points.shape[0], dtype=np.float64)
+
+    modes = np.asarray(mode_list, dtype=np.float64)
+    kvec = (2.0 * np.pi) * modes / cell_size.reshape(1, -1)
+    k2 = np.sum(kvec * kvec, axis=1)
+
+    src_phase = np.exp(-1j * (src_points @ kvec.T))
+    rho_k = src_phase.T @ strengths
+    symbol = _laplace_spectral_symbol_for_kernel_reference(kernel=kernel, kvec=kvec)
+
+    tgt_phase = np.exp(1j * (tgt_points @ kvec.T))
+    volume = float(np.prod(cell_size))
+    ref = (tgt_phase * (symbol * rho_k / k2).reshape(1, -1)).sum(axis=1) / volume
     return np.real(ref)
 
 
@@ -315,6 +649,7 @@ def _evaluate_periodic_direct_solution(
     fmm_order,
     training_samples,
     max_check_points,
+    target_kernel=None,
 ):
     from volumential.table_manager import NearFieldInteractionTableManager
     from volumential.volume_fmm import drive_volume_fmm
@@ -338,6 +673,7 @@ def _evaluate_periodic_direct_solution(
             traversal,
             table,
             fmm_order=int(fmm_order),
+            target_kernel=target_kernel,
         )
 
         strengths_dev = cl.array.to_device(queue, np.ascontiguousarray(strengths))
@@ -492,6 +828,74 @@ def _run_periodic_fmm_gap_case(ctx_factory, tmp_path, case_spec):
     return rel_l2
 
 
+def _run_periodic_derivative_fmm_gap_case(ctx_factory, tmp_path, case_spec):
+    from volumential.table_manager import NearFieldInteractionTableManager
+    from volumential.volume_fmm import drive_volume_fmm
+
+    case = _periodic_mesh_fmm_case(ctx_factory, case_spec)
+    queue = case["queue"]
+    traversal = case["traversal"]
+    dim = int(case_spec["dim"])
+    k_max = int(case_spec["k_max"])
+    kernel = _build_laplace_derivative_kernel(case_spec)
+
+    cell_size = np.full(dim, float(traversal.tree.root_extent), dtype=np.float64)
+
+    cache_file = tmp_path / f"nft-periodic-deriv-fmm-gap-{case_spec['id']}.sqlite"
+    with NearFieldInteractionTableManager(
+        str(cache_file),
+        root_extent=float(traversal.tree.root_extent),
+        progress_bar=False,
+    ) as tm:
+        table, _ = tm.get_table(
+            dim, "Laplace", q_order=int(case_spec["q_order"]), queue=queue
+        )
+        wrangler = _build_wrangler(
+            case["ctx"],
+            queue,
+            traversal,
+            table,
+            fmm_order=int(case_spec["fmm_order"]),
+            quad_order=int(case_spec["q_order"]),
+            exclude_self=True,
+            target_kernel=kernel,
+        )
+
+        (pot_periodic_fmm,) = drive_volume_fmm(
+            traversal,
+            wrangler,
+            case["weighted_sources"],
+            case["source_vals"],
+            periodic=True,
+            direct_evaluation=False,
+            auto_interpolate_targets=False,
+            periodic_near_shifts="nearest",
+            periodic_cell_size=cell_size,
+            periodic_far_operator="auto",
+            periodic_far_operator_manager=tm,
+            periodic_far_shift_radius=int(case_spec["far_shift_radius"]),
+            periodic_far_spectral_kmax_2d=k_max if dim == 2 else None,
+            periodic_far_spectral_kmax_3d=k_max if dim == 3 else None,
+            periodic_far_training_samples=64,
+            periodic_far_rng_seed=23,
+            periodic_far_max_check_points=256,
+            periodic_far_force_recompute=True,
+        )
+
+    reference = _spectral_periodic_laplace_reference_for_kernel(
+        src_points=case["src_points"],
+        strengths=case["weighted_strengths"],
+        tgt_points=case["src_points"],
+        cell_size=cell_size,
+        k_max=k_max,
+        kernel=kernel,
+    )
+
+    error = np.asarray(pot_periodic_fmm.get(queue), dtype=np.float64) - reference
+    rel_l2 = np.linalg.norm(error) / max(np.linalg.norm(reference), 1.0e-30)
+    return rel_l2
+
+
 def _build_split_tree_and_traversal(queue, src_points, tgt_points):
     from boxtree import TreeBuilder
     from boxtree.array_context import PyOpenCLArrayContext
@@ -535,6 +939,7 @@ def _build_wrangler(
     fmm_order=8,
     quad_order=1,
     exclude_self=False,
+    target_kernel=None,
 ):
     from sumpy.expansion import DefaultExpansionFactory
     from sumpy.kernel import LaplaceKernel
@@ -545,16 +950,30 @@ def _build_wrangler(
     )
 
     dim = int(traversal.tree.dimensions)
-    knl = LaplaceKernel(dim)
+    if target_kernel is None:
+        target_kernel = LaplaceKernel(dim)
+
+    base_kernel_getter = getattr(target_kernel, "get_base_kernel", None)
+    if callable(base_kernel_getter):
+        base_kernel = base_kernel_getter()
+    else:
+        base_kernel = target_kernel
+
+    kernel_dim = int(getattr(base_kernel, "dim", -1))
+    if kernel_dim != dim:
+        raise ValueError(
+            f"target kernel dimension {kernel_dim} does not match tree dimension {dim}"
+        )
+
     expn_factory = DefaultExpansionFactory()
-    local_expn_class = expn_factory.get_local_expansion_class(knl)
-    mpole_expn_class = expn_factory.get_multipole_expansion_class(knl)
+    local_expn_class = expn_factory.get_local_expansion_class(target_kernel)
+    mpole_expn_class = expn_factory.get_multipole_expansion_class(target_kernel)
 
     tree_indep = FPNDTreeIndependentDataForWrangler(
         ctx,
-        partial(mpole_expn_class, knl),
-        partial(local_expn_class, knl),
-        [knl],
+        partial(mpole_expn_class, target_kernel),
+        partial(local_expn_class, target_kernel),
+        [target_kernel],
         exclude_self=bool(exclude_self),
     )
 
@@ -639,6 +1058,22 @@ def _periodic_test_case(
         "tgt_points": tgt_points,
         "strengths": strengths,
     }
+
+
+def _build_laplace_derivative_kernel(case_spec):
+    from sumpy.kernel import AxisSourceDerivative, AxisTargetDerivative, LaplaceKernel
+
+    dim = int(case_spec["dim"])
+    axis = int(case_spec["axis"])
+    kind = str(case_spec["derivative_kind"])
+
+    base_kernel = LaplaceKernel(dim)
+    if kind == "target":
+        return AxisTargetDerivative(axis, base_kernel)
+    if kind == "source":
+        return AxisSourceDerivative(axis, base_kernel)
+
+    raise ValueError(f"unsupported derivative_kind '{kind}'")
 
 
 def test_periodic_far_operator_cache_reuse(ctx_factory, tmp_path):
@@ -780,6 +1215,50 @@ def _run_reference_parity_case(ctx_factory, tmp_path, case_spec):
     return rel_l2, float(case_spec["tol_rel"])
 
 
+def _run_derivative_reference_parity_case(ctx_factory, tmp_path, case_spec):
+    dim = int(case_spec["dim"])
+    kernel = _build_laplace_derivative_kernel(case_spec)
+
+    case = _periodic_test_case(
+        ctx_factory,
+        dim=dim,
+        rng_seed=int(case_spec["rng_seed"]),
+        nsources=int(case_spec["nsources"]),
+        ntargets=int(case_spec["ntargets"]),
+        scenario=case_spec["scenario"],
+    )
+
+    cell_size = _case_cell_size(case_spec, case["traversal"])
+    k_max = int(case_spec["k_max"])
+
+    derivative = _evaluate_periodic_direct_solution(
+        case=case,
+        case_cache_id=case_spec["id"],
+        tmp_path=tmp_path,
+        cell_size=cell_size,
+        k_max=k_max,
+        far_shift_radius=int(case_spec["far_shift_radius"]),
+        fmm_order=7,
+        training_samples=32 if dim == 2 else 48,
+        max_check_points=96,
+        target_kernel=kernel,
+    )
+
+    reference = _spectral_periodic_laplace_reference_for_kernel(
+        src_points=case["src_points"],
+        strengths=case["strengths"],
+        tgt_points=case["tgt_points"],
+        cell_size=cell_size,
+        k_max=k_max,
+        kernel=kernel,
+    )
+
+    error = derivative - reference
+    denom = max(np.linalg.norm(reference), 1.0e-30)
+    rel_l2 = np.linalg.norm(error) / denom
+    return rel_l2, float(case_spec["tol_rel"])
+
+
 @pytest.mark.parametrize(
     "case_spec",
     _case_params_by_tier(_PARITY_REFERENCE_CASE_MATRIX, "smoke"),
@@ -800,6 +1279,41 @@ def test_periodic_laplace_reference_parity_full_accuracy(
     case_spec,
 ):
     rel_l2, tol_rel = _run_reference_parity_case(ctx_factory, tmp_path, case_spec)
+    assert rel_l2 < tol_rel
+
+
+@pytest.mark.parametrize(
+    "case_spec",
+    _case_params_by_tier(_PARITY_DERIVATIVE_CASE_MATRIX, "smoke"),
+)
+def test_periodic_laplace_derivative_reference_parity_smoke(
+    ctx_factory,
+    tmp_path,
+    case_spec,
+):
+    rel_l2, tol_rel = _run_derivative_reference_parity_case(
+        ctx_factory,
+        tmp_path,
+        case_spec,
+    )
+    assert rel_l2 < tol_rel
+
+
+@pytest.mark.full_accuracy
+@pytest.mark.parametrize(
+    "case_spec",
+    _case_params_by_tier(_PARITY_DERIVATIVE_CASE_MATRIX, "full_accuracy"),
+)
+def test_periodic_laplace_derivative_reference_parity_full_accuracy(
+    ctx_factory,
+    tmp_path,
+    case_spec,
+):
+    rel_l2, tol_rel = _run_derivative_reference_parity_case(
+        ctx_factory,
+        tmp_path,
+        case_spec,
+    )
     assert rel_l2 < tol_rel
 
 
@@ -919,4 +1433,26 @@ def test_periodic_laplace_fmm_path_gap_vs_spectral_reference(
     assert rel_l2 < target_tol, (
         "periodic FMM path (direct_evaluation=False) missed target tolerance: "
         f"rel_l2={rel_l2:.3e}, target={target_tol:.1e}"
+    )
+
+
+@pytest.mark.full_accuracy
+@pytest.mark.parametrize(
+    "case_spec",
+    _case_params_by_tier(_PARITY_DERIVATIVE_FMM_GAP_CASE_MATRIX, "full_accuracy"),
+)
+def test_periodic_laplace_derivative_fmm_path_gap_vs_spectral_reference(
+    ctx_factory,
+    tmp_path,
+    case_spec,
+):
+    rel_l2 = _run_periodic_derivative_fmm_gap_case(ctx_factory, tmp_path, case_spec)
+
+    assert np.isfinite(rel_l2)
+    assert rel_l2 < float(case_spec["sanity_upper_rel"])
+
+    target_tol = float(case_spec["target_tol_rel"])
+    assert rel_l2 < target_tol, (
+        "periodic derivative FMM path (direct_evaluation=False) missed target "
+        f"tolerance: rel_l2={rel_l2:.3e}, target={target_tol:.1e}"
     )

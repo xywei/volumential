@@ -1030,6 +1030,128 @@ def _eval_spectral_periodic_laplace_potential(
     return np.real(potentials)
 
 
+def _laplace_spectral_symbol_for_kernel(*, kernel, kvec):
+    kvec = np.asarray(kvec, dtype=np.float64)
+    if kvec.ndim != 2:
+        raise ValueError("kvec must have shape (nmodes, dim)")
+
+    dim = int(kvec.shape[1])
+    symbol = np.ones(kvec.shape[0], dtype=np.complex128)
+
+    try:
+        from sumpy.kernel import (
+            AxisSourceDerivative,
+            AxisTargetDerivative,
+            LaplaceKernel,
+        )
+    except Exception:
+        AxisTargetDerivative = ()
+        AxisSourceDerivative = ()
+        LaplaceKernel = ()
+
+    current = kernel
+    for _ in range(64):
+        if isinstance(current, LaplaceKernel):
+            current_dim = int(getattr(current, "dim", -1))
+            if current_dim != dim:
+                raise ValueError(
+                    "kernel dimension does not match spectral mode dimension: "
+                    f"kernel_dim={current_dim}, mode_dim={dim}"
+                )
+            return symbol
+
+        if isinstance(current, AxisTargetDerivative):
+            axis = int(getattr(current, "axis", -1))
+            if axis < 0 or axis >= dim:
+                raise ValueError(
+                    f"invalid AxisTargetDerivative axis={axis} for dim={dim}"
+                )
+            symbol *= 1j * kvec[:, axis]
+            current = getattr(current, "inner_kernel", None)
+            if current is None:
+                raise NotImplementedError(
+                    "strict periodic Laplace mode requires derivative wrappers "
+                    "to expose inner_kernel"
+                )
+            continue
+
+        if isinstance(current, AxisSourceDerivative):
+            axis = int(getattr(current, "axis", -1))
+            if axis < 0 or axis >= dim:
+                raise ValueError(
+                    f"invalid AxisSourceDerivative axis={axis} for dim={dim}"
+                )
+            symbol *= -1j * kvec[:, axis]
+            current = getattr(current, "inner_kernel", None)
+            if current is None:
+                raise NotImplementedError(
+                    "strict periodic Laplace mode requires derivative wrappers "
+                    "to expose inner_kernel"
+                )
+            continue
+
+        break
+
+    raise NotImplementedError(
+        "strict periodic Laplace spectral mode only supports LaplaceKernel and "
+        "AxisTargetDerivative/AxisSourceDerivative wrappers. "
+        f"Got kernel={repr(kernel)}"
+    )
+
+
+def _eval_spectral_periodic_laplace_kernel_output(
+    *,
+    source_points,
+    target_points,
+    strengths,
+    cell_size,
+    k_max,
+    kernel,
+):
+    source_points = np.asarray(source_points, dtype=np.float64)
+    target_points = np.asarray(target_points, dtype=np.float64)
+    strengths = np.asarray(strengths)
+    cell_size = np.asarray(cell_size, dtype=np.float64)
+
+    if source_points.ndim != 2:
+        raise ValueError("source_points must have shape (nsources, dim)")
+    if target_points.ndim != 2:
+        raise ValueError("target_points must have shape (ntargets, dim)")
+
+    dim = int(source_points.shape[1])
+    if dim not in {2, 3}:
+        raise ValueError("spectral periodic Laplace output supports dim=2 or dim=3")
+    if target_points.shape[1] != dim:
+        raise ValueError("source/target dimensions do not match")
+    if cell_size.shape != (dim,):
+        raise ValueError(f"cell_size must have shape ({dim},)")
+
+    mode_axes = [np.arange(-int(k_max), int(k_max) + 1, dtype=np.float64)] * dim
+    mode_grids = np.meshgrid(*mode_axes, indexing="ij")
+    nonzero_mask = np.zeros(mode_grids[0].shape, dtype=bool)
+    for mode_grid in mode_grids:
+        nonzero_mask |= mode_grid != 0
+
+    if not np.any(nonzero_mask):
+        return np.zeros(target_points.shape[0], dtype=np.float64)
+
+    mode_components = [mode_grid[nonzero_mask] for mode_grid in mode_grids]
+    mode_vectors = np.stack(mode_components, axis=1)
+    kvec = (2.0 * np.pi) * mode_vectors / cell_size.reshape(1, dim)
+    k2 = np.sum(kvec * kvec, axis=1)
+
+    src_phase = np.exp(-1j * (source_points @ kvec.T))
+    rho_k = src_phase.T @ strengths
+
+    symbol = _laplace_spectral_symbol_for_kernel(kernel=kernel, kvec=kvec)
+    spectral_coeff = symbol * (rho_k / k2)
+
+    tgt_phase = np.exp(1j * (target_points @ kvec.T))
+    volume = float(np.prod(cell_size))
+    output = (tgt_phase * spectral_coeff.reshape(1, -1)).sum(axis=1) / volume
+    return np.real(output)
+
+
 def _infer_periodic_spectral_kmax(
     *,
     tree_dim,
@@ -1076,23 +1198,33 @@ def _strict_periodic_laplace_potential(
         dtype=np.dtype(wrangler.dtype),
     )
 
-    spectral_potential_host = _eval_spectral_periodic_laplace_potential(
-        source_points=source_points_host,
-        target_points=target_points_host,
-        strengths=source_strength_host,
-        cell_size=periodic_cell_size,
-        k_max=int(k_max),
-    )
+    target_kernels = list(getattr(wrangler.tree_indep, "target_kernels", ()))
+    if not target_kernels:
+        raise ValueError("strict periodic Laplace mode requires target kernels")
 
-    spectral_potential_host = np.ascontiguousarray(
-        spectral_potential_host,
-        dtype=np.dtype(wrangler.dtype),
-    )
+    spectral_outputs_host = []
+    for kernel in target_kernels:
+        kernel_output_host = _eval_spectral_periodic_laplace_kernel_output(
+            source_points=source_points_host,
+            target_points=target_points_host,
+            strengths=source_strength_host,
+            cell_size=periodic_cell_size,
+            k_max=int(k_max),
+            kernel=kernel,
+        )
+        spectral_outputs_host.append(
+            np.ascontiguousarray(kernel_output_host, dtype=np.dtype(wrangler.dtype))
+        )
 
     if isinstance(src_weights[0], cl.array.Array):
-        return obj_array_1d([cl.array.to_device(queue, spectral_potential_host)])
+        return obj_array_1d(
+            [
+                cl.array.to_device(queue, output_host)
+                for output_host in spectral_outputs_host
+            ]
+        )
 
-    return obj_array_1d([spectral_potential_host])
+    return obj_array_1d(spectral_outputs_host)
 
 
 def _build_local_response_matrix(
