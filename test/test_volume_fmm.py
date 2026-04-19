@@ -7155,6 +7155,316 @@ def test_volume_fmm_rejects_allow_list1_p2p_fallback_option():
         )
 
 
+def test_volume_fmm_periodic_modifiers_require_explicit_gate():
+    from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
+    from volumential.volume_fmm import drive_volume_fmm
+
+    class _MockWrangler(ExpansionWranglerInterface):
+        dtype = np.float64
+
+        def multipole_expansion_zeros(self):
+            return None
+
+        def local_expansion_zeros(self):
+            return None
+
+        def output_zeros(self):
+            return np.zeros(1, dtype=self.dtype)
+
+        def reorder_sources(self, source_array):
+            return source_array
+
+        def reorder_targets(self, target_array):
+            return target_array
+
+        def reorder_potentials(self, potentials):
+            return potentials
+
+        def form_multipoles(
+            self, level_start_source_box_nrs, source_boxes, src_weights
+        ):
+            return np.array([0.0], dtype=self.dtype), None
+
+        def coarsen_multipoles(
+            self, level_start_source_parent_box_nrs, source_parent_boxes, mpoles
+        ):
+            return mpoles, None
+
+        def eval_direct(
+            self,
+            target_boxes,
+            neighbor_sources_starts,
+            neighbor_sources_lists,
+            mode_coefs,
+        ):
+            return np.array([1.0], dtype=self.dtype), None
+
+        def eval_direct_p2p(
+            self,
+            target_boxes,
+            neighbor_sources_starts,
+            neighbor_sources_lists,
+            src_weights,
+        ):
+            return np.array([0.0], dtype=self.dtype), None
+
+        def multipole_to_local(
+            self,
+            level_start_target_or_target_parent_box_nrs,
+            target_or_target_parent_boxes,
+            starts,
+            lists,
+            mpole_exps,
+        ):
+            return np.array([0.0], dtype=self.dtype), None
+
+        def eval_multipoles(
+            self,
+            level_start_target_box_nrs,
+            target_boxes,
+            starts,
+            lists,
+            mpole_exps,
+        ):
+            return np.array([0.0], dtype=self.dtype), None
+
+        def form_locals(
+            self,
+            level_start_target_or_target_parent_box_nrs,
+            target_or_target_parent_boxes,
+            starts,
+            lists,
+            src_weights,
+        ):
+            return np.array([0.0], dtype=self.dtype), None
+
+        def refine_locals(
+            self,
+            level_start_target_or_target_parent_box_nrs,
+            target_or_target_parent_boxes,
+            local_exps,
+        ):
+            return local_exps, None
+
+        def eval_locals(self, level_start_target_box_nrs, target_boxes, local_exps):
+            return np.array([0.0], dtype=self.dtype), None
+
+        def finalize_potentials(self, potentials):
+            return potentials
+
+    traversal = SimpleNamespace(
+        tree=SimpleNamespace(nsources=1, ntargets=1, sources_are_targets=True),
+        level_start_source_box_nrs=np.array([], dtype=np.int32),
+        source_boxes=np.array([], dtype=np.int32),
+        level_start_source_parent_box_nrs=np.array([], dtype=np.int32),
+        source_parent_boxes=np.array([], dtype=np.int32),
+        target_boxes=np.array([], dtype=np.int32),
+        neighbor_source_boxes_starts=np.array([], dtype=np.int32),
+        neighbor_source_boxes_lists=np.array([], dtype=np.int32),
+        from_sep_close_smaller_starts=None,
+        from_sep_close_bigger_starts=None,
+    )
+
+    src_weights = np.array([1.0], dtype=np.float64)
+    src_func = np.array([2.0], dtype=np.float64)
+
+    with pytest.raises(
+        ValueError, match="periodic modifier kwargs require periodic=True"
+    ):
+        drive_volume_fmm(
+            traversal,
+            _MockWrangler(),
+            src_weights,
+            src_func,
+            list1_only=True,
+            periodic_near_shifts="nearest",
+        )
+
+
+def test_volume_fmm_periodic_true_defaults_to_near_plus_auto(monkeypatch):
+    from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
+    import volumential.volume_fmm as volume_fmm
+
+    class _FakeCLArray:
+        def __init__(self, values, queue):
+            self._values = np.asarray(values, dtype=np.float64)
+            self.queue = queue
+            self.dtype = self._values.dtype
+            self.ndim = self._values.ndim
+            self.shape = self._values.shape
+            self.size = self._values.size
+
+        def astype(self, dtype):
+            self._values = self._values.astype(dtype, copy=False)
+            self.dtype = self._values.dtype
+            return self
+
+        def get(self, queue=None):
+            return self._values
+
+    class _MockSumpyWrangler(ExpansionWranglerInterface):
+        dtype = np.float64
+
+        def __init__(self):
+            self.queue = object()
+            self.tree_indep = SimpleNamespace(target_kernels=[object()])
+
+        def multipole_expansion_zeros(self):
+            return None
+
+        def local_expansion_zeros(self):
+            return None
+
+        def output_zeros(self):
+            return np.zeros(1, dtype=self.dtype)
+
+        def reorder_sources(self, source_array):
+            return source_array
+
+        def reorder_targets(self, target_array):
+            return target_array
+
+        def reorder_potentials(self, potentials):
+            return potentials
+
+        def form_multipoles(
+            self, level_start_source_box_nrs, source_boxes, src_weights
+        ):
+            return np.array([0.0], dtype=self.dtype), None
+
+        def coarsen_multipoles(
+            self, level_start_source_parent_box_nrs, source_parent_boxes, mpoles
+        ):
+            return mpoles, None
+
+        def eval_direct(
+            self,
+            target_boxes,
+            neighbor_sources_starts,
+            neighbor_sources_lists,
+            mode_coefs,
+        ):
+            return np.array([0.0], dtype=self.dtype), None
+
+        def eval_direct_p2p(
+            self,
+            target_boxes,
+            neighbor_sources_starts,
+            neighbor_sources_lists,
+            src_weights,
+        ):
+            return np.array([0.0], dtype=self.dtype), None
+
+        def multipole_to_local(
+            self,
+            level_start_target_or_target_parent_box_nrs,
+            target_or_target_parent_boxes,
+            starts,
+            lists,
+            mpole_exps,
+        ):
+            return np.array([0.0], dtype=self.dtype), None
+
+        def eval_multipoles(
+            self,
+            level_start_target_box_nrs,
+            target_boxes,
+            starts,
+            lists,
+            mpole_exps,
+        ):
+            return np.array([0.0], dtype=self.dtype), None
+
+        def form_locals(
+            self,
+            level_start_target_or_target_parent_box_nrs,
+            target_or_target_parent_boxes,
+            starts,
+            lists,
+            src_weights,
+        ):
+            return np.array([0.0], dtype=self.dtype), None
+
+        def refine_locals(
+            self,
+            level_start_target_or_target_parent_box_nrs,
+            target_or_target_parent_boxes,
+            local_exps,
+        ):
+            return local_exps, None
+
+        def eval_locals(self, level_start_target_box_nrs, target_boxes, local_exps):
+            return np.array([0.0], dtype=self.dtype), None
+
+        def finalize_potentials(self, potentials):
+            return potentials
+
+    near_shift_calls = []
+    strict_calls = []
+
+    def _fake_normalize_periodic_near_shifts(periodic_near_shifts, dim):
+        near_shift_calls.append((periodic_near_shifts, dim))
+        return np.empty((0, dim), dtype=np.int64)
+
+    def _fake_strict_periodic_laplace_potential(
+        *,
+        traversal,
+        wrangler,
+        src_weights,
+        periodic_cell_size,
+        k_max,
+        queue,
+    ):
+        strict_calls.append((np.asarray(periodic_cell_size), int(k_max)))
+        return np.array([3.0], dtype=np.float64)
+
+    monkeypatch.setattr(volume_fmm, "FPNDSumpyExpansionWrangler", _MockSumpyWrangler)
+    monkeypatch.setattr(volume_fmm.cl.array, "Array", _FakeCLArray)
+    monkeypatch.setattr(
+        volume_fmm,
+        "_normalize_periodic_near_shifts",
+        _fake_normalize_periodic_near_shifts,
+    )
+    monkeypatch.setattr(volume_fmm, "_laplace_target_kernel_dim", lambda kernel: 2)
+    monkeypatch.setattr(
+        volume_fmm,
+        "_strict_periodic_laplace_potential",
+        _fake_strict_periodic_laplace_potential,
+    )
+
+    traversal = SimpleNamespace(
+        tree=SimpleNamespace(
+            nsources=1,
+            ntargets=1,
+            sources_are_targets=True,
+            dimensions=2,
+            root_extent=1.25,
+        )
+    )
+
+    fake_queue = object()
+    src_weights = np.empty(1, dtype=object)
+    src_weights[0] = _FakeCLArray([1.0], queue=fake_queue)
+    src_func = np.empty(1, dtype=object)
+    src_func[0] = _FakeCLArray([2.0], queue=fake_queue)
+
+    result = volume_fmm.drive_volume_fmm(
+        traversal,
+        _MockSumpyWrangler(),
+        src_weights,
+        src_func,
+        periodic=True,
+        reorder_sources=False,
+        reorder_potentials=False,
+    )
+
+    assert np.allclose(result, np.array([3.0], dtype=np.float64))
+    assert near_shift_calls == [("nearest", 2)]
+    assert len(strict_calls) == 1
+    assert np.allclose(strict_calls[0][0], np.array([1.25, 1.25], dtype=np.float64))
+    assert strict_calls[0][1] == 24
+
+
 def test_volume_fmm_rejects_multi_source_full_sumpy_path(monkeypatch):
     from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
     import volumential.volume_fmm as volume_fmm

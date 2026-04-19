@@ -1,11 +1,11 @@
-"""Benchmark Barnett-style periodic Laplace prototype (2D/3D).
+"""Benchmark periodic Laplace auto mode (2D/3D).
 
 This script compares three direct-evaluation modes on split source/target point
 clouds:
 
 1. free-space baseline
 2. periodic near-image correction only
-3. periodic near + cached/auto-built far operator (T_per)
+3. periodic near + auto far mode (strict spectral runtime for Laplace)
 
 The reference is a spectral periodic Laplace sum on a rectangular torus.
 """
@@ -16,6 +16,7 @@ import argparse
 import time
 from functools import partial
 from itertools import product
+from pathlib import Path
 
 import numpy as np
 import pyopencl as cl
@@ -32,12 +33,17 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--far-shift-radius", type=int, default=3)
     parser.add_argument("--training-samples", type=int, default=48)
     parser.add_argument("--max-check-points", type=int, default=128)
+    parser.add_argument("--spectral-kmax-2d", type=int, default=24)
+    parser.add_argument("--spectral-kmax-3d", type=int, default=10)
     parser.add_argument("--kmax-2d", type=int, default=24)
     parser.add_argument("--kmax-3d", type=int, default=10)
     parser.add_argument(
         "--cache-file",
         default="nft-periodic-benchmark.sqlite",
-        help="SQLite cache file (shared with near-field tables and T_per cache)",
+        help=(
+            "SQLite cache file (near-field tables; and periodic operator cache "
+            "for non-Laplace auto paths)"
+        ),
     )
     return parser.parse_args()
 
@@ -57,6 +63,14 @@ def _create_non_intel_context():
             return cl.Context([devices[0]])
 
     raise RuntimeError("No OpenCL devices available")
+
+
+def _cache_file_for_case(base_cache_file, dim, root_extent):
+    base_path = Path(base_cache_file)
+    stem = base_path.stem
+    suffix = base_path.suffix or ".sqlite"
+    root_tag = f"{float(root_extent):.12g}".replace("-", "m").replace(".", "p")
+    return str(base_path.with_name(f"{stem}.d{int(dim)}.re{root_tag}{suffix}"))
 
 
 def _spectral_periodic_laplace_reference(
@@ -181,9 +195,10 @@ def _run_case(args, dim):
 
     tree, traversal = _build_split_tree_and_traversal(queue, src_points, tgt_points)
     cell_size = np.full(dim, float(tree.root_extent), dtype=np.float64)
+    cache_file = _cache_file_for_case(args.cache_file, dim, tree.root_extent)
 
     with NearFieldInteractionTableManager(
-        args.cache_file,
+        cache_file,
         root_extent=float(tree.root_extent),
         progress_bar=False,
     ) as tm:
@@ -210,6 +225,7 @@ def _run_case(args, dim):
             wrangler,
             strengths_dev,
             strengths_dev,
+            periodic=True,
             direct_evaluation=True,
             auto_interpolate_targets=False,
             periodic_near_shifts="nearest",
@@ -224,6 +240,7 @@ def _run_case(args, dim):
             wrangler,
             strengths_dev,
             strengths_dev,
+            periodic=True,
             direct_evaluation=True,
             auto_interpolate_targets=False,
             periodic_near_shifts="nearest",
@@ -231,6 +248,8 @@ def _run_case(args, dim):
             periodic_far_operator="auto",
             periodic_far_operator_manager=tm,
             periodic_far_shift_radius=args.far_shift_radius,
+            periodic_far_spectral_kmax_2d=args.spectral_kmax_2d,
+            periodic_far_spectral_kmax_3d=args.spectral_kmax_3d,
             periodic_far_training_samples=args.training_samples,
             periodic_far_rng_seed=args.seed,
             periodic_far_max_check_points=args.max_check_points,
@@ -263,13 +282,14 @@ def _run_case(args, dim):
         "n_sources": int(args.nsources),
         "n_targets": int(args.ntargets),
         "cell_extent": float(tree.root_extent),
+        "cache_file": cache_file,
     }
 
 
 def main() -> None:
     args = _parse_args()
 
-    print("Periodic Laplace benchmark (Barnett-style prototype)")
+    print("Periodic Laplace benchmark (auto spectral mode)")
     print(f"cache file: {args.cache_file}")
     print(
         "config:",
@@ -279,6 +299,8 @@ def main() -> None:
             "ntargets": args.ntargets,
             "fmm_order": args.fmm_order,
             "far_shift_radius": args.far_shift_radius,
+            "spectral_kmax_2d": args.spectral_kmax_2d,
+            "spectral_kmax_3d": args.spectral_kmax_3d,
             "training_samples": args.training_samples,
             "max_check_points": args.max_check_points,
         },
@@ -291,6 +313,7 @@ def main() -> None:
             f"dim={result['dim']} ns={result['n_sources']} nt={result['n_targets']} "
             f"cell_extent={result['cell_extent']:.6f}"
         )
+        print(f"cache file: {result['cache_file']}")
         print(
             f"timings [s] free={result['free_time_s']:.3f} "
             f"near={result['near_time_s']:.3f} near+far={result['full_time_s']:.3f}"

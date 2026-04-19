@@ -47,13 +47,29 @@ Periodic Prototype
 An initial Barnett-style periodization hook is available in
 ``drive_volume_fmm`` (sumpy backend, 2D/3D):
 
+- Set ``periodic=True`` to enable periodic mode explicitly.
+- Passing ``periodic_*`` modifier kwargs without ``periodic=True`` raises a
+  ``ValueError``.
+- If ``periodic=True`` and no explicit near/far controls are provided,
+  defaults are ``periodic_near_shifts="nearest"`` and
+  ``periodic_far_operator="auto"``.
 - ``periodic_near_shifts`` adds explicit near-image lattice copies
   (``"nearest"`` for the nearest image ring).
 - ``periodic_near_target_boxes`` optionally restricts near-image evaluation
   to a subset of target boxes.
 - ``periodic_far_operator`` accepts a precomputed root-level far operator
-  ``T_per`` that maps root multipole coefficients to root local coefficients.
-  Passing ``"auto"`` builds/loads this operator offline.
+  ``T_per`` that maps periodic far-field features to root local coefficients.
+  Passing ``"auto"`` selects an automatic periodic far strategy.
+- In 2D/3D Laplace mode, ``"auto"`` uses a strict spectral periodic runtime
+  solve (reciprocal-space model) instead of fitting a root-local ``T_per``.
+- For non-Laplace auto paths, ``"auto"`` builds/loads ``T_per`` offline.
+- ``periodic_far_operator_basis`` optionally pins the operator basis
+  (``"multipole"`` or ``"source"``). Laplace auto strict mode accepts
+  ``None``/``"source"`` only.
+- ``periodic_far_spectral_kmax_2d`` controls Fourier truncation in 2D auto
+  spectral mode.
+- ``periodic_far_spectral_kmax_3d`` controls Fourier truncation in 3D auto
+  spectral mode.
 - ``periodic_cell_size`` sets the periodic cell lengths (defaults to
   ``tree.root_extent`` in each dimension).
 - ``periodic_far_operator_manager`` or
