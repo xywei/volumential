@@ -12,6 +12,7 @@ efficiently via Fast Multipole Method.
 - `test/`: pytest suite
 - `examples/`: maintained end-to-end examples (`laplace2d.py`, `laplace3d.py`,
   `helmholtz2d.py`, `helmholtz3d.py`, `poisson3d.py`,
+  `periodic_tail_hybrid_experiment.py`, `periodic_tail_hybrid_sweep.py`,
   `poisson3d_volumential.ipynb`, `poisson2d_pytential_volumential.ipynb`,
   `helmholtz3d_volumential.ipynb`)
 - `doc/`: Sphinx documentation
@@ -34,6 +35,18 @@ uv run python examples/poisson3d.py
 ```
 
 For a fully reproducible local + remote setup, see `DEVELOPMENT.md`.
+
+## Periodic Tail Hybrid Workflow
+
+The periodic Laplace hybrid validation workflow (2D) is documented in
+`doc/source/periodic_tail_hybrid.rst` (including derivations for
+`T_{beta,alpha}`, gauge correction, and diagnostics) and implemented in:
+
+- `examples/periodic_tail_hybrid_experiment.py`
+- `examples/periodic_tail_hybrid_sweep.py`
+
+It uses central-cell FMM + direct near-image shell sums + precomputed tail
+coefficients `T_{beta,alpha}` (shifted-image P2P path disabled).
 
 Debug tip: when validating source-node evaluations, set
 `VOLUMENTIAL_STRICT_SOURCE_TARGET_TREE=1` to fail fast if a traversal is built

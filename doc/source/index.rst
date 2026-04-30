@@ -14,6 +14,7 @@ Welcome to Volumential's Documentation!
    m1_kernels
    nearfield_symmetry
    helmholtz_split
+   periodic_tail_hybrid
    install
    development
    api/modules
