@@ -147,7 +147,7 @@ def _build_tables(queue, tree, case, cache_dir, path):
     )
 
     with NearFieldInteractionTableManager(
-        str(cache_path), root_extent=2.0, queue=queue
+        str(cache_path), root_extent=1.0, queue=queue
     ) as tm:
         if path == "per_level":
             tables = []
