@@ -249,6 +249,72 @@ def test_autobuild_split_source_levels_uses_base_table_levels():
     assert inferred_levels == [-1]
 
 
+def test_helmholtz_split_cache_accounting_separates_parameter_count():
+    from volumential.expansion_wrangler_fpnd import FPNDExpansionWrangler
+
+    def table(data, reduced=False):
+        return SimpleNamespace(
+            data=np.asarray(data, dtype=np.float64),
+            table_data_is_symmetry_reduced=reduced,
+        )
+
+    wrangler = FPNDExpansionWrangler.__new__(FPNDExpansionWrangler)
+    wrangler.helmholtz_split = True
+    wrangler.helmholtz_split_order = 3
+    wrangler.near_field_table = {
+        "LaplaceKernel(2)": [
+            table([1.0, 2.0, 3.0]),
+            table([4.0, np.nan, 6.0], reduced=True),
+        ],
+    }
+    wrangler.helmholtz_split_term_tables = {
+        ("power_log", 2): [table([7.0, 8.0])],
+        ("power_log", 4): [table([9.0, np.nan, 11.0], reduced=True)],
+    }
+
+    one_parameter = wrangler.get_helmholtz_split_cache_accounting(parameter_count=1)
+    three_parameters = wrangler.get_helmholtz_split_cache_accounting(
+        parameter_count=[2.0, 4.0, 8.0]
+    )
+
+    assert one_parameter.split_enabled
+    assert one_parameter.split_order == 3
+    assert one_parameter.base_table_count == 2
+    assert one_parameter.split_term_table_count == 2
+    assert one_parameter.basis_table_count == 4
+    assert one_parameter.split_term_keys == (("power_log", 2), ("power_log", 4))
+    assert one_parameter.uses_online_coefficients
+    assert one_parameter.uses_online_remainder
+    assert one_parameter.base_table_payload_bytes == 5 * np.dtype(np.float64).itemsize
+    assert one_parameter.split_term_table_payload_bytes == (
+        4 * np.dtype(np.float64).itemsize
+    )
+    assert one_parameter.total_table_payload_bytes == (
+        one_parameter.base_table_payload_bytes
+        + one_parameter.split_term_table_payload_bytes
+    )
+
+    assert three_parameters.parameter_count == 3
+    assert three_parameters.basis_table_count == one_parameter.basis_table_count
+    assert (
+        three_parameters.total_table_payload_bytes
+        == one_parameter.total_table_payload_bytes
+    )
+
+
+def test_helmholtz_split_cache_accounting_rejects_empty_parameter_sweep():
+    from volumential.expansion_wrangler_fpnd import FPNDExpansionWrangler
+
+    wrangler = FPNDExpansionWrangler.__new__(FPNDExpansionWrangler)
+    wrangler.helmholtz_split = True
+    wrangler.helmholtz_split_order = 1
+    wrangler.near_field_table = {}
+    wrangler.helmholtz_split_term_tables = {}
+
+    with pytest.raises(ValueError, match="parameter_count must be >= 1"):
+        wrangler.get_helmholtz_split_cache_accounting(parameter_count=0)
+
+
 def test_rebuild_tob_from_geometry_restores_unit_level_edges():
     from boxtree import make_tree_of_boxes_root, refine_and_coarsen_tree_of_boxes
 
