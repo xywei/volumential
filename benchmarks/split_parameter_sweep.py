@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Emit Helmholtz/Yukawa split-parameter sweep CSVs for Paper 1.
 
-The benchmark compares split near-field evaluation against direct non-split
-near-field tables for the same 2D scalar problem. It sweeps the Helmholtz wave
-number and Yukawa screening parameter while recording split-table accounting.
+The benchmark sweeps the Helmholtz wave number and Yukawa screening parameter
+while recording split-table accounting. Helmholtz rows use a manufactured
+Gaussian reference; Yukawa rows compare against a direct non-split near-field
+table for the same parameter.
 
 Smoke mode is intended for CI/local validation. Full mode is intended for
 metadata-wrapped runs on controlled machines such as ``ipa``.
@@ -34,9 +35,9 @@ FIELDS = (
     "fmm_order",
     "n_targets",
     "reference_path",
-    "rel_l2_vs_direct_table",
-    "linf_vs_direct_table",
-    "direct_warm_s",
+    "rel_l2_error",
+    "linf_error",
+    "reference_warm_s",
     "split_warm_s",
     "online_remainder_s",
     "online_remainder_time_kind",
@@ -204,14 +205,30 @@ def _build_geometry(ctx, queue, q_order: int, nlevels: int):
     )
 
 
-def _source_values(queue, q_points, dtype):
-    import pyopencl.array as cla
+def _coords_host(queue, q_points):
+    return np.array([axis.get(queue) for axis in q_points])
 
-    coords = np.array([axis.get(queue) for axis in q_points])
+
+def _gaussian_source_host(coords):
     x = coords[0]
     y = coords[1]
-    values = np.exp(-35.0 * ((x + 0.11) ** 2 + (y - 0.07) ** 2))
-    return cla.to_device(queue, np.ascontiguousarray(values.astype(dtype)))
+    return np.exp(-35.0 * ((x + 0.11) ** 2 + (y - 0.07) ** 2))
+
+
+def _helmholtz_manufactured_source_and_exact(coords, wave_number: float):
+    alpha = 80.0
+    r2 = coords[0] * coords[0] + coords[1] * coords[1]
+    exact = np.exp(-alpha * r2)
+    source = (4 * alpha - 4 * alpha * alpha * r2 - wave_number * wave_number) * exact
+    return source, exact
+
+
+def _source_values(queue, q_points, dtype, source_values_host=None):
+    import pyopencl.array as cla
+
+    if source_values_host is None:
+        source_values_host = _gaussian_source_host(_coords_host(queue, q_points))
+    return cla.to_device(queue, np.ascontiguousarray(source_values_host.astype(dtype)))
 
 
 def _run_path(
@@ -226,6 +243,7 @@ def _run_path(
     table,
     source_weights,
     q_points,
+    source_values_host=None,
     split: bool,
     split_order: int,
 ):
@@ -250,7 +268,7 @@ def _run_path(
     else:
         raise ValueError(f"unknown kernel: {kernel}")
 
-    source_vals = _source_values(queue, q_points, dtype)
+    source_vals = _source_values(queue, q_points, dtype, source_values_host)
     weighted_sources = source_vals * source_weights.astype(dtype)
 
     expn_factory = DefaultExpansionFactory()
@@ -322,14 +340,15 @@ def _row_from_result(
     q_order: int,
     nlevels: int,
     fmm_order: int,
-    direct_values,
+    reference_path: str,
+    reference_values,
     split_values,
-    direct_warm_s: float,
+    reference_warm_s: float | str,
     split_warm_s: float,
     accounting,
 ) -> dict[str, Any]:
-    diff = split_values - direct_values
-    direct_norm = max(float(np.linalg.norm(direct_values)), 1.0e-300)
+    diff = split_values - reference_values
+    reference_norm = max(float(np.linalg.norm(reference_values)), 1.0e-300)
     accounting_dict = asdict(accounting)
     return {
         "case_id": f"{kernel.lower()}2d-{parameter_name}{parameter:g}-p{split_order}",
@@ -342,11 +361,11 @@ def _row_from_result(
         "q_order": q_order,
         "nlevels": nlevels,
         "fmm_order": fmm_order,
-        "n_targets": int(direct_values.size),
-        "reference_path": "direct_non_split_table",
-        "rel_l2_vs_direct_table": float(np.linalg.norm(diff) / direct_norm),
-        "linf_vs_direct_table": float(np.max(np.abs(diff))),
-        "direct_warm_s": float(direct_warm_s),
+        "n_targets": int(reference_values.size),
+        "reference_path": reference_path,
+        "rel_l2_error": float(np.linalg.norm(diff) / reference_norm),
+        "linf_error": float(np.max(np.abs(diff))),
+        "reference_warm_s": reference_warm_s,
         "split_warm_s": float(split_warm_s),
         "online_remainder_s": float(split_warm_s if accounting.uses_online_remainder else 0.0),
         "online_remainder_time_kind": "warm_solve_upper_bound",
@@ -398,13 +417,13 @@ def run_benchmark(
     for kernel, parameter_name, parameters in sweep_specs:
         for parameter in parameters:
             if kernel == "Helmholtz":
-                direct_table = _build_helmholtz_2d_table(
-                    queue,
-                    cache_dir / f"direct-helmholtz-q{q_order}.sqlite",
-                    q_order,
-                    parameter,
-                    nlevels,
+                source_values_host, reference_values = (
+                    _helmholtz_manufactured_source_and_exact(
+                        _coords_host(queue, q_points), parameter
+                    )
                 )
+                reference_path = "manufactured_gaussian"
+                reference_warm_s: float | str = ""
             else:
                 direct_table = _get_yukawa_2d_table(
                     queue,
@@ -413,21 +432,23 @@ def run_benchmark(
                     parameter,
                     nlevels,
                 )
-
-            direct_values, direct_warm_s, _ = _run_path(
-                ctx=ctx,
-                queue=queue,
-                traversal=traversal,
-                q_order=q_order,
-                fmm_order=fmm_order,
-                kernel=kernel,
-                parameter=parameter,
-                table=direct_table,
-                source_weights=source_weights,
-                q_points=q_points,
-                split=False,
-                split_order=1,
-            )
+                source_values_host = _gaussian_source_host(_coords_host(queue, q_points))
+                reference_values, reference_warm_s, _ = _run_path(
+                    ctx=ctx,
+                    queue=queue,
+                    traversal=traversal,
+                    q_order=q_order,
+                    fmm_order=fmm_order,
+                    kernel=kernel,
+                    parameter=parameter,
+                    table=direct_table,
+                    source_weights=source_weights,
+                    q_points=q_points,
+                    source_values_host=source_values_host,
+                    split=False,
+                    split_order=1,
+                )
+                reference_path = "direct_non_split_table"
 
             for split_order in split_orders:
                 split_values, split_warm_s, split_wrangler = _run_path(
@@ -441,6 +462,7 @@ def run_benchmark(
                     table=split_table,
                     source_weights=source_weights,
                     q_points=q_points,
+                    source_values_host=source_values_host,
                     split=True,
                     split_order=split_order,
                 )
@@ -457,9 +479,10 @@ def run_benchmark(
                         q_order=q_order,
                         nlevels=nlevels,
                         fmm_order=fmm_order,
-                        direct_values=direct_values,
+                        reference_path=reference_path,
+                        reference_values=reference_values,
                         split_values=split_values,
-                        direct_warm_s=direct_warm_s,
+                        reference_warm_s=reference_warm_s,
                         split_warm_s=split_warm_s,
                         accounting=accounting,
                     )
