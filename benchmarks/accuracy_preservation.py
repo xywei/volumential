@@ -6,9 +6,12 @@ problem and compares three evaluator paths on the same mesh:
 
 * canonical: one level-0 near-field table with runtime scaling,
 * per_level: direct per-level near-field tables,
-* direct: direct evaluation reference through the same volume-FMM driver.
+* direct_p2p: direct point-particle diagnostic through the same volume-FMM driver.
 
 The output reports exact-solution errors and pairwise path differences by order.
+The canonical/per-level table comparison is the per-level row's difference from
+``canonical_rescaled``; the direct P2P path is diagnostic and not a near-field
+table reference.
 Smoke mode is small enough for CI; full mode is intended for controlled paper
 runs on ``ipa``.
 """
@@ -335,8 +338,8 @@ def run_benchmark(*, mode: str, cache_dir: Path):
                 mode=mode,
                 case=case,
                 path="canonical_rescaled",
-                reference_path="direct",
-                reference_method="direct volume_fmm evaluation",
+                reference_path="exact",
+                reference_method="manufactured analytic solution",
                 values=canonical,
                 exact=exact,
                 direct=direct,
@@ -349,8 +352,8 @@ def run_benchmark(*, mode: str, cache_dir: Path):
                 mode=mode,
                 case=case,
                 path="per_level_tables",
-                reference_path="direct",
-                reference_method="direct volume_fmm evaluation",
+                reference_path="exact",
+                reference_method="manufactured analytic solution",
                 values=per_level,
                 exact=exact,
                 direct=direct,
@@ -362,9 +365,9 @@ def run_benchmark(*, mode: str, cache_dir: Path):
             _norm_row(
                 mode=mode,
                 case=case,
-                path="direct",
+                path="direct_p2p",
                 reference_path="exact",
-                reference_method="manufactured analytic solution",
+                reference_method="manufactured analytic solution; P2P diagnostic path",
                 values=direct,
                 exact=exact,
                 direct=direct,
