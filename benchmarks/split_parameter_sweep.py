@@ -447,7 +447,9 @@ def run_benchmark(
                     (split_order, split_values, split_warm_s, accounting)
                 )
 
-            reference_split_order, reference_values, reference_warm_s, _ = split_results[-1]
+            reference_split_order, reference_values, reference_warm_s, _ = max(
+                split_results, key=lambda result: result[0]
+            )
             reference_path = f"split_order_{reference_split_order}"
             for split_order, split_values, split_warm_s, accounting in split_results:
                 rows.append(
