@@ -552,6 +552,105 @@ def test_online_symmetry_maps_match_orbit_canonical_signs(
         assert np.isclose(mapped_sign, canonical_sign)
 
 
+def _symmetry_diagnostic_test_table(kernel_case):
+    from sumpy.kernel import (
+        AxisSourceDerivative,
+        AxisTargetDerivative,
+        DirectionalSourceDerivative,
+        LaplaceKernel,
+    )
+
+    symmetry_source_direction = None
+    kernel_type = "const"
+    kernel_func = npt.constant_one
+    sumpy_kernel = ConstantKernel(2)
+
+    if kernel_case == "target-derivative":
+        kernel_type = "inv_power"
+        sumpy_kernel = AxisTargetDerivative(0, LaplaceKernel(2))
+    elif kernel_case == "source-derivative":
+        kernel_type = "inv_power"
+        sumpy_kernel = AxisSourceDerivative(1, LaplaceKernel(2))
+    elif kernel_case == "directional-source":
+        kernel_type = "inv_power"
+        sumpy_kernel = DirectionalSourceDerivative(LaplaceKernel(2), "dir_vec")
+        symmetry_source_direction = np.array([1.0, 0.0])
+    elif kernel_case == "mixed-source-target":
+        kernel_type = "inv_power"
+        sumpy_kernel = AxisTargetDerivative(
+            0,
+            AxisSourceDerivative(1, LaplaceKernel(2)),
+        )
+    elif kernel_case != "scalar":
+        raise ValueError(f"unknown kernel_case {kernel_case!r}")
+
+    q1d = np.linspace(0.25, 0.75, 3)
+    precomputed_q_points = np.array(
+        [(x, y) for x in q1d for y in q1d],
+        dtype=np.float64,
+    )
+
+    return npt.NearFieldInteractionTable(
+        quad_order=3,
+        dim=2,
+        build_method="DuffyRadial",
+        kernel_func=kernel_func,
+        kernel_type=kernel_type,
+        sumpy_kernel=sumpy_kernel,
+        derive_kernel_func=False,
+        symmetry_source_direction=symmetry_source_direction,
+        precomputed_q_points=precomputed_q_points,
+        progress_bar=False,
+    )
+
+
+@pytest.mark.parametrize(
+    "kernel_case",
+    [
+        "scalar",
+        "target-derivative",
+        "source-derivative",
+        "directional-source",
+        "mixed-source-target",
+    ],
+)
+def test_symmetry_diagnostics_reconstruct_full_table(kernel_case):
+    table = _symmetry_diagnostic_test_table(kernel_case)
+    orbit_info = table._get_orbit_canonical_info()
+    entry_ids = np.asarray(orbit_info["entry_ids"], dtype=np.int64)
+    canonical_entry_ids = np.asarray(orbit_info["canonical_entry_ids"], dtype=np.int64)
+    canonical_scales = np.asarray(orbit_info["canonical_scales"], dtype=table.dtype)
+
+    rng = np.random.default_rng(seed=101)
+    reference_data = np.empty(len(table.data), dtype=table.dtype)
+    reference_data.fill(np.nan)
+    reference_data[entry_ids] = rng.normal(size=len(entry_ids))
+    reference_data[:] = canonical_scales * reference_data[canonical_entry_ids]
+
+    reconstructed = table.reconstruct_full_table_from_symmetry(reference_data)
+    np.testing.assert_allclose(reconstructed, reference_data, rtol=0.0, atol=0.0)
+
+    diagnostics = table.get_symmetry_reduction_diagnostics(reference_data)
+    assert diagnostics.full_entry_count == len(table.data)
+    assert diagnostics.representative_count == len(entry_ids)
+    assert diagnostics.compression_ratio > 1.0
+    assert diagnostics.reconstructed_payload_bytes < diagnostics.unreduced_payload_bytes
+    assert diagnostics.metadata_payload_bytes > 0
+    assert sum(
+        orbit_size * count
+        for orbit_size, count in diagnostics.orbit_size_histogram
+    ) == len(table.data)
+    assert diagnostics.max_reconstruction_error == 0.0
+    assert diagnostics.l2_reconstruction_error == 0.0
+
+    if kernel_case == "scalar":
+        assert diagnostics.negative_scale_count == 0
+        assert diagnostics.sign_metadata_count == 0
+    else:
+        assert diagnostics.negative_scale_count > 0
+        assert diagnostics.sign_metadata_count >= diagnostics.negative_scale_count
+
+
 def test_duffy_radial_routes_queue_to_batched_builder(monkeypatch):
     table = npt.NearFieldInteractionTable(
         quad_order=2,

@@ -198,6 +198,21 @@ class DuffyBuildConfig:
     auto_tune_candidates: object = None
 
 
+@dataclass(frozen=True)
+class SymmetryReductionDiagnostics:
+    full_entry_count: int
+    representative_count: int
+    compression_ratio: float
+    orbit_size_histogram: tuple
+    sign_metadata_count: int
+    negative_scale_count: int
+    unreduced_payload_bytes: int
+    reconstructed_payload_bytes: int
+    metadata_payload_bytes: int
+    max_reconstruction_error: object = None
+    l2_reconstruction_error: object = None
+
+
 def _self_tp(vec, tpd=2):
     """
     Self tensor product
@@ -1065,6 +1080,84 @@ class NearFieldInteractionTable:
 
     def _get_invariant_entry_info(self):
         return self._get_orbit_canonical_info()
+
+    def reconstruct_full_table_from_symmetry(self, canonical_data=None):
+        """Reconstruct full table data from orbit-canonical representatives."""
+        orbit_info = self._get_orbit_canonical_info()
+        canonical_entry_ids = np.asarray(orbit_info["canonical_entry_ids"], dtype=np.int64)
+        canonical_scales = np.asarray(orbit_info["canonical_scales"], dtype=self.dtype)
+
+        if canonical_data is None:
+            canonical_data = self.data
+        canonical_data = np.asarray(canonical_data, dtype=self.dtype)
+
+        if canonical_data.shape[0] != len(self.data):
+            raise ValueError(
+                "canonical_data must be indexed by full table entry ids; "
+                f"expected length {len(self.data)}, got {canonical_data.shape[0]}"
+            )
+
+        return canonical_scales * canonical_data[canonical_entry_ids]
+
+    def get_symmetry_reduction_diagnostics(self, reference_data=None):
+        """Return paper-facing symmetry-reduction counts and reconstruction errors."""
+        orbit_info = self._get_orbit_canonical_info()
+        entry_ids = np.asarray(orbit_info["entry_ids"], dtype=np.int64)
+        canonical_entry_ids = np.asarray(orbit_info["canonical_entry_ids"], dtype=np.int64)
+        canonical_scales = np.asarray(orbit_info["canonical_scales"], dtype=self.dtype)
+
+        full_entry_count = int(len(canonical_entry_ids))
+        representative_count = int(len(entry_ids))
+        unique_ids, orbit_sizes = np.unique(canonical_entry_ids, return_counts=True)
+        del unique_ids
+        size_values, size_counts = np.unique(orbit_sizes, return_counts=True)
+        orbit_size_histogram = tuple(
+            (int(size), int(count))
+            for size, count in zip(size_values.tolist(), size_counts.tolist())
+        )
+
+        scale_differs = ~np.isclose(canonical_scales, self.dtype(1))
+        sign_metadata_count = int(np.count_nonzero(scale_differs))
+        negative_scale_count = int(np.count_nonzero(canonical_scales < 0))
+
+        unreduced_payload_bytes = int(full_entry_count * np.dtype(self.dtype).itemsize)
+        reconstructed_payload_bytes = int(
+            representative_count * np.dtype(self.dtype).itemsize
+        )
+        metadata_payload_bytes = int(canonical_entry_ids.nbytes + canonical_scales.nbytes)
+
+        max_reconstruction_error = None
+        l2_reconstruction_error = None
+        if reference_data is None:
+            reference_data = self.data
+        reference_data = np.asarray(reference_data, dtype=self.dtype)
+        if reference_data.shape[0] != full_entry_count:
+            raise ValueError(
+                "reference_data must be indexed by full table entry ids; "
+                f"expected length {full_entry_count}, got {reference_data.shape[0]}"
+            )
+
+        if np.all(np.isfinite(reference_data[canonical_entry_ids])) and np.all(
+            np.isfinite(reference_data)
+        ):
+            reconstructed = self.reconstruct_full_table_from_symmetry(reference_data)
+            errors = np.abs(reconstructed - reference_data)
+            max_reconstruction_error = float(np.max(errors))
+            l2_reconstruction_error = float(np.linalg.norm(errors))
+
+        return SymmetryReductionDiagnostics(
+            full_entry_count=full_entry_count,
+            representative_count=representative_count,
+            compression_ratio=float(full_entry_count / representative_count),
+            orbit_size_histogram=orbit_size_histogram,
+            sign_metadata_count=sign_metadata_count,
+            negative_scale_count=negative_scale_count,
+            unreduced_payload_bytes=unreduced_payload_bytes,
+            reconstructed_payload_bytes=reconstructed_payload_bytes,
+            metadata_payload_bytes=metadata_payload_bytes,
+            max_reconstruction_error=max_reconstruction_error,
+            l2_reconstruction_error=l2_reconstruction_error,
+        )
 
     @memoize_method
     def _get_case_target_points(self):
