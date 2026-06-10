@@ -25,6 +25,7 @@ import logging
 import hashlib
 import math
 from collections import OrderedDict
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -55,6 +56,29 @@ from volumential.nearfield_potential_table import NearFieldInteractionTable
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class HelmholtzSplitCacheAccounting:
+    split_enabled: bool
+    split_order: int
+    parameter_count: int
+    base_table_count: int
+    split_term_table_count: int
+    basis_table_count: int
+    base_table_payload_bytes: int
+    split_term_table_payload_bytes: int
+    total_table_payload_bytes: int
+    split_term_keys: tuple
+    uses_online_coefficients: bool
+    uses_online_remainder: bool
+
+
+def _nearfield_table_payload_bytes(table):
+    data = np.asarray(table.data)
+    if bool(getattr(table, "table_data_is_symmetry_reduced", False)):
+        return int(np.count_nonzero(np.isfinite(data)) * data.dtype.itemsize)
+    return int(data.nbytes)
 
 
 def _table_data_fingerprint(arr, sample_bytes=4096):
@@ -1579,6 +1603,58 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         self._nearfield_device_payload_cache_max = 16
 
     # }}} End constructor
+
+    def get_helmholtz_split_cache_accounting(self, parameter_count=1):
+        """Return table-storage accounting for Helmholtz/Yukawa split mode."""
+        if not isinstance(parameter_count, int):
+            try:
+                parameter_count = len(parameter_count)
+            except TypeError as exc:
+                raise TypeError(
+                    "parameter_count must be an integer or a sized parameter collection"
+                ) from exc
+        parameter_count = int(parameter_count)
+        if parameter_count < 1:
+            raise ValueError("parameter_count must be >= 1")
+
+        base_tables = [
+            table
+            for tables in self.near_field_table.values()
+            for table in tables
+        ]
+        split_term_items = sorted(
+            self.helmholtz_split_term_tables.items(),
+            key=lambda item: _format_helmholtz_split_term_key(item[0]),
+        )
+        split_term_tables = [
+            table
+            for _, tables in split_term_items
+            for table in tables
+        ]
+
+        base_table_payload_bytes = sum(
+            _nearfield_table_payload_bytes(table) for table in base_tables
+        )
+        split_term_table_payload_bytes = sum(
+            _nearfield_table_payload_bytes(table) for table in split_term_tables
+        )
+
+        return HelmholtzSplitCacheAccounting(
+            split_enabled=bool(self.helmholtz_split),
+            split_order=int(self.helmholtz_split_order),
+            parameter_count=parameter_count,
+            base_table_count=len(base_tables),
+            split_term_table_count=len(split_term_tables),
+            basis_table_count=len(base_tables) + len(split_term_tables),
+            base_table_payload_bytes=int(base_table_payload_bytes),
+            split_term_table_payload_bytes=int(split_term_table_payload_bytes),
+            total_table_payload_bytes=int(
+                base_table_payload_bytes + split_term_table_payload_bytes
+            ),
+            split_term_keys=tuple(key for key, _ in split_term_items),
+            uses_online_coefficients=bool(self.helmholtz_split and split_term_tables),
+            uses_online_remainder=bool(self.helmholtz_split),
+        )
 
     # {{{ data vector utilities
 
