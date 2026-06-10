@@ -2,9 +2,9 @@
 """Emit Helmholtz/Yukawa split-parameter sweep CSVs for Paper 1.
 
 The benchmark sweeps the Helmholtz wave number and Yukawa screening parameter
-while recording split-table accounting. Helmholtz rows use a manufactured
-Gaussian reference; Yukawa rows compare against a direct non-split near-field
-table for the same parameter.
+while recording split-table accounting. For each kernel parameter, rows compare
+against the highest split order in the same run, giving a direct split-order
+convergence measurement without changing the pretabulated basis-table family.
 
 Smoke mode is intended for CI/local validation. Full mode is intended for
 metadata-wrapped runs on controlled machines such as ``ipa``.
@@ -417,39 +417,13 @@ def run_benchmark(
     for kernel, parameter_name, parameters in sweep_specs:
         for parameter in parameters:
             if kernel == "Helmholtz":
-                source_values_host, reference_values = (
-                    _helmholtz_manufactured_source_and_exact(
-                        _coords_host(queue, q_points), parameter
-                    )
+                source_values_host, _exact_values = _helmholtz_manufactured_source_and_exact(
+                    _coords_host(queue, q_points), parameter
                 )
-                reference_path = "manufactured_gaussian"
-                reference_warm_s: float | str = ""
             else:
-                direct_table = _get_yukawa_2d_table(
-                    queue,
-                    cache_dir / f"direct-yukawa-q{q_order}.sqlite",
-                    q_order,
-                    parameter,
-                    nlevels,
-                )
                 source_values_host = _gaussian_source_host(_coords_host(queue, q_points))
-                reference_values, reference_warm_s, _ = _run_path(
-                    ctx=ctx,
-                    queue=queue,
-                    traversal=traversal,
-                    q_order=q_order,
-                    fmm_order=fmm_order,
-                    kernel=kernel,
-                    parameter=parameter,
-                    table=direct_table,
-                    source_weights=source_weights,
-                    q_points=q_points,
-                    source_values_host=source_values_host,
-                    split=False,
-                    split_order=1,
-                )
-                reference_path = "direct_non_split_table"
 
+            split_results = []
             for split_order in split_orders:
                 split_values, split_warm_s, split_wrangler = _run_path(
                     ctx=ctx,
@@ -469,6 +443,13 @@ def run_benchmark(
                 accounting = split_wrangler.get_helmholtz_split_cache_accounting(
                     parameter_count=parameter_count_by_kernel[kernel]
                 )
+                split_results.append(
+                    (split_order, split_values, split_warm_s, accounting)
+                )
+
+            reference_split_order, reference_values, reference_warm_s, _ = split_results[-1]
+            reference_path = f"split_order_{reference_split_order}"
+            for split_order, split_values, split_warm_s, accounting in split_results:
                 rows.append(
                     _row_from_result(
                         mode=mode,
