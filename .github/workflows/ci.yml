@@ -164,5 +164,6 @@ jobs:
           python examples/helmholtz2d.py
           python examples/helmholtz3d.py
           python benchmarks/table_equivalence_cache.py --mode smoke
+          python benchmarks/accuracy_preservation.py --mode smoke
 
 # vim: sw=2
