@@ -332,6 +332,9 @@ class NearFieldFromCSR(NearFieldEvalBase):
 
         ``mode == "canonical_single_table"`` means table level 0 is reused for
         all source-box levels with ``scaling_code`` and ``displacement_code``.
+        ``mode == "fixed_single_table"`` means table level 0 is used without
+        scaling and runtime checks require all source boxes to match the table
+        starting level.
         ``mode == "per_level_tables"`` means no kernel scaling is applied and
         the table level is selected from the source-box level.
         """
@@ -367,6 +370,22 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 ),
                 table_level_code="0.0",
                 notes="Uses user-provided scaling and displacement code with table level 0.",
+            )
+
+        if self.n_tables == 1:
+            return KernelScalingPolicy(
+                kernel_name=self.kname,
+                mode="fixed_single_table",
+                infer_kernel_scaling=False,
+                single_table_scaling_supported=False,
+                reference_table_level=0,
+                scaling_code="1.0",
+                displacement_code="0.0",
+                table_level_code="0.0",
+                notes=(
+                    "Uses the only cached table level without kernel scaling; "
+                    "runtime checks reject mixed source levels or a table level mismatch."
+                ),
             )
 
         return KernelScalingPolicy(
