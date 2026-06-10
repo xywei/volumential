@@ -109,10 +109,9 @@ def _build_manufactured_problem(dim):
     g2 = expp(-alpha_2 * r2_sq)
 
     solution_expr = g1 + coeff_2 * g2
-    source_expr = (
-        (2 * dim * alpha_1 - 4 * alpha_1**2 * r1_sq) * g1
-        + coeff_2 * (2 * dim * alpha_2 - 4 * alpha_2**2 * r2_sq) * g2
-    ) / (4.0 * np.pi)
+    source_expr = (2 * dim * alpha_1 - 4 * alpha_1**2 * r1_sq) * g1 + coeff_2 * (
+        2 * dim * alpha_2 - 4 * alpha_2**2 * r2_sq
+    ) * g2
 
     return source_expr, solution_expr, [x, y, z]
 
