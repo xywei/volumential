@@ -18,7 +18,7 @@ wheels = [
 [[package]]
 name = "arraycontext"
 version = "2024.0"
-source = { git = "https://gitlab.tiker.net/inducer/arraycontext.git#5ed2868f1ee0f4f45dcd07cf96ae71e57939fd16" }
+source = { git = "https://github.com/inducer/arraycontext.git#4ed685da024473266b2a635b350615e36c3ce176" }
 dependencies = [
     { name = "constantdict" },
     { name = "numpy" },
@@ -38,7 +38,7 @@ wheels = [
 [[package]]
 name = "boxtree"
 version = "2024.10"
-source = { git = "https://gitlab.tiker.net/inducer/boxtree.git#3c220d5065cff40243fb7d0cf32dd08014c05fb4" }
+source = { git = "https://github.com/inducer/boxtree.git#bfee6b8ffee7e187a1020984305a7107cecca638" }
 dependencies = [
     { name = "arraycontext" },
     { name = "cgen" },
@@ -221,7 +221,7 @@ sdist = { url = "https://files.pythonhosted.org/packages/04/03/1578d2a701e5596f9
 [[package]]
 name = "gmsh-interop"
 version = "2025.1"
-source = { git = "https://gitlab.tiker.net/inducer/gmsh_interop.git#0250c1eff69bf17b2d1e9b296163f2aef5cdbda5" }
+source = { git = "https://github.com/inducer/gmsh_interop.git#0250c1eff69bf17b2d1e9b296163f2aef5cdbda5" }
 dependencies = [
     { name = "numpy" },
     { name = "packaging" },
@@ -302,7 +302,7 @@ wheels = [
 [[package]]
 name = "loopy"
 version = "2025.2"
-source = { git = "https://gitlab.tiker.net/inducer/loopy.git#fe8bdedf32202492b96acbfb394a81abfd4bf195" }
+source = { git = "https://github.com/inducer/loopy.git#682ad32b859ac562937beff905f74dff35534ab0" }
 dependencies = [
     { name = "cgen" },
     { name = "codepy" },
@@ -407,7 +407,7 @@ wheels = [
 [[package]]
 name = "meshmode"
 version = "2024.0"
-source = { git = "https://gitlab.tiker.net/inducer/meshmode.git#9c3142724fc5f57469855bd7d06ecc974b0262bd" }
+source = { git = "https://github.com/inducer/meshmode.git#fa2d5450a42468ef31b9b8f420e2514465ba7a5c" }
 dependencies = [
     { name = "arraycontext" },
     { name = "gmsh-interop" },
@@ -423,7 +423,7 @@ dependencies = [
 [[package]]
 name = "modepy"
 version = "2026.1"
-source = { git = "https://gitlab.tiker.net/inducer/modepy.git#cd824fbf761beb287275041b4968a730077837ec" }
+source = { git = "https://github.com/inducer/modepy.git#a0f44097f4f470c9107c60ef322512ecabda1174" }
 dependencies = [
     { name = "numpy" },
     { name = "optype" },
@@ -571,7 +571,7 @@ wheels = [
 [[package]]
 name = "pymbolic"
 version = "2025.1"
-source = { git = "https://gitlab.tiker.net/inducer/pymbolic.git#ae07a0f041094de88e1d7d89162e03171d2520e7" }
+source = { git = "https://github.com/inducer/pymbolic.git#3963dd2d0be04e3f06ce7b5d1151dff3955ff5aa" }
 dependencies = [
     { name = "constantdict" },
     { name = "pytools" },
@@ -628,7 +628,7 @@ wheels = [
 [[package]]
 name = "pytential"
 version = "2024.0"
-source = { git = "https://gitlab.tiker.net/inducer/pytential.git#fc413f1128fc0f310cd3af717d4a38da9e32c3c1" }
+source = { git = "https://github.com/inducer/pytential.git#09a0316b88ddb3fd75670089dc64411186740606" }
 dependencies = [
     { name = "arraycontext" },
     { name = "boxtree" },
@@ -641,6 +641,7 @@ dependencies = [
     { name = "pytools" },
     { name = "scipy" },
     { name = "sumpy" },
+    { name = "typing-extensions" },
 ]
 
 [[package]]
@@ -661,8 +662,8 @@ wheels = [
 
 [[package]]
 name = "pytools"
-version = "2025.2.5"
-source = { git = "https://gitlab.tiker.net/inducer/pytools.git#f6395afe859f5dab7523b077ed2fd6ab68b5ef29" }
+version = "2026.1.1"
+source = { git = "https://github.com/inducer/pytools.git#295ffaebfacdb1ffb2a7ef85a0862f3ee0519c8f" }
 dependencies = [
     { name = "platformdirs" },
     { name = "siphash24" },
@@ -985,7 +986,7 @@ wheels = [
 [[package]]
 name = "sumpy"
 version = "2024.0"
-source = { git = "https://gitlab.tiker.net/inducer/sumpy.git#9b0e892f0fd932d0edf9fd017a89751cf1e654d4" }
+source = { git = "https://github.com/inducer/sumpy.git#83c5db03ba9266e8c2b24e5d3115142db6ca1be8" }
 dependencies = [
     { name = "arraycontext" },
     { name = "boxtree" },
@@ -1063,22 +1064,22 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "arraycontext", git = "https://gitlab.tiker.net/inducer/arraycontext.git" },
-    { name = "boxtree", git = "https://gitlab.tiker.net/inducer/boxtree.git" },
+    { name = "arraycontext", git = "https://github.com/inducer/arraycontext.git" },
+    { name = "boxtree", git = "https://github.com/inducer/boxtree.git" },
     { name = "filelock", marker = "extra == 'test'" },
-    { name = "gmsh-interop", marker = "extra == 'gmsh-support'", git = "https://gitlab.tiker.net/inducer/gmsh_interop.git" },
-    { name = "gmsh-interop", marker = "extra == 'test'", git = "https://gitlab.tiker.net/inducer/gmsh_interop.git" },
-    { name = "loopy", git = "https://gitlab.tiker.net/inducer/loopy.git" },
-    { name = "meshmode", git = "https://gitlab.tiker.net/inducer/meshmode.git" },
-    { name = "modepy", git = "https://gitlab.tiker.net/inducer/modepy.git" },
-    { name = "pymbolic", git = "https://gitlab.tiker.net/inducer/pymbolic.git" },
+    { name = "gmsh-interop", marker = "extra == 'gmsh-support'", git = "https://github.com/inducer/gmsh_interop.git" },
+    { name = "gmsh-interop", marker = "extra == 'test'", git = "https://github.com/inducer/gmsh_interop.git" },
+    { name = "loopy", git = "https://github.com/inducer/loopy.git" },
+    { name = "meshmode", git = "https://github.com/inducer/meshmode.git" },
+    { name = "modepy", git = "https://github.com/inducer/modepy.git" },
+    { name = "pymbolic", git = "https://github.com/inducer/pymbolic.git" },
     { name = "pyopencl" },
-    { name = "pytential", git = "https://gitlab.tiker.net/inducer/pytential.git" },
+    { name = "pytential", git = "https://github.com/inducer/pytential.git" },
     { name = "pytest", marker = "extra == 'test'" },
-    { name = "pytools", git = "https://gitlab.tiker.net/inducer/pytools.git" },
+    { name = "pytools", git = "https://github.com/inducer/pytools.git" },
     { name = "scipy" },
     { name = "sphinx", marker = "extra == 'doc'" },
     { name = "sphinx-rtd-theme", marker = "extra == 'doc'" },
-    { name = "sumpy", git = "https://gitlab.tiker.net/inducer/sumpy.git" },
+    { name = "sumpy", git = "https://github.com/inducer/sumpy.git" },
 ]
 provides-extras = ["gmsh-support", "test", "doc"]
