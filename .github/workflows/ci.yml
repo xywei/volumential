@@ -163,5 +163,6 @@ jobs:
           python examples/laplace2d.py
           python examples/helmholtz2d.py
           python examples/helmholtz3d.py
+          python benchmarks/table_equivalence_cache.py --mode smoke
 
 # vim: sw=2
