@@ -159,6 +159,12 @@ def _timing_value(timings: dict[str, Any], group: str, key: str) -> float | int 
     return subgroup.get(key)
 
 
+def _sqlite_database_bytes(connection) -> int:
+    page_count = int(connection.execute("PRAGMA page_count").fetchone()[0])
+    page_size = int(connection.execute("PRAGMA page_size").fetchone()[0])
+    return page_count * page_size
+
+
 def _full_table_data(table) -> np.ndarray:
     if getattr(table, "table_data_is_symmetry_reduced", False):
         return np.asarray(table.reconstruct_full_table_from_symmetry(), dtype=table.dtype)
@@ -220,7 +226,7 @@ def _cache_row(
     is_recomputed: bool,
     timings: dict[str, Any],
     table,
-    cache_path: Path,
+    cache_bytes: int,
 ) -> dict[str, Any]:
     diagnostics = table.get_symmetry_reduction_diagnostics()
     timing_group = "compute" if cache_state == "cold" else "load"
@@ -251,7 +257,7 @@ def _cache_row(
         ),
         "kwargs_load_s": _as_float(_timing_value(timings, "load", "kwargs_load_s")),
         "payload_bytes": payload_bytes,
-        "cache_bytes": cache_path.stat().st_size if cache_path.exists() else 0,
+        "cache_bytes": cache_bytes,
         **asdict(diagnostics),
     }
 
@@ -315,7 +321,7 @@ def run_benchmark(*, mode: str, cache_dir: Path):
                             is_recomputed=is_recomputed,
                             timings=dict(tm.last_get_table_timings),
                             table=table,
-                            cache_path=cache_path,
+                            cache_bytes=_sqlite_database_bytes(tm.datafile),
                         )
                     )
 
@@ -350,7 +356,7 @@ def run_benchmark(*, mode: str, cache_dir: Path):
                             is_recomputed=is_recomputed,
                             timings=dict(tm.last_get_table_timings),
                             table=table,
-                            cache_path=cache_path,
+                            cache_bytes=_sqlite_database_bytes(tm.datafile),
                         )
                     )
 
