@@ -552,7 +552,7 @@ def test_online_symmetry_maps_match_orbit_canonical_signs(
         assert np.isclose(mapped_sign, canonical_sign)
 
 
-def _symmetry_diagnostic_test_table(kernel_case):
+def _symmetry_diagnostic_test_table(kernel_case, dtype=np.float64):
     from sumpy.kernel import (
         AxisSourceDerivative,
         AxisTargetDerivative,
@@ -600,6 +600,7 @@ def _symmetry_diagnostic_test_table(kernel_case):
         derive_kernel_func=False,
         symmetry_source_direction=symmetry_source_direction,
         precomputed_q_points=precomputed_q_points,
+        dtype=dtype,
         progress_bar=False,
     )
 
@@ -649,6 +650,27 @@ def test_symmetry_diagnostics_reconstruct_full_table(kernel_case):
     else:
         assert diagnostics.negative_scale_count > 0
         assert diagnostics.sign_metadata_count >= diagnostics.negative_scale_count
+
+
+def test_symmetry_diagnostics_count_signs_for_complex_tables():
+    table = _symmetry_diagnostic_test_table(
+        "target-derivative",
+        dtype=np.complex128,
+    )
+    orbit_info = table._get_orbit_canonical_info()
+    entry_ids = np.asarray(orbit_info["entry_ids"], dtype=np.int64)
+    canonical_entry_ids = np.asarray(orbit_info["canonical_entry_ids"], dtype=np.int64)
+    canonical_scales = np.asarray(orbit_info["canonical_scales"], dtype=table.dtype)
+
+    reference_data = np.empty(len(table.data), dtype=table.dtype)
+    reference_data.fill(np.nan + 1j * np.nan)
+    reference_data[entry_ids] = np.arange(1, len(entry_ids) + 1) * (1.0 + 2.0j)
+    reference_data[:] = canonical_scales * reference_data[canonical_entry_ids]
+
+    diagnostics = table.get_symmetry_reduction_diagnostics(reference_data)
+    assert diagnostics.negative_scale_count > 0
+    assert diagnostics.sign_metadata_count >= diagnostics.negative_scale_count
+    assert diagnostics.max_reconstruction_error == 0.0
 
 
 def test_duffy_radial_routes_queue_to_batched_builder(monkeypatch):

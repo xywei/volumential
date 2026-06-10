@@ -1105,6 +1105,7 @@ class NearFieldInteractionTable:
         entry_ids = np.asarray(orbit_info["entry_ids"], dtype=np.int64)
         canonical_entry_ids = np.asarray(orbit_info["canonical_entry_ids"], dtype=np.int64)
         canonical_scales = np.asarray(orbit_info["canonical_scales"], dtype=self.dtype)
+        canonical_scale_signs = np.real(canonical_scales).astype(np.float64)
 
         full_entry_count = int(len(canonical_entry_ids))
         representative_count = int(len(entry_ids))
@@ -1116,9 +1117,9 @@ class NearFieldInteractionTable:
             for size, count in zip(size_values.tolist(), size_counts.tolist())
         )
 
-        scale_differs = ~np.isclose(canonical_scales, self.dtype(1))
+        scale_differs = ~np.isclose(canonical_scale_signs, 1.0)
         sign_metadata_count = int(np.count_nonzero(scale_differs))
-        negative_scale_count = int(np.count_nonzero(canonical_scales < 0))
+        negative_scale_count = int(np.count_nonzero(canonical_scale_signs < 0))
 
         unreduced_payload_bytes = int(full_entry_count * np.dtype(self.dtype).itemsize)
         reconstructed_payload_bytes = int(
