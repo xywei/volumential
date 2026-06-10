@@ -37,3 +37,11 @@ python benchmarks/accuracy_preservation.py --mode smoke --out build/benchmarks/a
 ```
 
 The benchmark compares canonical rescaled tables, direct per-level tables, and direct evaluation on a smooth manufactured 3D Poisson problem. Full runs should be wrapped with the paper repository metadata tool before their CSVs are promoted to manuscript data.
+
+## Helmholtz/Yukawa Split Parameter Sweep
+
+```bash
+python benchmarks/split_parameter_sweep.py --mode smoke --out build/benchmarks/split-parameter-sweep.csv
+```
+
+The benchmark sweeps 2D scalar Helmholtz wave numbers and Yukawa screening parameters. For each parameter and split order, it compares split near-field evaluation against a direct non-split near-field table for the same parameter and records split cache accounting. The `online_remainder_s` column is a conservative upper bound equal to the split warm solve time, because the current wrangler instrumentation does not isolate smooth online-remainder work from the rest of the warm FMM/List-1 evaluation.
