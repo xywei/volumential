@@ -3472,6 +3472,65 @@ def test_list1_helmholtz_infer_scaling_rejected():
         )
 
 
+def test_list1_scaling_policy_documents_per_level_tables_for_helmholtz():
+    from sumpy.kernel import HelmholtzKernel
+
+    from volumential.list1 import NearFieldFromCSR
+
+    near_field = NearFieldFromCSR(
+        HelmholtzKernel(3),
+        {
+            "n_tables": 3,
+            "n_q_points": 1,
+            "n_cases": 1,
+            "n_table_entries": 1,
+        },
+        potential_kind=1,
+    )
+
+    policy = near_field.get_kernel_scaling_policy()
+    assert policy.mode == "per_level_tables"
+    assert not policy.infer_kernel_scaling
+    assert not policy.single_table_scaling_supported
+    assert policy.reference_table_level is None
+    assert policy.scaling_code == "1.0"
+    assert policy.displacement_code == "0.0"
+    assert "sbox_level" in policy.table_level_code
+    assert policy.scaling_code == near_field.codegen_compute_scaling()
+    assert policy.displacement_code == near_field.codegen_compute_displacement()
+    assert policy.table_level_code == near_field.codegen_get_table_level()
+
+
+def test_list1_scaling_policy_documents_fixed_single_table_for_helmholtz():
+    from sumpy.kernel import HelmholtzKernel
+
+    from volumential.list1 import NearFieldFromCSR
+
+    near_field = NearFieldFromCSR(
+        HelmholtzKernel(3),
+        {
+            "n_tables": 1,
+            "n_q_points": 1,
+            "n_cases": 1,
+            "n_table_entries": 1,
+        },
+        potential_kind=1,
+    )
+
+    policy = near_field.get_kernel_scaling_policy()
+    assert policy.mode == "fixed_single_table"
+    assert not policy.infer_kernel_scaling
+    assert not policy.single_table_scaling_supported
+    assert policy.reference_table_level == 0
+    assert policy.scaling_code == "1.0"
+    assert policy.displacement_code == "0.0"
+    assert policy.table_level_code == "0.0"
+    assert "runtime checks reject mixed source levels" in policy.notes
+    assert policy.scaling_code == near_field.codegen_compute_scaling()
+    assert policy.displacement_code == near_field.codegen_compute_displacement()
+    assert policy.table_level_code == near_field.codegen_get_table_level()
+
+
 def test_list1_laplace_derivative_infer_scaling_is_first_order():
     from sumpy.kernel import AxisSourceDerivative, AxisTargetDerivative, LaplaceKernel
 
@@ -3491,6 +3550,66 @@ def test_list1_laplace_derivative_infer_scaling_is_first_order():
         near_field = NearFieldFromCSR(out_knl, table_shapes, potential_kind=1)
         scaling = "".join(near_field.codegen_compute_scaling().split())
         assert scaling == "sbox_extent/table_root_extent"
+
+
+def test_list1_laplace_scaling_policy_documents_canonical_table():
+    from sumpy.kernel import LaplaceKernel
+
+    from volumential.list1 import NearFieldFromCSR
+
+    near_field = NearFieldFromCSR(
+        LaplaceKernel(2),
+        {
+            "n_tables": 1,
+            "n_q_points": 1,
+            "n_cases": 1,
+            "n_table_entries": 1,
+        },
+        potential_kind=1,
+    )
+
+    policy = near_field.get_kernel_scaling_policy()
+    assert policy.mode == "canonical_single_table"
+    assert policy.infer_kernel_scaling
+    assert policy.single_table_scaling_supported
+    assert policy.reference_table_level == 0
+    assert "sbox_extent" in policy.scaling_code
+    assert "log(sbox_extent / table_root_extent)" in policy.displacement_code
+    assert policy.table_level_code == "0.0"
+    assert policy.scaling_code == near_field.codegen_compute_scaling()
+    assert policy.displacement_code == near_field.codegen_compute_displacement()
+    assert policy.table_level_code == near_field.codegen_get_table_level()
+
+
+def test_list1_custom_scaling_policy_documents_user_code():
+    from sumpy.kernel import HelmholtzKernel
+
+    from volumential.list1 import NearFieldFromCSR
+
+    near_field = NearFieldFromCSR(
+        HelmholtzKernel(3),
+        {
+            "n_tables": 1,
+            "n_q_points": 1,
+            "n_cases": 1,
+            "n_table_entries": 1,
+        },
+        potential_kind=1,
+        kernel_scaling_code="2 * BOX_extent",
+        kernel_displacement_code="BOX_level",
+    )
+
+    policy = near_field.get_kernel_scaling_policy()
+    assert policy.mode == "custom_single_table"
+    assert not policy.infer_kernel_scaling
+    assert policy.single_table_scaling_supported
+    assert policy.reference_table_level == 0
+    assert policy.scaling_code == "2 * sbox_extent"
+    assert policy.displacement_code == "sbox_level"
+    assert policy.table_level_code == "0.0"
+    assert policy.scaling_code == near_field.codegen_compute_scaling()
+    assert policy.displacement_code == near_field.codegen_compute_displacement()
+    assert policy.table_level_code == near_field.codegen_get_table_level()
 
 
 def test_list1_laplace_2d_derivative_infer_scaling_has_no_log_displacement():
