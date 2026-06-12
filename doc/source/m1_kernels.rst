@@ -54,5 +54,5 @@ The M1 kernels are covered by regression tests for:
 Related Follow-up
 -----------------
 
-Source-derivative and mixed derivative support matrix completion is tracked
-separately in `issue #71 <https://github.com/xywei/volumential/issues/71>`_.
+Source-derivative and mixed derivative support is summarized in
+:doc:`derivative_support`.
