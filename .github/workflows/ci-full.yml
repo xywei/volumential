@@ -81,10 +81,11 @@ jobs:
 
           build_docs
 
-  full_accuracy:
-    name: Full Accuracy Tests
+  full_accuracy_collection:
+    name: Full Accuracy Test Collection
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
       - uses: mamba-org/setup-micromamba@v2
@@ -107,7 +108,7 @@ jobs:
           python -m pip install uv
           uv pip install --system --editable ".[test]"
 
-          pytest -vv -m full_accuracy --full-accuracy \
+          pytest -vv --collect-only -m full_accuracy --full-accuracy \
             test/test_duffy_full_accuracy.py \
             test/test_volume_fmm.py
 

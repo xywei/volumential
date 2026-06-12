@@ -28,8 +28,11 @@ Test Tiers
        every pull request.
    * - Full-accuracy tests
      - ``pytest -m full_accuracy --full-accuracy``
-     - Scheduled/manual ``CI Full`` workflow
-     - High-cost direct-reference and split/non-split accuracy checks.
+     - GPU-capable developer or dedicated runner environments
+     - High-cost direct-reference and split/non-split accuracy checks. The
+       GitHub-hosted ``CI Full`` workflow collects the marked tests on
+       scheduled/manual runs so marker drift and import errors are visible
+       without pretending that CPU-only runners exercise GPU-required cases.
    * - Benchmarks
      - ``python benchmarks/<name>.py --mode smoke`` or full benchmark commands
      - Smoke variants in pull-request CI; full runs are promoted manually
@@ -58,25 +61,28 @@ Current Capability Matrix
        work rather than correctness coverage.
    * - Helmholtz split reuse
      - 2D, 3D where supported
-     - Volume FMM split and non-split comparisons; directional source paths
+     - Volume FMM split and non-split comparisons; 2D directional source paths
      - Complex-valued scalar outputs and derivative paths
      - ``full_accuracy`` tests compare split outputs against non-split or
-       higher-order references across parameter ladders.
+       higher-order references at fixed representative parameters.
      - Capability reporting is still per-test; unsupported mixed/backend
-       combinations should keep raising explicit errors.
+       combinations should keep raising explicit errors. Broader parameter
+       ladders remain benchmark coverage rather than full-accuracy CI coverage.
    * - Yukawa split reuse
      - 2D, 3D where supported
-     - Volume FMM split and non-split comparisons; directional source paths
+     - Volume FMM split and non-split comparisons; 2D directional source paths
      - Real scalar outputs and derivative paths
      - ``full_accuracy`` tests cover split/non-split tracking and directional
-       source derivative behavior.
-     - Same backend/mixed-combination policy audit as Helmholtz.
+       source derivative behavior at fixed representative parameters.
+     - Same backend/mixed-combination policy audit as Helmholtz; broader
+       parameter ladders remain benchmark coverage.
    * - Cahn-Hilliard and other legacy kernels
      - As implemented by existing specialized tests
-     - Focused kernel-specific checks
-     - Real scalar paths
-     - Existing regression tests preserve current behavior.
-     - Not yet represented in a unified cross-kernel validation matrix.
+     - Focused compatibility and cache/schema checks
+     - Real scalar paths where currently exposed
+     - Existing regression tests preserve table-manager and legacy cache
+       behavior.
+     - Not yet represented in a unified numerical validation matrix.
    * - Matrix/vector PDE kernel families
      - Planned
      - Planned vector/tensor modes
@@ -95,9 +101,12 @@ CI Partitioning
 
 Pull-request CI runs smoke and regression coverage that should stay bounded in
 runtime. The scheduled/manual ``CI Full`` workflow runs the documentation and
-example jobs and now includes the ``full_accuracy`` pytest marker explicitly.
-This keeps expensive direct-reference accuracy checks visible in GitHub Actions
-without making every pull request wait for the full matrix.
+example jobs and now collects the ``full_accuracy`` pytest marker explicitly on
+GitHub-hosted CPU runners. Full numerical execution of the marked tests still
+requires a GPU-capable environment; the collection job is intended to catch
+marker drift, import errors, and accidental deselection without making every
+pull request wait for the full matrix or silently treating skipped GPU tests as
+validation.
 
 When adding a new kernel or derivative mode, update this page in the same pull
 request that adds tests. A feature should not be marked as fully covered unless
