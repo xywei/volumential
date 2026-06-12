@@ -67,6 +67,10 @@ def _case_output_arg(case: SuiteCase, case_dir: Path) -> list[str]:
     return ["--out", str(case_dir / case.output_name)]
 
 
+def _case_cache_arg(case_dir: Path) -> list[str]:
+    return ["--cache-dir", str(case_dir / "cache")]
+
+
 def _run_case(
     case: SuiteCase, *, mode: str, backend: str, out_dir: Path, dry_run: bool
 ) -> dict[str, object]:
@@ -78,6 +82,7 @@ def _run_case(
         "--mode",
         mode,
         *_case_output_arg(case, case_dir),
+        *_case_cache_arg(case_dir),
     ]
     if case.accepts_backend:
         command.extend(["--backend", backend])

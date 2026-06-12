@@ -25,7 +25,9 @@ without executing benchmarks, `--backend <auto|pocl-cpu|cuda-gpu>` to preserve
 device selection for benchmark scripts that expose a backend option, and
 `--list-cases` to inspect the registered cases without importing
 OpenCL-dependent benchmark modules. The manifest is written even when a case
-fails, so partial controlled runs remain auditable.
+fails, so partial controlled runs remain auditable. The suite passes each case
+an output-local cache directory under `<out-dir>/<case>/cache`, keeping table
+caches with the promoted run artifacts instead of relying on script defaults.
 
 ## Table Equivalence And Cache Economics
 
