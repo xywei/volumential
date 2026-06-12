@@ -134,17 +134,19 @@ def main() -> None:
             print(f"{case.name}: {case.description}")
         return
 
+    out_dir = args.out_dir.resolve()
+    manifest_path = args.manifest.resolve() if args.manifest is not None else out_dir / "manifest.json"
+
     records = [
         _run_case(
             case,
             mode=args.mode,
             backend=args.backend,
-            out_dir=args.out_dir,
+            out_dir=out_dir,
             dry_run=args.dry_run,
         )
         for case in selected
     ]
-    manifest_path = args.manifest or (args.out_dir / "manifest.json")
     _write_manifest(records, manifest_path)
     print(f"wrote {manifest_path}")
 
