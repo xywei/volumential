@@ -1217,11 +1217,17 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         if self.helmholtz_split:
             split_supported, split_reason = self._split_target_kernel_support_status()
             if not split_supported:
-                logger.info(
-                    "[split:disable] unsupported target kernels: %s",
-                    split_reason,
-                )
-                self.helmholtz_split = False
+                if helmholtz_split is None:
+                    logger.info(
+                        "[split:disable] unsupported target kernels: %s",
+                        split_reason,
+                    )
+                    self.helmholtz_split = False
+                else:
+                    raise RuntimeError(
+                        "helmholtz_split does not support the requested target "
+                        f"kernels; {split_reason}"
+                    )
 
         if self.helmholtz_split:
             base_table_supported, base_table_reason = (
@@ -2463,6 +2469,14 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         return "__" + "__".join(parts)
 
     @staticmethod
+    def _helmholtz_split_wrapper_chain_has_mixed_source_target(wrappers):
+        has_target = any(kind == "axis_target" for kind, _value in wrappers)
+        has_source = any(
+            kind in ("axis_source", "directional_source") for kind, _value in wrappers
+        )
+        return has_target and has_source
+
+    @staticmethod
     def _apply_helmholtz_split_kernel_wrappers_with_chain(kernel, wrapper_chain):
         wrapped = kernel
         for kind, value in reversed(wrapper_chain):
@@ -2558,9 +2572,21 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
                 return False, f"unsupported dimension {base_knl.dim}"
 
             try:
-                self._extract_helmholtz_split_kernel_wrapper_chain(out_knl, base_knl)
+                wrapper_chain = self._extract_helmholtz_split_kernel_wrapper_chain(
+                    out_knl,
+                    base_knl,
+                )
             except NotImplementedError as exc:
                 return False, str(exc)
+
+            if self._helmholtz_split_wrapper_chain_has_mixed_source_target(
+                wrapper_chain
+            ):
+                return (
+                    False,
+                    "mixed source/target derivative wrapper chains are unsupported "
+                    "in split mode without a dedicated regression test and scaling rule",
+                )
 
             param_name = self._split_wave_number_parameter_name(base_knl)
             if not isinstance(param_name, str) or not param_name:
