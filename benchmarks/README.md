@@ -2,6 +2,33 @@
 
 These scripts emit reproducible CSV artifacts for manuscript evidence. Keep smoke modes lightweight enough for CI/local checks and reserve full sweeps for controlled machines such as `ipa`.
 
+## Performance Suite Driver
+
+Use the suite driver to run the maintained benchmark set with a shared output
+layout and JSON command manifest:
+
+```bash
+python benchmarks/performance_suite.py --mode smoke --out-dir build/benchmarks/performance-suite
+```
+
+For full runs, execute on a controlled machine such as `ipa` and wrap the suite
+with the paper repository metadata tool before promoting results:
+
+```bash
+python benchmarks/performance_suite.py --mode full --out-dir /path/to/raw-runs/performance-suite
+```
+
+The suite currently covers canonical table equivalence/cache economics,
+accuracy preservation, split-parameter coverage, and adaptive timing. Use
+`--case <name>` to run a subset, `--dry-run` to emit the command manifest
+without executing benchmarks, `--backend <auto|pocl-cpu|cuda-gpu>` to preserve
+device selection for benchmark scripts that expose a backend option, and
+`--list-cases` to inspect the registered cases without importing
+OpenCL-dependent benchmark modules. The manifest is written even when a case
+fails, so partial controlled runs remain auditable. The suite passes each case
+an output-local cache directory under `<out-dir>/<case>/cache`, keeping table
+caches with the promoted run artifacts instead of relying on script defaults.
+
 ## Table Equivalence And Cache Economics
 
 ```bash
