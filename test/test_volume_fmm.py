@@ -3721,6 +3721,55 @@ def test_source_kernel_derivation_preserves_source_derivatives():
     assert source_knl_no_source_deriv == base_knl
 
 
+def test_helmholtz_split_policy_rejects_mixed_source_target_derivative_chain():
+    from sumpy.kernel import (
+        AxisSourceDerivative,
+        AxisTargetDerivative,
+        DirectionalSourceDerivative,
+        HelmholtzKernel,
+    )
+
+    from volumential.expansion_wrangler_fpnd import FPNDExpansionWrangler
+
+    base_knl = HelmholtzKernel(2)
+    for out_knl in (
+        AxisTargetDerivative(0, AxisSourceDerivative(1, base_knl)),
+        AxisTargetDerivative(0, DirectionalSourceDerivative(base_knl, "dir_vec")),
+    ):
+        wrangler = FPNDExpansionWrangler.__new__(FPNDExpansionWrangler)
+        wrangler.tree_indep = SimpleNamespace(target_kernels=[out_knl])
+
+        supported, reason = wrangler._split_target_kernel_support_status()
+
+        assert not supported
+        assert "mixed source/target derivative wrapper chains" in reason
+
+
+def test_helmholtz_split_policy_accepts_single_source_or_target_derivative_chain():
+    from sumpy.kernel import (
+        AxisSourceDerivative,
+        AxisTargetDerivative,
+        DirectionalSourceDerivative,
+        HelmholtzKernel,
+    )
+
+    from volumential.expansion_wrangler_fpnd import FPNDExpansionWrangler
+
+    base_knl = HelmholtzKernel(2)
+
+    for out_knl in (
+        AxisTargetDerivative(0, base_knl),
+        AxisSourceDerivative(1, base_knl),
+        DirectionalSourceDerivative(base_knl, "dir_vec"),
+    ):
+        wrangler = FPNDExpansionWrangler.__new__(FPNDExpansionWrangler)
+        wrangler.tree_indep = SimpleNamespace(target_kernels=[out_knl])
+
+        supported, reason = wrangler._split_target_kernel_support_status()
+
+        assert supported, reason
+
+
 def test_volume_fmm_3d_laplace_source_target_derivative_antisymmetry(tmp_path):
     from sumpy.expansion import DefaultExpansionFactory
     from sumpy.kernel import AxisSourceDerivative, AxisTargetDerivative, LaplaceKernel
