@@ -81,6 +81,37 @@ jobs:
 
           build_docs
 
+  full_accuracy_collection:
+    name: Full Accuracy Test Collection
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: .test-conda-env-py3.yml
+          environment-name: testing
+          cache-downloads: true
+          generate-run-shell: true
+      - name: Main Script
+        shell: micromamba-shell {0}
+        run: |
+          set -euxo pipefail
+
+          export PY_EXE=python
+          export PYOPENCL_CTX="portable:0"
+          export PYOPENCL_TEST="portable:0"
+          export PYTHONFAULTHANDLER=1
+
+          python -m pip install --upgrade pip
+          python -m pip install uv
+          uv pip install --system --editable ".[test]"
+
+          pytest -vv --collect-only -m full_accuracy --full-accuracy \
+            test/test_duffy_full_accuracy.py \
+            test/test_volume_fmm.py
+
   examples:
     name: Examples
     runs-on: ubuntu-latest
