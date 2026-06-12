@@ -69,8 +69,8 @@ Current Support Matrix
        derivative request.
      - Supported for axis and directional source derivative wrappers in the
        maintained split paths.
-     - Supported for maintained wrapper chains; unsupported combinations raise
-       explicit errors rather than silently falling back.
+     - Mixed source/target wrapper chains are not documented as supported in
+       the end-to-end FMM path unless a dedicated test covers that exact chain.
      - Regression and full-accuracy tests cover representative scalar,
        target-derivative, source-derivative, and split directional paths.
    * - Table-manager named-kernel API
@@ -91,6 +91,9 @@ starts. In particular:
   with the missing parameter name;
 - unsupported split/base-table combinations must raise ``RuntimeError`` rather
   than mixing incompatible reduced and full tables;
+- nested mixed source/target derivative wrappers should be treated as
+  unsupported unless the specific table/FMM path has an explicit regression
+  test and scaling rule;
 - directional source derivatives must provide the named runtime direction vector
   for FMM evaluation and a compatible ``symmetry_source_direction`` for
   symmetry-reduced table construction;
