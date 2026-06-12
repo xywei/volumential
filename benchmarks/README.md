@@ -21,8 +21,11 @@ python benchmarks/performance_suite.py --mode full --out-dir /path/to/raw-runs/p
 The suite currently covers canonical table equivalence/cache economics,
 accuracy preservation, split-parameter coverage, and adaptive timing. Use
 `--case <name>` to run a subset, `--dry-run` to emit the command manifest
-without executing benchmarks, and `--list-cases` to inspect the registered
-cases without importing OpenCL-dependent benchmark modules.
+without executing benchmarks, `--backend <auto|pocl-cpu|cuda-gpu>` to preserve
+device selection for benchmark scripts that expose a backend option, and
+`--list-cases` to inspect the registered cases without importing
+OpenCL-dependent benchmark modules. The manifest is written even when a case
+fails, so partial controlled runs remain auditable.
 
 ## Table Equivalence And Cache Economics
 

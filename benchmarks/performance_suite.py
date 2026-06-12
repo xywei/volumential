@@ -25,6 +25,7 @@ class SuiteCase:
     description: str
     script: str
     output_name: str | None
+    accepts_backend: bool = False
 
 
 SUITE_CASES = (
@@ -45,14 +46,19 @@ SUITE_CASES = (
         description="Helmholtz/Yukawa split-order and parameter coverage",
         script="benchmarks/split_parameter_sweep.py",
         output_name="split_parameter_sweep.csv",
+        accepts_backend=True,
     ),
     SuiteCase(
         name="adaptive-timing",
         description="adaptive-tree geometry, table build/load, and FMM wall time",
         script="benchmarks/adaptive_timing.py",
         output_name="adaptive_timing.csv",
+        accepts_backend=True,
     ),
 )
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _case_output_arg(case: SuiteCase, case_dir: Path) -> list[str]:
@@ -61,15 +67,27 @@ def _case_output_arg(case: SuiteCase, case_dir: Path) -> list[str]:
     return ["--out", str(case_dir / case.output_name)]
 
 
-def _run_case(case: SuiteCase, *, mode: str, out_dir: Path, dry_run: bool) -> dict[str, object]:
+def _run_case(
+    case: SuiteCase, *, mode: str, backend: str, out_dir: Path, dry_run: bool
+) -> dict[str, object]:
     case_dir = out_dir / case.name
-    command = [sys.executable, case.script, "--mode", mode, *_case_output_arg(case, case_dir)]
+    script_path = REPO_ROOT / case.script
+    command = [
+        sys.executable,
+        str(script_path),
+        "--mode",
+        mode,
+        *_case_output_arg(case, case_dir),
+    ]
+    if case.accepts_backend:
+        command.extend(["--backend", backend])
 
     record: dict[str, object] = {
         "name": case.name,
         "description": case.description,
         "mode": mode,
         "command": command,
+        "backend": backend if case.accepts_backend else None,
         "out_dir": str(case_dir),
         "dry_run": dry_run,
     }
@@ -79,11 +97,9 @@ def _run_case(case: SuiteCase, *, mode: str, out_dir: Path, dry_run: bool) -> di
 
     case_dir.mkdir(parents=True, exist_ok=True)
     start = time.perf_counter()
-    completed = subprocess.run(command, check=False)
+    completed = subprocess.run(command, check=False, cwd=REPO_ROOT)
     record["elapsed_s"] = time.perf_counter() - start
     record["returncode"] = completed.returncode
-    if completed.returncode != 0:
-        raise SystemExit(completed.returncode)
     return record
 
 
@@ -95,6 +111,12 @@ def _write_manifest(records: list[dict[str, object]], manifest_path: Path) -> No
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("smoke", "full"), default="smoke")
+    parser.add_argument(
+        "--backend",
+        choices=("auto", "pocl-cpu", "cuda-gpu"),
+        default="auto",
+        help="OpenCL backend for suite cases that expose --backend",
+    )
     parser.add_argument("--out-dir", type=Path, default=Path("build/benchmarks/performance-suite"))
     parser.add_argument("--case", choices=[case.name for case in SUITE_CASES], action="append")
     parser.add_argument("--manifest", type=Path, default=None)
@@ -113,12 +135,22 @@ def main() -> None:
         return
 
     records = [
-        _run_case(case, mode=args.mode, out_dir=args.out_dir, dry_run=args.dry_run)
+        _run_case(
+            case,
+            mode=args.mode,
+            backend=args.backend,
+            out_dir=args.out_dir,
+            dry_run=args.dry_run,
+        )
         for case in selected
     ]
     manifest_path = args.manifest or (args.out_dir / "manifest.json")
     _write_manifest(records, manifest_path)
     print(f"wrote {manifest_path}")
+
+    failures = [record for record in records if record.get("returncode") not in (None, 0)]
+    if failures:
+        raise SystemExit(int(failures[0]["returncode"]))
 
 
 if __name__ == "__main__":
