@@ -79,14 +79,14 @@ def test_laplace2d_dmk_like_split_parameter_sweep_reaches_high_accuracy():
     low_expansion = next(
         row
         for row in rows
-        if row["sigma"] == 0.35
+        if np.isclose(row["sigma"], 0.35)
         and row["expansion_order"] == 2
         and row["smooth_order"] == 220
     )
     high_expansion = next(
         row
         for row in rows
-        if row["sigma"] == 0.35
+        if np.isclose(row["sigma"], 0.35)
         and row["expansion_order"] == 8
         and row["smooth_order"] == 220
     )
@@ -97,7 +97,7 @@ def test_laplace2d_dmk_like_split_parameter_sweep_reaches_high_accuracy():
     low_smooth_order = next(
         row
         for row in rows
-        if row["sigma"] == 0.35
+        if np.isclose(row["sigma"], 0.35)
         and row["expansion_order"] == 8
         and row["smooth_order"] == 64
     )

@@ -510,4 +510,4 @@ def sweep_laplace2d_dmk_split(
     return rows
 
 
-# vim: foldmethod=marker:filetype=pyopencl
+# vim: foldmethod=marker:filetype=python
