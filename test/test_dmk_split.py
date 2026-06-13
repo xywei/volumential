@@ -61,6 +61,9 @@ def test_compact_window_support_avoids_gauss_node_boundary_intersection():
 def test_heat_kernel_split_recombines_laplace_kernel_off_target():
     config = dmk.HeatKernelConfig(sigma=0.06)
     radii = np.array([0.01, 0.05, 0.2, 1.0])
+    expected_target_value = (dmk.EULER_GAMMA - 2.0 * np.log(config.sigma)) / (
+        4.0 * np.pi
+    )
 
     local = dmk.laplace2d_heat_local_kernel_radius(radii, config)
     smooth = dmk.laplace2d_heat_smooth_kernel(radii, np.zeros_like(radii), config)
@@ -71,11 +74,23 @@ def test_heat_kernel_split_recombines_laplace_kernel_off_target():
         rtol=1.0e-14,
         atol=1.0e-14,
     )
-    assert np.isfinite(dmk.laplace2d_heat_smooth_kernel(0.0, 0.0, config))
+    assert np.isclose(
+        dmk.laplace2d_heat_smooth_kernel(0.0, 0.0, config),
+        expected_target_value,
+    )
     assert np.isclose(
         dmk.laplace2d_heat_local_moment(0, 0, config),
         config.sigma**2 / 4.0,
     )
+
+
+def test_window_order_validation_rejects_fractional_smoothness():
+    try:
+        dmk.CompactWindowConfig(sigma=0.1, smoothness_order=4.9)
+    except ValueError as exc:
+        assert "smoothness_order must be an integer" in str(exc)
+    else:
+        raise AssertionError("fractional smoothness order should fail validation")
 
 
 def test_laplace2d_dmk_like_split_parameter_sweep_reaches_high_accuracy():
@@ -145,9 +160,30 @@ def test_laplace2d_heat_split_reaches_high_accuracy_with_smooth_remainder():
     low_smooth_order = next(row for row in rows if row["smooth_order"] == 24)
     high_smooth_order = next(row for row in rows if row["smooth_order"] == 48)
 
-    assert high_smooth_order["support_relation"] == "heat-tail"
+    assert high_smooth_order["support_relation"] == "tail-contained"
     assert high_smooth_order["abs_error"] < 1.0e-12
     assert high_smooth_order["abs_error"] < 1.0e-6 * low_smooth_order["abs_error"]
+
+
+def test_laplace2d_heat_split_rejects_boundary_intersecting_tail():
+    q_order = 5
+    mode_index = 12
+    target_index = 0
+    coeffs = dmk.tensor_lagrange_mode_coefficients(q_order, mode_index)
+    target = dmk.tensor_gauss_point(q_order, target_index)
+
+    try:
+        dmk.laplace2d_heat_split_integral(
+            coeffs,
+            target=target,
+            config=dmk.HeatKernelConfig(sigma=0.06),
+            expansion_order=8,
+            smooth_order=48,
+        )
+    except ValueError as exc:
+        assert "heat-local tail intersects" in str(exc)
+    else:
+        raise AssertionError("boundary-intersecting heat tail should be rejected")
 
 
 def test_laplace2d_dmk_like_split_rejects_intersecting_local_support():

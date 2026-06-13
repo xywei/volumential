@@ -63,15 +63,19 @@ class CompactWindowConfig:
     def __post_init__(self):
         if not np.isfinite(self.sigma) or self.sigma <= 0:
             raise ValueError(f"sigma must be positive and finite, got {self.sigma!r}")
+        object.__setattr__(
+            self,
+            "smoothness_order",
+            _validate_integer_order(
+                self.smoothness_order,
+                "smoothness_order",
+                minimum=0,
+            ),
+        )
         if not 0 < self.plateau_fraction < 1:
             raise ValueError(
                 "plateau_fraction must be between 0 and 1, "
                 f"got {self.plateau_fraction!r}"
-            )
-        if self.smoothness_order < 0:
-            raise ValueError(
-                "smoothness_order must be nonnegative, "
-                f"got {self.smoothness_order!r}"
             )
 
 
@@ -85,10 +89,16 @@ class HeatKernelConfig:
     """
 
     sigma: float
+    tail_cutoff_sigma: float = 5.0
 
     def __post_init__(self):
         if not np.isfinite(self.sigma) or self.sigma <= 0:
             raise ValueError(f"sigma must be positive and finite, got {self.sigma!r}")
+        if not np.isfinite(self.tail_cutoff_sigma) or self.tail_cutoff_sigma <= 0:
+            raise ValueError(
+                "tail_cutoff_sigma must be positive and finite, "
+                f"got {self.tail_cutoff_sigma!r}"
+            )
 
 
 @dataclass(frozen=True)
@@ -103,6 +113,10 @@ class Laplace2DDMKSplitResult:
 
 class CompactSupportIntersectionError(ValueError):
     """Raised when compact local support intersects the source box boundary."""
+
+
+class HeatTailBoundaryError(ValueError):
+    """Raised when heat-local full-space moments are unsafe for a finite box."""
 
 
 def _validate_integer_order(order, name, minimum):
@@ -332,22 +346,25 @@ def laplace2d_heat_smooth_kernel(dx, dy, config):
     """
 
     r = np.sqrt(np.asarray(dx) ** 2 + np.asarray(dy) ** 2)
+    if np.isscalar(dx) and np.isscalar(dy):
+        if r == 0:
+            return (EULER_GAMMA - 2.0 * log(config.sigma)) / (4.0 * pi)
+        return float(
+            laplace2d_kernel_radius(r)
+            - laplace2d_heat_local_kernel_radius(r, config)
+        )
+
     result = np.empty(np.shape(r), dtype=np.float64)
     zero = r == 0
     if np.any(~zero):
-        rr = r[~zero] if np.ndim(r) else r
+        rr = r[~zero]
         vals = laplace2d_kernel_radius(rr) - laplace2d_heat_local_kernel_radius(
             rr,
             config,
         )
-        if np.ndim(r):
-            result[~zero] = vals
-        else:
-            result = np.asarray(vals, dtype=np.float64)
+        result[~zero] = vals
     if np.any(zero):
         result[zero] = (EULER_GAMMA - 2.0 * log(config.sigma)) / (4.0 * pi)
-    if np.isscalar(dx) and np.isscalar(dy):
-        return float(result)
     return result
 
 
@@ -378,6 +395,31 @@ def support_relation_to_box(
         return "outside"
 
     return "intersects"
+
+
+def heat_tail_relation_to_box(
+    target,
+    config,
+    bounds=((0.0, 1.0), (0.0, 1.0)),
+    tol=0.0,
+):
+    """Classify the effective heat-local tail relative to a source box."""
+
+    tx, ty = target
+    (a, b), (c, d) = bounds
+    radius = config.tail_cutoff_sigma * config.sigma
+
+    if a <= tx <= b and c <= ty <= d:
+        boundary_distance = min(tx - a, b - tx, ty - c, d - ty)
+        if boundary_distance + tol >= radius:
+            return "tail-contained"
+
+    dx = max(a - tx, 0.0, tx - b)
+    dy = max(c - ty, 0.0, ty - d)
+    if np.hypot(dx, dy) + tol >= radius:
+        return "tail-outside"
+
+    return "tail-intersects"
 
 
 def _integral_power(lo, hi, exponent):
@@ -603,12 +645,23 @@ def laplace2d_heat_split_integral(
     )
     smooth_order = _validate_integer_order(smooth_order, "smooth_order", minimum=1)
 
-    local_value = laplace2d_heat_local_expansion_integral(
-        coeffs,
-        target=target,
-        expansion_order=expansion_order,
-        config=config,
-    )
+    relation = heat_tail_relation_to_box(target, config, bounds=bounds)
+    if relation == "tail-intersects":
+        raise HeatTailBoundaryError(
+            "heat-local tail intersects the source box boundary; choose a smaller "
+            "sigma or use boundary-corrected local moments"
+        )
+
+    if relation == "tail-contained":
+        local_value = laplace2d_heat_local_expansion_integral(
+            coeffs,
+            target=target,
+            expansion_order=expansion_order,
+            config=config,
+        )
+    else:
+        local_value = 0.0
+
     smooth_value = laplace2d_heat_smooth_gauss_integral(
         coeffs,
         target=target,
@@ -620,7 +673,7 @@ def laplace2d_heat_split_integral(
         value=local_value + smooth_value,
         local_value=local_value,
         smooth_value=smooth_value,
-        support_relation="heat-tail",
+        support_relation=relation,
     )
 
 
@@ -741,26 +794,41 @@ def sweep_laplace2d_heat_split(
         config = HeatKernelConfig(sigma=float(sigma))
         for expansion_order in expansion_orders:
             for smooth_order in smooth_orders:
-                result = laplace2d_heat_split_integral(
-                    coeffs,
-                    target=target,
-                    config=config,
-                    expansion_order=expansion_order,
-                    smooth_order=smooth_order,
-                )
-                error = abs(result.value - reference_value)
-                rows.append(
-                    {
-                        "sigma": float(sigma),
-                        "expansion_order": expansion_order,
-                        "smooth_order": smooth_order,
-                        "value": result.value,
-                        "local_value": result.local_value,
-                        "smooth_value": result.smooth_value,
-                        "support_relation": result.support_relation,
-                        "abs_error": float(error),
-                    }
-                )
+                try:
+                    result = laplace2d_heat_split_integral(
+                        coeffs,
+                        target=target,
+                        config=config,
+                        expansion_order=expansion_order,
+                        smooth_order=smooth_order,
+                    )
+                    error = abs(result.value - reference_value)
+                    rows.append(
+                        {
+                            "sigma": float(sigma),
+                            "expansion_order": expansion_order,
+                            "smooth_order": smooth_order,
+                            "value": result.value,
+                            "local_value": result.local_value,
+                            "smooth_value": result.smooth_value,
+                            "support_relation": result.support_relation,
+                            "abs_error": float(error),
+                        }
+                    )
+                except HeatTailBoundaryError as exc:
+                    rows.append(
+                        {
+                            "sigma": float(sigma),
+                            "expansion_order": expansion_order,
+                            "smooth_order": smooth_order,
+                            "value": np.nan,
+                            "local_value": np.nan,
+                            "smooth_value": np.nan,
+                            "support_relation": "tail-intersects",
+                            "abs_error": np.inf,
+                            "error_message": str(exc),
+                        }
+                    )
 
     return rows
 
