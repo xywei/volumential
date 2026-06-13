@@ -54,7 +54,9 @@ def barycentric_lagrange_weights(nodes):
     if np.any(diffs == 0):
         raise ValueError("nodes must be distinct")
 
-    return 1.0 / np.prod(diffs, axis=1)
+    signs = np.prod(np.sign(diffs), axis=1)
+    log_abs_weights = -np.sum(np.log(np.abs(diffs)), axis=1)
+    return signs * np.exp(log_abs_weights - np.max(log_abs_weights))
 
 
 def evaluate_lagrange_basis_1d(nodes, index, x, weights=None):
