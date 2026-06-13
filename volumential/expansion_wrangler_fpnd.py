@@ -52,6 +52,7 @@ from volumential.expansion_wrangler_interface import (
     ExpansionWranglerInterface,
     TreeIndependentDataForWranglerInterface,
 )
+from volumential.lagrange import barycentric_lagrange_weights
 from volumential.nearfield_potential_table import NearFieldInteractionTable
 
 
@@ -103,15 +104,13 @@ def _gauss_legendre_nodes_and_weights(order):
 
 
 def _barycentric_interp_matrix(source_nodes, target_nodes):
-    from scipy.interpolate import BarycentricInterpolator as Interpolator
-
     source_nodes = np.asarray(source_nodes, dtype=np.float64)
     target_nodes = np.asarray(target_nodes, dtype=np.float64)
 
     if source_nodes.size == 1:
         return np.ones((target_nodes.size, 1), dtype=np.float64)
 
-    weights = np.asarray(Interpolator(xi=source_nodes, yi=None).wi, dtype=np.float64)
+    weights = barycentric_lagrange_weights(source_nodes)
     interp_mat = np.empty((target_nodes.size, source_nodes.size), dtype=np.float64)
 
     for i, x_tgt in enumerate(target_nodes):

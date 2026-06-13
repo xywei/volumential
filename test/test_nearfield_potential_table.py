@@ -39,6 +39,7 @@ if (
     )
 
 import volumential.nearfield_potential_table as npt
+from volumential import lagrange
 from volumential.table_manager import ConstantKernel
 
 
@@ -61,6 +62,30 @@ def _make_build_queue_or_skip():
             return cl.CommandQueue(cl.Context([devices[0]]))
 
     pytest.skip("No OpenCL devices available for table builds")
+
+
+def _make_legendre_table_without_cl(q_order, dim):
+    nodes = np.polynomial.legendre.leggauss(q_order)[0]
+    nodes = 0.5 * (nodes + 1.0)
+
+    table = npt.NearFieldInteractionTable.__new__(npt.NearFieldInteractionTable)
+    table.quad_order = q_order
+    table.dim = dim
+    table.n_q_points = q_order**dim
+    table.source_box_extent = 1.0
+    table.dtype = np.float64
+
+    if dim == 1:
+        q_points = [(x,) for x in nodes]
+    elif dim == 2:
+        q_points = [(x, y) for x in nodes for y in nodes]
+    elif dim == 3:
+        q_points = [(x, y, z) for x in nodes for y in nodes for z in nodes]
+    else:
+        raise NotImplementedError("dimension %d not supported" % dim)
+
+    table.q_points = np.asarray(q_points, dtype=np.float64)
+    return table
 
 
 def test_const_order_1():
@@ -236,6 +261,33 @@ def test_modes_cheb_coeffs():
     drive_test_modes_cheb_coeffs(3, 5, 5)
     drive_test_modes_cheb_coeffs(3, 5, 10)
     drive_test_modes_cheb_coeffs(3, 10, 10)
+
+
+def test_high_order_modes_are_barycentric_at_nodes():
+    q_order = 16
+    dim = 2
+    mode_index = 7 * q_order + 9
+    table = _make_legendre_table_without_cl(q_order, dim)
+
+    mode = table.get_template_mode(mode_index)
+    values = np.asarray([mode(*qpt) for qpt in table.q_points])
+    expected = np.zeros(q_order**dim)
+    expected[mode_index] = 1.0
+
+    np.testing.assert_array_equal(values, expected)
+
+
+def test_nearfield_batched_duffy_uses_shared_barycentric_weights():
+    table = _make_legendre_table_without_cl(q_order=16, dim=2)
+
+    xi, weights = table._get_barycentric_data()
+
+    np.testing.assert_allclose(
+        weights,
+        lagrange.barycentric_lagrange_weights(xi),
+        rtol=0.0,
+        atol=0.0,
+    )
 
 
 @pytest.mark.parametrize("q_order", [1, 2, 3, 5, 8])

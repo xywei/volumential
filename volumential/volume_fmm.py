@@ -67,6 +67,7 @@ from volumential.expansion_wrangler_fpnd import (
     FPNDSumpyExpansionWrangler,
 )
 from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
+from volumential.lagrange import barycentric_lagrange_weights
 
 
 logger = logging.getLogger(__name__)
@@ -1195,20 +1196,11 @@ def compute_barycentric_lagrange_params(q_order):
     q_points_1d = (q_points_1d + 1) * 0.5
     q_weights_1d *= 0.5
 
+    q_points_1d = np.asarray(q_points_1d, dtype=np.float64)
     if q_order == 1:
-        return (
-            np.asarray(q_points_1d, dtype=np.float64),
-            np.ones(1, dtype=np.float64),
-        )
+        return q_points_1d, np.ones(1, dtype=np.float64)
 
-    # interpolation weights for barycentric Lagrange interpolation
-    from scipy.interpolate import BarycentricInterpolator as Interpolator
-
-    interp = Interpolator(xi=q_points_1d, yi=None)
-    interp_weights = interp.wi
-    interp_points = interp.xi
-
-    return (interp_points, interp_weights)
+    return q_points_1d, barycentric_lagrange_weights(q_points_1d)
 
 
 def _infer_tree_local_interp_points_1d(tree, traversal, q_order, queue):
@@ -1522,11 +1514,8 @@ def interpolate_volume_potential(
         blpoints = np.asarray(interp_points_1d, dtype=np.float64)
         blweights = np.ones(1, dtype=np.float64)
     else:
-        from scipy.interpolate import BarycentricInterpolator as Interpolator
-
-        interp = Interpolator(xi=interp_points_1d, yi=None)
-        blpoints = interp.xi
-        blweights = interp.wi
+        blpoints = np.asarray(interp_points_1d, dtype=np.float64)
+        blweights = barycentric_lagrange_weights(blpoints)
     blpoints = cl.array.to_device(queue, blpoints)
     blweights = cl.array.to_device(queue, blweights)
     use_mode_to_source_ids = bool(kwargs.pop("use_mode_to_source_ids", False))
