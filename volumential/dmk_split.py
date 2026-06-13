@@ -37,9 +37,13 @@ not wired into the production table manager yet.
 """
 
 from dataclasses import dataclass
-from math import comb, lgamma, log, pi
+from math import comb, exp, lgamma, log, pi
 
 import numpy as np
+from scipy import special as sps
+
+
+EULER_GAMMA = 0.5772156649015329
 
 
 @dataclass(frozen=True)
@@ -69,6 +73,22 @@ class CompactWindowConfig:
                 "smoothness_order must be nonnegative, "
                 f"got {self.smoothness_order!r}"
             )
+
+
+@dataclass(frozen=True)
+class HeatKernelConfig:
+    """Heat-kernel smoothing scale for the 2D Laplace split.
+
+    This uses the Gaussian-smoothed Green's function.  In 3D this corresponds to
+    the familiar ``erf(r/sigma)/r`` smooth part; for 2D Laplace the local residual
+    is ``E1((r/sigma)**2)/(4*pi)``.
+    """
+
+    sigma: float
+
+    def __post_init__(self):
+        if not np.isfinite(self.sigma) or self.sigma <= 0:
+            raise ValueError(f"sigma must be positive and finite, got {self.sigma!r}")
 
 
 @dataclass(frozen=True)
@@ -288,6 +308,49 @@ def laplace2d_smooth_kernel(dx, dy, config):
     return result
 
 
+def laplace2d_heat_local_kernel_radius(r, config):
+    """Heat-kernel local residual for 2D Laplace.
+
+    The residual is ``E1((r/sigma)**2)/(4*pi)``.  It has the same logarithmic
+    singularity as the original Green's function but decays exponentially away
+    from the target.
+    """
+
+    r_arr = np.asarray(r, dtype=np.float64)
+    z = (r_arr / config.sigma) ** 2
+    result = sps.exp1(z) / (4.0 * pi)
+    if np.isscalar(r):
+        return float(result)
+    return result
+
+
+def laplace2d_heat_smooth_kernel(dx, dy, config):
+    """Gaussian-smoothed 2D Laplace Green's function.
+
+    This is ``G(r) - E1((r/sigma)**2)/(4*pi)`` and has the finite target value
+    ``(EulerGamma - 2*log(sigma))/(4*pi)``.
+    """
+
+    r = np.sqrt(np.asarray(dx) ** 2 + np.asarray(dy) ** 2)
+    result = np.empty(np.shape(r), dtype=np.float64)
+    zero = r == 0
+    if np.any(~zero):
+        rr = r[~zero] if np.ndim(r) else r
+        vals = laplace2d_kernel_radius(rr) - laplace2d_heat_local_kernel_radius(
+            rr,
+            config,
+        )
+        if np.ndim(r):
+            result[~zero] = vals
+        else:
+            result = np.asarray(vals, dtype=np.float64)
+    if np.any(zero):
+        result[zero] = (EULER_GAMMA - 2.0 * log(config.sigma)) / (4.0 * pi)
+    if np.isscalar(dx) and np.isscalar(dy):
+        return float(result)
+    return result
+
+
 def support_relation_to_box(
     target,
     config,
@@ -374,6 +437,23 @@ def laplace2d_local_moment(mx, my, config):
     return angular * radial
 
 
+def laplace2d_heat_local_moment(mx, my, config):
+    """Full-space moment of the heat-kernel local residual."""
+
+    angular = _angular_moment(mx, my)
+    if angular == 0.0:
+        return 0.0
+
+    total_degree = mx + my
+    sigma_power = config.sigma ** (total_degree + 2)
+    radial = (
+        sigma_power
+        * exp(lgamma(0.5 * total_degree + 1.0))
+        / (8.0 * pi * (0.5 * total_degree + 1.0))
+    )
+    return angular * radial
+
+
 def laplace2d_local_expansion_integral(coeffs, target, expansion_order, config):
     """Evaluate the local compact singular contribution by Taylor moments."""
 
@@ -398,6 +478,30 @@ def laplace2d_local_expansion_integral(coeffs, target, expansion_order, config):
     return float(total)
 
 
+def laplace2d_heat_local_expansion_integral(coeffs, target, expansion_order, config):
+    """Evaluate the heat-local contribution by full-space Taylor moments."""
+
+    expansion_order = _validate_integer_order(
+        expansion_order,
+        "expansion_order",
+        minimum=0,
+    )
+    shifted = shifted_polynomial_coefficients(
+        coeffs,
+        center=target,
+        max_total_order=expansion_order,
+    )
+    total = 0.0
+    for mx in range(shifted.shape[0]):
+        for my in range(shifted.shape[1]):
+            if mx + my > expansion_order:
+                continue
+            coeff = shifted[mx, my]
+            if coeff != 0:
+                total += coeff * laplace2d_heat_local_moment(mx, my, config)
+    return float(total)
+
+
 def laplace2d_smooth_gauss_integral(
     coeffs,
     target,
@@ -410,6 +514,21 @@ def laplace2d_smooth_gauss_integral(
     xx, yy, weights = gauss_legendre_tensor_points(smooth_order, bounds=bounds)
     density = evaluate_polynomial_2d(coeffs, xx, yy)
     kernel = laplace2d_smooth_kernel(xx - target[0], yy - target[1], config)
+    return float(np.dot(weights, density * kernel))
+
+
+def laplace2d_heat_smooth_gauss_integral(
+    coeffs,
+    target,
+    config,
+    smooth_order,
+    bounds=((0.0, 1.0), (0.0, 1.0)),
+):
+    """Evaluate the heat-smoothed contribution by tensor-product Gauss."""
+
+    xx, yy, weights = gauss_legendre_tensor_points(smooth_order, bounds=bounds)
+    density = evaluate_polynomial_2d(coeffs, xx, yy)
+    kernel = laplace2d_heat_smooth_kernel(xx - target[0], yy - target[1], config)
     return float(np.dot(weights, density * kernel))
 
 
@@ -459,6 +578,49 @@ def laplace2d_dmk_split_integral(
         local_value=local_value,
         smooth_value=smooth_value,
         support_relation=relation,
+    )
+
+
+def laplace2d_heat_split_integral(
+    coeffs,
+    target,
+    config,
+    expansion_order,
+    smooth_order,
+    bounds=((0.0, 1.0), (0.0, 1.0)),
+):
+    """Evaluate one 2D Laplace table entry by a heat-kernel split.
+
+    The local part uses full-space Taylor moments of the exponentially decaying
+    residual.  For finite boxes this is most accurate when ``sigma`` is small
+    compared with the target's distance to the source-box boundary.
+    """
+
+    expansion_order = _validate_integer_order(
+        expansion_order,
+        "expansion_order",
+        minimum=0,
+    )
+    smooth_order = _validate_integer_order(smooth_order, "smooth_order", minimum=1)
+
+    local_value = laplace2d_heat_local_expansion_integral(
+        coeffs,
+        target=target,
+        expansion_order=expansion_order,
+        config=config,
+    )
+    smooth_value = laplace2d_heat_smooth_gauss_integral(
+        coeffs,
+        target=target,
+        config=config,
+        smooth_order=smooth_order,
+        bounds=bounds,
+    )
+    return Laplace2DDMKSplitResult(
+        value=local_value + smooth_value,
+        local_value=local_value,
+        smooth_value=smooth_value,
+        support_relation="heat-tail",
     )
 
 
@@ -547,6 +709,58 @@ def sweep_laplace2d_dmk_split(
                             "error_message": str(exc),
                         }
                     )
+
+    return rows
+
+
+def sweep_laplace2d_heat_split(
+    q_order,
+    mode_index,
+    target_index,
+    sigmas,
+    expansion_orders,
+    smooth_orders,
+    reference_value,
+):
+    """Sweep heat-kernel split parameters for one 2D Laplace table entry."""
+
+    coeffs = tensor_lagrange_mode_coefficients(q_order, mode_index)
+    target = tensor_gauss_point(q_order, target_index)
+    sigmas = tuple(sigmas)
+    expansion_orders = tuple(
+        _validate_integer_order(order, "expansion_order", minimum=0)
+        for order in expansion_orders
+    )
+    smooth_orders = tuple(
+        _validate_integer_order(order, "smooth_order", minimum=1)
+        for order in smooth_orders
+    )
+    rows = []
+
+    for sigma in sigmas:
+        config = HeatKernelConfig(sigma=float(sigma))
+        for expansion_order in expansion_orders:
+            for smooth_order in smooth_orders:
+                result = laplace2d_heat_split_integral(
+                    coeffs,
+                    target=target,
+                    config=config,
+                    expansion_order=expansion_order,
+                    smooth_order=smooth_order,
+                )
+                error = abs(result.value - reference_value)
+                rows.append(
+                    {
+                        "sigma": float(sigma),
+                        "expansion_order": expansion_order,
+                        "smooth_order": smooth_order,
+                        "value": result.value,
+                        "local_value": result.local_value,
+                        "smooth_value": result.smooth_value,
+                        "support_relation": result.support_relation,
+                        "abs_error": float(error),
+                    }
+                )
 
     return rows
 

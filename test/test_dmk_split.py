@@ -58,6 +58,26 @@ def test_compact_window_support_avoids_gauss_node_boundary_intersection():
     ) == "outside"
 
 
+def test_heat_kernel_split_recombines_laplace_kernel_off_target():
+    config = dmk.HeatKernelConfig(sigma=0.06)
+    radii = np.array([0.01, 0.05, 0.2, 1.0])
+
+    local = dmk.laplace2d_heat_local_kernel_radius(radii, config)
+    smooth = dmk.laplace2d_heat_smooth_kernel(radii, np.zeros_like(radii), config)
+
+    np.testing.assert_allclose(
+        local + smooth,
+        dmk.laplace2d_kernel_radius(radii),
+        rtol=1.0e-14,
+        atol=1.0e-14,
+    )
+    assert np.isfinite(dmk.laplace2d_heat_smooth_kernel(0.0, 0.0, config))
+    assert np.isclose(
+        dmk.laplace2d_heat_local_moment(0, 0, config),
+        config.sigma**2 / 4.0,
+    )
+
+
 def test_laplace2d_dmk_like_split_parameter_sweep_reaches_high_accuracy():
     q_order = 5
     mode_index = 12
@@ -102,6 +122,32 @@ def test_laplace2d_dmk_like_split_parameter_sweep_reaches_high_accuracy():
         and row["smooth_order"] == 64
     )
     assert high_expansion["abs_error"] < 1.0e-3 * low_smooth_order["abs_error"]
+
+
+def test_laplace2d_heat_split_reaches_high_accuracy_with_smooth_remainder():
+    q_order = 5
+    mode_index = 12
+    target_index = 12
+    coeffs = dmk.tensor_lagrange_mode_coefficients(q_order, mode_index)
+    target = dmk.tensor_gauss_point(q_order, target_index)
+    reference = _duffy_reference_laplace2d(coeffs, target)
+
+    rows = dmk.sweep_laplace2d_heat_split(
+        q_order=q_order,
+        mode_index=mode_index,
+        target_index=target_index,
+        sigmas=[0.06],
+        expansion_orders=[8],
+        smooth_orders=[24, 48],
+        reference_value=reference,
+    )
+
+    low_smooth_order = next(row for row in rows if row["smooth_order"] == 24)
+    high_smooth_order = next(row for row in rows if row["smooth_order"] == 48)
+
+    assert high_smooth_order["support_relation"] == "heat-tail"
+    assert high_smooth_order["abs_error"] < 1.0e-12
+    assert high_smooth_order["abs_error"] < 1.0e-6 * low_smooth_order["abs_error"]
 
 
 def test_laplace2d_dmk_like_split_rejects_intersecting_local_support():
