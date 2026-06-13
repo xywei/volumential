@@ -42,6 +42,13 @@ from math import comb, exp, lgamma, log, pi
 import numpy as np
 from scipy import special as sps
 
+from volumential.lagrange import (
+    evaluate_tensor_lagrange_mode as _evaluate_tensor_lagrange_mode,
+    legendre_gauss_lagrange_data,
+    mode_index_to_axes,
+    tensor_lagrange_mode_shifted_coefficients as _tensor_lagrange_shifted_coeffs,
+)
+
 
 EULER_GAMMA = 0.5772156649015329
 MACHINE_EPS = np.finfo(np.float64).eps
@@ -191,75 +198,43 @@ def minimum_boundary_spacing(q_order):
     return float(min(np.min(nodes), np.min(1.0 - nodes)))
 
 
-def lagrange_polynomial_coefficients(nodes, index):
-    """Return monomial coefficients for the 1D Lagrange basis polynomial.
-
-    Coefficients are in ascending order, i.e. ``c[k]`` multiplies ``x**k``.
-    """
-
-    nodes = np.asarray(nodes, dtype=np.float64)
-    if index < 0 or index >= nodes.size:
-        raise ValueError(f"basis index {index} outside node set of size {nodes.size}")
-
-    roots = np.delete(nodes, index)
-    coeffs = np.polynomial.polynomial.polyfromroots(roots)
-    denom = np.prod(nodes[index] - roots)
-    return coeffs / denom
+def _source_mode_nodes_and_axes(q_order, mode_index, bounds):
+    q_order = _validate_integer_order(q_order, "q_order", minimum=1)
+    axes = mode_index_to_axes(mode_index, q_order, dim=2)
+    nodes_by_axis = tuple(
+        legendre_gauss_lagrange_data(q_order, *axis_bounds)[0]
+        for axis_bounds in bounds
+    )
+    return nodes_by_axis, tuple(int(axis) for axis in axes)
 
 
-def tensor_lagrange_mode_coefficients(q_order, mode_index):
-    """Return monomial coefficients for a 2D tensor Lagrange source mode.
+def evaluate_laplace2d_source_mode(
+    q_order,
+    mode_index,
+    x,
+    y,
+    bounds=((0.0, 1.0), (0.0, 1.0)),
+):
+    """Evaluate a 2D source mode with barycentric Lagrange interpolation."""
 
-    The mode ordering matches :class:`NearFieldInteractionTable`: x-index first,
-    y-index second.
-    """
-
-    if mode_index < 0 or mode_index >= q_order * q_order:
-        raise ValueError(
-            f"mode_index must be in [0, {q_order * q_order}), got {mode_index}"
-        )
-
-    ix = mode_index // q_order
-    iy = mode_index % q_order
-    nodes, _ = gauss_legendre_rule(q_order)
-    cx = lagrange_polynomial_coefficients(nodes, ix)
-    cy = lagrange_polynomial_coefficients(nodes, iy)
-    return np.multiply.outer(cx, cy)
+    nodes_by_axis, mode_axes = _source_mode_nodes_and_axes(q_order, mode_index, bounds)
+    return _evaluate_tensor_lagrange_mode(nodes_by_axis, mode_axes, (x, y))
 
 
-def evaluate_polynomial_2d(coeffs, x, y):
-    """Evaluate an ascending-coefficient 2D polynomial."""
-
-    return np.polynomial.polynomial.polyval2d(x, y, coeffs)
-
-
-def shifted_polynomial_coefficients(coeffs, center, max_total_order=None):
-    """Expand ``p(x, y)`` in powers of ``x-center[0]`` and ``y-center[1]``."""
-
-    coeffs = np.asarray(coeffs, dtype=np.float64)
-    tx, ty = center
-    shifted = np.zeros_like(coeffs, dtype=np.float64)
-
-    for i in range(coeffs.shape[0]):
-        for j in range(coeffs.shape[1]):
-            cij = coeffs[i, j]
-            if cij == 0:
-                continue
-
-            for a in range(i + 1):
-                x_scale = comb(i, a) * tx ** (i - a)
-                for b in range(j + 1):
-                    if max_total_order is not None and a + b > max_total_order:
-                        continue
-                    shifted[a, b] += cij * x_scale * comb(j, b) * ty ** (j - b)
-
-    if max_total_order is not None:
-        for a in range(shifted.shape[0]):
-            for b in range(shifted.shape[1]):
-                if a + b > max_total_order:
-                    shifted[a, b] = 0.0
-
-    return shifted
+def _source_mode_shifted_coefficients(
+    q_order,
+    mode_index,
+    target,
+    max_total_order,
+    bounds,
+):
+    nodes_by_axis, mode_axes = _source_mode_nodes_and_axes(q_order, mode_index, bounds)
+    return _tensor_lagrange_shifted_coeffs(
+        nodes_by_axis,
+        mode_axes,
+        center=target,
+        max_total_order=max_total_order,
+    )
 
 
 def _smoothstep_coefficients(smoothness_order):
@@ -597,7 +572,14 @@ def laplace2d_heat_local_moment(mx, my, config):
     return angular * radial
 
 
-def laplace2d_local_expansion_integral(coeffs, target, expansion_order, config):
+def laplace2d_local_expansion_integral(
+    q_order,
+    mode_index,
+    target,
+    expansion_order,
+    config,
+    bounds=((0.0, 1.0), (0.0, 1.0)),
+):
     """Evaluate the local compact singular contribution by Taylor moments."""
 
     expansion_order = _validate_integer_order(
@@ -605,10 +587,12 @@ def laplace2d_local_expansion_integral(coeffs, target, expansion_order, config):
         "expansion_order",
         minimum=0,
     )
-    shifted = shifted_polynomial_coefficients(
-        coeffs,
-        center=target,
+    shifted = _source_mode_shifted_coefficients(
+        q_order,
+        mode_index,
+        target=target,
         max_total_order=expansion_order,
+        bounds=bounds,
     )
     total = 0.0
     for mx in range(shifted.shape[0]):
@@ -621,7 +605,14 @@ def laplace2d_local_expansion_integral(coeffs, target, expansion_order, config):
     return float(total)
 
 
-def laplace2d_heat_local_expansion_integral(coeffs, target, expansion_order, config):
+def laplace2d_heat_local_expansion_integral(
+    q_order,
+    mode_index,
+    target,
+    expansion_order,
+    config,
+    bounds=((0.0, 1.0), (0.0, 1.0)),
+):
     """Evaluate the heat-local contribution by full-space Taylor moments."""
 
     expansion_order = _validate_integer_order(
@@ -629,10 +620,12 @@ def laplace2d_heat_local_expansion_integral(coeffs, target, expansion_order, con
         "expansion_order",
         minimum=0,
     )
-    shifted = shifted_polynomial_coefficients(
-        coeffs,
-        center=target,
+    shifted = _source_mode_shifted_coefficients(
+        q_order,
+        mode_index,
+        target=target,
         max_total_order=expansion_order,
+        bounds=bounds,
     )
     total = 0.0
     for mx in range(shifted.shape[0]):
@@ -646,7 +639,8 @@ def laplace2d_heat_local_expansion_integral(coeffs, target, expansion_order, con
 
 
 def laplace2d_smooth_gauss_integral(
-    coeffs,
+    q_order,
+    mode_index,
     target,
     config,
     smooth_order,
@@ -655,13 +649,20 @@ def laplace2d_smooth_gauss_integral(
     """Evaluate the smooth remainder contribution by tensor-product Gauss."""
 
     xx, yy, weights = gauss_legendre_tensor_points(smooth_order, bounds=bounds)
-    density = evaluate_polynomial_2d(coeffs, xx, yy)
+    density = evaluate_laplace2d_source_mode(
+        q_order,
+        mode_index,
+        xx,
+        yy,
+        bounds=bounds,
+    )
     kernel = laplace2d_smooth_kernel(xx - target[0], yy - target[1], config)
     return float(np.dot(weights, density * kernel))
 
 
 def laplace2d_heat_smooth_gauss_integral(
-    coeffs,
+    q_order,
+    mode_index,
     target,
     config,
     smooth_order,
@@ -670,13 +671,20 @@ def laplace2d_heat_smooth_gauss_integral(
     """Evaluate the heat-smoothed contribution by tensor-product Gauss."""
 
     xx, yy, weights = gauss_legendre_tensor_points(smooth_order, bounds=bounds)
-    density = evaluate_polynomial_2d(coeffs, xx, yy)
+    density = evaluate_laplace2d_source_mode(
+        q_order,
+        mode_index,
+        xx,
+        yy,
+        bounds=bounds,
+    )
     kernel = laplace2d_heat_smooth_kernel(xx - target[0], yy - target[1], config)
     return float(np.dot(weights, density * kernel))
 
 
 def laplace2d_dmk_split_integral(
-    coeffs,
+    q_order,
+    mode_index,
     target,
     config,
     expansion_order,
@@ -701,16 +709,19 @@ def laplace2d_dmk_split_integral(
 
     if relation == "inside":
         local_value = laplace2d_local_expansion_integral(
-            coeffs,
+            q_order,
+            mode_index,
             target=target,
             expansion_order=expansion_order,
             config=config,
+            bounds=bounds,
         )
     else:
         local_value = 0.0
 
     smooth_value = laplace2d_smooth_gauss_integral(
-        coeffs,
+        q_order,
+        mode_index,
         target=target,
         config=config,
         smooth_order=smooth_order,
@@ -726,7 +737,8 @@ def laplace2d_dmk_split_integral(
 
 
 def laplace2d_heat_split_integral(
-    coeffs,
+    q_order,
+    mode_index,
     target,
     config,
     expansion_order,
@@ -756,16 +768,19 @@ def laplace2d_heat_split_integral(
 
     if relation == "tail-contained":
         local_value = laplace2d_heat_local_expansion_integral(
-            coeffs,
+            q_order,
+            mode_index,
             target=target,
             expansion_order=expansion_order,
             config=effective_config,
+            bounds=bounds,
         )
     else:
         local_value = 0.0
 
     smooth_value = laplace2d_heat_smooth_gauss_integral(
-        coeffs,
+        q_order,
+        mode_index,
         target=target,
         config=effective_config,
         smooth_order=smooth_order,
@@ -781,7 +796,8 @@ def laplace2d_heat_split_integral(
 
 
 def laplace2d_full_gauss_integral(
-    coeffs,
+    q_order,
+    mode_index,
     target,
     quad_order,
     bounds=((0.0, 1.0), (0.0, 1.0)),
@@ -792,7 +808,14 @@ def laplace2d_full_gauss_integral(
     r = np.sqrt((xx - target[0]) ** 2 + (yy - target[1]) ** 2)
     if np.any(r == 0):
         raise ValueError("full Gauss reference hit the singular target point")
-    integrand = evaluate_polynomial_2d(coeffs, xx, yy) * laplace2d_kernel_radius(r)
+    density = evaluate_laplace2d_source_mode(
+        q_order,
+        mode_index,
+        xx,
+        yy,
+        bounds=bounds,
+    )
+    integrand = density * laplace2d_kernel_radius(r)
     return float(np.dot(weights, integrand))
 
 
@@ -809,7 +832,6 @@ def sweep_laplace2d_dmk_split(
 ):
     """Sweep split parameters for one 2D Laplace table entry."""
 
-    coeffs = tensor_lagrange_mode_coefficients(q_order, mode_index)
     target = tensor_gauss_point(q_order, target_index)
     sigmas = tuple(sigmas)
     expansion_orders = tuple(
@@ -832,7 +854,8 @@ def sweep_laplace2d_dmk_split(
             for smooth_order in smooth_orders:
                 try:
                     result = laplace2d_dmk_split_integral(
-                        coeffs,
+                        q_order,
+                        mode_index,
                         target=target,
                         config=config,
                         expansion_order=expansion_order,
@@ -882,7 +905,6 @@ def sweep_laplace2d_heat_split(
 ):
     """Sweep heat-kernel split parameters for one 2D Laplace table entry."""
 
-    coeffs = tensor_lagrange_mode_coefficients(q_order, mode_index)
     target = tensor_gauss_point(q_order, target_index)
     sigmas = tuple(sigmas)
     expansion_orders = tuple(
@@ -901,7 +923,8 @@ def sweep_laplace2d_heat_split(
             for smooth_order in smooth_orders:
                 try:
                     result = laplace2d_heat_split_integral(
-                        coeffs,
+                        q_order,
+                        mode_index,
                         target=target,
                         config=config,
                         expansion_order=expansion_order,

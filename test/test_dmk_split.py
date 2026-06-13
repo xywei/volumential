@@ -1,13 +1,14 @@
 import numpy as np
 
 from volumential import dmk_split as dmk
+from volumential import lagrange
 from volumential import singular_integral_2d as sint
 
 
-def _safe_laplace2d_table_integrand(coeffs, target):
+def _safe_laplace2d_table_integrand(q_order, mode_index, target):
     def integrand(x, y):
         r = np.sqrt((x - target[0]) ** 2 + (y - target[1]) ** 2)
-        density = dmk.evaluate_polynomial_2d(coeffs, x, y)
+        density = dmk.evaluate_laplace2d_source_mode(q_order, mode_index, x, y)
 
         if np.isscalar(r):
             if r == 0:
@@ -22,9 +23,9 @@ def _safe_laplace2d_table_integrand(coeffs, target):
     return integrand
 
 
-def _duffy_reference_laplace2d(coeffs, target):
+def _duffy_reference_laplace2d(q_order, mode_index, target):
     value, _ = sint.box_quad_duffy_radial(
-        _safe_laplace2d_table_integrand(coeffs, target),
+        _safe_laplace2d_table_integrand(q_order, mode_index, target),
         0,
         1,
         0,
@@ -93,13 +94,80 @@ def test_window_order_validation_rejects_fractional_smoothness():
         raise AssertionError("fractional smoothness order should fail validation")
 
 
+def test_barycentric_tensor_lagrange_mode_is_exact_at_high_order_nodes():
+    q_order = 16
+    mode_index = 7 * q_order + 9
+    nodes, _ = dmk.gauss_legendre_rule(q_order)
+    xx, yy = np.meshgrid(nodes, nodes, indexing="ij")
+
+    values = dmk.evaluate_laplace2d_source_mode(q_order, mode_index, xx, yy)
+    expected = np.zeros((q_order, q_order))
+    expected[7, 9] = 1.0
+
+    np.testing.assert_array_equal(values, expected)
+
+
+def test_heat_smooth_integral_matches_manual_barycentric_quadrature():
+    q_order = 5
+    mode_index = 12
+    target = dmk.tensor_gauss_point(q_order, 12)
+    config = dmk.HeatKernelConfig(sigma=0.06)
+
+    split_value = dmk.laplace2d_heat_smooth_gauss_integral(
+        q_order,
+        mode_index,
+        target=target,
+        config=config,
+        smooth_order=48,
+    )
+    xx, yy, weights = dmk.gauss_legendre_tensor_points(48)
+    density = dmk.evaluate_laplace2d_source_mode(q_order, mode_index, xx, yy)
+    kernel = dmk.laplace2d_heat_smooth_kernel(
+        xx - target[0],
+        yy - target[1],
+        config,
+    )
+    manual = np.dot(weights, density * kernel)
+
+    np.testing.assert_allclose(split_value, manual, rtol=1.0e-13, atol=1.0e-13)
+
+
+def test_shifted_lagrange_mode_coefficients_reconstruct_source_mode():
+    q_order = 5
+    mode_index = 12
+    target = dmk.tensor_gauss_point(q_order, 17)
+    sample_x = np.array([0.15, 0.41, 0.75])
+    sample_y = np.array([0.22, 0.54, 0.86])
+
+    nodes, _ = dmk.gauss_legendre_rule(q_order)
+    mode_axes = lagrange.mode_index_to_axes(mode_index, q_order, dim=2)
+    shifted = lagrange.tensor_lagrange_mode_shifted_coefficients(
+        (nodes, nodes),
+        mode_axes,
+        target,
+        max_total_order=2 * (q_order - 1),
+    )
+    reconstructed = np.polynomial.polynomial.polyval2d(
+        sample_x - target[0],
+        sample_y - target[1],
+        shifted,
+    )
+    expected = dmk.evaluate_laplace2d_source_mode(
+        q_order,
+        mode_index,
+        sample_x,
+        sample_y,
+    )
+
+    np.testing.assert_allclose(reconstructed, expected, rtol=1.0e-13, atol=1.0e-12)
+
+
 def test_laplace2d_dmk_like_split_parameter_sweep_reaches_high_accuracy():
     q_order = 5
     mode_index = 12
     target_index = 12
-    coeffs = dmk.tensor_lagrange_mode_coefficients(q_order, mode_index)
     target = dmk.tensor_gauss_point(q_order, target_index)
-    reference = _duffy_reference_laplace2d(coeffs, target)
+    reference = _duffy_reference_laplace2d(q_order, mode_index, target)
 
     rows = dmk.sweep_laplace2d_dmk_split(
         q_order=q_order,
@@ -143,9 +211,8 @@ def test_laplace2d_heat_split_reaches_high_accuracy_with_smooth_remainder():
     q_order = 5
     mode_index = 12
     target_index = 12
-    coeffs = dmk.tensor_lagrange_mode_coefficients(q_order, mode_index)
     target = dmk.tensor_gauss_point(q_order, target_index)
-    reference = _duffy_reference_laplace2d(coeffs, target)
+    reference = _duffy_reference_laplace2d(q_order, mode_index, target)
 
     rows = dmk.sweep_laplace2d_heat_split(
         q_order=q_order,
@@ -169,12 +236,12 @@ def test_laplace2d_heat_split_shrinks_boundary_tail_to_tolerance():
     q_order = 5
     mode_index = 12
     target_index = 0
-    coeffs = dmk.tensor_lagrange_mode_coefficients(q_order, mode_index)
     target = dmk.tensor_gauss_point(q_order, target_index)
     requested = dmk.HeatKernelConfig(sigma=0.06)
 
     result = dmk.laplace2d_heat_split_integral(
-        coeffs,
+        q_order,
+        mode_index,
         target=target,
         config=requested,
         expansion_order=8,
@@ -202,12 +269,12 @@ def test_laplace2d_heat_split_rejects_boundary_tail_without_shrinkage():
     q_order = 5
     mode_index = 12
     target_index = 0
-    coeffs = dmk.tensor_lagrange_mode_coefficients(q_order, mode_index)
     target = dmk.tensor_gauss_point(q_order, target_index)
 
     try:
         dmk.laplace2d_heat_split_integral(
-            coeffs,
+            q_order,
+            mode_index,
             target=target,
             config=dmk.HeatKernelConfig(sigma=0.06, shrink_to_boundary=False),
             expansion_order=8,
@@ -223,7 +290,6 @@ def test_laplace2d_dmk_like_split_rejects_intersecting_local_support():
     q_order = 5
     mode_index = 12
     target_index = 0
-    coeffs = dmk.tensor_lagrange_mode_coefficients(q_order, mode_index)
     target = dmk.tensor_gauss_point(q_order, target_index)
 
     config = dmk.CompactWindowConfig(
@@ -232,7 +298,8 @@ def test_laplace2d_dmk_like_split_rejects_intersecting_local_support():
 
     try:
         dmk.laplace2d_dmk_split_integral(
-            coeffs,
+            q_order,
+            mode_index,
             target=target,
             config=config,
             expansion_order=8,

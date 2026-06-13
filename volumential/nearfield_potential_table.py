@@ -27,7 +27,6 @@ from dataclasses import dataclass
 from functools import partial
 
 import numpy as np
-from scipy.interpolate import BarycentricInterpolator as Interpolator
 
 import loopy as lp
 import pyopencl as cl
@@ -35,6 +34,10 @@ from pytools import memoize_method
 
 import volumential.list1_gallery as gallery
 import volumential.singular_integral_2d as squad
+from volumential.lagrange import (
+    barycentric_lagrange_weights,
+    evaluate_lagrange_basis_1d,
+)
 
 
 logger = logging.getLogger("NearFieldInteractionTable")
@@ -693,12 +696,7 @@ class NearFieldInteractionTable:
         )
         assert len(xi) == self.quad_order
 
-        yi = []
-        for d in range(self.dim):
-            yi.append(np.zeros(self.quad_order, dtype=self.dtype))
-            yi[d][idx[d]] = 1
-
-        axis_interp = [Interpolator(xi, yi[d]) for d in range(self.dim)]
+        bary_w = barycentric_lagrange_weights(xi)
 
         def mode(*coords):
             assert len(coords) == self.dim
@@ -706,11 +704,7 @@ class NearFieldInteractionTable:
             is_scalar = all(np.asarray(coord).ndim == 0 for coord in coords)
             fvals = np.ones(coords0.shape, dtype=self.dtype)
             for d, coord in zip(range(self.dim), coords):
-                val = axis_interp[d](np.array(coord))
-                if is_scalar:
-                    val = np.asarray(val)
-                    if val.size == 1:
-                        val = val.item()
+                val = evaluate_lagrange_basis_1d(xi, idx[d], coord, weights=bary_w)
                 fvals = np.multiply(fvals, val)
             if is_scalar and fvals.size == 1:
                 return fvals.item()
@@ -742,12 +736,7 @@ class NearFieldInteractionTable:
         xi = np.array([p[self.dim - 1] for p in self.q_points[: self.quad_order]])
         assert len(xi) == self.quad_order
 
-        yi = []
-        for d in range(self.dim):
-            yi.append(np.zeros(self.quad_order, dtype=self.dtype))
-            yi[d][idx[d]] = 1
-
-        axis_interp = [Interpolator(xi, yi[d]) for d in range(self.dim)]
+        bary_w = barycentric_lagrange_weights(xi)
 
         def _to_source_box_coords(coord):
             coord = np.asarray(coord)
@@ -764,11 +753,12 @@ class NearFieldInteractionTable:
             is_scalar = all(np.asarray(coord).ndim == 0 for coord in coords)
             fvals = np.ones(coords0.shape, dtype=self.dtype)
             for d, coord in zip(range(self.dim), coords):
-                val = axis_interp[d](_to_source_box_coords(coord))
-                if is_scalar:
-                    val = np.asarray(val)
-                    if val.size == 1:
-                        val = val.item()
+                val = evaluate_lagrange_basis_1d(
+                    xi,
+                    idx[d],
+                    _to_source_box_coords(coord),
+                    weights=bary_w,
+                )
                 fvals = np.multiply(fvals, val)
             if is_scalar and fvals.size == 1:
                 return fvals.item()
@@ -1056,12 +1046,7 @@ class NearFieldInteractionTable:
             [p[self.dim - 1] for p in self.q_points[: self.quad_order]],
             dtype=geom_dtype,
         )
-        bw = np.ones(self.quad_order, dtype=geom_dtype)
-        for i in range(self.quad_order):
-            for j in range(self.quad_order):
-                if i != j:
-                    bw[i] /= xi[i] - xi[j]
-        return xi, bw.astype(geom_dtype)
+        return xi, barycentric_lagrange_weights(xi).astype(geom_dtype)
 
     def _get_invariant_entry_info(self):
         return self._get_orbit_canonical_info()
