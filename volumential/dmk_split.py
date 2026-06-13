@@ -85,13 +85,29 @@ class CompactSupportIntersectionError(ValueError):
     """Raised when compact local support intersects the source box boundary."""
 
 
+def _validate_integer_order(order, name, minimum):
+    if isinstance(order, (bool, np.bool_)):
+        raise ValueError(f"{name} must be an integer, got {order!r}")
+
+    try:
+        order_int = int(order)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be an integer, got {order!r}") from exc
+
+    if order_int != order:
+        raise ValueError(f"{name} must be an integer, got {order!r}")
+    if order_int < minimum:
+        raise ValueError(f"{name} must be >= {minimum}, got {order!r}")
+
+    return order_int
+
+
 def gauss_legendre_rule(order, a=0.0, b=1.0):
     """Return Gauss-Legendre nodes/weights on ``[a, b]``."""
 
-    if order < 1:
-        raise ValueError(f"order must be >= 1, got {order}")
+    order = _validate_integer_order(order, "order", minimum=1)
 
-    nodes, weights = np.polynomial.legendre.leggauss(int(order))
+    nodes, weights = np.polynomial.legendre.leggauss(order)
     center = 0.5 * (a + b)
     radius = 0.5 * (b - a)
     return center + radius * nodes, radius * weights
@@ -361,6 +377,11 @@ def laplace2d_local_moment(mx, my, config):
 def laplace2d_local_expansion_integral(coeffs, target, expansion_order, config):
     """Evaluate the local compact singular contribution by Taylor moments."""
 
+    expansion_order = _validate_integer_order(
+        expansion_order,
+        "expansion_order",
+        minimum=0,
+    )
     shifted = shifted_polynomial_coefficients(
         coeffs,
         center=target,
@@ -401,6 +422,13 @@ def laplace2d_dmk_split_integral(
     bounds=((0.0, 1.0), (0.0, 1.0)),
 ):
     """Evaluate one 2D Laplace table entry by the experimental DMK-like split."""
+
+    expansion_order = _validate_integer_order(
+        expansion_order,
+        "expansion_order",
+        minimum=0,
+    )
+    smooth_order = _validate_integer_order(smooth_order, "smooth_order", minimum=1)
 
     relation = support_relation_to_box(target, config, bounds=bounds)
     if relation == "intersects":
@@ -465,6 +493,15 @@ def sweep_laplace2d_dmk_split(
 
     coeffs = tensor_lagrange_mode_coefficients(q_order, mode_index)
     target = tensor_gauss_point(q_order, target_index)
+    sigmas = tuple(sigmas)
+    expansion_orders = tuple(
+        _validate_integer_order(order, "expansion_order", minimum=0)
+        for order in expansion_orders
+    )
+    smooth_orders = tuple(
+        _validate_integer_order(order, "smooth_order", minimum=1)
+        for order in smooth_orders
+    )
     rows = []
 
     for sigma in sigmas:
@@ -480,15 +517,15 @@ def sweep_laplace2d_dmk_split(
                         coeffs,
                         target=target,
                         config=config,
-                        expansion_order=int(expansion_order),
-                        smooth_order=int(smooth_order),
+                        expansion_order=expansion_order,
+                        smooth_order=smooth_order,
                     )
                     error = abs(result.value - reference_value)
                     rows.append(
                         {
                             "sigma": float(sigma),
-                            "expansion_order": int(expansion_order),
-                            "smooth_order": int(smooth_order),
+                            "expansion_order": expansion_order,
+                            "smooth_order": smooth_order,
                             "value": result.value,
                             "local_value": result.local_value,
                             "smooth_value": result.smooth_value,
@@ -500,8 +537,8 @@ def sweep_laplace2d_dmk_split(
                     rows.append(
                         {
                             "sigma": float(sigma),
-                            "expansion_order": int(expansion_order),
-                            "smooth_order": int(smooth_order),
+                            "expansion_order": expansion_order,
+                            "smooth_order": smooth_order,
                             "value": np.nan,
                             "local_value": np.nan,
                             "smooth_value": np.nan,

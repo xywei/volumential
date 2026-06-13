@@ -148,3 +148,51 @@ def test_laplace2d_dmk_like_split_sweep_does_not_hide_invalid_orders():
         assert "order must be >= 1" in str(exc)
     else:
         raise AssertionError("invalid smooth order should not be reported as support")
+
+
+def test_laplace2d_dmk_like_split_sweep_rejects_invalid_expansion_order():
+    try:
+        dmk.sweep_laplace2d_dmk_split(
+            q_order=5,
+            mode_index=12,
+            target_index=12,
+            sigmas=[0.35],
+            expansion_orders=[-1],
+            smooth_orders=[64],
+            reference_value=0.0,
+        )
+    except ValueError as exc:
+        assert "expansion_order must be >= 0" in str(exc)
+    else:
+        raise AssertionError("invalid expansion order should fail validation")
+
+
+def test_gauss_legendre_rule_rejects_fractional_order():
+    try:
+        dmk.gauss_legendre_rule(64.9)
+    except ValueError as exc:
+        assert "order must be an integer" in str(exc)
+    else:
+        raise AssertionError("fractional quadrature order should fail validation")
+
+
+def test_laplace2d_dmk_like_split_sweep_materializes_generator_inputs():
+    rows = dmk.sweep_laplace2d_dmk_split(
+        q_order=3,
+        mode_index=4,
+        target_index=4,
+        sigmas=(sigma for sigma in [0.1, 0.2]),
+        expansion_orders=(order for order in [0, 2]),
+        smooth_orders=(order for order in [6, 8]),
+        reference_value=0.0,
+    )
+
+    assert {
+        (row["sigma"], row["expansion_order"], row["smooth_order"])
+        for row in rows
+    } == {
+        (sigma, expansion_order, smooth_order)
+        for sigma in [0.1, 0.2]
+        for expansion_order in [0, 2]
+        for smooth_order in [6, 8]
+    }
