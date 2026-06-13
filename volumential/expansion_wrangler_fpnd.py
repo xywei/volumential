@@ -115,7 +115,7 @@ def _barycentric_interp_matrix(source_nodes, target_nodes):
 
     for i, x_tgt in enumerate(target_nodes):
         diff = x_tgt - source_nodes
-        hit = np.where(np.abs(diff) < 1.0e-15)[0]
+        hit = np.where(diff == 0.0)[0]
         if hit.size:
             interp_mat[i, :] = 0.0
             interp_mat[i, int(hit[0])] = 1.0
