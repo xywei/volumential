@@ -44,6 +44,7 @@ from scipy import special as sps
 
 
 EULER_GAMMA = 0.5772156649015329
+MACHINE_EPS = np.finfo(np.float64).eps
 
 
 @dataclass(frozen=True)
@@ -89,15 +90,25 @@ class HeatKernelConfig:
     """
 
     sigma: float
-    tail_cutoff_sigma: float = 5.0
+    boundary_kernel_tol: float = MACHINE_EPS
+    boundary_truncation_tol: float = MACHINE_EPS
+    shrink_to_boundary: bool = True
 
     def __post_init__(self):
         if not np.isfinite(self.sigma) or self.sigma <= 0:
             raise ValueError(f"sigma must be positive and finite, got {self.sigma!r}")
-        if not np.isfinite(self.tail_cutoff_sigma) or self.tail_cutoff_sigma <= 0:
+        if not np.isfinite(self.boundary_kernel_tol) or self.boundary_kernel_tol <= 0:
             raise ValueError(
-                "tail_cutoff_sigma must be positive and finite, "
-                f"got {self.tail_cutoff_sigma!r}"
+                "boundary_kernel_tol must be positive and finite, "
+                f"got {self.boundary_kernel_tol!r}"
+            )
+        if (
+            not np.isfinite(self.boundary_truncation_tol)
+            or self.boundary_truncation_tol <= 0
+        ):
+            raise ValueError(
+                "boundary_truncation_tol must be positive and finite, "
+                f"got {self.boundary_truncation_tol!r}"
             )
 
 
@@ -109,6 +120,7 @@ class Laplace2DDMKSplitResult:
     local_value: float
     smooth_value: float
     support_relation: str
+    effective_sigma: float | None = None
 
 
 class CompactSupportIntersectionError(ValueError):
@@ -338,6 +350,35 @@ def laplace2d_heat_local_kernel_radius(r, config):
     return result
 
 
+def _laplace2d_heat_local_kernel_radius_with_sigma(r, sigma):
+    z = (np.asarray(r, dtype=np.float64) / sigma) ** 2
+    result = sps.exp1(z) / (4.0 * pi)
+    if np.isscalar(r):
+        return float(result)
+    return result
+
+
+def laplace2d_heat_tail_integral_bound(distance, sigma):
+    """Bound the heat-local residual mass outside radius ``distance``.
+
+    This is the radial full-space bound for unit-bounded density:
+    ``int_distance^inf E1((r/sigma)^2)/(4*pi) 2*pi*r dr``.
+    """
+
+    if distance < 0:
+        raise ValueError(f"distance must be nonnegative, got {distance!r}")
+    if not np.isfinite(sigma) or sigma <= 0:
+        raise ValueError(f"sigma must be positive and finite, got {sigma!r}")
+    if distance == 0:
+        return sigma**2 / 4.0
+
+    scaled_distance_sq = (distance / sigma) ** 2
+    tail = np.exp(-scaled_distance_sq) - scaled_distance_sq * sps.exp1(
+        scaled_distance_sq
+    )
+    return float((sigma**2 / 4.0) * max(tail, 0.0))
+
+
 def laplace2d_heat_smooth_kernel(dx, dy, config):
     """Gaussian-smoothed 2D Laplace Green's function.
 
@@ -405,21 +446,81 @@ def heat_tail_relation_to_box(
 ):
     """Classify the effective heat-local tail relative to a source box."""
 
+    return heat_tail_plan_for_box(target, config, bounds=bounds, tol=tol)[0]
+
+
+def _heat_boundary_criteria_met(distance, sigma, config):
+    if distance <= 0:
+        return False
+
+    return (
+        _laplace2d_heat_local_kernel_radius_with_sigma(distance, sigma)
+        <= config.boundary_kernel_tol
+        and laplace2d_heat_tail_integral_bound(distance, sigma)
+        <= config.boundary_truncation_tol
+    )
+
+
+def _shrink_heat_sigma_for_boundary(distance, config):
+    if _heat_boundary_criteria_met(distance, config.sigma, config):
+        return config.sigma
+    if not config.shrink_to_boundary or distance <= 0:
+        return None
+
+    lo = 0.0
+    hi = config.sigma
+    for _ in range(80):
+        mid = 0.5 * (lo + hi)
+        if mid == 0:
+            break
+        if _heat_boundary_criteria_met(distance, mid, config):
+            lo = mid
+        else:
+            hi = mid
+
+    if lo == 0.0:
+        return None
+    return lo
+
+
+def _heat_config_with_sigma(config, sigma):
+    return HeatKernelConfig(
+        sigma=sigma,
+        boundary_kernel_tol=config.boundary_kernel_tol,
+        boundary_truncation_tol=config.boundary_truncation_tol,
+        shrink_to_boundary=config.shrink_to_boundary,
+    )
+
+
+def heat_tail_plan_for_box(
+    target,
+    config,
+    bounds=((0.0, 1.0), (0.0, 1.0)),
+    tol=0.0,
+):
+    """Return heat-tail relation and an optionally shrunk safe config."""
+
     tx, ty = target
     (a, b), (c, d) = bounds
-    radius = config.tail_cutoff_sigma * config.sigma
 
     if a <= tx <= b and c <= ty <= d:
         boundary_distance = min(tx - a, b - tx, ty - c, d - ty)
-        if boundary_distance + tol >= radius:
-            return "tail-contained"
+        effective_sigma = _shrink_heat_sigma_for_boundary(
+            boundary_distance + tol,
+            config,
+        )
+        if effective_sigma is not None:
+            return "tail-contained", _heat_config_with_sigma(config, effective_sigma)
+        return "tail-intersects", config
 
     dx = max(a - tx, 0.0, tx - b)
     dy = max(c - ty, 0.0, ty - d)
-    if np.hypot(dx, dy) + tol >= radius:
-        return "tail-outside"
+    closest_distance = np.hypot(dx, dy) + tol
+    effective_sigma = _shrink_heat_sigma_for_boundary(closest_distance, config)
+    if effective_sigma is not None:
+        return "tail-outside", _heat_config_with_sigma(config, effective_sigma)
 
-    return "tail-intersects"
+    return "tail-intersects", config
 
 
 def _integral_power(lo, hi, exponent):
@@ -620,6 +721,7 @@ def laplace2d_dmk_split_integral(
         local_value=local_value,
         smooth_value=smooth_value,
         support_relation=relation,
+        effective_sigma=config.sigma,
     )
 
 
@@ -645,7 +747,7 @@ def laplace2d_heat_split_integral(
     )
     smooth_order = _validate_integer_order(smooth_order, "smooth_order", minimum=1)
 
-    relation = heat_tail_relation_to_box(target, config, bounds=bounds)
+    relation, effective_config = heat_tail_plan_for_box(target, config, bounds=bounds)
     if relation == "tail-intersects":
         raise HeatTailBoundaryError(
             "heat-local tail intersects the source box boundary; choose a smaller "
@@ -657,7 +759,7 @@ def laplace2d_heat_split_integral(
             coeffs,
             target=target,
             expansion_order=expansion_order,
-            config=config,
+            config=effective_config,
         )
     else:
         local_value = 0.0
@@ -665,7 +767,7 @@ def laplace2d_heat_split_integral(
     smooth_value = laplace2d_heat_smooth_gauss_integral(
         coeffs,
         target=target,
-        config=config,
+        config=effective_config,
         smooth_order=smooth_order,
         bounds=bounds,
     )
@@ -674,6 +776,7 @@ def laplace2d_heat_split_integral(
         local_value=local_value,
         smooth_value=smooth_value,
         support_relation=relation,
+        effective_sigma=effective_config.sigma,
     )
 
 
@@ -739,6 +842,7 @@ def sweep_laplace2d_dmk_split(
                     rows.append(
                         {
                             "sigma": float(sigma),
+                            "effective_sigma": result.effective_sigma,
                             "expansion_order": expansion_order,
                             "smooth_order": smooth_order,
                             "value": result.value,
@@ -752,6 +856,7 @@ def sweep_laplace2d_dmk_split(
                     rows.append(
                         {
                             "sigma": float(sigma),
+                            "effective_sigma": np.nan,
                             "expansion_order": expansion_order,
                             "smooth_order": smooth_order,
                             "value": np.nan,
@@ -806,6 +911,7 @@ def sweep_laplace2d_heat_split(
                     rows.append(
                         {
                             "sigma": float(sigma),
+                            "effective_sigma": result.effective_sigma,
                             "expansion_order": expansion_order,
                             "smooth_order": smooth_order,
                             "value": result.value,
@@ -819,6 +925,7 @@ def sweep_laplace2d_heat_split(
                     rows.append(
                         {
                             "sigma": float(sigma),
+                            "effective_sigma": np.nan,
                             "expansion_order": expansion_order,
                             "smooth_order": smooth_order,
                             "value": np.nan,

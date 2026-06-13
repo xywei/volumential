@@ -165,7 +165,40 @@ def test_laplace2d_heat_split_reaches_high_accuracy_with_smooth_remainder():
     assert high_smooth_order["abs_error"] < 1.0e-6 * low_smooth_order["abs_error"]
 
 
-def test_laplace2d_heat_split_rejects_boundary_intersecting_tail():
+def test_laplace2d_heat_split_shrinks_boundary_tail_to_tolerance():
+    q_order = 5
+    mode_index = 12
+    target_index = 0
+    coeffs = dmk.tensor_lagrange_mode_coefficients(q_order, mode_index)
+    target = dmk.tensor_gauss_point(q_order, target_index)
+    requested = dmk.HeatKernelConfig(sigma=0.06)
+
+    result = dmk.laplace2d_heat_split_integral(
+        coeffs,
+        target=target,
+        config=requested,
+        expansion_order=8,
+        smooth_order=48,
+    )
+
+    assert result.support_relation == "tail-contained"
+    assert result.effective_sigma < requested.sigma
+    boundary_distance = min(target[0], 1.0 - target[0], target[1], 1.0 - target[1])
+    effective = dmk.HeatKernelConfig(sigma=result.effective_sigma)
+    assert (
+        dmk.laplace2d_heat_local_kernel_radius(boundary_distance, effective)
+        <= requested.boundary_kernel_tol
+    )
+    assert (
+        dmk.laplace2d_heat_tail_integral_bound(
+            boundary_distance,
+            result.effective_sigma,
+        )
+        <= requested.boundary_truncation_tol
+    )
+
+
+def test_laplace2d_heat_split_rejects_boundary_tail_without_shrinkage():
     q_order = 5
     mode_index = 12
     target_index = 0
@@ -176,7 +209,7 @@ def test_laplace2d_heat_split_rejects_boundary_intersecting_tail():
         dmk.laplace2d_heat_split_integral(
             coeffs,
             target=target,
-            config=dmk.HeatKernelConfig(sigma=0.06),
+            config=dmk.HeatKernelConfig(sigma=0.06, shrink_to_boundary=False),
             expansion_order=8,
             smooth_order=48,
         )
