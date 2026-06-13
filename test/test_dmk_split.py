@@ -127,3 +127,24 @@ def test_laplace2d_dmk_like_split_rejects_intersecting_local_support():
         assert "compact support intersects" in str(exc)
     else:
         raise AssertionError("intersecting compact support should be rejected")
+
+
+def test_laplace2d_dmk_like_split_sweep_does_not_hide_invalid_orders():
+    q_order = 5
+    mode_index = 12
+    target_index = 12
+
+    try:
+        dmk.sweep_laplace2d_dmk_split(
+            q_order=q_order,
+            mode_index=mode_index,
+            target_index=target_index,
+            sigmas=[0.35],
+            expansion_orders=[8],
+            smooth_orders=[0],
+            reference_value=0.0,
+        )
+    except ValueError as exc:
+        assert "order must be >= 1" in str(exc)
+    else:
+        raise AssertionError("invalid smooth order should not be reported as support")

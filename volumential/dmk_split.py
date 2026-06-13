@@ -81,6 +81,10 @@ class Laplace2DDMKSplitResult:
     support_relation: str
 
 
+class CompactSupportIntersectionError(ValueError):
+    """Raised when compact local support intersects the source box boundary."""
+
+
 def gauss_legendre_rule(order, a=0.0, b=1.0):
     """Return Gauss-Legendre nodes/weights on ``[a, b]``."""
 
@@ -400,7 +404,7 @@ def laplace2d_dmk_split_integral(
 
     relation = support_relation_to_box(target, config, bounds=bounds)
     if relation == "intersects":
-        raise ValueError(
+        raise CompactSupportIntersectionError(
             "compact support intersects the source box boundary; choose a smaller "
             "sigma or use an intersection-aware local integration path"
         )
@@ -492,7 +496,7 @@ def sweep_laplace2d_dmk_split(
                             "abs_error": float(error),
                         }
                     )
-                except ValueError as exc:
+                except CompactSupportIntersectionError as exc:
                     rows.append(
                         {
                             "sigma": float(sigma),
