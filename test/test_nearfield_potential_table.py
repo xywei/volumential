@@ -2204,6 +2204,31 @@ def test_prepare_table_data_and_entry_map_uses_orbit_canonical_mapping():
     assert reconstruction_info["kind"] == "dense"
 
 
+def test_arithmetic_orbit_reconstruction_sorts_nonadjacent_group_axes():
+    from volumential.expansion_wrangler_fpnd import _evaluate_arithmetic_orbit_entry
+
+    q_order = 3
+    n_q_points = q_order**3
+    source_mode_id = 2 * q_order * q_order
+    target_point_id = 2 * q_order * q_order
+
+    arithmetic_row, arithmetic_sign = _evaluate_arithmetic_orbit_entry(
+        0,
+        source_mode_id,
+        target_point_id,
+        case_orbit_ranks=np.array([0], dtype=np.uint16),
+        case_axis_perm=np.array([[0, 1, 2]], dtype=np.uint8),
+        case_axis_sign=np.array([[1, 1, 1]], dtype=np.int8),
+        case_axis_group=np.array([[1, 0, 1]], dtype=np.uint8),
+        q_order=q_order,
+        dim=3,
+    )
+
+    expected_mode_id = 2
+    assert arithmetic_row == expected_mode_id * n_q_points + expected_mode_id
+    assert arithmetic_sign == 1
+
+
 @pytest.mark.parametrize(
     "kernel_case",
     [

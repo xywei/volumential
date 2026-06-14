@@ -680,12 +680,23 @@ class NearFieldFromCSR(NearFieldEvalBase):
                             and (src1_b < src0_b
                                 or (src1_b == src0_b and tgt1_b < tgt0_b))
                             else 0)
-                        <> src0_s = (src1_b if swap01_c else src0_b)
-                        <> tgt0_s = (tgt1_b if swap01_c else tgt0_b)
-                        <> src1_s = (src0_b if swap01_c else src1_b)
-                        <> tgt1_s = (tgt0_b if swap01_c else tgt1_b)
-                        <> src2_s = src2_b
-                        <> tgt2_s = tgt2_b
+                        <> src0_c = (src1_b if swap01_c else src0_b)
+                        <> tgt0_c = (tgt1_b if swap01_c else tgt0_b)
+                        <> src1_c = (src0_b if swap01_c else src1_b)
+                        <> tgt1_c = (tgt0_b if swap01_c else tgt1_b)
+                        <> src2_c = src2_b
+                        <> tgt2_c = tgt2_b
+
+                        <> swap02_d = (1 if group0 == group2
+                            and (src2_c < src0_c
+                                or (src2_c == src0_c and tgt2_c < tgt0_c))
+                            else 0)
+                        <> src0_s = (src2_c if swap02_d else src0_c)
+                        <> tgt0_s = (tgt2_c if swap02_d else tgt0_c)
+                        <> src1_s = src1_c
+                        <> tgt1_s = tgt1_c
+                        <> src2_s = (src0_c if swap02_d else src2_c)
+                        <> tgt2_s = (tgt0_c if swap02_d else tgt2_c)
                 """
             else:
                 raise NotImplementedError("arithmetic ORBIT supports dim 2 or 3")

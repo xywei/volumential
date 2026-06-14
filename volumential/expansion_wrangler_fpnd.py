@@ -1271,6 +1271,7 @@ def _evaluate_arithmetic_orbit_entry(
         compare_swap(0, 1)
         compare_swap(1, 2)
         compare_swap(0, 1)
+        compare_swap(0, 2)
     else:
         raise NotImplementedError("scalar arithmetic ORBIT supports dim 2 or 3")
 
