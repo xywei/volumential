@@ -92,6 +92,56 @@ def test_interpolation_target_coverage_reports_missing_targets():
         )
 
 
+def test_volume_fmm_loopy_interpolation_uses_shared_barycentric_weights():
+    from volumential import lagrange
+    from volumential.volume_fmm import compute_barycentric_lagrange_params
+
+    q_order = 16
+    nodes, weights = compute_barycentric_lagrange_params(q_order)
+
+    np.testing.assert_allclose(
+        weights,
+        lagrange.barycentric_lagrange_weights(nodes),
+        rtol=0.0,
+        atol=0.0,
+    )
+
+    values = lagrange.evaluate_lagrange_basis_1d(nodes, 7, nodes, weights=weights)
+    expected = np.zeros(q_order)
+    expected[7] = 1.0
+    np.testing.assert_array_equal(values, expected)
+
+
+def test_barycentric_interp_matrix_is_exact_at_source_nodes():
+    from volumential.expansion_wrangler_fpnd import _barycentric_interp_matrix
+
+    source_nodes = np.polynomial.legendre.leggauss(16)[0]
+    source_nodes = 0.5 * (source_nodes + 1.0)
+
+    interp = _barycentric_interp_matrix(source_nodes, source_nodes)
+
+    np.testing.assert_allclose(interp, np.eye(source_nodes.size), rtol=0.0, atol=0.0)
+
+
+def test_barycentric_interp_matrix_matches_shared_near_node_behavior():
+    from volumential import lagrange
+    from volumential.expansion_wrangler_fpnd import _barycentric_interp_matrix
+
+    source_nodes = np.polynomial.legendre.leggauss(16)[0]
+    source_nodes = 0.5 * (source_nodes + 1.0)
+    target_node = np.nextafter(source_nodes[7], source_nodes[8])
+
+    interp = _barycentric_interp_matrix(source_nodes, np.array([target_node]))
+    expected = np.array(
+        [
+            lagrange.evaluate_lagrange_basis_1d(source_nodes, i, target_node)
+            for i in range(source_nodes.size)
+        ]
+    )
+
+    np.testing.assert_allclose(interp[0], expected, rtol=1.0e-14, atol=1.0e-14)
+
+
 def test_list1_gallery_includes_mixed_source_levels():
     from volumential.list1_gallery import generate_interactions
 
