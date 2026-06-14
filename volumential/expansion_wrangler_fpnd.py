@@ -2866,10 +2866,20 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
                 }
             )
 
+        representative_entry_count = int(
+            reconstruction_info.get(
+                "representative_entry_count",
+                table_data_combined.shape[1],
+            )
+        )
         reconstruction_diagnostics = {
             "kind": reconstruction_kind,
             "online_value_bytes": int(table_data_combined.nbytes),
-            "representative_value_bytes": int(table_data_combined.nbytes),
+            "representative_value_bytes": int(
+                representative_entry_count
+                * len(near_field_tables)
+                * np.dtype(eval_dtype).itemsize
+            ),
             "generated_reconstruction_metadata_bytes": int(
                 reconstruction_info["metadata_bytes"]
             ),
@@ -6036,10 +6046,20 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
                 }
             )
 
+        representative_entry_count = int(
+            reconstruction_info.get(
+                "representative_entry_count",
+                table_data_combined.shape[1],
+            )
+        )
         reconstruction_diagnostics = {
             "kind": reconstruction_kind,
             "online_value_bytes": int(table_data_combined.nbytes),
-            "representative_value_bytes": int(table_data_combined.nbytes),
+            "representative_value_bytes": int(
+                representative_entry_count
+                * len(near_field_tables)
+                * np.dtype(eval_dtype).itemsize
+            ),
             "generated_reconstruction_metadata_bytes": int(
                 reconstruction_info["metadata_bytes"]
             ),
