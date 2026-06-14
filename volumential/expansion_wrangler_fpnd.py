@@ -32,6 +32,7 @@ import numpy as np
 import pyopencl as cl
 import pyopencl.array
 from boxtree.pyfmmlib_integration import FMMLibExpansionWrangler
+from pytools import memoize_method
 from pytools.obj_array import new_1d as obj_array_1d
 from sumpy.array_context import PyOpenCLArrayContext
 from sumpy.fmm import (
@@ -1554,10 +1555,13 @@ class FPNDSumpyTreeIndependentDataForWrangler(
         strength_usage=None,
         source_kernels=None,
     ):
-        if source_kernels is None and not _target_kernels_include_source_derivatives(
-            target_kernels
-        ):
-            source_kernels = _derive_source_kernels_from_target_kernels(target_kernels)
+        expansion_source_kernels = source_kernels
+        if source_kernels is None:
+            expansion_source_kernels = _derive_source_kernels_from_target_kernels(
+                target_kernels
+            )
+            if not _target_kernels_include_source_derivatives(target_kernels):
+                source_kernels = expansion_source_kernels
 
         queue = cl.CommandQueue(cl_context)
         actx = PyOpenCLArrayContext(queue)
@@ -1576,6 +1580,7 @@ class FPNDSumpyTreeIndependentDataForWrangler(
             local_expansion_factory,
             **super_kwargs,
         )
+        self.expansion_source_kernels = expansion_source_kernels
 
     def _for_queue(self, queue):
         setup_queue = getattr(self._setup_actx, "queue", None)
@@ -1626,6 +1631,28 @@ class FPNDSumpyTreeIndependentDataForWrangler(
             kernel_extra_kwargs=kernel_extra_kwargs,
             self_extra_kwargs=self_extra_kwargs,
             **kwargs,
+        )
+
+    @memoize_method
+    def p2m(self, tgt_order):
+        from sumpy.p2e import P2EFromSingleBox
+
+        return P2EFromSingleBox(
+            kernels=self.expansion_source_kernels,
+            expansion=self.multipole_expansion(tgt_order),
+            strength_usage=self.strength_usage,
+            name="p2m",
+        )
+
+    @memoize_method
+    def p2l(self, tgt_order):
+        from sumpy.p2e import P2EFromCSR
+
+        return P2EFromCSR(
+            kernels=self.expansion_source_kernels,
+            expansion=self.local_expansion(tgt_order),
+            strength_usage=self.strength_usage,
+            name="p2l",
         )
 
     def opencl_fft_app(self, shape, dtype, inverse):
