@@ -1288,8 +1288,12 @@ class NearFieldInteractionTable:
         direction_key = self._symmetry_source_direction_key(symmetry_source_direction)
         return self._get_online_symmetry_maps_cached(direction_key)
 
+    def _get_orbit_reconstruction_maps(self, symmetry_source_direction=None):
+        direction_key = self._symmetry_source_direction_key(symmetry_source_direction)
+        return self._get_orbit_reconstruction_maps_cached(direction_key)
+
     @memoize_method
-    def _get_online_symmetry_maps_cached(self, symmetry_source_direction_key):
+    def _get_orbit_reconstruction_maps_cached(self, symmetry_source_direction_key):
         runtime_source_direction = None
         if symmetry_source_direction_key is not None:
             runtime_source_direction = np.asarray(
@@ -1302,10 +1306,6 @@ class NearFieldInteractionTable:
                     "symmetry_source_direction has incompatible shape "
                     f"{runtime_source_direction.shape}; expected {expected_shape}"
                 )
-
-        mode_qpoint_map = np.empty((self.n_q_points, self.n_q_points), dtype=np.int32)
-        mode_case_map = np.empty((self.n_q_points, self.n_cases), dtype=np.int32)
-        mode_case_scale = np.empty((self.n_q_points, self.n_cases), dtype=np.int8)
 
         all_mode_axes = self._get_all_mode_axes()
         case_vecs = np.asarray(self.interaction_case_vecs, dtype=np.int32)
@@ -1320,7 +1320,11 @@ class NearFieldInteractionTable:
         )
         kernel_constraint, kernel_sign_eval = _kernel_symmetry_meta(kernel)
 
-        transforms = []
+        mode_maps = []
+        case_maps = []
+        transform_signs = []
+        transform_signatures = []
+
         for sign_tuple in product([-1, 1], repeat=self.dim):
             sgn = np.asarray(sign_tuple, dtype=np.int32)
             neg_axes = sgn < 0
@@ -1338,10 +1342,9 @@ class NearFieldInteractionTable:
                         self.quad_order - 1 - mapped_axes[:, neg_axes]
                     )
                 mapped_axes = mapped_axes[:, perm]
-                transform_mode_map = np.ravel_multi_index(
-                    mapped_axes.T,
-                    multi_shape,
-                ).astype(np.int32)
+                mode_maps.append(
+                    np.ravel_multi_index(mapped_axes.T, multi_shape).astype(np.int32)
+                )
 
                 mapped_case_vecs = case_vecs * sgn
                 mapped_case_vecs = mapped_case_vecs[:, perm]
@@ -1352,7 +1355,7 @@ class NearFieldInteractionTable:
                     ],
                     dtype=np.int64,
                 )
-                transform_case_map = self.case_indices[encoded].astype(np.int32)
+                case_maps.append(self.case_indices[encoded].astype(np.int32))
 
                 transform_sign = int(kernel_sign_eval(sign_tuple, perm_tuple))
                 if transform_sign not in {-1, 1}:
@@ -1360,29 +1363,44 @@ class NearFieldInteractionTable:
                         "kernel symmetry transform sign must be +/-1, got "
                         f"{transform_sign}"
                     )
-
-                transforms.append(
+                transform_signs.append(transform_sign)
+                transform_signatures.append(
                     (
-                        transform_mode_map,
-                        transform_case_map,
-                        np.int8(transform_sign),
                         tuple(int(val) for val in sign_tuple),
                         tuple(int(val) for val in perm_tuple),
                     )
                 )
 
-        if not transforms:
-            identity_mode = np.arange(self.n_q_points, dtype=np.int32)
-            identity_case = np.arange(self.n_cases, dtype=np.int32)
-            transforms = [
-                (
-                    identity_mode,
-                    identity_case,
-                    np.int8(1),
-                    (1,) * self.dim,
-                    tuple(range(self.dim)),
-                )
-            ]
+        if not mode_maps:
+            mode_maps = [np.arange(self.n_q_points, dtype=np.int32)]
+            case_maps = [np.arange(self.n_cases, dtype=np.int32)]
+            transform_signs = [1]
+            transform_signatures = [((1,) * self.dim, tuple(range(self.dim)))]
+
+        return {
+            "transform_qpoint_map": np.ascontiguousarray(
+                np.vstack(mode_maps), dtype=np.int32
+            ),
+            "transform_case_map": np.ascontiguousarray(
+                np.vstack(case_maps), dtype=np.int32
+            ),
+            "transform_signs": np.asarray(transform_signs, dtype=np.int8),
+            "transform_signatures": tuple(transform_signatures),
+        }
+
+    @memoize_method
+    def _get_online_symmetry_maps_cached(self, symmetry_source_direction_key):
+        mode_qpoint_map = np.empty((self.n_q_points, self.n_q_points), dtype=np.int32)
+        mode_case_map = np.empty((self.n_q_points, self.n_cases), dtype=np.int32)
+        mode_case_scale = np.empty((self.n_q_points, self.n_cases), dtype=np.int8)
+
+        reconstruction_maps = self._get_orbit_reconstruction_maps_cached(
+            symmetry_source_direction_key
+        )
+        transform_qpoint_map = reconstruction_maps["transform_qpoint_map"]
+        transform_case_map = reconstruction_maps["transform_case_map"]
+        transform_signs = reconstruction_maps["transform_signs"]
+        transform_signatures = reconstruction_maps["transform_signatures"]
 
         for source_mode_index in range(self.n_q_points):
             best_score = None
@@ -1390,13 +1408,11 @@ class NearFieldInteractionTable:
             best_case_map = None
             best_sign = np.int8(1)
 
-            for (
-                transform_mode_map,
-                transform_case_map,
-                transform_sign,
-                sign_tuple,
-                perm_tuple,
-            ) in transforms:
+            for itransform in range(len(transform_signs)):
+                transform_mode_map = transform_qpoint_map[itransform]
+                transform_case_map_i = transform_case_map[itransform]
+                transform_sign = np.int8(transform_signs[itransform])
+                sign_tuple, perm_tuple = transform_signatures[itransform]
                 mapped_source_mode = int(transform_mode_map[source_mode_index])
                 score = (
                     mapped_source_mode,
@@ -1407,7 +1423,7 @@ class NearFieldInteractionTable:
                 if best_score is None or score < best_score:
                     best_score = score
                     best_mode_map = transform_mode_map
-                    best_case_map = transform_case_map
+                    best_case_map = transform_case_map_i
                     best_sign = transform_sign
 
             if best_mode_map is None or best_case_map is None:
@@ -1447,7 +1463,6 @@ class NearFieldInteractionTable:
             return cached
 
         all_mode_axes = self._get_all_mode_axes()
-        case_vecs = np.asarray(self.interaction_case_vecs, dtype=np.int32)
 
         n_entries = self.n_cases * self.n_pairs
         n_q_points_i64 = np.int64(self.n_q_points)
@@ -1457,55 +1472,10 @@ class NearFieldInteractionTable:
         rank = np.zeros(n_entries, dtype=np.int8)
         rel = np.ones(n_entries, dtype=np.int8)
 
-        from itertools import permutations, product
-
-        multi_shape = (self.quad_order,) * self.dim
-        perms = list(permutations(range(self.dim)))
-        signs = list(product([-1, 1], repeat=self.dim))
-
-        mode_maps = []
-        case_maps = []
-        transform_signs = []
-        kernel = self.integral_knl
-        self._attach_directional_symmetry_metadata(
-            kernel,
-            self.symmetry_source_direction,
-        )
-
-        kernel_constraint, kernel_sign_eval = _kernel_symmetry_meta(kernel)
-
-        for sign_tuple in signs:
-            sgn = np.asarray(sign_tuple, dtype=np.int32)
-            neg_axes = sgn < 0
-
-            for perm_tuple in perms:
-                perm = np.asarray(perm_tuple, dtype=np.int32)
-
-                if not kernel_constraint(sign_tuple, perm_tuple):
-                    continue
-
-                mapped_axes = all_mode_axes
-                if np.any(neg_axes):
-                    mapped_axes = mapped_axes.copy()
-                    mapped_axes[:, neg_axes] = (
-                        self.quad_order - 1 - mapped_axes[:, neg_axes]
-                    )
-                mapped_axes = mapped_axes[:, perm]
-                mode_maps.append(
-                    np.ravel_multi_index(mapped_axes.T, multi_shape).astype(np.int32)
-                )
-
-                mapped_case_vecs = case_vecs * sgn
-                mapped_case_vecs = mapped_case_vecs[:, perm]
-                encoded = np.array(
-                    [
-                        self.case_encode(case_vec.tolist())
-                        for case_vec in mapped_case_vecs
-                    ],
-                    dtype=np.int64,
-                )
-                case_maps.append(self.case_indices[encoded].astype(np.int32))
-                transform_signs.append(int(kernel_sign_eval(sign_tuple, perm_tuple)))
+        reconstruction_maps = self._get_orbit_reconstruction_maps()
+        mode_maps = reconstruction_maps["transform_qpoint_map"]
+        case_maps = reconstruction_maps["transform_case_map"]
+        transform_signs = reconstruction_maps["transform_signs"]
 
         for mode_map, case_map, transform_sign in zip(
             mode_maps, case_maps, transform_signs

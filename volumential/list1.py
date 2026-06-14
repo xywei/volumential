@@ -117,12 +117,37 @@ class NearFieldEvalBase(KernelCacheWrapper):
         self.n_q_points = table_data_shapes["n_q_points"]
         self.n_table_entries = table_data_shapes["n_table_entries"]
         self.n_cases = table_data_shapes.get("n_cases", 0)
+        self.reconstruction_kind = table_data_shapes.get("reconstruction_kind", "dense")
+        self.n_reconstruction_transforms = table_data_shapes.get(
+            "n_reconstruction_transforms", 0
+        )
+        self.n_reconstruction_lookup_entries = table_data_shapes.get(
+            "n_reconstruction_lookup_entries", 0
+        )
+        self.n_reconstruction_lookup_probes = table_data_shapes.get(
+            "n_reconstruction_lookup_probes", 0
+        )
+        self.n_reconstruction_sign_lookup_entries = table_data_shapes.get(
+            "n_reconstruction_sign_lookup_entries", 0
+        )
+        self.n_reconstruction_sign_lookup_probes = table_data_shapes.get(
+            "n_reconstruction_sign_lookup_probes", 0
+        )
+        self.n_arithmetic_case_orbits = table_data_shapes.get(
+            "n_arithmetic_case_orbits", 0
+        )
         self.potential_kind = potential_kind
 
         assert np.isreal(self.n_tables)
         assert np.isreal(self.n_q_points)
         assert np.isreal(self.n_table_entries)
         assert np.isreal(self.n_cases)
+        assert self.reconstruction_kind in {
+            "dense",
+            "generated-orbit",
+            "scalar-arithmetic-orbit",
+            "signed-arithmetic-orbit",
+        }
 
         self.options = options
         self.name = name or self.default_name
@@ -130,6 +155,12 @@ class NearFieldEvalBase(KernelCacheWrapper):
         self.extra_kwargs = kwargs
         self.kname = self.integral_kernel.__repr__()
         self.dim = self.integral_kernel.dim
+        self.quad_order = int(
+            table_data_shapes.get(
+                "quad_order",
+                round(float(self.n_q_points) ** (1.0 / float(self.dim))),
+            )
+        )
 
         if "case_encoding_bias" not in self.extra_kwargs:
             self.extra_kwargs["case_encoding_bias"] = CASE_ENCODING_BIAS_DEFAULT
@@ -570,13 +601,358 @@ class NearFieldFromCSR(NearFieldEvalBase):
         else:
             potential_dtype = np.float64
 
+        if self.reconstruction_kind in {
+            "scalar-arithmetic-orbit",
+            "signed-arithmetic-orbit",
+        }:
+            reconstruction_domains = []
+
+            def select_axis(prefix, perm_name):
+                if self.dim == 2:
+                    return (
+                        f"({prefix}_raw_0 if {perm_name} == 0 "
+                        f"else {prefix}_raw_1)"
+                    )
+                if self.dim == 3:
+                    return (
+                        f"({prefix}_raw_0 if {perm_name} == 0 "
+                        f"else ({prefix}_raw_1 if {perm_name} == 1 "
+                        f"else {prefix}_raw_2))"
+                    )
+                raise NotImplementedError("arithmetic ORBIT supports dim 2 or 3")
+
+            if self.dim == 2:
+                decode_code = """
+                        <> src_raw_0 = source_mode_id // quad_order
+                        <> src_raw_1 = source_mode_id % quad_order
+                        <> tgt_raw_0 = target_point_id // quad_order
+                        <> tgt_raw_1 = target_point_id % quad_order
+                """
+                encode_source = "src0_s * quad_order + src1_s"
+                encode_target = "tgt0_s * quad_order + tgt1_s"
+                sort_code = """
+                        <> swap01 = (1 if group0 == group1
+                            and (src1 < src0 or (src1 == src0 and tgt1 < tgt0))
+                            else 0)
+                        <> src0_s = (src1 if swap01 else src0)
+                        <> tgt0_s = (tgt1 if swap01 else tgt0)
+                        <> src1_s = (src0 if swap01 else src1)
+                        <> tgt1_s = (tgt0 if swap01 else tgt1)
+                """
+            elif self.dim == 3:
+                decode_code = """
+                        <> src_raw_0 = source_mode_id // (quad_order * quad_order)
+                        <> src_raw_1 = (source_mode_id // quad_order) % quad_order
+                        <> src_raw_2 = source_mode_id % quad_order
+                        <> tgt_raw_0 = target_point_id // (quad_order * quad_order)
+                        <> tgt_raw_1 = (target_point_id // quad_order) % quad_order
+                        <> tgt_raw_2 = target_point_id % quad_order
+                """
+                encode_source = (
+                    "src0_s * (quad_order * quad_order) + src1_s * quad_order + src2_s"
+                )
+                encode_target = (
+                    "tgt0_s * (quad_order * quad_order) + tgt1_s * quad_order + tgt2_s"
+                )
+                sort_code = """
+                        <> swap01_a = (1 if group0 == group1
+                            and (src1 < src0 or (src1 == src0 and tgt1 < tgt0))
+                            else 0)
+                        <> src0_a = (src1 if swap01_a else src0)
+                        <> tgt0_a = (tgt1 if swap01_a else tgt0)
+                        <> src1_a = (src0 if swap01_a else src1)
+                        <> tgt1_a = (tgt0 if swap01_a else tgt1)
+                        <> src2_a = src2
+                        <> tgt2_a = tgt2
+
+                        <> swap12_b = (1 if group1 == group2
+                            and (src2_a < src1_a
+                                or (src2_a == src1_a and tgt2_a < tgt1_a))
+                            else 0)
+                        <> src0_b = src0_a
+                        <> tgt0_b = tgt0_a
+                        <> src1_b = (src2_a if swap12_b else src1_a)
+                        <> tgt1_b = (tgt2_a if swap12_b else tgt1_a)
+                        <> src2_b = (src1_a if swap12_b else src2_a)
+                        <> tgt2_b = (tgt1_a if swap12_b else tgt2_a)
+
+                        <> swap01_c = (1 if group0 == group1
+                            and (src1_b < src0_b
+                                or (src1_b == src0_b and tgt1_b < tgt0_b))
+                            else 0)
+                        <> src0_c = (src1_b if swap01_c else src0_b)
+                        <> tgt0_c = (tgt1_b if swap01_c else tgt0_b)
+                        <> src1_c = (src0_b if swap01_c else src1_b)
+                        <> tgt1_c = (tgt0_b if swap01_c else tgt1_b)
+                        <> src2_c = src2_b
+                        <> tgt2_c = tgt2_b
+
+                        <> swap02_d = (1 if group0 == group2
+                            and (src2_c < src0_c
+                                or (src2_c == src0_c and tgt2_c < tgt0_c))
+                            else 0)
+                        <> src0_s = (src2_c if swap02_d else src0_c)
+                        <> tgt0_s = (tgt2_c if swap02_d else tgt0_c)
+                        <> src1_s = src1_c
+                        <> tgt1_s = tgt1_c
+                        <> src2_s = (src0_c if swap02_d else src2_c)
+                        <> tgt2_s = (tgt0_c if swap02_d else tgt2_c)
+                """
+            else:
+                raise NotImplementedError("arithmetic ORBIT supports dim 2 or 3")
+
+            axis_code = ""
+            for iaxis in range(self.dim):
+                perm_name = f"perm{iaxis}"
+                sign_name = f"axis_sign{iaxis}"
+                axis_code += f"""
+                        <> {perm_name} = arithmetic_case_axis_perm[case_id, {iaxis}]
+                        <> {sign_name} = arithmetic_case_axis_sign[case_id, {iaxis}]
+                        <> group{iaxis} = arithmetic_case_axis_group[case_id, {iaxis}]
+                        <> sign_power{iaxis} = arithmetic_axis_sign_power[{perm_name}]
+                        <> src{iaxis}_raw_perm = {select_axis("src", perm_name)}
+                        <> tgt{iaxis}_raw_perm = {select_axis("tgt", perm_name)}
+                        <> src{iaxis}_fixed = (quad_order - 1 - src{iaxis}_raw_perm
+                            if {sign_name} < 0 else src{iaxis}_raw_perm)
+                        <> tgt{iaxis}_fixed = (quad_order - 1 - tgt{iaxis}_raw_perm
+                            if {sign_name} < 0 else tgt{iaxis}_raw_perm)
+                        <> src{iaxis}_flip = quad_order - 1 - src{iaxis}_raw_perm
+                        <> tgt{iaxis}_flip = quad_order - 1 - tgt{iaxis}_raw_perm
+                        <> zero_flip{iaxis} = (1 if {sign_name} == 0
+                            and (src{iaxis}_flip < src{iaxis}_raw_perm
+                                or (src{iaxis}_flip == src{iaxis}_raw_perm
+                                    and tgt{iaxis}_flip < tgt{iaxis}_raw_perm))
+                            else 0)
+                        <> src{iaxis} = (src{iaxis}_flip
+                            if zero_flip{iaxis} else src{iaxis}_fixed)
+                        <> tgt{iaxis} = (tgt{iaxis}_flip
+                            if zero_flip{iaxis} else tgt{iaxis}_fixed)
+                        <> transform_sign{iaxis} = (-1
+                            if {sign_name} < 0 or zero_flip{iaxis} else 1)
+                        <> direction_sign_factor{iaxis} = (
+                            transform_sign{iaxis}
+                            * arithmetic_axis_direction_signs[{perm_name}]
+                            * arithmetic_axis_direction_signs[{iaxis}]
+                            if arithmetic_direction_sign_axis == {iaxis}
+                            else 1)
+                        <> entry_sign_factor{iaxis} = (
+                            (transform_sign{iaxis}
+                                if sign_power{iaxis} != 0 else 1)
+                            * direction_sign_factor{iaxis})
+                """
+
+            reconstruction_code = f"""
+                        {decode_code}
+                        {axis_code}
+                        {sort_code}
+                        <> canonical_source_id = {encode_source}
+                        <> canonical_target_id = {encode_target}
+                        <> arithmetic_case_rank = arithmetic_case_orbit_ranks[case_id]
+                        <> entry_id = arithmetic_case_rank * (n_q_points * n_q_points) \
+                                + canonical_source_id * n_q_points + canonical_target_id
+                        <> entry_sign = {" * ".join(
+                            f"entry_sign_factor{iaxis}" for iaxis in range(self.dim)
+                        )}
+                        <> has_entry = 1
+            """
+            reconstruction_args = [
+                loopy.GlobalArg(
+                    "arithmetic_case_orbit_ranks",
+                    np.uint16,
+                    "n_cases",
+                    is_input=True,
+                ),
+                loopy.GlobalArg(
+                    "arithmetic_case_axis_perm",
+                    np.uint8,
+                    "n_cases, dim",
+                    is_input=True,
+                ),
+                loopy.GlobalArg(
+                    "arithmetic_case_axis_sign",
+                    np.int8,
+                    "n_cases, dim",
+                    is_input=True,
+                ),
+                loopy.GlobalArg(
+                    "arithmetic_case_axis_group",
+                    np.uint8,
+                    "n_cases, dim",
+                    is_input=True,
+                ),
+                loopy.GlobalArg(
+                    "arithmetic_axis_sign_power",
+                    np.uint8,
+                    "dim",
+                    is_input=True,
+                ),
+                loopy.GlobalArg(
+                    "arithmetic_axis_direction_signs",
+                    np.int8,
+                    "dim",
+                    is_input=True,
+                ),
+            ]
+            reconstruction_value_arg_names = (
+                ", quad_order, n_arithmetic_case_orbits, "
+                "arithmetic_direction_sign_axis"
+            )
+        elif self.reconstruction_kind == "generated-orbit":
+            reconstruction_domains = [
+                "{ [ tr ] : 0 <= tr < n_reconstruction_transforms }",
+                "{ [ probe ] : 0 <= probe < n_reconstruction_lookup_probes }",
+                "{ [ sign_probe ] : "
+                "0 <= sign_probe < n_reconstruction_sign_lookup_probes }",
+                "{ [ sign_value_probe ] : "
+                "0 <= sign_value_probe < n_reconstruction_sign_lookup_probes }",
+            ]
+            reconstruction_code = """
+                        <> reconstruction_full_entry_id = \
+                                case_id * (n_q_points * n_q_points) \
+                                + source_mode_id * n_q_points + target_point_id
+                        <> best_reconstruction_key = min((tr),
+                            (
+                                reconstruction_case_map[tr, case_id]
+                                * (n_q_points * n_q_points)
+                                + reconstruction_qpoint_map[tr, source_mode_id]
+                                * n_q_points
+                                + reconstruction_qpoint_map[tr, target_point_id]
+                            ) * (2 * n_reconstruction_transforms)
+                            + (0 if reconstruction_signs[tr] > 0 else 1)
+                            * n_reconstruction_transforms
+                            + tr)
+                        <> best_transform_id = \
+                                best_reconstruction_key % n_reconstruction_transforms
+                        <> representative_entry_id = \
+                                best_reconstruction_key \
+                                // (2 * n_reconstruction_transforms)
+                        <> lookup_start = (representative_entry_id * 33) \
+                                % n_reconstruction_lookup_entries
+                        <> lookup_match_count = sum((probe),
+                            1
+                            if reconstruction_lookup_keys[
+                                (lookup_start + probe)
+                                % n_reconstruction_lookup_entries]
+                                == representative_entry_id
+                            else 0)
+                        <> entry_id = sum((probe),
+                            reconstruction_lookup_values[
+                                (lookup_start + probe)
+                                % n_reconstruction_lookup_entries]
+                            if reconstruction_lookup_keys[
+                                (lookup_start + probe)
+                                % n_reconstruction_lookup_entries]
+                                == representative_entry_id
+                            else 0)
+                        <> sign_lookup_start = (reconstruction_full_entry_id * 33) \
+                                % n_reconstruction_sign_lookup_entries
+                        <> sign_correction_match_count = sum((sign_probe),
+                            1
+                            if reconstruction_sign_lookup_keys[
+                                (sign_lookup_start + sign_probe)
+                                % n_reconstruction_sign_lookup_entries]
+                                == reconstruction_full_entry_id
+                            else 0)
+                        <> sign_correction = (
+                            sum((sign_value_probe),
+                                reconstruction_sign_lookup_values[
+                                    (sign_lookup_start + sign_value_probe)
+                                    % n_reconstruction_sign_lookup_entries]
+                                if reconstruction_sign_lookup_keys[
+                                    (sign_lookup_start + sign_value_probe)
+                                    % n_reconstruction_sign_lookup_entries]
+                                    == reconstruction_full_entry_id
+                                else 0)
+                            if sign_correction_match_count > 0
+                            else 1)
+                        <> entry_sign = reconstruction_signs[best_transform_id] \
+                                * sign_correction
+                        <> has_entry = lookup_match_count > 0
+            """
+            reconstruction_args = [
+                loopy.GlobalArg(
+                    "reconstruction_qpoint_map",
+                    np.int32,
+                    "n_reconstruction_transforms, n_q_points",
+                ),
+                loopy.GlobalArg(
+                    "reconstruction_case_map",
+                    np.int32,
+                    "n_reconstruction_transforms, n_cases",
+                ),
+                loopy.GlobalArg(
+                    "reconstruction_signs",
+                    np.int8,
+                    "n_reconstruction_transforms",
+                ),
+                loopy.GlobalArg(
+                    "reconstruction_lookup_keys",
+                    np.int32,
+                    "n_reconstruction_lookup_entries",
+                ),
+                loopy.GlobalArg(
+                    "reconstruction_lookup_values",
+                    np.int32,
+                    "n_reconstruction_lookup_entries",
+                ),
+                loopy.GlobalArg(
+                    "reconstruction_sign_lookup_keys",
+                    np.int32,
+                    "n_reconstruction_sign_lookup_entries",
+                ),
+                loopy.GlobalArg(
+                    "reconstruction_sign_lookup_values",
+                    np.int8,
+                    "n_reconstruction_sign_lookup_entries",
+                ),
+            ]
+            reconstruction_value_arg_names = (
+                ", n_reconstruction_transforms, "
+                "n_reconstruction_lookup_entries, n_reconstruction_lookup_probes, "
+                "n_reconstruction_sign_lookup_entries, "
+                "n_reconstruction_sign_lookup_probes"
+            )
+        else:
+            reconstruction_domains = []
+            reconstruction_code = """
+                        <> source_mode_id_sym = mode_qpoint_map[source_mode_id, source_mode_id]
+                        <> target_point_id_sym = mode_qpoint_map[source_mode_id, target_point_id]
+                        <> case_id_sym = mode_case_map[source_mode_id, case_id]
+                        <> mode_map_sign = mode_case_scale[source_mode_id, case_id]
+                        <> pair_id = source_mode_id_sym * n_q_points + target_point_id_sym
+                        <> entry_id_full = case_id_sym * (n_q_points * n_q_points) + pair_id
+                        <> entry_id = table_entry_ids[entry_id_full]
+                        <> entry_sign = table_entry_scales[entry_id_full] * mode_map_sign
+                        <> has_entry = entry_id >= 0
+            """
+            reconstruction_args = [
+                loopy.GlobalArg(
+                    "table_entry_ids", np.int32, "n_cases*n_q_points*n_q_points"
+                ),
+                loopy.GlobalArg(
+                    "table_entry_scales",
+                    potential_dtype,
+                    "n_cases*n_q_points*n_q_points",
+                ),
+                loopy.GlobalArg("mode_qpoint_map", np.int32, "n_q_points, n_q_points"),
+                loopy.GlobalArg("mode_case_map", np.int32, "n_q_points, n_cases"),
+                loopy.GlobalArg(
+                    "mode_case_scale",
+                    potential_dtype,
+                    "n_q_points, n_cases",
+                ),
+            ]
+            reconstruction_value_arg_names = ""
+
+        kernel_domains = [
+            "{ [ tbox ] : 0 <= tbox < n_tgt_boxes }",
+            "{ [ tid ] : 0 <= tid < n_q_points }",
+            "{ [ sbox ] : sbox_begin <= sbox < sbox_end }",
+            "{ [ sid ] : 0 <= sid < n_box_sources }",
+        ] + reconstruction_domains
+
         lpknl = loopy.make_kernel(
-            [
-                "{ [ tbox ] : 0 <= tbox < n_tgt_boxes }",
-                "{ [ tid, sbox ] : 0 <= tid < n_box_targets and \
-                        sbox_begin <= sbox < sbox_end }",
-                "{ [ sid ] : 0 <= sid < n_box_sources }",
-            ],
+            kernel_domains,
             """
             for tbox
                 <> target_box_id    = target_boxes[tbox]
@@ -590,10 +966,13 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 <> tbox_extent = root_extent * (1.0 / (2**tbox_level))
 
                 for tid
+                    if tid < n_box_targets
                     <> target_id = box_target_beg + tid
+                    end
                 end
 
                 for tid, sbox
+                    if tid < n_box_targets
                     <> source_box_id  = source_boxes[sbox]
                     <> n_box_sources  = box_source_counts_nonchild[source_box_id]
                     <> box_source_beg = box_source_starts[source_box_id]
@@ -624,15 +1003,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
 
                         <> source_id = box_source_beg + sid
                         <> source_mode_id = source_mode_ids[source_id]
-                        <> source_mode_id_sym = mode_qpoint_map[source_mode_id, source_mode_id]
-                        <> target_point_id_sym = mode_qpoint_map[source_mode_id, target_point_id]
-                        <> case_id_sym = mode_case_map[source_mode_id, case_id]
-                        <> mode_map_sign = mode_case_scale[source_mode_id, case_id]
-                        <> pair_id = source_mode_id_sym * n_q_points + target_point_id_sym
-                        <> entry_id_full = case_id_sym * (n_q_points * n_q_points) + pair_id
-                        <> entry_id = table_entry_ids[entry_id_full]
-                        <> entry_sign = table_entry_scales[entry_id_full] * mode_map_sign
-                        <> has_entry = entry_id >= 0
+                        RECONSTRUCT_ENTRY
 
                         <> displacement = COMPUTE_DISPLACEMENT
 
@@ -654,21 +1025,26 @@ class NearFieldFromCSR(NearFieldEvalBase):
                         #db_entry_id[target_id] = entry_id
 
                     end
+                    end
                 end
 
                 for tid
+                    if tid < n_box_targets
 
                     result[target_id] = sum((sbox, sid),
-                        coef * integ) + EXTERIOR_PART {dep=integ:coef:extnmlz}
+                        coef * integ) + EXTERIOR_PART \
+                            {id=write_result,dep=integ:coef:extnmlz}
 
                     # Try inspecting case_id if something goes wrong
                     # (like segmentation fault) and look for -1's
                     # result[target_id] = min((sbox, sid), case_id)
                     # result[target_id] = vec_id_tmp
 
+                    end
                 end
             end
             """.replace("COMPUTE_VEC_ID", self.codegen_vec_id())
+            .replace("RECONSTRUCT_ENTRY", reconstruction_code)
             .replace("COMPUTE_SCALING", self.codegen_compute_scaling())
             .replace("COMPUTE_DISPLACEMENT", self.codegen_compute_displacement())
             .replace("COMPUTE_TGT_SCALING", self.codegen_compute_scaling("tbox"))
@@ -693,21 +1069,6 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 loopy.GlobalArg(
                     "table_data", potential_dtype, "n_tables, n_table_entries"
                 ),
-                loopy.GlobalArg(
-                    "table_entry_ids", np.int32, "n_cases*n_q_points*n_q_points"
-                ),
-                loopy.GlobalArg(
-                    "table_entry_scales",
-                    potential_dtype,
-                    "n_cases*n_q_points*n_q_points",
-                ),
-                loopy.GlobalArg("mode_qpoint_map", np.int32, "n_q_points, n_q_points"),
-                loopy.GlobalArg("mode_case_map", np.int32, "n_q_points, n_cases"),
-                loopy.GlobalArg(
-                    "mode_case_scale",
-                    potential_dtype,
-                    "n_q_points, n_cases",
-                ),
                 loopy.GlobalArg("source_boxes", np.int32, "n_source_boxes"),
                 loopy.GlobalArg("box_centers", None, "dim, aligned_nboxes"),
                 loopy.GlobalArg(
@@ -722,13 +1083,17 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 loopy.ValueArg("table_root_extent", np.float64),
                 loopy.ValueArg("table_starting_level", np.int32),
                 loopy.ValueArg(
-                    "dim, n_source_boxes, n_tables, n_q_points, n_cases, n_table_entries, n_source_particles, n_target_particles",
+                    "dim, n_source_boxes, n_tables, n_q_points, n_cases, "
+                    "n_table_entries, n_source_particles, n_target_particles"
+                    + reconstruction_value_arg_names,
                     np.int32,
                 ),
                 "...",
-            ],
+            ]
+            + reconstruction_args,
             name="near_field",
             lang_version=(2018, 2),
+            silenced_warnings=("write_race(write_result)",),
         )
 
         # lpknl = loopy.set_options(lpknl, write_code=True)
@@ -739,11 +1104,23 @@ class NearFieldFromCSR(NearFieldEvalBase):
     def get_cache_key(self):
         return (
             type(self).__name__,
-            "kernel-v10",
+            "kernel-v13",
             self.name,
             self.kname,
             "complex_kernel=" + str(self.integral_kernel.is_complex_valued),
             "potential_kind=%d" % self.potential_kind,
+            "reconstruction_kind=" + self.reconstruction_kind,
+            "n_reconstruction_transforms=%d" % self.n_reconstruction_transforms,
+            "n_reconstruction_lookup_entries=%d"
+            % self.n_reconstruction_lookup_entries,
+            "n_reconstruction_lookup_probes=%d"
+            % self.n_reconstruction_lookup_probes,
+            "n_reconstruction_sign_lookup_entries=%d"
+            % self.n_reconstruction_sign_lookup_entries,
+            "n_reconstruction_sign_lookup_probes=%d"
+            % self.n_reconstruction_sign_lookup_probes,
+            "n_arithmetic_case_orbits=%d" % self.n_arithmetic_case_orbits,
+            "list1_target_batch_size=%d" % self._target_batch_size(),
             "infer_scaling=" + str(self.extra_kwargs["infer_kernel_scaling"]),
             "case_encoding_bias=" + repr(self.extra_kwargs["case_encoding_bias"]),
             "scaling_policy=" + self.codegen_compute_scaling(),
@@ -751,8 +1128,30 @@ class NearFieldFromCSR(NearFieldEvalBase):
             "table_level_policy=" + self.codegen_get_table_level(),
         )
 
+    def _target_batch_size(self):
+        target_batch_size = int(self.extra_kwargs.get("list1_target_batch_size", 1))
+        if target_batch_size < 1:
+            raise ValueError("list1_target_batch_size must be positive")
+        return target_batch_size
+
     def get_optimized_kernel(self, ncpus=None):
         knl = self.get_kernel()
+        target_batch_size = self._target_batch_size()
+        if target_batch_size > 1:
+            # Each target row is independent; keep the source-box/source-mode
+            # reduction private to one work item while mapping neighboring target
+            # points in a box to local lanes for warp/subgroup-friendly execution.
+            knl = loopy.split_iname(
+                knl,
+                "tid",
+                inner_length=target_batch_size,
+                outer_tag="g.1",
+                inner_tag="l.0",
+                slabs=(0, 1),
+            )
+
+        knl = loopy.tag_inames(knl, {"tbox": "g.0"})
+        knl = loopy.add_inames_for_unused_hw_axes(knl)
         return knl
 
     def __call__(self, queue, **kwargs):
@@ -771,11 +1170,72 @@ class NearFieldFromCSR(NearFieldEvalBase):
         encoding_shift = kwargs.pop("encoding_shift")
         mode_nmlz_combined = kwargs.pop("mode_nmlz_combined")
         exterior_mode_nmlz_combined = kwargs.pop("exterior_mode_nmlz_combined")
-        mode_qpoint_map = kwargs.pop("mode_qpoint_map")
-        mode_case_map = kwargs.pop("mode_case_map")
-        mode_case_scale = kwargs.pop("mode_case_scale")
-        table_entry_ids = kwargs.pop("table_entry_ids")
-        table_entry_scales = kwargs.pop("table_entry_scales")
+        if self.reconstruction_kind in {
+            "scalar-arithmetic-orbit",
+            "signed-arithmetic-orbit",
+        }:
+            reconstruction_kwargs = {
+                "arithmetic_case_orbit_ranks": kwargs.pop(
+                    "arithmetic_case_orbit_ranks"
+                ),
+                "arithmetic_case_axis_perm": kwargs.pop(
+                    "arithmetic_case_axis_perm"
+                ),
+                "arithmetic_case_axis_sign": kwargs.pop(
+                    "arithmetic_case_axis_sign"
+                ),
+                "arithmetic_case_axis_group": kwargs.pop(
+                    "arithmetic_case_axis_group"
+                ),
+                "arithmetic_axis_sign_power": kwargs.pop(
+                    "arithmetic_axis_sign_power"
+                ),
+                "arithmetic_axis_direction_signs": kwargs.pop(
+                    "arithmetic_axis_direction_signs"
+                ),
+                "arithmetic_direction_sign_axis": kwargs.pop(
+                    "arithmetic_direction_sign_axis"
+                ),
+                "quad_order": self.quad_order,
+                "n_arithmetic_case_orbits": self.n_arithmetic_case_orbits,
+            }
+        elif self.reconstruction_kind == "generated-orbit":
+            reconstruction_kwargs = {
+                "reconstruction_qpoint_map": kwargs.pop("reconstruction_qpoint_map"),
+                "reconstruction_case_map": kwargs.pop("reconstruction_case_map"),
+                "reconstruction_signs": kwargs.pop("reconstruction_signs"),
+                "reconstruction_lookup_keys": kwargs.pop(
+                    "reconstruction_lookup_keys"
+                ),
+                "reconstruction_lookup_values": kwargs.pop(
+                    "reconstruction_lookup_values"
+                ),
+                "reconstruction_sign_lookup_keys": kwargs.pop(
+                    "reconstruction_sign_lookup_keys"
+                ),
+                "reconstruction_sign_lookup_values": kwargs.pop(
+                    "reconstruction_sign_lookup_values"
+                ),
+                "n_reconstruction_transforms": self.n_reconstruction_transforms,
+                "n_reconstruction_lookup_entries": (
+                    self.n_reconstruction_lookup_entries
+                ),
+                "n_reconstruction_lookup_probes": self.n_reconstruction_lookup_probes,
+                "n_reconstruction_sign_lookup_entries": (
+                    self.n_reconstruction_sign_lookup_entries
+                ),
+                "n_reconstruction_sign_lookup_probes": (
+                    self.n_reconstruction_sign_lookup_probes
+                ),
+            }
+        else:
+            reconstruction_kwargs = {
+                "mode_qpoint_map": kwargs.pop("mode_qpoint_map"),
+                "mode_case_map": kwargs.pop("mode_case_map"),
+                "mode_case_scale": kwargs.pop("mode_case_scale"),
+                "table_entry_ids": kwargs.pop("table_entry_ids"),
+                "table_entry_scales": kwargs.pop("table_entry_scales"),
+            }
         root_extent = kwargs.pop("root_extent")
         table_root_extent = kwargs.pop("table_root_extent")
         table_starting_level = kwargs.pop("table_starting_level")
@@ -887,11 +1347,6 @@ class NearFieldFromCSR(NearFieldEvalBase):
             encoding_shift=encoding_shift,
             mode_nmlz=mode_nmlz_combined,
             exterior_mode_nmlz=exterior_mode_nmlz_combined,
-            table_entry_ids=table_entry_ids,
-            table_entry_scales=table_entry_scales,
-            mode_qpoint_map=mode_qpoint_map,
-            mode_case_map=mode_case_map,
-            mode_case_scale=mode_case_scale,
             n_tgt_boxes=len(target_boxes),
             neighbor_source_boxes_starts=neighbor_source_boxes_starts,
             root_extent=root_extent,
@@ -906,6 +1361,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
             n_target_particles=len(target_point_ids),
             table_root_extent=table_root_extent,
             table_starting_level=table_starting_level,
+            **reconstruction_kwargs,
             **extra_knl_args_from_init,
         )
 

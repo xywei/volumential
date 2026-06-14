@@ -88,6 +88,22 @@ def _make_legendre_table_without_cl(q_order, dim):
     return table
 
 
+def _precomputed_legendre_q_points(q_order, dim):
+    nodes = np.polynomial.legendre.leggauss(q_order)[0]
+    nodes = 0.5 * (nodes + 1.0)
+
+    if dim == 1:
+        q_points = [(x,) for x in nodes]
+    elif dim == 2:
+        q_points = [(x, y) for x in nodes for y in nodes]
+    elif dim == 3:
+        q_points = [(x, y, z) for x in nodes for y in nodes for z in nodes]
+    else:
+        raise NotImplementedError("dimension %d not supported" % dim)
+
+    return np.asarray(q_points, dtype=np.float64)
+
+
 def test_const_order_1():
     queue = _make_build_queue_or_skip()
     table = npt.NearFieldInteractionTable(
@@ -2046,6 +2062,7 @@ def test_prepare_table_data_and_entry_map_accepts_finite_full_entries():
         exterior_mode_nmlz_combined,
         table_entry_ids,
         table_entry_scales,
+        reconstruction_info,
     ) = _prepare_table_data_and_entry_map([table0, table1])
 
     assert table_data_combined.shape == (2, 3)
@@ -2058,6 +2075,7 @@ def test_prepare_table_data_and_entry_map_accepts_finite_full_entries():
     np.testing.assert_allclose(
         exterior_mode_nmlz_combined[0], table0.kernel_exterior_normalizers
     )
+    assert reconstruction_info["kind"] == "dense"
 
 
 def test_prepare_table_data_and_entry_map_rejects_nonfinite_full_entries():
@@ -2128,6 +2146,7 @@ def test_prepare_table_data_and_entry_map_accepts_consistent_reduced_masks():
         _,
         table_entry_ids,
         table_entry_scales,
+        reconstruction_info,
     ) = _prepare_table_data_and_entry_map([table0, table1])
 
     assert table_data_combined.shape == (2, 2)
@@ -2137,6 +2156,7 @@ def test_prepare_table_data_and_entry_map_accepts_consistent_reduced_masks():
     np.testing.assert_allclose(table_entry_scales, np.array([1.0, 1.0, 1.0]))
     np.testing.assert_allclose(mode_nmlz_combined[0], table0.mode_normalizers)
     np.testing.assert_allclose(mode_nmlz_combined[1], table1.mode_normalizers)
+    assert reconstruction_info["kind"] == "dense"
 
 
 def test_prepare_table_data_and_entry_map_uses_orbit_canonical_mapping():
@@ -2171,6 +2191,7 @@ def test_prepare_table_data_and_entry_map_uses_orbit_canonical_mapping():
         _,
         table_entry_ids,
         table_entry_scales,
+        reconstruction_info,
     ) = _prepare_table_data_and_entry_map([table0, table1])
 
     assert table_data_combined.shape == (2, 2)
@@ -2180,6 +2201,283 @@ def test_prepare_table_data_and_entry_map_uses_orbit_canonical_mapping():
     np.testing.assert_allclose(table_entry_scales, np.array([1.0, -1.0, 1.0]))
     np.testing.assert_allclose(mode_nmlz_combined[0], table0.mode_normalizers)
     np.testing.assert_allclose(mode_nmlz_combined[1], table1.mode_normalizers)
+    assert reconstruction_info["kind"] == "dense"
+
+
+def test_arithmetic_orbit_reconstruction_sorts_nonadjacent_group_axes():
+    from volumential.expansion_wrangler_fpnd import _evaluate_arithmetic_orbit_entry
+
+    q_order = 3
+    n_q_points = q_order**3
+    source_mode_id = 2 * q_order * q_order
+    target_point_id = 2 * q_order * q_order
+
+    arithmetic_row, arithmetic_sign = _evaluate_arithmetic_orbit_entry(
+        0,
+        source_mode_id,
+        target_point_id,
+        case_orbit_ranks=np.array([0], dtype=np.uint16),
+        case_axis_perm=np.array([[0, 1, 2]], dtype=np.uint8),
+        case_axis_sign=np.array([[1, 1, 1]], dtype=np.int8),
+        case_axis_group=np.array([[1, 0, 1]], dtype=np.uint8),
+        q_order=q_order,
+        dim=3,
+    )
+
+    expected_mode_id = 2
+    assert arithmetic_row == expected_mode_id * n_q_points + expected_mode_id
+    assert arithmetic_sign == 1
+
+
+@pytest.mark.parametrize(
+    "kernel_case",
+    [
+        "scalar-laplace",
+        "target-derivative",
+        "source-derivative",
+        "directional-axis-source-derivative",
+        "directional-diagonal-source-derivative",
+        "directional-unequal-source-derivative",
+        "directional-magnitude-group-source-derivative",
+        "repeated-directional-source-derivative",
+        "mixed-source-target-derivative",
+        "mixed-directional-target-derivative",
+    ],
+)
+def test_arithmetic_orbit_reconstruction_matches_dense_oracle(kernel_case):
+    from sumpy.kernel import (
+        AxisSourceDerivative,
+        AxisTargetDerivative,
+        DirectionalSourceDerivative,
+        LaplaceKernel,
+    )
+
+    from volumential.expansion_wrangler_fpnd import (
+        _entry_has_odd_reconstruction_stabilizer,
+        _evaluate_arithmetic_orbit_entry,
+        _evaluate_scalar_arithmetic_entry,
+        _prepare_table_data_and_entry_map,
+    )
+
+    q_order = 3
+    dim = 3
+    symmetry_source_direction = None
+    if kernel_case == "scalar-laplace":
+        sumpy_kernel = LaplaceKernel(dim)
+    elif kernel_case == "target-derivative":
+        sumpy_kernel = AxisTargetDerivative(0, LaplaceKernel(dim))
+    elif kernel_case == "source-derivative":
+        sumpy_kernel = AxisSourceDerivative(0, LaplaceKernel(dim))
+    elif kernel_case == "directional-axis-source-derivative":
+        sumpy_kernel = DirectionalSourceDerivative(LaplaceKernel(dim), "dir_vec")
+        symmetry_source_direction = np.array([1.0, 0.0, 0.0])
+    elif kernel_case == "directional-diagonal-source-derivative":
+        sumpy_kernel = DirectionalSourceDerivative(LaplaceKernel(dim), "dir_vec")
+        symmetry_source_direction = np.array([1.0, 1.0, 0.0])
+    elif kernel_case == "directional-unequal-source-derivative":
+        sumpy_kernel = DirectionalSourceDerivative(LaplaceKernel(dim), "dir_vec")
+        symmetry_source_direction = np.array([1.0, 2.0, 0.0])
+    elif kernel_case == "directional-magnitude-group-source-derivative":
+        sumpy_kernel = DirectionalSourceDerivative(LaplaceKernel(dim), "dir_vec")
+        symmetry_source_direction = np.array([1.0, 2.0, 2.0])
+    elif kernel_case == "repeated-directional-source-derivative":
+        sumpy_kernel = DirectionalSourceDerivative(
+            DirectionalSourceDerivative(LaplaceKernel(dim), "dir_vec"),
+            "dir_vec",
+        )
+        symmetry_source_direction = np.array([1.0, 2.0, 0.0])
+    elif kernel_case == "mixed-source-target-derivative":
+        sumpy_kernel = AxisTargetDerivative(
+            0,
+            AxisSourceDerivative(1, LaplaceKernel(dim)),
+        )
+    else:
+        sumpy_kernel = AxisTargetDerivative(
+            0,
+            DirectionalSourceDerivative(LaplaceKernel(dim), "dir_vec"),
+        )
+        symmetry_source_direction = np.array([1.0, 2.0, 0.0])
+
+    table = npt.NearFieldInteractionTable(
+        quad_order=q_order,
+        dim=dim,
+        build_method="DuffyRadial",
+        kernel_func=npt.constant_one,
+        kernel_type="inv_power",
+        sumpy_kernel=sumpy_kernel,
+        derive_kernel_func=False,
+        symmetry_source_direction=symmetry_source_direction,
+        progress_bar=False,
+        precomputed_q_points=_precomputed_legendre_q_points(q_order, dim),
+    )
+    orbit_info = table._get_orbit_canonical_info()
+    entry_ids = np.asarray(orbit_info["entry_ids"], dtype=np.int64)
+    table.data.fill(np.nan)
+    table.data[entry_ids] = np.arange(1, len(entry_ids) + 1, dtype=table.dtype)
+    table.table_data_is_symmetry_reduced = True
+
+    (
+        table_data_combined,
+        _,
+        _,
+        table_entry_ids,
+        table_entry_scales,
+        reconstruction_info,
+    ) = _prepare_table_data_and_entry_map([table])
+
+    expected_entry_ids = entry_ids[table_entry_ids]
+    expected_scales = np.real(table_entry_scales).astype(np.int8)
+
+    dense_metadata_bytes = table_entry_ids.nbytes + table_entry_scales.nbytes
+    assert reconstruction_info["metadata_bytes"] < dense_metadata_bytes
+
+    if reconstruction_info["kind"] == "scalar-arithmetic-orbit":
+        assert kernel_case in {
+            "scalar-laplace",
+            "repeated-directional-source-derivative",
+        }
+        assert table_data_combined.shape[1] > len(entry_ids)
+        assert reconstruction_info["metadata_bytes"] < 2000
+
+        for full_entry_id in range(table.n_cases * table.n_pairs):
+            case_id = full_entry_id // table.n_pairs
+            pair_id = full_entry_id % table.n_pairs
+            source_mode_id = pair_id // table.n_q_points
+            target_point_id = pair_id % table.n_q_points
+            arithmetic_row = _evaluate_scalar_arithmetic_entry(
+                case_id,
+                source_mode_id,
+                target_point_id,
+                case_orbit_ranks=reconstruction_info["case_orbit_ranks"],
+                case_axis_perm=reconstruction_info["case_axis_perm"],
+                case_axis_sign=reconstruction_info["case_axis_sign"],
+                case_axis_group=reconstruction_info["case_axis_group"],
+                q_order=table.quad_order,
+                dim=table.dim,
+            )
+            dense_value = table.data[expected_entry_ids[full_entry_id]]
+            assert table_data_combined[0, arithmetic_row] == dense_value
+    else:
+        assert reconstruction_info["kind"] == "signed-arithmetic-orbit"
+        assert "lookup_keys" not in reconstruction_info
+        assert "sign_lookup_keys" not in reconstruction_info
+        assert reconstruction_info["metadata_bytes"] < 2000
+
+        dense_convention_mismatches = 0
+        reconstruction_maps = table._get_orbit_reconstruction_maps()
+        for full_entry_id in range(table.n_cases * table.n_pairs):
+            case_id = full_entry_id // table.n_pairs
+            pair_id = full_entry_id % table.n_pairs
+            source_mode_id = pair_id // table.n_q_points
+            target_point_id = pair_id % table.n_q_points
+            arithmetic_row, arithmetic_sign = _evaluate_arithmetic_orbit_entry(
+                case_id,
+                source_mode_id,
+                target_point_id,
+                case_orbit_ranks=reconstruction_info["case_orbit_ranks"],
+                case_axis_perm=reconstruction_info["case_axis_perm"],
+                case_axis_sign=reconstruction_info["case_axis_sign"],
+                case_axis_group=reconstruction_info["case_axis_group"],
+                axis_sign_power=reconstruction_info["axis_sign_power"],
+                axis_direction_signs=reconstruction_info["axis_direction_signs"],
+                direction_sign_axis=reconstruction_info["direction_sign_axis"],
+                q_order=table.quad_order,
+                dim=table.dim,
+            )
+            arithmetic_value = table_data_combined[0, arithmetic_row] * arithmetic_sign
+            dense_value = (
+                table.data[expected_entry_ids[full_entry_id]]
+                * expected_scales[full_entry_id]
+            )
+
+            if arithmetic_value != dense_value:
+                assert _entry_has_odd_reconstruction_stabilizer(
+                    case_id,
+                    source_mode_id,
+                    target_point_id,
+                    reconstruction_maps,
+                )
+                dense_convention_mismatches += 1
+
+        assert dense_convention_mismatches == reconstruction_info[
+            "sign_convention_conflict_count"
+        ]
+        if kernel_case in {
+            "target-derivative",
+            "source-derivative",
+            "directional-axis-source-derivative",
+            "directional-diagonal-source-derivative",
+            "directional-unequal-source-derivative",
+            "mixed-source-target-derivative",
+        }:
+            assert dense_convention_mismatches > 0
+
+
+def test_directional_source_derivative_without_direction_uses_generated_fallback():
+    from sumpy.kernel import DirectionalSourceDerivative, LaplaceKernel
+
+    from volumential.expansion_wrangler_fpnd import _prepare_table_data_and_entry_map
+
+    q_order = 2
+    dim = 3
+    table = npt.NearFieldInteractionTable(
+        quad_order=q_order,
+        dim=dim,
+        build_method="DuffyRadial",
+        kernel_func=npt.constant_one,
+        kernel_type="inv_power",
+        sumpy_kernel=DirectionalSourceDerivative(LaplaceKernel(dim), "dir_vec"),
+        derive_kernel_func=False,
+        progress_bar=False,
+        precomputed_q_points=_precomputed_legendre_q_points(q_order, dim),
+    )
+    orbit_info = table._get_orbit_canonical_info()
+    entry_ids = np.asarray(orbit_info["entry_ids"], dtype=np.int64)
+    table.data.fill(np.nan)
+    table.data[entry_ids] = np.arange(1, len(entry_ids) + 1, dtype=table.dtype)
+    table.table_data_is_symmetry_reduced = True
+
+    with pytest.warns(RuntimeWarning, match="generated-orbit fallback"):
+        _, _, _, _, _, reconstruction_info = _prepare_table_data_and_entry_map([table])
+
+    assert reconstruction_info["kind"] == "generated-orbit"
+    assert "lookup_keys" in reconstruction_info
+    assert "sign_lookup_keys" in reconstruction_info
+
+
+def test_arithmetic_orbit_reconstruction_q3_payload_diagnostic_row():
+    from sumpy.kernel import LaplaceKernel
+
+    from volumential.expansion_wrangler_fpnd import _prepare_table_data_and_entry_map
+
+    q_order = 3
+    dim = 3
+    table = npt.NearFieldInteractionTable(
+        quad_order=q_order,
+        dim=dim,
+        build_method="DuffyRadial",
+        kernel_func=npt.constant_one,
+        kernel_type="inv_power",
+        sumpy_kernel=LaplaceKernel(dim),
+        derive_kernel_func=False,
+        progress_bar=False,
+        precomputed_q_points=_precomputed_legendre_q_points(q_order, dim),
+    )
+    orbit_info = table._get_orbit_canonical_info()
+    entry_ids = np.asarray(orbit_info["entry_ids"], dtype=np.int64)
+    table.data.fill(np.nan)
+    table.data[entry_ids] = np.arange(1, len(entry_ids) + 1, dtype=table.dtype)
+    table.table_data_is_symmetry_reduced = True
+
+    table_data_combined, _, _, table_entry_ids, table_entry_scales, recon = (
+        _prepare_table_data_and_entry_map([table])
+    )
+
+    dense_metadata_bytes = table_entry_ids.nbytes + table_entry_scales.nbytes
+    assert recon["kind"] == "scalar-arithmetic-orbit"
+    assert table_data_combined.nbytes > len(entry_ids) * np.dtype(table.dtype).itemsize
+    assert dense_metadata_bytes == 1215972
+    assert recon["metadata_bytes"] < 2000
 
 
 def test_table_payload_serialization_excludes_nan_sentinels_for_reduced_tables():

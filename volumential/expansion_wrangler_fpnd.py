@@ -24,6 +24,7 @@ import json
 import logging
 import hashlib
 import math
+import warnings
 from collections import OrderedDict
 from dataclasses import dataclass
 
@@ -32,6 +33,7 @@ import numpy as np
 import pyopencl as cl
 import pyopencl.array
 from boxtree.pyfmmlib_integration import FMMLibExpansionWrangler
+from pytools import memoize_method
 from pytools.obj_array import new_1d as obj_array_1d
 from sumpy.array_context import PyOpenCLArrayContext
 from sumpy.fmm import (
@@ -57,6 +59,25 @@ from volumential.nearfield_potential_table import NearFieldInteractionTable
 
 
 logger = logging.getLogger(__name__)
+
+
+_ORBIT_RECONSTRUCTION_HASH_MULTIPLIER = 33
+
+
+def _encode_mode_axes(axes, q_order):
+    result = 0
+    for axis_value in axes:
+        result = result * int(q_order) + int(axis_value)
+    return int(result)
+
+
+def _decode_mode_axes(mode_id, q_order, dim):
+    axes = [0] * int(dim)
+    residual = int(mode_id)
+    for iaxis in range(int(dim) - 1, -1, -1):
+        axes[iaxis] = residual % int(q_order)
+        residual //= int(q_order)
+    return axes
 
 
 @dataclass(frozen=True)
@@ -688,8 +709,7 @@ def _extract_symmetry_source_direction(out_kernel, source_extra_kwargs, queue):
     return np.asarray(comps, dtype=np.float64)
 
 
-def _derive_source_kernels_from_target_kernels(target_kernels):
-    from pytools import single_valued
+def _derive_source_kernels_from_target_kernels(target_kernels, *, require_single=True):
     from sumpy.kernel import TargetTransformationRemover
 
     txr = TargetTransformationRemover()
@@ -697,9 +717,15 @@ def _derive_source_kernels_from_target_kernels(target_kernels):
     if not target_kernels:
         return None
 
+    source_kernels = tuple(txr(knl) for knl in target_kernels)
+    if not require_single:
+        return source_kernels
+
+    from pytools import single_valued
+
     try:
-        source_knl = single_valued(txr(knl) for knl in target_kernels)
-    except ValueError as exc:
+        source_knl = single_valued(source_kernels)
+    except (AssertionError, ValueError) as exc:
         raise ValueError(
             "target kernels must share a single source-side kernel "
             "after removing target derivatives"
@@ -720,6 +746,839 @@ def _target_kernels_include_source_derivatives(target_kernels):
             cur_knl = getattr(cur_knl, "inner_kernel", None)
 
     return False
+
+
+def _build_open_addressed_int_lookup(
+    keys, *, max_load_factor=0.5, target_max_probe_count=16
+):
+    keys = np.asarray(keys, dtype=np.int64)
+    if keys.ndim != 1:
+        raise ValueError("lookup keys must be one-dimensional")
+    if len(keys) == 0:
+        raise ValueError("lookup keys cannot be empty")
+    if np.any(keys < 0) or np.any(keys > np.iinfo(np.int32).max):
+        raise ValueError("lookup keys must fit in nonnegative int32")
+
+    size = 1
+    min_size = int(math.ceil(len(keys) / float(max_load_factor)))
+    while size < min_size:
+        size *= 2
+
+    while True:
+        lookup_keys = np.full(size, -1, dtype=np.int32)
+        lookup_values = np.full(size, -1, dtype=np.int32)
+        max_probe_count = 0
+        mask = size - 1
+
+        for value, key64 in enumerate(keys.tolist()):
+            key = int(key64)
+            slot = (key * _ORBIT_RECONSTRUCTION_HASH_MULTIPLIER) & mask
+            probe_count = 1
+            while lookup_keys[slot] != -1:
+                if int(lookup_keys[slot]) == key:
+                    raise ValueError("lookup keys must be unique")
+                slot = (slot + 1) & mask
+                probe_count += 1
+            lookup_keys[slot] = key
+            lookup_values[slot] = value
+            max_probe_count = max(max_probe_count, probe_count)
+
+        if max_probe_count <= target_max_probe_count or size >= 64 * len(keys):
+            return lookup_keys, lookup_values, max_probe_count
+
+        size *= 2
+
+
+def _build_sparse_sign_lookup(keys, values):
+    keys = np.asarray(keys, dtype=np.int64)
+    values = np.asarray(values, dtype=np.int8)
+    if keys.shape != values.shape:
+        raise ValueError("sign lookup keys and values must have the same shape")
+
+    if len(keys) == 0:
+        return (
+            np.full(1, -1, dtype=np.int32),
+            np.ones(1, dtype=np.int8),
+            1,
+        )
+
+    lookup_keys, lookup_values_i32, max_probe_count = _build_open_addressed_int_lookup(
+        keys,
+        max_load_factor=0.5,
+    )
+    lookup_values = np.ones(lookup_values_i32.shape, dtype=np.int8)
+    occupied = lookup_values_i32 >= 0
+    lookup_values[occupied] = values[lookup_values_i32[occupied]]
+    return lookup_keys, lookup_values, max_probe_count
+
+
+def _evaluate_generated_orbit_reconstruction(
+    transform_qpoint_map,
+    transform_case_map,
+    transform_signs,
+    *,
+    n_cases,
+    n_q_points,
+):
+    transform_qpoint_map = np.asarray(transform_qpoint_map, dtype=np.int64)
+    transform_case_map = np.asarray(transform_case_map, dtype=np.int64)
+    transform_signs = np.asarray(transform_signs, dtype=np.int8)
+
+    if transform_qpoint_map.ndim != 2:
+        raise ValueError("transform_qpoint_map must be two-dimensional")
+    if transform_case_map.ndim != 2:
+        raise ValueError("transform_case_map must be two-dimensional")
+    if transform_qpoint_map.shape[0] != transform_case_map.shape[0]:
+        raise ValueError("transform maps disagree on transform count")
+    if transform_signs.shape != (transform_qpoint_map.shape[0],):
+        raise ValueError("transform_signs disagrees with transform maps")
+
+    n_transforms = int(transform_qpoint_map.shape[0])
+    n_pairs = int(n_q_points) * int(n_q_points)
+    n_entries = int(n_cases) * n_pairs
+    transform_ids = np.arange(n_transforms, dtype=np.int64)
+    sign_tie_breakers = np.where(transform_signs > 0, 0, 1).astype(np.int64)
+
+    representative_entry_ids = np.empty(n_entries, dtype=np.int64)
+    representative_scales = np.empty(n_entries, dtype=np.int8)
+
+    for case_id in range(int(n_cases)):
+        transformed_cases = transform_case_map[:, case_id]
+        for source_mode_id in range(int(n_q_points)):
+            transformed_sources = transform_qpoint_map[:, source_mode_id]
+            row = case_id * n_pairs + source_mode_id * int(n_q_points)
+            for target_point_id in range(int(n_q_points)):
+                transformed_targets = transform_qpoint_map[:, target_point_id]
+                candidates = (
+                    transformed_cases * n_pairs
+                    + transformed_sources * int(n_q_points)
+                    + transformed_targets
+                )
+                # Prefer positive stabilizer signs, then transform id. This matches
+                # the dense oracle's convention that a representative scales itself
+                # by +1 even if an odd stabilizer transform also fixes the entry.
+                best_key = int(
+                    np.min(
+                        candidates * (2 * n_transforms)
+                        + sign_tie_breakers * n_transforms
+                        + transform_ids
+                    )
+                )
+                best_transform = best_key % n_transforms
+                entry_id = row + target_point_id
+                representative_entry_ids[entry_id] = best_key // (2 * n_transforms)
+                representative_scales[entry_id] = transform_signs[best_transform]
+
+    return representative_entry_ids, representative_scales
+
+
+_ARITHMETIC_RECONSTRUCTION_KINDS = {
+    "scalar-arithmetic-orbit",
+    "signed-arithmetic-orbit",
+}
+
+
+def _case_arithmetic_axis_descriptors(
+    case_vec,
+    *,
+    axis_groups=None,
+    direction_signs=None,
+):
+    case_vec = [int(val) for val in case_vec]
+    dim = len(case_vec)
+    if axis_groups is None:
+        axis_group_specs = (tuple(range(dim)),)
+    else:
+        axis_group_specs = axis_groups
+    axis_group_specs = tuple(
+        tuple(int(axis) for axis in group) for group in axis_group_specs
+    )
+    direction_signs = np.zeros(dim, dtype=np.int8) if direction_signs is None else (
+        np.asarray(direction_signs, dtype=np.int8)
+    )
+
+    axis_perm = np.empty(dim, dtype=np.uint8)
+    axis_signs = np.empty(dim, dtype=np.int8)
+    axis_group_ids = np.empty(dim, dtype=np.uint8)
+    next_runtime_group = 0
+
+    def sign_to_negative(value):
+        value = int(value)
+        if value > 0:
+            return -1
+        if value < 0:
+            return 1
+        return 0
+
+    active_group_specs = []
+    inactive_group_specs = []
+    for group in axis_group_specs:
+        out_axes = tuple(sorted(group))
+        active_direction_axes = [axis for axis in out_axes if direction_signs[axis] != 0]
+        if active_direction_axes:
+            if len(active_direction_axes) != len(out_axes):
+                raise ValueError("directional arithmetic groups cannot mix active axes")
+            active_group_specs.append(out_axes)
+        else:
+            inactive_group_specs.append(out_axes)
+
+    if active_group_specs:
+        from itertools import permutations, product
+
+        sorted_active_axes = tuple(
+            sorted(axis for group in active_group_specs for axis in group)
+        )
+        permutation_options = [tuple(permutations(group)) for group in active_group_specs]
+        best_key = None
+        best_axis_perm = None
+        best_axis_sign = None
+
+        for line_sign in (-1, 1):
+            for permuted_groups in product(*permutation_options):
+                candidate_axis_perm = {}
+                candidate_axis_sign = {}
+                for out_axes, permuted_axes in zip(
+                    active_group_specs,
+                    permuted_groups,
+                    strict=True,
+                ):
+                    for out_axis, in_axis in zip(out_axes, permuted_axes, strict=True):
+                        sign = (
+                            int(line_sign)
+                            * int(direction_signs[out_axis])
+                            * int(direction_signs[in_axis])
+                        )
+                        candidate_axis_perm[out_axis] = int(in_axis)
+                        candidate_axis_sign[out_axis] = int(sign)
+
+                key = (
+                    tuple(
+                        int(case_vec[candidate_axis_perm[axis]])
+                        * int(candidate_axis_sign[axis])
+                        for axis in sorted_active_axes
+                    ),
+                    tuple(candidate_axis_perm[axis] for axis in sorted_active_axes),
+                )
+                if best_key is None or key < best_key:
+                    best_key = key
+                    best_axis_perm = candidate_axis_perm
+                    best_axis_sign = candidate_axis_sign
+
+        for out_axis in sorted_active_axes:
+            axis_perm[out_axis] = best_axis_perm[out_axis]
+            axis_signs[out_axis] = best_axis_sign[out_axis]
+            # Avoid over-canonicalizing directional stabilizers: source/target
+            # flips in active directional groups are tied by one line sign.
+            axis_group_ids[out_axis] = next_runtime_group
+            next_runtime_group += 1
+
+    for out_axes in inactive_group_specs:
+        free_order = sorted(
+            out_axes,
+            key=lambda iaxis: (-abs(case_vec[iaxis]), iaxis),
+        )
+
+        last_abs = None
+        current_runtime_group = next_runtime_group - 1
+        for out_axis, in_axis in zip(out_axes, free_order, strict=True):
+            value = int(case_vec[in_axis])
+            abs_value = abs(value)
+            if last_abs != abs_value:
+                current_runtime_group += 1
+                last_abs = abs_value
+            axis_perm[out_axis] = in_axis
+            axis_signs[out_axis] = sign_to_negative(value)
+            axis_group_ids[out_axis] = current_runtime_group
+
+        next_runtime_group = current_runtime_group + 1
+
+    return axis_perm, axis_signs, axis_group_ids
+
+
+def _canonical_case_from_axis_descriptors(case_vec, axis_perm, axis_sign):
+    canonical = []
+    for in_axis, sign in zip(axis_perm, axis_sign, strict=True):
+        value = int(case_vec[int(in_axis)])
+        sign = int(sign)
+        canonical.append(0 if sign == 0 else value * sign)
+
+    return canonical
+
+
+def _kernel_axis_preserving_arithmetic_symmetry(table, reconstruction_maps):
+    dim = int(table.dim)
+    fixed_axes = set()
+    axis_sign_power = np.zeros(dim, dtype=np.uint8)
+    direction_signs = np.zeros(dim, dtype=np.int8)
+    direction_sign_axis = -1
+    direction_abs_group = np.full(dim, -1, dtype=np.int16)
+    direction_sign_power = np.uint8(0)
+    direction_vector = None
+    has_directional_source = False
+
+    kernel = table.integral_knl
+    while kernel is not None:
+        cls_name = kernel.__class__.__name__
+        if cls_name in {"AxisTargetDerivative", "AxisSourceDerivative"}:
+            axis = int(kernel.axis)
+            if axis < 0 or axis >= dim:
+                return None
+            fixed_axes.add(axis)
+            axis_sign_power[axis] ^= np.uint8(1)
+            kernel = kernel.inner_kernel
+            continue
+
+        if cls_name == "DirectionalSourceDerivative":
+            source_direction = getattr(kernel, "_volumential_source_direction", None)
+            if source_direction is None:
+                return None
+            source_direction = np.asarray(source_direction, dtype=np.float64).ravel()
+            if source_direction.shape != (dim,):
+                return None
+            direction_sign_power ^= np.uint8(1)
+            if has_directional_source:
+                if not np.allclose(source_direction, direction_vector):
+                    return None
+                kernel = kernel.inner_kernel
+                continue
+
+            axis_candidates = np.flatnonzero(
+                np.abs(source_direction) > 100 * np.finfo(np.float64).eps
+            )
+            if len(axis_candidates) == 0:
+                return None
+
+            active_axes = tuple(sorted(int(axis) for axis in axis_candidates))
+            active_axis_list = list(active_axes)
+            direction_signs[active_axis_list] = np.sign(
+                source_direction[active_axis_list]
+            ).astype(np.int8)
+            active_abs_groups = []
+            for axis in active_axes:
+                abs_value = abs(float(source_direction[axis]))
+                for group_id, (group_abs, group_axes) in enumerate(active_abs_groups):
+                    if np.isclose(abs_value, group_abs):
+                        group_axes.append(axis)
+                        direction_abs_group[axis] = group_id
+                        break
+                else:
+                    direction_abs_group[axis] = len(active_abs_groups)
+                    active_abs_groups.append((abs_value, [axis]))
+            direction_sign_axis = int(active_axes[0])
+            direction_vector = source_direction.copy()
+            has_directional_source = True
+            kernel = kernel.inner_kernel
+            continue
+
+        if hasattr(kernel, "inner_kernel"):
+            kernel = kernel.inner_kernel
+            continue
+
+        break
+
+    from itertools import permutations, product
+
+    if not has_directional_source:
+        free_axes = tuple(axis for axis in range(dim) if axis not in fixed_axes)
+        axis_groups = tuple((axis,) for axis in sorted(fixed_axes))
+        if free_axes:
+            axis_groups += (free_axes,)
+    else:
+        axis_groups = []
+        for group_id in sorted(
+            int(group_id) for group_id in np.unique(direction_abs_group) if group_id >= 0
+        ):
+            group_axes = tuple(
+                axis for axis in range(dim) if int(direction_abs_group[axis]) == group_id
+            )
+            fixed_group_axes = tuple(axis for axis in group_axes if axis in fixed_axes)
+            free_group_axes = tuple(axis for axis in group_axes if axis not in fixed_axes)
+            axis_groups.extend((axis,) for axis in fixed_group_axes)
+            if free_group_axes:
+                axis_groups.append(free_group_axes)
+
+        inactive_fixed_axes = tuple(
+            axis
+            for axis in sorted(fixed_axes)
+            if int(direction_abs_group[axis]) < 0
+        )
+        inactive_free_axes = tuple(
+            axis
+            for axis in range(dim)
+            if int(direction_abs_group[axis]) < 0 and axis not in fixed_axes
+        )
+        axis_groups.extend((axis,) for axis in inactive_fixed_axes)
+        if inactive_free_axes:
+            axis_groups.append(inactive_free_axes)
+        axis_groups = tuple(axis_groups)
+
+    expected = set()
+    for sign_tuple in product([-1, 1], repeat=dim):
+        for perm_tuple in permutations(range(dim)):
+            line_sign = 1
+            if not has_directional_source:
+                if any(int(perm_tuple[axis]) != axis for axis in fixed_axes):
+                    continue
+            else:
+                line_sign = None
+                valid = True
+                if any(int(perm_tuple[axis]) != axis for axis in fixed_axes):
+                    continue
+                for out_axis in range(dim):
+                    in_axis = int(perm_tuple[out_axis])
+                    out_dir = int(direction_signs[out_axis])
+                    in_dir = int(direction_signs[in_axis])
+                    if out_dir == 0 or in_dir == 0:
+                        if out_dir != in_dir:
+                            valid = False
+                            break
+                        continue
+                    if int(direction_abs_group[out_axis]) != int(
+                        direction_abs_group[in_axis]
+                    ):
+                        valid = False
+                        break
+
+                    candidate = int(sign_tuple[in_axis]) * out_dir * in_dir
+                    if line_sign is None:
+                        line_sign = candidate
+                    elif candidate != line_sign:
+                        valid = False
+                        break
+
+                if not valid or line_sign is None:
+                    continue
+
+            transform_sign = 1
+            for axis in range(dim):
+                if int(axis_sign_power[axis]):
+                    transform_sign *= int(sign_tuple[axis])
+            if int(direction_sign_power):
+                transform_sign *= int(line_sign)
+
+            expected.add(
+                (
+                    tuple(int(val) for val in sign_tuple),
+                    tuple(int(val) for val in perm_tuple),
+                    int(transform_sign),
+                )
+            )
+
+    signatures = reconstruction_maps.get("transform_signatures")
+    if signatures is None:
+        return None
+
+    actual = {
+        (
+            tuple(int(val) for val in sign_tuple),
+            tuple(int(val) for val in perm_tuple),
+            int(transform_sign),
+        )
+        for (sign_tuple, perm_tuple), transform_sign in zip(
+            signatures,
+            np.asarray(reconstruction_maps["transform_signs"], dtype=np.int8),
+            strict=True,
+        )
+    }
+
+    if actual != expected:
+        return None
+
+    if len(actual) != len(signatures):
+        return None
+
+    return {
+        "axis_groups": axis_groups,
+        "axis_sign_power": axis_sign_power,
+        "axis_direction_signs": direction_signs,
+        "direction_sign_axis": int(direction_sign_axis if direction_sign_power else -1),
+    }
+
+
+def _evaluate_arithmetic_orbit_entry(
+    case_id,
+    source_mode_id,
+    target_point_id,
+    *,
+    case_orbit_ranks,
+    case_axis_perm,
+    case_axis_sign,
+    case_axis_group,
+    axis_sign_power=None,
+    axis_direction_signs=None,
+    direction_sign_axis=-1,
+    q_order,
+    dim,
+):
+    if axis_sign_power is None:
+        axis_sign_power = np.zeros(int(dim), dtype=np.uint8)
+    if axis_direction_signs is None:
+        axis_direction_signs = np.zeros(int(dim), dtype=np.int8)
+
+    source_axes_raw = _decode_mode_axes(source_mode_id, q_order, dim)
+    target_axes_raw = _decode_mode_axes(target_point_id, q_order, dim)
+
+    source_axes = []
+    target_axes = []
+    groups = []
+    entry_sign = 1
+    for out_axis in range(int(dim)):
+        in_axis = int(case_axis_perm[case_id, out_axis])
+        axis_sign = int(case_axis_sign[case_id, out_axis])
+        source_axis = source_axes_raw[in_axis]
+        target_axis = target_axes_raw[in_axis]
+        applied_axis_sign = 1
+
+        if axis_sign < 0:
+            source_axis = int(q_order) - 1 - source_axis
+            target_axis = int(q_order) - 1 - target_axis
+            applied_axis_sign = -1
+        elif axis_sign == 0:
+            flipped_source = int(q_order) - 1 - source_axis
+            flipped_target = int(q_order) - 1 - target_axis
+            if (flipped_source, flipped_target) < (source_axis, target_axis):
+                source_axis = flipped_source
+                target_axis = flipped_target
+                applied_axis_sign = -1
+
+        if int(axis_sign_power[in_axis]):
+            entry_sign *= applied_axis_sign
+        if int(direction_sign_axis) == out_axis:
+            entry_sign *= (
+                applied_axis_sign
+                * int(axis_direction_signs[in_axis])
+                * int(axis_direction_signs[out_axis])
+            )
+
+        source_axes.append(source_axis)
+        target_axes.append(target_axis)
+        groups.append(int(case_axis_group[case_id, out_axis]))
+
+    def compare_swap(iaxis, jaxis):
+        if groups[iaxis] != groups[jaxis]:
+            return
+        if (source_axes[jaxis], target_axes[jaxis]) < (
+            source_axes[iaxis],
+            target_axes[iaxis],
+        ):
+            source_axes[iaxis], source_axes[jaxis] = (
+                source_axes[jaxis],
+                source_axes[iaxis],
+            )
+            target_axes[iaxis], target_axes[jaxis] = (
+                target_axes[jaxis],
+                target_axes[iaxis],
+            )
+
+    if int(dim) == 2:
+        compare_swap(0, 1)
+    elif int(dim) == 3:
+        compare_swap(0, 1)
+        compare_swap(1, 2)
+        compare_swap(0, 1)
+        compare_swap(0, 2)
+    else:
+        raise NotImplementedError("scalar arithmetic ORBIT supports dim 2 or 3")
+
+    canonical_source = _encode_mode_axes(source_axes, q_order)
+    canonical_target = _encode_mode_axes(target_axes, q_order)
+    n_q_points = int(q_order) ** int(dim)
+    entry_id = (
+        int(case_orbit_ranks[case_id]) * n_q_points * n_q_points
+        + canonical_source * n_q_points
+        + canonical_target
+    )
+    return int(entry_id), int(entry_sign)
+
+
+def _evaluate_scalar_arithmetic_entry(
+    case_id,
+    source_mode_id,
+    target_point_id,
+    *,
+    case_orbit_ranks,
+    case_axis_perm,
+    case_axis_sign,
+    case_axis_group,
+    q_order,
+    dim,
+):
+    entry_id, _ = _evaluate_arithmetic_orbit_entry(
+        case_id,
+        source_mode_id,
+        target_point_id,
+        case_orbit_ranks=case_orbit_ranks,
+        case_axis_perm=case_axis_perm,
+        case_axis_sign=case_axis_sign,
+        case_axis_group=case_axis_group,
+        q_order=q_order,
+        dim=dim,
+    )
+    return entry_id
+
+
+def _entry_has_odd_reconstruction_stabilizer(
+    case_id,
+    source_mode_id,
+    target_point_id,
+    reconstruction_maps,
+):
+    transform_case_map = np.asarray(reconstruction_maps["transform_case_map"])
+    transform_qpoint_map = np.asarray(reconstruction_maps["transform_qpoint_map"])
+    transform_signs = np.asarray(reconstruction_maps["transform_signs"])
+
+    for transform_id, transform_sign in enumerate(transform_signs):
+        if int(transform_sign) >= 0:
+            continue
+        if int(transform_case_map[transform_id, case_id]) != int(case_id):
+            continue
+        if int(transform_qpoint_map[transform_id, source_mode_id]) != int(
+            source_mode_id
+        ):
+            continue
+        if int(transform_qpoint_map[transform_id, target_point_id]) != int(
+            target_point_id
+        ):
+            continue
+        return True
+
+    return False
+
+
+def _build_arithmetic_orbit_reconstruction(
+    table,
+    table_entry_ids,
+    table_entry_scales,
+):
+    if not hasattr(table, "_get_orbit_reconstruction_maps"):
+        return None
+    if not bool(getattr(table, "table_data_is_symmetry_reduced", False)):
+        return None
+    if table.dim not in (2, 3):
+        return None
+
+    reconstruction_maps = table._get_orbit_reconstruction_maps()
+    arithmetic_symmetry = _kernel_axis_preserving_arithmetic_symmetry(
+        table,
+        reconstruction_maps,
+    )
+    if arithmetic_symmetry is None:
+        return None
+
+    axis_sign_power = arithmetic_symmetry["axis_sign_power"]
+    axis_groups = arithmetic_symmetry["axis_groups"]
+    axis_direction_signs = arithmetic_symmetry["axis_direction_signs"]
+    direction_sign_axis = arithmetic_symmetry["direction_sign_axis"]
+    if table.n_q_points > np.iinfo(np.uint16).max:
+        return None
+
+    case_vecs = np.asarray(table.interaction_case_vecs, dtype=np.int32)
+    canonical_case_ids = np.empty(table.n_cases, dtype=np.int32)
+    case_axis_perm = np.empty((table.n_cases, table.dim), dtype=np.uint8)
+    case_axis_sign = np.empty((table.n_cases, table.dim), dtype=np.int8)
+    case_axis_group = np.empty((table.n_cases, table.dim), dtype=np.uint8)
+
+    for case_id, case_vec in enumerate(case_vecs):
+        axis_perm, axis_sign, axis_group = _case_arithmetic_axis_descriptors(
+            case_vec,
+            axis_groups=axis_groups,
+            direction_signs=axis_direction_signs,
+        )
+        canonical_vec = _canonical_case_from_axis_descriptors(
+            case_vec,
+            axis_perm,
+            axis_sign,
+        )
+        canonical_case_ids[case_id] = int(
+            table.case_indices[table.case_encode(canonical_vec)]
+        )
+        case_axis_perm[case_id, :] = axis_perm
+        case_axis_sign[case_id, :] = axis_sign
+        case_axis_group[case_id, :] = axis_group
+
+    unique_canonical_case_ids = np.unique(canonical_case_ids)
+    if len(unique_canonical_case_ids) > np.iinfo(np.uint16).max:
+        return None
+
+    canonical_case_rank_by_id = {
+        int(case_id): rank for rank, case_id in enumerate(unique_canonical_case_ids)
+    }
+    case_orbit_ranks = np.empty(table.n_cases, dtype=np.uint16)
+
+    for case_id in range(table.n_cases):
+        case_orbit_ranks[case_id] = canonical_case_rank_by_id[
+            int(canonical_case_ids[case_id])
+        ]
+
+    n_arithmetic_entries = len(unique_canonical_case_ids) * table.n_pairs
+    layout_entry_ids = np.full(n_arithmetic_entries, -1, dtype=np.int64)
+    layout_entry_scales = np.ones(n_arithmetic_entries, dtype=np.int8)
+    sign_convention_conflict_count = 0
+    full_entry_count = table.n_cases * table.n_pairs
+    representative_entry_ids = np.asarray(
+        table._get_orbit_canonical_info()["entry_ids"], dtype=np.int64
+    )
+    table_entry_ids = np.asarray(table_entry_ids, dtype=np.int32)
+    expected_scales = np.real(np.asarray(table_entry_scales)).astype(np.int8)
+
+    for full_entry_id in range(full_entry_count):
+        case_id = full_entry_id // table.n_pairs
+        pair_id = full_entry_id % table.n_pairs
+        source_mode_id = pair_id // table.n_q_points
+        target_point_id = pair_id % table.n_q_points
+        arithmetic_row, arithmetic_sign = _evaluate_arithmetic_orbit_entry(
+            case_id,
+            source_mode_id,
+            target_point_id,
+            case_orbit_ranks=case_orbit_ranks,
+            case_axis_perm=case_axis_perm,
+            case_axis_sign=case_axis_sign,
+            case_axis_group=case_axis_group,
+            axis_sign_power=axis_sign_power,
+            axis_direction_signs=axis_direction_signs,
+            direction_sign_axis=direction_sign_axis,
+            q_order=table.quad_order,
+            dim=table.dim,
+        )
+        representative_full_id = int(
+            representative_entry_ids[table_entry_ids[full_entry_id]]
+        )
+        layout_scale = int(expected_scales[full_entry_id]) * int(arithmetic_sign)
+        existing = int(layout_entry_ids[arithmetic_row])
+        if existing >= 0 and existing != representative_full_id:
+            raise RuntimeError("arithmetic ORBIT row layout is inconsistent")
+        if existing >= 0 and int(layout_entry_scales[arithmetic_row]) != layout_scale:
+            if _entry_has_odd_reconstruction_stabilizer(
+                case_id,
+                source_mode_id,
+                target_point_id,
+                reconstruction_maps,
+            ):
+                sign_convention_conflict_count += 1
+                continue
+            raise RuntimeError("arithmetic ORBIT row sign layout is inconsistent")
+        layout_entry_ids[arithmetic_row] = representative_full_id
+        layout_entry_scales[arithmetic_row] = layout_scale
+
+    metadata_arrays = (
+        case_orbit_ranks,
+        case_axis_perm,
+        case_axis_sign,
+        case_axis_group,
+        axis_sign_power,
+    )
+    if direction_sign_axis >= 0:
+        metadata_arrays += (axis_direction_signs,)
+    kind = (
+        "signed-arithmetic-orbit"
+        if np.any(axis_sign_power) or direction_sign_axis >= 0
+        else "scalar-arithmetic-orbit"
+    )
+
+    return {
+        "kind": kind,
+        "case_orbit_ranks": case_orbit_ranks,
+        "case_axis_perm": case_axis_perm,
+        "case_axis_sign": case_axis_sign,
+        "case_axis_group": case_axis_group,
+        "axis_sign_power": axis_sign_power,
+        "axis_direction_signs": axis_direction_signs,
+        "direction_sign_axis": int(direction_sign_axis),
+        "layout_entry_ids": layout_entry_ids,
+        "layout_entry_scales": layout_entry_scales,
+        "n_case_orbits": int(len(unique_canonical_case_ids)),
+        "metadata_bytes": int(sum(arr.nbytes for arr in metadata_arrays)),
+        "unused_layout_entry_count": int(np.count_nonzero(layout_entry_ids < 0)),
+        "sign_convention_conflict_count": int(sign_convention_conflict_count),
+    }
+
+
+def _build_scalar_arithmetic_orbit_reconstruction(
+    table,
+    table_entry_ids,
+    table_entry_scales,
+):
+    return _build_arithmetic_orbit_reconstruction(
+        table,
+        table_entry_ids,
+        table_entry_scales,
+    )
+
+
+def _build_generated_orbit_reconstruction(table, table_entry_ids, table_entry_scales):
+    if not hasattr(table, "_get_orbit_reconstruction_maps"):
+        return None
+    if not bool(getattr(table, "table_data_is_symmetry_reduced", False)):
+        return None
+
+    orbit_info = table._get_orbit_canonical_info()
+    representative_entry_ids = np.asarray(orbit_info["entry_ids"], dtype=np.int64)
+    if len(representative_entry_ids) == 0:
+        return None
+
+    reconstruction_maps = table._get_orbit_reconstruction_maps()
+    transform_qpoint_map = np.asarray(
+        reconstruction_maps["transform_qpoint_map"], dtype=np.int32
+    )
+    transform_case_map = np.asarray(
+        reconstruction_maps["transform_case_map"], dtype=np.int32
+    )
+    transform_signs = np.asarray(reconstruction_maps["transform_signs"], dtype=np.int8)
+
+    generated_entry_ids, generated_scales = _evaluate_generated_orbit_reconstruction(
+        transform_qpoint_map,
+        transform_case_map,
+        transform_signs,
+        n_cases=table.n_cases,
+        n_q_points=table.n_q_points,
+    )
+
+    table_entry_ids = np.asarray(table_entry_ids, dtype=np.int32)
+    table_entry_scales = np.asarray(table_entry_scales)
+    expected_entry_ids = representative_entry_ids[table_entry_ids]
+    expected_scales = np.real(table_entry_scales).astype(np.int8)
+
+    if not np.array_equal(generated_entry_ids, expected_entry_ids):
+        raise RuntimeError("generated ORBIT representative ids disagree with dense map")
+
+    sign_correction_entry_ids = np.flatnonzero(generated_scales != expected_scales)
+    sign_corrections = (
+        expected_scales[sign_correction_entry_ids]
+        // generated_scales[sign_correction_entry_ids]
+    ).astype(np.int8)
+
+    lookup_keys, lookup_values, max_probe_count = _build_open_addressed_int_lookup(
+        representative_entry_ids
+    )
+    sign_lookup_keys, sign_lookup_values, sign_lookup_max_probe_count = (
+        _build_sparse_sign_lookup(sign_correction_entry_ids, sign_corrections)
+    )
+
+    metadata_arrays = (
+        transform_qpoint_map,
+        transform_case_map,
+        transform_signs,
+        lookup_keys,
+        lookup_values,
+        sign_lookup_keys,
+        sign_lookup_values,
+    )
+
+    return {
+        "kind": "generated-orbit",
+        "transform_qpoint_map": np.ascontiguousarray(transform_qpoint_map),
+        "transform_case_map": np.ascontiguousarray(transform_case_map),
+        "transform_signs": np.ascontiguousarray(transform_signs),
+        "lookup_keys": lookup_keys,
+        "lookup_values": lookup_values,
+        "lookup_max_probe_count": int(max_probe_count),
+        "sign_lookup_keys": sign_lookup_keys,
+        "sign_lookup_values": sign_lookup_values,
+        "sign_lookup_max_probe_count": int(sign_lookup_max_probe_count),
+        "sign_correction_count": int(len(sign_correction_entry_ids)),
+        "metadata_bytes": int(sum(arr.nbytes for arr in metadata_arrays)),
+        "representative_entry_ids": representative_entry_ids,
+    }
 
 
 def _prepare_table_data_and_entry_map(table_levels):
@@ -796,8 +1655,58 @@ def _prepare_table_data_and_entry_map(table_levels):
         table_entry_ids[kept_entry_ids] = np.arange(len(kept_entry_ids), dtype=np.int32)
         table_entry_scales = np.ones(n_full_entries, dtype=table0.data.dtype)
 
+    reconstruction_info = _build_scalar_arithmetic_orbit_reconstruction(
+        table0,
+        table_entry_ids,
+        table_entry_scales,
+    )
+    if reconstruction_info is None:
+        reconstruction_info = _build_generated_orbit_reconstruction(
+            table0,
+            table_entry_ids,
+            table_entry_scales,
+        )
+        if reconstruction_info is not None:
+            warnings.warn(
+                "using generated-orbit fallback for near-field table "
+                "reconstruction; this compact fallback is correct but not "
+                "GPU-ideal because it still uses transform scans and lookup "
+                f"tables (kernel={table0.integral_knl!r})",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+
+    if reconstruction_info is None:
+        reconstruction_info = {
+            "kind": "dense",
+            "metadata_bytes": int(table_entry_ids.nbytes + table_entry_scales.nbytes),
+        }
+
+    layout_entry_ids = reconstruction_info.get("layout_entry_ids", kept_entry_ids)
+    layout_entry_ids = np.asarray(layout_entry_ids, dtype=np.int64)
+    layout_entry_scales = reconstruction_info.get("layout_entry_scales")
+    if layout_entry_scales is None:
+        layout_entry_scales = np.ones(len(layout_entry_ids), dtype=table0.data.dtype)
+    else:
+        layout_entry_scales = np.asarray(layout_entry_scales, dtype=table0.data.dtype)
+    if layout_entry_scales.shape != layout_entry_ids.shape:
+        raise RuntimeError("reconstruction layout entry scales have incompatible shape")
+
+    used_layout_mask = layout_entry_ids >= 0
+    used_layout_entry_ids = layout_entry_ids[used_layout_mask]
+    used_layout_scales = layout_entry_scales[used_layout_mask]
+    if len(used_layout_entry_ids) == 0:
+        raise RuntimeError("near-field reconstruction layout contains no entries")
+    if not np.all(np.isfinite(table0.data[used_layout_entry_ids])):
+        raise RuntimeError("near-field reconstruction layout references missing data")
+    for table in table_levels[1:]:
+        if not np.all(np.isfinite(table.data[used_layout_entry_ids])):
+            raise RuntimeError(
+                "near-field levels disagree on reconstruction layout availability"
+            )
+
     table_data_combined = np.zeros(
-        (len(table_levels), len(kept_entry_ids)),
+        (len(table_levels), len(layout_entry_ids)),
         dtype=table0.data.dtype,
     )
     mode_nmlz_combined = np.zeros(
@@ -810,7 +1719,9 @@ def _prepare_table_data_and_entry_map(table_levels):
     )
 
     for lev, table in enumerate(table_levels):
-        table_data_combined[lev, :] = table.data[kept_entry_ids]
+        table_data_combined[lev, used_layout_mask] = (
+            table.data[used_layout_entry_ids] * used_layout_scales
+        )
         mode_nmlz_combined[lev, :] = table.mode_normalizers
         exterior_mode_nmlz_combined[lev, :] = table.kernel_exterior_normalizers
 
@@ -820,6 +1731,7 @@ def _prepare_table_data_and_entry_map(table_levels):
         exterior_mode_nmlz_combined,
         table_entry_ids,
         table_entry_scales,
+        reconstruction_info,
     )
 
 
@@ -850,10 +1762,17 @@ class FPNDSumpyTreeIndependentDataForWrangler(
         strength_usage=None,
         source_kernels=None,
     ):
-        if source_kernels is None and not _target_kernels_include_source_derivatives(
+        target_has_source_derivatives = _target_kernels_include_source_derivatives(
             target_kernels
-        ):
-            source_kernels = _derive_source_kernels_from_target_kernels(target_kernels)
+        )
+        expansion_source_kernels = source_kernels
+        if source_kernels is None:
+            expansion_source_kernels = _derive_source_kernels_from_target_kernels(
+                target_kernels,
+                require_single=not target_has_source_derivatives,
+            )
+            if not target_has_source_derivatives:
+                source_kernels = expansion_source_kernels
 
         queue = cl.CommandQueue(cl_context)
         actx = PyOpenCLArrayContext(queue)
@@ -872,6 +1791,7 @@ class FPNDSumpyTreeIndependentDataForWrangler(
             local_expansion_factory,
             **super_kwargs,
         )
+        self.expansion_source_kernels = expansion_source_kernels
 
     def _for_queue(self, queue):
         setup_queue = getattr(self._setup_actx, "queue", None)
@@ -922,6 +1842,28 @@ class FPNDSumpyTreeIndependentDataForWrangler(
             kernel_extra_kwargs=kernel_extra_kwargs,
             self_extra_kwargs=self_extra_kwargs,
             **kwargs,
+        )
+
+    @memoize_method
+    def p2m(self, tgt_order):
+        from sumpy.p2e import P2EFromSingleBox
+
+        return P2EFromSingleBox(
+            kernels=self.expansion_source_kernels,
+            expansion=self.multipole_expansion(tgt_order),
+            strength_usage=self.strength_usage,
+            name="p2m",
+        )
+
+    @memoize_method
+    def p2l(self, tgt_order):
+        from sumpy.p2e import P2EFromCSR
+
+        return P2EFromCSR(
+            kernels=self.expansion_source_kernels,
+            expansion=self.local_expansion(tgt_order),
+            strength_usage=self.strength_usage,
+            name="p2l",
         )
 
     def opencl_fft_app(self, shape, dtype, inverse):
@@ -1683,26 +2625,19 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         base = len(range(min(distinct_numbers), max(distinct_numbers) + 1))
         shift = -min(distinct_numbers)
 
-        case_indices_dev = cl.array.to_device(queue, table0.case_indices)
-        symmetry_maps = table0._get_online_symmetry_maps()
-        mode_qpoint_map_dev = cl.array.to_device(
-            queue, symmetry_maps["mode_qpoint_map"]
-        )
-        mode_case_map_dev = cl.array.to_device(queue, symmetry_maps["mode_case_map"])
-        mode_case_scale = symmetry_maps.get("mode_case_scale")
-        if mode_case_scale is None:
-            mode_case_scale = np.ones(
-                (table0.n_q_points, table0.n_cases),
-                dtype=np.int8,
-            )
-
         (
             table_data_combined,
             mode_nmlz_combined,
             exterior_mode_nmlz_combined,
             table_entry_ids,
             table_entry_scales,
+            reconstruction_info,
         ) = _prepare_table_data_and_entry_map(near_field_tables)
+
+        case_indices_dev = cl.array.to_device(queue, table0.case_indices)
+        reconstruction_kind = reconstruction_info["kind"]
+        dense_id_bytes = int(table_entry_ids.nbytes)
+        dense_scale_bytes = int(table_entry_scales.size * np.dtype(eval_dtype).itemsize)
 
         if table_data_combined.dtype != eval_dtype:
             table_data_combined = table_data_combined.astype(eval_dtype)
@@ -1710,34 +2645,156 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             mode_nmlz_combined = mode_nmlz_combined.astype(eval_dtype)
         if exterior_mode_nmlz_combined.dtype != eval_dtype:
             exterior_mode_nmlz_combined = exterior_mode_nmlz_combined.astype(eval_dtype)
-        if table_entry_scales.dtype != eval_dtype:
-            table_entry_scales = table_entry_scales.astype(eval_dtype)
-        if mode_case_scale.dtype != eval_dtype:
-            mode_case_scale = mode_case_scale.astype(eval_dtype)
+
+        if reconstruction_kind == "dense":
+            symmetry_maps = table0._get_online_symmetry_maps()
+            mode_qpoint_map_dev = cl.array.to_device(
+                queue, symmetry_maps["mode_qpoint_map"]
+            )
+            mode_case_map_dev = cl.array.to_device(queue, symmetry_maps["mode_case_map"])
+            mode_case_scale = symmetry_maps.get("mode_case_scale")
+            if mode_case_scale is None:
+                mode_case_scale = np.ones(
+                    (table0.n_q_points, table0.n_cases),
+                    dtype=np.int8,
+                )
+            if table_entry_scales.dtype != eval_dtype:
+                table_entry_scales = table_entry_scales.astype(eval_dtype)
+            if mode_case_scale.dtype != eval_dtype:
+                mode_case_scale = mode_case_scale.astype(eval_dtype)
 
         table_data_shapes = {
             "n_tables": len(near_field_tables),
+            "quad_order": table0.quad_order,
             "n_q_points": table0.n_q_points,
             "n_cases": table0.n_cases,
             "n_table_entries": table_data_combined.shape[1],
+            "reconstruction_kind": reconstruction_kind,
+        }
+        if reconstruction_kind in _ARITHMETIC_RECONSTRUCTION_KINDS:
+            table_data_shapes.update(
+                {
+                    "n_arithmetic_case_orbits": int(
+                        reconstruction_info["n_case_orbits"]
+                    ),
+                }
+            )
+        elif reconstruction_kind == "generated-orbit":
+            table_data_shapes.update(
+                {
+                    "n_reconstruction_transforms": reconstruction_info[
+                        "transform_signs"
+                    ].shape[0],
+                    "n_reconstruction_lookup_entries": reconstruction_info[
+                        "lookup_keys"
+                    ].shape[0],
+                    "n_reconstruction_lookup_probes": int(
+                        reconstruction_info["lookup_max_probe_count"]
+                    ),
+                    "n_reconstruction_sign_lookup_entries": reconstruction_info[
+                        "sign_lookup_keys"
+                    ].shape[0],
+                    "n_reconstruction_sign_lookup_probes": int(
+                        reconstruction_info["sign_lookup_max_probe_count"]
+                    ),
+                }
+            )
+
+        reconstruction_diagnostics = {
+            "kind": reconstruction_kind,
+            "representative_value_bytes": int(table_data_combined.nbytes),
+            "dense_entry_id_bytes": dense_id_bytes,
+            "dense_entry_scale_bytes": dense_scale_bytes,
+            "dense_metadata_bytes": int(dense_id_bytes + dense_scale_bytes),
+            "generated_metadata_bytes": int(reconstruction_info["metadata_bytes"]),
+            "generated_sign_correction_count": int(
+                reconstruction_info.get("sign_correction_count", 0)
+            ),
+            "sign_convention_conflict_count": int(
+                reconstruction_info.get("sign_convention_conflict_count", 0)
+            ),
+            "unused_arithmetic_layout_entries": int(
+                reconstruction_info.get("unused_layout_entry_count", 0)
+            ),
         }
 
         payload = {
             "base": base,
             "shift": shift,
             "case_indices_dev": case_indices_dev,
-            "mode_qpoint_map_dev": mode_qpoint_map_dev,
-            "mode_case_map_dev": mode_case_map_dev,
-            "mode_case_scale_dev": cl.array.to_device(queue, mode_case_scale),
             "table_data_dev": cl.array.to_device(queue, table_data_combined),
             "mode_nmlz_dev": cl.array.to_device(queue, mode_nmlz_combined),
             "exterior_mode_nmlz_dev": cl.array.to_device(
                 queue, exterior_mode_nmlz_combined
             ),
-            "table_entry_ids_dev": cl.array.to_device(queue, table_entry_ids),
-            "table_entry_scales_dev": cl.array.to_device(queue, table_entry_scales),
             "table_data_shapes": table_data_shapes,
+            "reconstruction_diagnostics": reconstruction_diagnostics,
         }
+
+        if reconstruction_kind in _ARITHMETIC_RECONSTRUCTION_KINDS:
+            payload.update(
+                {
+                    "arithmetic_case_orbit_ranks_dev": cl.array.to_device(
+                        queue, reconstruction_info["case_orbit_ranks"]
+                    ),
+                    "arithmetic_case_axis_perm_dev": cl.array.to_device(
+                        queue, reconstruction_info["case_axis_perm"]
+                    ),
+                    "arithmetic_case_axis_sign_dev": cl.array.to_device(
+                        queue, reconstruction_info["case_axis_sign"]
+                    ),
+                    "arithmetic_case_axis_group_dev": cl.array.to_device(
+                        queue, reconstruction_info["case_axis_group"]
+                    ),
+                    "arithmetic_axis_sign_power_dev": cl.array.to_device(
+                        queue, reconstruction_info["axis_sign_power"]
+                    ),
+                    "arithmetic_axis_direction_signs_dev": cl.array.to_device(
+                        queue, reconstruction_info["axis_direction_signs"]
+                    ),
+                    "arithmetic_direction_sign_axis": int(
+                        reconstruction_info["direction_sign_axis"]
+                    ),
+                }
+            )
+        elif reconstruction_kind == "generated-orbit":
+            payload.update(
+                {
+                    "reconstruction_qpoint_map_dev": cl.array.to_device(
+                        queue, reconstruction_info["transform_qpoint_map"]
+                    ),
+                    "reconstruction_case_map_dev": cl.array.to_device(
+                        queue, reconstruction_info["transform_case_map"]
+                    ),
+                    "reconstruction_signs_dev": cl.array.to_device(
+                        queue, reconstruction_info["transform_signs"]
+                    ),
+                    "reconstruction_lookup_keys_dev": cl.array.to_device(
+                        queue, reconstruction_info["lookup_keys"]
+                    ),
+                    "reconstruction_lookup_values_dev": cl.array.to_device(
+                        queue, reconstruction_info["lookup_values"]
+                    ),
+                    "reconstruction_sign_lookup_keys_dev": cl.array.to_device(
+                        queue, reconstruction_info["sign_lookup_keys"]
+                    ),
+                    "reconstruction_sign_lookup_values_dev": cl.array.to_device(
+                        queue, reconstruction_info["sign_lookup_values"]
+                    ),
+                }
+            )
+        else:
+            payload.update(
+                {
+                    "mode_qpoint_map_dev": mode_qpoint_map_dev,
+                    "mode_case_map_dev": mode_case_map_dev,
+                    "mode_case_scale_dev": cl.array.to_device(queue, mode_case_scale),
+                    "table_entry_ids_dev": cl.array.to_device(queue, table_entry_ids),
+                    "table_entry_scales_dev": cl.array.to_device(
+                        queue, table_entry_scales
+                    ),
+                }
+            )
         self._nearfield_device_payload_cache[cache_key] = payload
         while (
             len(self._nearfield_device_payload_cache)
@@ -1906,11 +2963,9 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         base = payload["base"]
         shift = payload["shift"]
         case_indices_dev = payload["case_indices_dev"]
-        mode_qpoint_map_dev = payload["mode_qpoint_map_dev"]
-        mode_case_map_dev = payload["mode_case_map_dev"]
-        mode_case_scale_dev = payload["mode_case_scale_dev"]
         table_data_shapes = payload["table_data_shapes"]
         assert table_data_shapes["n_q_points"] == len(table0.mode_normalizers)
+        reconstruction_kind = table_data_shapes.get("reconstruction_kind", "dense")
 
         from volumential.list1 import NearFieldFromCSR
 
@@ -1924,8 +2979,58 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         table_data_combined = payload["table_data_dev"]
         mode_nmlz_combined = payload["mode_nmlz_dev"]
         exterior_mode_nmlz_combined = payload["exterior_mode_nmlz_dev"]
-        table_entry_ids = payload["table_entry_ids_dev"]
-        table_entry_scales = payload["table_entry_scales_dev"]
+        if reconstruction_kind in _ARITHMETIC_RECONSTRUCTION_KINDS:
+            reconstruction_kwargs = {
+                "arithmetic_case_orbit_ranks": payload[
+                    "arithmetic_case_orbit_ranks_dev"
+                ],
+                "arithmetic_case_axis_perm": payload[
+                    "arithmetic_case_axis_perm_dev"
+                ],
+                "arithmetic_case_axis_sign": payload[
+                    "arithmetic_case_axis_sign_dev"
+                ],
+                "arithmetic_case_axis_group": payload[
+                    "arithmetic_case_axis_group_dev"
+                ],
+                "arithmetic_axis_sign_power": payload[
+                    "arithmetic_axis_sign_power_dev"
+                ],
+                "arithmetic_axis_direction_signs": payload[
+                    "arithmetic_axis_direction_signs_dev"
+                ],
+                "arithmetic_direction_sign_axis": payload[
+                    "arithmetic_direction_sign_axis"
+                ],
+            }
+        elif reconstruction_kind == "generated-orbit":
+            reconstruction_kwargs = {
+                "reconstruction_qpoint_map": payload[
+                    "reconstruction_qpoint_map_dev"
+                ],
+                "reconstruction_case_map": payload["reconstruction_case_map_dev"],
+                "reconstruction_signs": payload["reconstruction_signs_dev"],
+                "reconstruction_lookup_keys": payload[
+                    "reconstruction_lookup_keys_dev"
+                ],
+                "reconstruction_lookup_values": payload[
+                    "reconstruction_lookup_values_dev"
+                ],
+                "reconstruction_sign_lookup_keys": payload[
+                    "reconstruction_sign_lookup_keys_dev"
+                ],
+                "reconstruction_sign_lookup_values": payload[
+                    "reconstruction_sign_lookup_values_dev"
+                ],
+            }
+        else:
+            reconstruction_kwargs = {
+                "mode_qpoint_map": payload["mode_qpoint_map_dev"],
+                "mode_case_map": payload["mode_case_map_dev"],
+                "mode_case_scale": payload["mode_case_scale_dev"],
+                "table_entry_ids": payload["table_entry_ids_dev"],
+                "table_entry_scales": payload["table_entry_scales_dev"],
+            }
         particle_local_ids = _compute_box_local_ids(queue, self.tree, table0.n_q_points)
 
         _validate_table_box_particle_layout_cached(
@@ -1962,15 +3067,10 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             box_target_counts_nonchild=target_counts_nonchild,
             box_target_starts=self.tree.box_target_starts,
             case_indices=case_indices_dev,
-            mode_qpoint_map=mode_qpoint_map_dev,
-            mode_case_map=mode_case_map_dev,
-            mode_case_scale=mode_case_scale_dev,
             encoding_base=base,
             encoding_shift=shift,
             mode_nmlz_combined=mode_nmlz_combined,
             exterior_mode_nmlz_combined=exterior_mode_nmlz_combined,
-            table_entry_ids=table_entry_ids,
-            table_entry_scales=table_entry_scales,
             neighbor_source_boxes_starts=neighbor_source_boxes_starts,
             root_extent=self.tree.root_extent,
             neighbor_source_boxes_lists=neighbor_source_boxes_lists,
@@ -1981,6 +3081,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             target_point_ids=particle_local_ids,
             table_root_extent=table_root_extent,
             table_starting_level=table_starting_level,
+            **reconstruction_kwargs,
         )
 
         # print(near_field.get_kernel())
@@ -4519,12 +5620,11 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
         base = payload["base"]
         shift = payload["shift"]
         case_indices_dev = payload["case_indices_dev"]
-        mode_qpoint_map_dev = payload["mode_qpoint_map_dev"]
-        mode_case_map_dev = payload["mode_case_map_dev"]
         table_data_shapes = payload["table_data_shapes"]
         assert table_data_shapes["n_q_points"] == len(
             self.near_field_table[kname][0].mode_normalizers
         )
+        reconstruction_kind = table_data_shapes.get("reconstruction_kind", "dense")
 
         from volumential.list1 import NearFieldFromCSR
 
@@ -4538,8 +5638,58 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
         table_data_combined = payload["table_data_dev"]
         mode_nmlz_combined = payload["mode_nmlz_dev"]
         exterior_mode_nmlz_combined = payload["exterior_mode_nmlz_dev"]
-        table_entry_ids = payload["table_entry_ids_dev"]
-        table_entry_scales = payload["table_entry_scales_dev"]
+        if reconstruction_kind in _ARITHMETIC_RECONSTRUCTION_KINDS:
+            reconstruction_kwargs = {
+                "arithmetic_case_orbit_ranks": payload[
+                    "arithmetic_case_orbit_ranks_dev"
+                ],
+                "arithmetic_case_axis_perm": payload[
+                    "arithmetic_case_axis_perm_dev"
+                ],
+                "arithmetic_case_axis_sign": payload[
+                    "arithmetic_case_axis_sign_dev"
+                ],
+                "arithmetic_case_axis_group": payload[
+                    "arithmetic_case_axis_group_dev"
+                ],
+                "arithmetic_axis_sign_power": payload[
+                    "arithmetic_axis_sign_power_dev"
+                ],
+                "arithmetic_axis_direction_signs": payload[
+                    "arithmetic_axis_direction_signs_dev"
+                ],
+                "arithmetic_direction_sign_axis": payload[
+                    "arithmetic_direction_sign_axis"
+                ],
+            }
+        elif reconstruction_kind == "generated-orbit":
+            reconstruction_kwargs = {
+                "reconstruction_qpoint_map": payload[
+                    "reconstruction_qpoint_map_dev"
+                ],
+                "reconstruction_case_map": payload["reconstruction_case_map_dev"],
+                "reconstruction_signs": payload["reconstruction_signs_dev"],
+                "reconstruction_lookup_keys": payload[
+                    "reconstruction_lookup_keys_dev"
+                ],
+                "reconstruction_lookup_values": payload[
+                    "reconstruction_lookup_values_dev"
+                ],
+                "reconstruction_sign_lookup_keys": payload[
+                    "reconstruction_sign_lookup_keys_dev"
+                ],
+                "reconstruction_sign_lookup_values": payload[
+                    "reconstruction_sign_lookup_values_dev"
+                ],
+            }
+        else:
+            reconstruction_kwargs = {
+                "mode_qpoint_map": payload["mode_qpoint_map_dev"],
+                "mode_case_map": payload["mode_case_map_dev"],
+                "mode_case_scale": payload["mode_case_scale_dev"],
+                "table_entry_ids": payload["table_entry_ids_dev"],
+                "table_entry_scales": payload["table_entry_scales_dev"],
+            }
         particle_local_ids = _compute_box_local_ids(
             self.queue, self.tree, self.near_field_table[kname][0].n_q_points
         )
@@ -4575,15 +5725,10 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
             box_target_counts_nonchild=target_counts_nonchild,
             box_target_starts=self.tree.box_target_starts,
             case_indices=case_indices_dev,
-            mode_qpoint_map=mode_qpoint_map_dev,
-            mode_case_map=mode_case_map_dev,
-            mode_case_scale=payload["mode_case_scale_dev"],
             encoding_base=base,
             encoding_shift=shift,
             mode_nmlz_combined=mode_nmlz_combined,
             exterior_mode_nmlz_combined=exterior_mode_nmlz_combined,
-            table_entry_ids=table_entry_ids,
-            table_entry_scales=table_entry_scales,
             neighbor_source_boxes_starts=neighbor_source_boxes_starts,
             root_extent=self.tree.root_extent,
             neighbor_source_boxes_lists=neighbor_source_boxes_lists,
@@ -4594,6 +5739,7 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
             target_point_ids=particle_local_ids,
             table_root_extent=self.root_table_source_box_extent,
             table_starting_level=self.table_starting_level,
+            **reconstruction_kwargs,
         )
 
         if isinstance(out_pot, cl.array.Array):
@@ -4630,26 +5776,19 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
         base = len(range(min(distinct_numbers), max(distinct_numbers) + 1))
         shift = -min(distinct_numbers)
 
-        case_indices_dev = cl.array.to_device(queue, table0.case_indices)
-        symmetry_maps = table0._get_online_symmetry_maps()
-        mode_qpoint_map_dev = cl.array.to_device(
-            queue, symmetry_maps["mode_qpoint_map"]
-        )
-        mode_case_map_dev = cl.array.to_device(queue, symmetry_maps["mode_case_map"])
-        mode_case_scale = symmetry_maps.get("mode_case_scale")
-        if mode_case_scale is None:
-            mode_case_scale = np.ones(
-                (table0.n_q_points, table0.n_cases),
-                dtype=np.int8,
-            )
-
         (
             table_data_combined,
             mode_nmlz_combined,
             exterior_mode_nmlz_combined,
             table_entry_ids,
             table_entry_scales,
+            reconstruction_info,
         ) = _prepare_table_data_and_entry_map(near_field_tables)
+
+        case_indices_dev = cl.array.to_device(queue, table0.case_indices)
+        reconstruction_kind = reconstruction_info["kind"]
+        dense_id_bytes = int(table_entry_ids.nbytes)
+        dense_scale_bytes = int(table_entry_scales.size * np.dtype(eval_dtype).itemsize)
 
         if table_data_combined.dtype != eval_dtype:
             table_data_combined = table_data_combined.astype(eval_dtype)
@@ -4657,34 +5796,156 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
             mode_nmlz_combined = mode_nmlz_combined.astype(eval_dtype)
         if exterior_mode_nmlz_combined.dtype != eval_dtype:
             exterior_mode_nmlz_combined = exterior_mode_nmlz_combined.astype(eval_dtype)
-        if table_entry_scales.dtype != eval_dtype:
-            table_entry_scales = table_entry_scales.astype(eval_dtype)
-        if mode_case_scale.dtype != eval_dtype:
-            mode_case_scale = mode_case_scale.astype(eval_dtype)
+
+        if reconstruction_kind == "dense":
+            symmetry_maps = table0._get_online_symmetry_maps()
+            mode_qpoint_map_dev = cl.array.to_device(
+                queue, symmetry_maps["mode_qpoint_map"]
+            )
+            mode_case_map_dev = cl.array.to_device(queue, symmetry_maps["mode_case_map"])
+            mode_case_scale = symmetry_maps.get("mode_case_scale")
+            if mode_case_scale is None:
+                mode_case_scale = np.ones(
+                    (table0.n_q_points, table0.n_cases),
+                    dtype=np.int8,
+                )
+            if table_entry_scales.dtype != eval_dtype:
+                table_entry_scales = table_entry_scales.astype(eval_dtype)
+            if mode_case_scale.dtype != eval_dtype:
+                mode_case_scale = mode_case_scale.astype(eval_dtype)
 
         table_data_shapes = {
             "n_tables": len(near_field_tables),
+            "quad_order": table0.quad_order,
             "n_q_points": table0.n_q_points,
             "n_cases": table0.n_cases,
             "n_table_entries": table_data_combined.shape[1],
+            "reconstruction_kind": reconstruction_kind,
+        }
+        if reconstruction_kind in _ARITHMETIC_RECONSTRUCTION_KINDS:
+            table_data_shapes.update(
+                {
+                    "n_arithmetic_case_orbits": int(
+                        reconstruction_info["n_case_orbits"]
+                    ),
+                }
+            )
+        elif reconstruction_kind == "generated-orbit":
+            table_data_shapes.update(
+                {
+                    "n_reconstruction_transforms": reconstruction_info[
+                        "transform_signs"
+                    ].shape[0],
+                    "n_reconstruction_lookup_entries": reconstruction_info[
+                        "lookup_keys"
+                    ].shape[0],
+                    "n_reconstruction_lookup_probes": int(
+                        reconstruction_info["lookup_max_probe_count"]
+                    ),
+                    "n_reconstruction_sign_lookup_entries": reconstruction_info[
+                        "sign_lookup_keys"
+                    ].shape[0],
+                    "n_reconstruction_sign_lookup_probes": int(
+                        reconstruction_info["sign_lookup_max_probe_count"]
+                    ),
+                }
+            )
+
+        reconstruction_diagnostics = {
+            "kind": reconstruction_kind,
+            "representative_value_bytes": int(table_data_combined.nbytes),
+            "dense_entry_id_bytes": dense_id_bytes,
+            "dense_entry_scale_bytes": dense_scale_bytes,
+            "dense_metadata_bytes": int(dense_id_bytes + dense_scale_bytes),
+            "generated_metadata_bytes": int(reconstruction_info["metadata_bytes"]),
+            "generated_sign_correction_count": int(
+                reconstruction_info.get("sign_correction_count", 0)
+            ),
+            "sign_convention_conflict_count": int(
+                reconstruction_info.get("sign_convention_conflict_count", 0)
+            ),
+            "unused_arithmetic_layout_entries": int(
+                reconstruction_info.get("unused_layout_entry_count", 0)
+            ),
         }
 
         payload = {
             "base": base,
             "shift": shift,
             "case_indices_dev": case_indices_dev,
-            "mode_qpoint_map_dev": mode_qpoint_map_dev,
-            "mode_case_map_dev": mode_case_map_dev,
-            "mode_case_scale_dev": cl.array.to_device(queue, mode_case_scale),
             "table_data_dev": cl.array.to_device(queue, table_data_combined),
             "mode_nmlz_dev": cl.array.to_device(queue, mode_nmlz_combined),
             "exterior_mode_nmlz_dev": cl.array.to_device(
                 queue, exterior_mode_nmlz_combined
             ),
-            "table_entry_ids_dev": cl.array.to_device(queue, table_entry_ids),
-            "table_entry_scales_dev": cl.array.to_device(queue, table_entry_scales),
             "table_data_shapes": table_data_shapes,
+            "reconstruction_diagnostics": reconstruction_diagnostics,
         }
+
+        if reconstruction_kind in _ARITHMETIC_RECONSTRUCTION_KINDS:
+            payload.update(
+                {
+                    "arithmetic_case_orbit_ranks_dev": cl.array.to_device(
+                        queue, reconstruction_info["case_orbit_ranks"]
+                    ),
+                    "arithmetic_case_axis_perm_dev": cl.array.to_device(
+                        queue, reconstruction_info["case_axis_perm"]
+                    ),
+                    "arithmetic_case_axis_sign_dev": cl.array.to_device(
+                        queue, reconstruction_info["case_axis_sign"]
+                    ),
+                    "arithmetic_case_axis_group_dev": cl.array.to_device(
+                        queue, reconstruction_info["case_axis_group"]
+                    ),
+                    "arithmetic_axis_sign_power_dev": cl.array.to_device(
+                        queue, reconstruction_info["axis_sign_power"]
+                    ),
+                    "arithmetic_axis_direction_signs_dev": cl.array.to_device(
+                        queue, reconstruction_info["axis_direction_signs"]
+                    ),
+                    "arithmetic_direction_sign_axis": int(
+                        reconstruction_info["direction_sign_axis"]
+                    ),
+                }
+            )
+        elif reconstruction_kind == "generated-orbit":
+            payload.update(
+                {
+                    "reconstruction_qpoint_map_dev": cl.array.to_device(
+                        queue, reconstruction_info["transform_qpoint_map"]
+                    ),
+                    "reconstruction_case_map_dev": cl.array.to_device(
+                        queue, reconstruction_info["transform_case_map"]
+                    ),
+                    "reconstruction_signs_dev": cl.array.to_device(
+                        queue, reconstruction_info["transform_signs"]
+                    ),
+                    "reconstruction_lookup_keys_dev": cl.array.to_device(
+                        queue, reconstruction_info["lookup_keys"]
+                    ),
+                    "reconstruction_lookup_values_dev": cl.array.to_device(
+                        queue, reconstruction_info["lookup_values"]
+                    ),
+                    "reconstruction_sign_lookup_keys_dev": cl.array.to_device(
+                        queue, reconstruction_info["sign_lookup_keys"]
+                    ),
+                    "reconstruction_sign_lookup_values_dev": cl.array.to_device(
+                        queue, reconstruction_info["sign_lookup_values"]
+                    ),
+                }
+            )
+        else:
+            payload.update(
+                {
+                    "mode_qpoint_map_dev": mode_qpoint_map_dev,
+                    "mode_case_map_dev": mode_case_map_dev,
+                    "mode_case_scale_dev": cl.array.to_device(queue, mode_case_scale),
+                    "table_entry_ids_dev": cl.array.to_device(queue, table_entry_ids),
+                    "table_entry_scales_dev": cl.array.to_device(
+                        queue, table_entry_scales
+                    ),
+                }
+            )
         self._nearfield_device_payload_cache[cache_key] = payload
         while (
             len(self._nearfield_device_payload_cache)
