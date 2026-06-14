@@ -619,9 +619,9 @@ class NearFieldFromCSR(NearFieldEvalBase):
 
             if self.dim == 2:
                 decode_code = """
-                        <> src_raw_0 = source_mode_id / quad_order
+                        <> src_raw_0 = source_mode_id // quad_order
                         <> src_raw_1 = source_mode_id % quad_order
-                        <> tgt_raw_0 = target_point_id / quad_order
+                        <> tgt_raw_0 = target_point_id // quad_order
                         <> tgt_raw_1 = target_point_id % quad_order
                 """
                 encode_source = "src0_s * quad_order + src1_s"
@@ -637,11 +637,11 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 """
             elif self.dim == 3:
                 decode_code = """
-                        <> src_raw_0 = source_mode_id / (quad_order * quad_order)
-                        <> src_raw_1 = (source_mode_id / quad_order) % quad_order
+                        <> src_raw_0 = source_mode_id // (quad_order * quad_order)
+                        <> src_raw_1 = (source_mode_id // quad_order) % quad_order
                         <> src_raw_2 = source_mode_id % quad_order
-                        <> tgt_raw_0 = target_point_id / (quad_order * quad_order)
-                        <> tgt_raw_1 = (target_point_id / quad_order) % quad_order
+                        <> tgt_raw_0 = target_point_id // (quad_order * quad_order)
+                        <> tgt_raw_1 = (target_point_id // quad_order) % quad_order
                         <> tgt_raw_2 = target_point_id % quad_order
                 """
                 encode_source = (
@@ -778,7 +778,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
                                 best_reconstruction_key % n_reconstruction_transforms
                         <> representative_entry_id = \
                                 best_reconstruction_key \
-                                / (2 * n_reconstruction_transforms)
+                                // (2 * n_reconstruction_transforms)
                         <> lookup_start = (representative_entry_id * 33) \
                                 % n_reconstruction_lookup_entries
                         <> lookup_match_count = sum((probe),
