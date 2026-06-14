@@ -10,16 +10,28 @@ Orbit canonicalization
 - A full table entry is mapped to a canonical representative entry.
 - The dense compatibility path uses an index map from full entry IDs to
   canonical entry IDs.
-- Generated ORBIT reconstruction avoids sending that full-entry map to the GPU
-  for symmetry-reduced tables. The List 1 evaluator instead scans the compact
-  signed-permutation descriptor, computes the representative full-entry ID in
-  registers, then resolves it through a small representative hash table.
+- Scalar arithmetic ORBIT reconstruction avoids sending that full-entry map to
+  the GPU for full-symmetry scalar tables. The List 1 evaluator canonicalizes
+  ``(source_mode, target_point, case)`` with packed per-case descriptors and
+  computes the target-fastest table row directly.
 
-Generated online reconstruction
--------------------------------
+Online reconstruction modes
+---------------------------
 
-The generated path is the intended online representation for
-symmetry-reduced tables.
+Scalar full-symmetry kernels use the arithmetic path.
+
+- ``case_orbit_ranks`` is stored as ``uint16[n_cases]``.
+- ``case_axis_perm``, ``case_axis_sign``, and ``case_axis_group`` are packed as
+  ``uint8``/``int8`` arrays and passed as read-only List 1 kernel inputs.
+- The evaluator decodes tensor-product source/target indices, applies the
+  per-case signed permutation, resolves zero-axis flips locally, and uses a
+  fixed compare-exchange sorting network for equal-absolute-value case axes.
+- The table layout is ``(canonical_case_orbit, canonical_source,
+  canonical_target)`` with target index fastest. This intentionally stores some
+  unused scalar layout rows to remove representative hash lookups and keep GPU
+  table accesses arithmetic and coalescing-friendly.
+
+Constrained or sign-changing kernels use the generated descriptor fallback.
 
 - ``transform_qpoint_map[transform, qpoint]`` and
   ``transform_case_map[transform, case]`` encode the allowed signed
@@ -43,9 +55,11 @@ used.
 
 For scalar 3D Laplace at ``q=3``, the dense online reconstruction maps contain
 ``101331`` full entries and occupy ``1215972`` bytes as ``int32`` IDs plus
-``float64`` scales. Generated reconstruction keeps the representative values at
-``2510 * 8`` bytes and reduces reconstruction metadata to less than ``100000``
-bytes in the CPU descriptor test.
+``float64`` scales. Scalar arithmetic reconstruction reduces transferred
+metadata to less than ``2000`` bytes in the CPU descriptor test. It uses a
+canonical-case table layout rather than the minimal representative-only layout,
+so value bytes increase relative to ``2510`` representatives while eliminating
+the transform scan and representative hash lookup in the scalar online kernel.
 
 Derivative kernels
 ------------------

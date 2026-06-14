@@ -133,13 +133,20 @@ class NearFieldEvalBase(KernelCacheWrapper):
         self.n_reconstruction_sign_lookup_probes = table_data_shapes.get(
             "n_reconstruction_sign_lookup_probes", 0
         )
+        self.n_arithmetic_case_orbits = table_data_shapes.get(
+            "n_arithmetic_case_orbits", 0
+        )
         self.potential_kind = potential_kind
 
         assert np.isreal(self.n_tables)
         assert np.isreal(self.n_q_points)
         assert np.isreal(self.n_table_entries)
         assert np.isreal(self.n_cases)
-        assert self.reconstruction_kind in {"dense", "generated-orbit"}
+        assert self.reconstruction_kind in {
+            "dense",
+            "generated-orbit",
+            "scalar-arithmetic-orbit",
+        }
 
         self.options = options
         self.name = name or self.default_name
@@ -147,6 +154,12 @@ class NearFieldEvalBase(KernelCacheWrapper):
         self.extra_kwargs = kwargs
         self.kname = self.integral_kernel.__repr__()
         self.dim = self.integral_kernel.dim
+        self.quad_order = int(
+            table_data_shapes.get(
+                "quad_order",
+                round(float(self.n_q_points) ** (1.0 / float(self.dim))),
+            )
+        )
 
         if "case_encoding_bias" not in self.extra_kwargs:
             self.extra_kwargs["case_encoding_bias"] = CASE_ENCODING_BIAS_DEFAULT
@@ -587,7 +600,159 @@ class NearFieldFromCSR(NearFieldEvalBase):
         else:
             potential_dtype = np.float64
 
-        if self.reconstruction_kind == "generated-orbit":
+        if self.reconstruction_kind == "scalar-arithmetic-orbit":
+            reconstruction_domains = []
+
+            def select_axis(prefix, perm_name):
+                if self.dim == 2:
+                    return (
+                        f"({prefix}_raw_0 if {perm_name} == 0 "
+                        f"else {prefix}_raw_1)"
+                    )
+                if self.dim == 3:
+                    return (
+                        f"({prefix}_raw_0 if {perm_name} == 0 "
+                        f"else ({prefix}_raw_1 if {perm_name} == 1 "
+                        f"else {prefix}_raw_2))"
+                    )
+                raise NotImplementedError("arithmetic ORBIT supports dim 2 or 3")
+
+            if self.dim == 2:
+                decode_code = """
+                        <> src_raw_0 = source_mode_id / quad_order
+                        <> src_raw_1 = source_mode_id % quad_order
+                        <> tgt_raw_0 = target_point_id / quad_order
+                        <> tgt_raw_1 = target_point_id % quad_order
+                """
+                encode_source = "src0_s * quad_order + src1_s"
+                encode_target = "tgt0_s * quad_order + tgt1_s"
+                sort_code = """
+                        <> swap01 = (1 if group0 == group1
+                            and (src1 < src0 or (src1 == src0 and tgt1 < tgt0))
+                            else 0)
+                        <> src0_s = (src1 if swap01 else src0)
+                        <> tgt0_s = (tgt1 if swap01 else tgt0)
+                        <> src1_s = (src0 if swap01 else src1)
+                        <> tgt1_s = (tgt0 if swap01 else tgt1)
+                """
+            elif self.dim == 3:
+                decode_code = """
+                        <> src_raw_0 = source_mode_id / (quad_order * quad_order)
+                        <> src_raw_1 = (source_mode_id / quad_order) % quad_order
+                        <> src_raw_2 = source_mode_id % quad_order
+                        <> tgt_raw_0 = target_point_id / (quad_order * quad_order)
+                        <> tgt_raw_1 = (target_point_id / quad_order) % quad_order
+                        <> tgt_raw_2 = target_point_id % quad_order
+                """
+                encode_source = (
+                    "src0_s * (quad_order * quad_order) + src1_s * quad_order + src2_s"
+                )
+                encode_target = (
+                    "tgt0_s * (quad_order * quad_order) + tgt1_s * quad_order + tgt2_s"
+                )
+                sort_code = """
+                        <> swap01_a = (1 if group0 == group1
+                            and (src1 < src0 or (src1 == src0 and tgt1 < tgt0))
+                            else 0)
+                        <> src0_a = (src1 if swap01_a else src0)
+                        <> tgt0_a = (tgt1 if swap01_a else tgt0)
+                        <> src1_a = (src0 if swap01_a else src1)
+                        <> tgt1_a = (tgt0 if swap01_a else tgt1)
+                        <> src2_a = src2
+                        <> tgt2_a = tgt2
+
+                        <> swap12_b = (1 if group1 == group2
+                            and (src2_a < src1_a
+                                or (src2_a == src1_a and tgt2_a < tgt1_a))
+                            else 0)
+                        <> src0_b = src0_a
+                        <> tgt0_b = tgt0_a
+                        <> src1_b = (src2_a if swap12_b else src1_a)
+                        <> tgt1_b = (tgt2_a if swap12_b else tgt1_a)
+                        <> src2_b = (src1_a if swap12_b else src2_a)
+                        <> tgt2_b = (tgt1_a if swap12_b else tgt2_a)
+
+                        <> swap01_c = (1 if group0 == group1
+                            and (src1_b < src0_b
+                                or (src1_b == src0_b and tgt1_b < tgt0_b))
+                            else 0)
+                        <> src0_s = (src1_b if swap01_c else src0_b)
+                        <> tgt0_s = (tgt1_b if swap01_c else tgt0_b)
+                        <> src1_s = (src0_b if swap01_c else src1_b)
+                        <> tgt1_s = (tgt0_b if swap01_c else tgt1_b)
+                        <> src2_s = src2_b
+                        <> tgt2_s = tgt2_b
+                """
+            else:
+                raise NotImplementedError("arithmetic ORBIT supports dim 2 or 3")
+
+            axis_code = ""
+            for iaxis in range(self.dim):
+                perm_name = f"perm{iaxis}"
+                sign_name = f"axis_sign{iaxis}"
+                axis_code += f"""
+                        <> {perm_name} = arithmetic_case_axis_perm[case_id, {iaxis}]
+                        <> {sign_name} = arithmetic_case_axis_sign[case_id, {iaxis}]
+                        <> group{iaxis} = arithmetic_case_axis_group[case_id, {iaxis}]
+                        <> src{iaxis}_raw_perm = {select_axis("src", perm_name)}
+                        <> tgt{iaxis}_raw_perm = {select_axis("tgt", perm_name)}
+                        <> src{iaxis}_fixed = (quad_order - 1 - src{iaxis}_raw_perm
+                            if {sign_name} < 0 else src{iaxis}_raw_perm)
+                        <> tgt{iaxis}_fixed = (quad_order - 1 - tgt{iaxis}_raw_perm
+                            if {sign_name} < 0 else tgt{iaxis}_raw_perm)
+                        <> src{iaxis}_flip = quad_order - 1 - src{iaxis}_raw_perm
+                        <> tgt{iaxis}_flip = quad_order - 1 - tgt{iaxis}_raw_perm
+                        <> zero_flip{iaxis} = (1 if {sign_name} == 0
+                            and (src{iaxis}_flip < src{iaxis}_raw_perm
+                                or (src{iaxis}_flip == src{iaxis}_raw_perm
+                                    and tgt{iaxis}_flip < tgt{iaxis}_raw_perm))
+                            else 0)
+                        <> src{iaxis} = (src{iaxis}_flip
+                            if zero_flip{iaxis} else src{iaxis}_fixed)
+                        <> tgt{iaxis} = (tgt{iaxis}_flip
+                            if zero_flip{iaxis} else tgt{iaxis}_fixed)
+                """
+
+            reconstruction_code = f"""
+                        {decode_code}
+                        {axis_code}
+                        {sort_code}
+                        <> canonical_source_id = {encode_source}
+                        <> canonical_target_id = {encode_target}
+                        <> arithmetic_case_rank = arithmetic_case_orbit_ranks[case_id]
+                        <> entry_id = arithmetic_case_rank * (n_q_points * n_q_points) \
+                                + canonical_source_id * n_q_points + canonical_target_id
+                        <> entry_sign = 1
+                        <> has_entry = 1
+            """
+            reconstruction_args = [
+                loopy.GlobalArg(
+                    "arithmetic_case_orbit_ranks",
+                    np.uint16,
+                    "n_cases",
+                    is_input=True,
+                ),
+                loopy.GlobalArg(
+                    "arithmetic_case_axis_perm",
+                    np.uint8,
+                    "n_cases, dim",
+                    is_input=True,
+                ),
+                loopy.GlobalArg(
+                    "arithmetic_case_axis_sign",
+                    np.int8,
+                    "n_cases, dim",
+                    is_input=True,
+                ),
+                loopy.GlobalArg(
+                    "arithmetic_case_axis_group",
+                    np.uint8,
+                    "n_cases, dim",
+                    is_input=True,
+                ),
+            ]
+            reconstruction_value_arg_names = ", quad_order, n_arithmetic_case_orbits"
+        elif self.reconstruction_kind == "generated-orbit":
             reconstruction_domains = [
                 "{ [ tr ] : 0 <= tr < n_reconstruction_transforms }",
                 "{ [ probe ] : 0 <= probe < n_reconstruction_lookup_probes }",
@@ -899,6 +1064,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
             % self.n_reconstruction_sign_lookup_entries,
             "n_reconstruction_sign_lookup_probes=%d"
             % self.n_reconstruction_sign_lookup_probes,
+            "n_arithmetic_case_orbits=%d" % self.n_arithmetic_case_orbits,
             "infer_scaling=" + str(self.extra_kwargs["infer_kernel_scaling"]),
             "case_encoding_bias=" + repr(self.extra_kwargs["case_encoding_bias"]),
             "scaling_policy=" + self.codegen_compute_scaling(),
@@ -926,7 +1092,24 @@ class NearFieldFromCSR(NearFieldEvalBase):
         encoding_shift = kwargs.pop("encoding_shift")
         mode_nmlz_combined = kwargs.pop("mode_nmlz_combined")
         exterior_mode_nmlz_combined = kwargs.pop("exterior_mode_nmlz_combined")
-        if self.reconstruction_kind == "generated-orbit":
+        if self.reconstruction_kind == "scalar-arithmetic-orbit":
+            reconstruction_kwargs = {
+                "arithmetic_case_orbit_ranks": kwargs.pop(
+                    "arithmetic_case_orbit_ranks"
+                ),
+                "arithmetic_case_axis_perm": kwargs.pop(
+                    "arithmetic_case_axis_perm"
+                ),
+                "arithmetic_case_axis_sign": kwargs.pop(
+                    "arithmetic_case_axis_sign"
+                ),
+                "arithmetic_case_axis_group": kwargs.pop(
+                    "arithmetic_case_axis_group"
+                ),
+                "quad_order": self.quad_order,
+                "n_arithmetic_case_orbits": self.n_arithmetic_case_orbits,
+            }
+        elif self.reconstruction_kind == "generated-orbit":
             reconstruction_kwargs = {
                 "reconstruction_qpoint_map": kwargs.pop("reconstruction_qpoint_map"),
                 "reconstruction_case_map": kwargs.pop("reconstruction_case_map"),

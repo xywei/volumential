@@ -62,6 +62,22 @@ logger = logging.getLogger(__name__)
 _ORBIT_RECONSTRUCTION_HASH_MULTIPLIER = 33
 
 
+def _encode_mode_axes(axes, q_order):
+    result = 0
+    for axis_value in axes:
+        result = result * int(q_order) + int(axis_value)
+    return int(result)
+
+
+def _decode_mode_axes(mode_id, q_order, dim):
+    axes = [0] * int(dim)
+    residual = int(mode_id)
+    for iaxis in range(int(dim) - 1, -1, -1):
+        axes[iaxis] = residual % int(q_order)
+        residual //= int(q_order)
+    return axes
+
+
 @dataclass(frozen=True)
 class HelmholtzSplitCacheAccounting:
     split_enabled: bool
@@ -849,6 +865,212 @@ def _evaluate_generated_orbit_reconstruction(
     return representative_entry_ids, representative_scales
 
 
+def _case_arithmetic_axis_descriptors(case_vec):
+    case_vec = [int(val) for val in case_vec]
+    order = sorted(
+        range(len(case_vec)), key=lambda iaxis: (-abs(case_vec[iaxis]), iaxis)
+    )
+
+    axis_signs = []
+    axis_groups = []
+    last_abs = None
+    group_id = -1
+    for iaxis in order:
+        value = int(case_vec[iaxis])
+        abs_value = abs(value)
+        if last_abs != abs_value:
+            group_id += 1
+            last_abs = abs_value
+        axis_groups.append(group_id)
+        if value > 0:
+            axis_signs.append(-1)
+        elif value < 0:
+            axis_signs.append(1)
+        else:
+            axis_signs.append(0)
+
+    return order, axis_signs, axis_groups
+
+
+def _evaluate_scalar_arithmetic_entry(
+    case_id,
+    source_mode_id,
+    target_point_id,
+    *,
+    case_orbit_ranks,
+    case_axis_perm,
+    case_axis_sign,
+    case_axis_group,
+    q_order,
+    dim,
+):
+    source_axes_raw = _decode_mode_axes(source_mode_id, q_order, dim)
+    target_axes_raw = _decode_mode_axes(target_point_id, q_order, dim)
+
+    source_axes = []
+    target_axes = []
+    groups = []
+    for out_axis in range(int(dim)):
+        in_axis = int(case_axis_perm[case_id, out_axis])
+        axis_sign = int(case_axis_sign[case_id, out_axis])
+        source_axis = source_axes_raw[in_axis]
+        target_axis = target_axes_raw[in_axis]
+
+        if axis_sign < 0:
+            source_axis = int(q_order) - 1 - source_axis
+            target_axis = int(q_order) - 1 - target_axis
+        elif axis_sign == 0:
+            flipped_source = int(q_order) - 1 - source_axis
+            flipped_target = int(q_order) - 1 - target_axis
+            if (flipped_source, flipped_target) < (source_axis, target_axis):
+                source_axis = flipped_source
+                target_axis = flipped_target
+
+        source_axes.append(source_axis)
+        target_axes.append(target_axis)
+        groups.append(int(case_axis_group[case_id, out_axis]))
+
+    def compare_swap(iaxis, jaxis):
+        if groups[iaxis] != groups[jaxis]:
+            return
+        if (source_axes[jaxis], target_axes[jaxis]) < (
+            source_axes[iaxis],
+            target_axes[iaxis],
+        ):
+            source_axes[iaxis], source_axes[jaxis] = (
+                source_axes[jaxis],
+                source_axes[iaxis],
+            )
+            target_axes[iaxis], target_axes[jaxis] = (
+                target_axes[jaxis],
+                target_axes[iaxis],
+            )
+
+    if int(dim) == 2:
+        compare_swap(0, 1)
+    elif int(dim) == 3:
+        compare_swap(0, 1)
+        compare_swap(1, 2)
+        compare_swap(0, 1)
+    else:
+        raise NotImplementedError("scalar arithmetic ORBIT supports dim 2 or 3")
+
+    canonical_source = _encode_mode_axes(source_axes, q_order)
+    canonical_target = _encode_mode_axes(target_axes, q_order)
+    n_q_points = int(q_order) ** int(dim)
+    return (
+        int(case_orbit_ranks[case_id]) * n_q_points * n_q_points
+        + canonical_source * n_q_points
+        + canonical_target
+    )
+
+
+def _build_scalar_arithmetic_orbit_reconstruction(
+    table,
+    table_entry_ids,
+    table_entry_scales,
+):
+    if not hasattr(table, "_get_orbit_reconstruction_maps"):
+        return None
+    if not bool(getattr(table, "table_data_is_symmetry_reduced", False)):
+        return None
+    if table.dim not in (2, 3):
+        return None
+
+    reconstruction_maps = table._get_orbit_reconstruction_maps()
+    transform_signs = np.asarray(reconstruction_maps["transform_signs"], dtype=np.int8)
+    expected_transform_count = (2 ** int(table.dim)) * math.factorial(int(table.dim))
+    if len(transform_signs) != expected_transform_count:
+        return None
+    if not np.all(transform_signs == 1):
+        return None
+    if table.n_q_points > np.iinfo(np.uint16).max:
+        return None
+
+    table_entry_scales_real = np.real(np.asarray(table_entry_scales))
+    if not np.all(table_entry_scales_real == 1):
+        return None
+
+    case_vecs = np.asarray(table.interaction_case_vecs, dtype=np.int32)
+    canonical_case_ids = np.empty(table.n_cases, dtype=np.int32)
+    for case_id, case_vec in enumerate(case_vecs):
+        canonical_vec = [-int(val) for val in sorted(np.abs(case_vec), reverse=True)]
+        canonical_case_ids[case_id] = int(
+            table.case_indices[table.case_encode(canonical_vec)]
+        )
+
+    unique_canonical_case_ids = np.unique(canonical_case_ids)
+    if len(unique_canonical_case_ids) > np.iinfo(np.uint16).max:
+        return None
+
+    canonical_case_rank_by_id = {
+        int(case_id): rank for rank, case_id in enumerate(unique_canonical_case_ids)
+    }
+    case_orbit_ranks = np.empty(table.n_cases, dtype=np.uint16)
+    case_axis_perm = np.empty((table.n_cases, table.dim), dtype=np.uint8)
+    case_axis_sign = np.empty((table.n_cases, table.dim), dtype=np.int8)
+    case_axis_group = np.empty((table.n_cases, table.dim), dtype=np.uint8)
+
+    for case_id, case_vec in enumerate(case_vecs):
+        case_orbit_ranks[case_id] = canonical_case_rank_by_id[
+            int(canonical_case_ids[case_id])
+        ]
+        axis_perm, axis_sign, axis_group = _case_arithmetic_axis_descriptors(case_vec)
+        case_axis_perm[case_id, :] = axis_perm
+        case_axis_sign[case_id, :] = axis_sign
+        case_axis_group[case_id, :] = axis_group
+
+    n_arithmetic_entries = len(unique_canonical_case_ids) * table.n_pairs
+    layout_entry_ids = np.full(n_arithmetic_entries, -1, dtype=np.int64)
+    full_entry_count = table.n_cases * table.n_pairs
+    representative_entry_ids = np.asarray(
+        table._get_orbit_canonical_info()["entry_ids"], dtype=np.int64
+    )
+
+    for full_entry_id in range(full_entry_count):
+        case_id = full_entry_id // table.n_pairs
+        pair_id = full_entry_id % table.n_pairs
+        source_mode_id = pair_id // table.n_q_points
+        target_point_id = pair_id % table.n_q_points
+        arithmetic_row = _evaluate_scalar_arithmetic_entry(
+            case_id,
+            source_mode_id,
+            target_point_id,
+            case_orbit_ranks=case_orbit_ranks,
+            case_axis_perm=case_axis_perm,
+            case_axis_sign=case_axis_sign,
+            case_axis_group=case_axis_group,
+            q_order=table.quad_order,
+            dim=table.dim,
+        )
+        representative_full_id = int(
+            representative_entry_ids[table_entry_ids[full_entry_id]]
+        )
+        existing = int(layout_entry_ids[arithmetic_row])
+        if existing >= 0 and existing != representative_full_id:
+            raise RuntimeError("arithmetic ORBIT row layout is inconsistent")
+        layout_entry_ids[arithmetic_row] = representative_full_id
+
+    metadata_arrays = (
+        case_orbit_ranks,
+        case_axis_perm,
+        case_axis_sign,
+        case_axis_group,
+    )
+
+    return {
+        "kind": "scalar-arithmetic-orbit",
+        "case_orbit_ranks": case_orbit_ranks,
+        "case_axis_perm": case_axis_perm,
+        "case_axis_sign": case_axis_sign,
+        "case_axis_group": case_axis_group,
+        "layout_entry_ids": layout_entry_ids,
+        "n_case_orbits": int(len(unique_canonical_case_ids)),
+        "metadata_bytes": int(sum(arr.nbytes for arr in metadata_arrays)),
+        "unused_layout_entry_count": int(np.count_nonzero(layout_entry_ids < 0)),
+    }
+
+
 def _build_generated_orbit_reconstruction(table, table_entry_ids, table_entry_scales):
     if not hasattr(table, "_get_orbit_reconstruction_maps"):
         return None
@@ -999,19 +1221,40 @@ def _prepare_table_data_and_entry_map(table_levels):
         table_entry_ids[kept_entry_ids] = np.arange(len(kept_entry_ids), dtype=np.int32)
         table_entry_scales = np.ones(n_full_entries, dtype=table0.data.dtype)
 
-    reconstruction_info = _build_generated_orbit_reconstruction(
+    reconstruction_info = _build_scalar_arithmetic_orbit_reconstruction(
         table0,
         table_entry_ids,
         table_entry_scales,
     )
+    if reconstruction_info is None:
+        reconstruction_info = _build_generated_orbit_reconstruction(
+            table0,
+            table_entry_ids,
+            table_entry_scales,
+        )
+
     if reconstruction_info is None:
         reconstruction_info = {
             "kind": "dense",
             "metadata_bytes": int(table_entry_ids.nbytes + table_entry_scales.nbytes),
         }
 
+    layout_entry_ids = reconstruction_info.get("layout_entry_ids", kept_entry_ids)
+    layout_entry_ids = np.asarray(layout_entry_ids, dtype=np.int64)
+    used_layout_mask = layout_entry_ids >= 0
+    used_layout_entry_ids = layout_entry_ids[used_layout_mask]
+    if len(used_layout_entry_ids) == 0:
+        raise RuntimeError("near-field reconstruction layout contains no entries")
+    if not np.all(np.isfinite(table0.data[used_layout_entry_ids])):
+        raise RuntimeError("near-field reconstruction layout references missing data")
+    for table in table_levels[1:]:
+        if not np.all(np.isfinite(table.data[used_layout_entry_ids])):
+            raise RuntimeError(
+                "near-field levels disagree on reconstruction layout availability"
+            )
+
     table_data_combined = np.zeros(
-        (len(table_levels), len(kept_entry_ids)),
+        (len(table_levels), len(layout_entry_ids)),
         dtype=table0.data.dtype,
     )
     mode_nmlz_combined = np.zeros(
@@ -1024,7 +1267,7 @@ def _prepare_table_data_and_entry_map(table_levels):
     )
 
     for lev, table in enumerate(table_levels):
-        table_data_combined[lev, :] = table.data[kept_entry_ids]
+        table_data_combined[lev, used_layout_mask] = table.data[used_layout_entry_ids]
         mode_nmlz_combined[lev, :] = table.mode_normalizers
         exterior_mode_nmlz_combined[lev, :] = table.kernel_exterior_normalizers
 
@@ -1938,12 +2181,21 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
 
         table_data_shapes = {
             "n_tables": len(near_field_tables),
+            "quad_order": table0.quad_order,
             "n_q_points": table0.n_q_points,
             "n_cases": table0.n_cases,
             "n_table_entries": table_data_combined.shape[1],
             "reconstruction_kind": reconstruction_kind,
         }
-        if reconstruction_kind == "generated-orbit":
+        if reconstruction_kind == "scalar-arithmetic-orbit":
+            table_data_shapes.update(
+                {
+                    "n_arithmetic_case_orbits": int(
+                        reconstruction_info["n_case_orbits"]
+                    ),
+                }
+            )
+        elif reconstruction_kind == "generated-orbit":
             table_data_shapes.update(
                 {
                     "n_reconstruction_transforms": reconstruction_info[
@@ -1974,6 +2226,9 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             "generated_sign_correction_count": int(
                 reconstruction_info.get("sign_correction_count", 0)
             ),
+            "unused_arithmetic_layout_entries": int(
+                reconstruction_info.get("unused_layout_entry_count", 0)
+            ),
         }
 
         payload = {
@@ -1989,7 +2244,24 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             "reconstruction_diagnostics": reconstruction_diagnostics,
         }
 
-        if reconstruction_kind == "generated-orbit":
+        if reconstruction_kind == "scalar-arithmetic-orbit":
+            payload.update(
+                {
+                    "arithmetic_case_orbit_ranks_dev": cl.array.to_device(
+                        queue, reconstruction_info["case_orbit_ranks"]
+                    ),
+                    "arithmetic_case_axis_perm_dev": cl.array.to_device(
+                        queue, reconstruction_info["case_axis_perm"]
+                    ),
+                    "arithmetic_case_axis_sign_dev": cl.array.to_device(
+                        queue, reconstruction_info["case_axis_sign"]
+                    ),
+                    "arithmetic_case_axis_group_dev": cl.array.to_device(
+                        queue, reconstruction_info["case_axis_group"]
+                    ),
+                }
+            )
+        elif reconstruction_kind == "generated-orbit":
             payload.update(
                 {
                     "reconstruction_qpoint_map_dev": cl.array.to_device(
@@ -2211,7 +2483,22 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         table_data_combined = payload["table_data_dev"]
         mode_nmlz_combined = payload["mode_nmlz_dev"]
         exterior_mode_nmlz_combined = payload["exterior_mode_nmlz_dev"]
-        if reconstruction_kind == "generated-orbit":
+        if reconstruction_kind == "scalar-arithmetic-orbit":
+            reconstruction_kwargs = {
+                "arithmetic_case_orbit_ranks": payload[
+                    "arithmetic_case_orbit_ranks_dev"
+                ],
+                "arithmetic_case_axis_perm": payload[
+                    "arithmetic_case_axis_perm_dev"
+                ],
+                "arithmetic_case_axis_sign": payload[
+                    "arithmetic_case_axis_sign_dev"
+                ],
+                "arithmetic_case_axis_group": payload[
+                    "arithmetic_case_axis_group_dev"
+                ],
+            }
+        elif reconstruction_kind == "generated-orbit":
             reconstruction_kwargs = {
                 "reconstruction_qpoint_map": payload[
                     "reconstruction_qpoint_map_dev"
@@ -4846,7 +5133,22 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
         table_data_combined = payload["table_data_dev"]
         mode_nmlz_combined = payload["mode_nmlz_dev"]
         exterior_mode_nmlz_combined = payload["exterior_mode_nmlz_dev"]
-        if reconstruction_kind == "generated-orbit":
+        if reconstruction_kind == "scalar-arithmetic-orbit":
+            reconstruction_kwargs = {
+                "arithmetic_case_orbit_ranks": payload[
+                    "arithmetic_case_orbit_ranks_dev"
+                ],
+                "arithmetic_case_axis_perm": payload[
+                    "arithmetic_case_axis_perm_dev"
+                ],
+                "arithmetic_case_axis_sign": payload[
+                    "arithmetic_case_axis_sign_dev"
+                ],
+                "arithmetic_case_axis_group": payload[
+                    "arithmetic_case_axis_group_dev"
+                ],
+            }
+        elif reconstruction_kind == "generated-orbit":
             reconstruction_kwargs = {
                 "reconstruction_qpoint_map": payload[
                     "reconstruction_qpoint_map_dev"
@@ -5000,12 +5302,21 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
 
         table_data_shapes = {
             "n_tables": len(near_field_tables),
+            "quad_order": table0.quad_order,
             "n_q_points": table0.n_q_points,
             "n_cases": table0.n_cases,
             "n_table_entries": table_data_combined.shape[1],
             "reconstruction_kind": reconstruction_kind,
         }
-        if reconstruction_kind == "generated-orbit":
+        if reconstruction_kind == "scalar-arithmetic-orbit":
+            table_data_shapes.update(
+                {
+                    "n_arithmetic_case_orbits": int(
+                        reconstruction_info["n_case_orbits"]
+                    ),
+                }
+            )
+        elif reconstruction_kind == "generated-orbit":
             table_data_shapes.update(
                 {
                     "n_reconstruction_transforms": reconstruction_info[
@@ -5036,6 +5347,9 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
             "generated_sign_correction_count": int(
                 reconstruction_info.get("sign_correction_count", 0)
             ),
+            "unused_arithmetic_layout_entries": int(
+                reconstruction_info.get("unused_layout_entry_count", 0)
+            ),
         }
 
         payload = {
@@ -5051,7 +5365,24 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
             "reconstruction_diagnostics": reconstruction_diagnostics,
         }
 
-        if reconstruction_kind == "generated-orbit":
+        if reconstruction_kind == "scalar-arithmetic-orbit":
+            payload.update(
+                {
+                    "arithmetic_case_orbit_ranks_dev": cl.array.to_device(
+                        queue, reconstruction_info["case_orbit_ranks"]
+                    ),
+                    "arithmetic_case_axis_perm_dev": cl.array.to_device(
+                        queue, reconstruction_info["case_axis_perm"]
+                    ),
+                    "arithmetic_case_axis_sign_dev": cl.array.to_device(
+                        queue, reconstruction_info["case_axis_sign"]
+                    ),
+                    "arithmetic_case_axis_group_dev": cl.array.to_device(
+                        queue, reconstruction_info["case_axis_group"]
+                    ),
+                }
+            )
+        elif reconstruction_kind == "generated-orbit":
             payload.update(
                 {
                     "reconstruction_qpoint_map_dev": cl.array.to_device(

@@ -2213,6 +2213,7 @@ def test_generated_orbit_reconstruction_matches_dense_oracle(kernel_case):
 
     from volumential.expansion_wrangler_fpnd import (
         _evaluate_generated_orbit_reconstruction,
+        _evaluate_scalar_arithmetic_entry,
         _prepare_table_data_and_entry_map,
     )
 
@@ -2249,41 +2250,64 @@ def test_generated_orbit_reconstruction_matches_dense_oracle(kernel_case):
         reconstruction_info,
     ) = _prepare_table_data_and_entry_map([table])
 
-    assert reconstruction_info["kind"] == "generated-orbit"
-    assert table_data_combined.shape == (1, len(entry_ids))
-
-    reconstruction_maps = table._get_orbit_reconstruction_maps()
-    generated_entry_ids, generated_scales = _evaluate_generated_orbit_reconstruction(
-        reconstruction_maps["transform_qpoint_map"],
-        reconstruction_maps["transform_case_map"],
-        reconstruction_maps["transform_signs"],
-        n_cases=table.n_cases,
-        n_q_points=table.n_q_points,
-    )
-
     expected_entry_ids = entry_ids[table_entry_ids]
     expected_scales = np.real(table_entry_scales).astype(np.int8)
-    np.testing.assert_array_equal(generated_entry_ids, expected_entry_ids)
-
-    sign_keys = reconstruction_info["sign_lookup_keys"]
-    sign_values = reconstruction_info["sign_lookup_values"]
-    sign_probe_count = reconstruction_info["sign_lookup_max_probe_count"]
-    corrected_scales = generated_scales.copy()
-    for full_entry_id in range(len(corrected_scales)):
-        slot0 = (full_entry_id * 33) & (len(sign_keys) - 1)
-        for probe in range(sign_probe_count):
-            slot = (slot0 + probe) & (len(sign_keys) - 1)
-            if sign_keys[slot] == full_entry_id:
-                corrected_scales[full_entry_id] *= sign_values[slot]
-                break
-
-    np.testing.assert_array_equal(corrected_scales, expected_scales)
 
     dense_metadata_bytes = table_entry_ids.nbytes + table_entry_scales.nbytes
     assert reconstruction_info["metadata_bytes"] < dense_metadata_bytes
+
     if kernel_case == "scalar-laplace":
-        assert reconstruction_info["sign_correction_count"] == 0
+        assert reconstruction_info["kind"] == "scalar-arithmetic-orbit"
+        assert table_data_combined.shape[1] > len(entry_ids)
+        assert reconstruction_info["metadata_bytes"] < 2000
+
+        for full_entry_id in range(table.n_cases * table.n_pairs):
+            case_id = full_entry_id // table.n_pairs
+            pair_id = full_entry_id % table.n_pairs
+            source_mode_id = pair_id // table.n_q_points
+            target_point_id = pair_id % table.n_q_points
+            arithmetic_row = _evaluate_scalar_arithmetic_entry(
+                case_id,
+                source_mode_id,
+                target_point_id,
+                case_orbit_ranks=reconstruction_info["case_orbit_ranks"],
+                case_axis_perm=reconstruction_info["case_axis_perm"],
+                case_axis_sign=reconstruction_info["case_axis_sign"],
+                case_axis_group=reconstruction_info["case_axis_group"],
+                q_order=table.quad_order,
+                dim=table.dim,
+            )
+            dense_value = table.data[expected_entry_ids[full_entry_id]]
+            assert table_data_combined[0, arithmetic_row] == dense_value
     else:
+        assert reconstruction_info["kind"] == "generated-orbit"
+        assert table_data_combined.shape == (1, len(entry_ids))
+
+        reconstruction_maps = table._get_orbit_reconstruction_maps()
+        generated_entry_ids, generated_scales = (
+            _evaluate_generated_orbit_reconstruction(
+                reconstruction_maps["transform_qpoint_map"],
+                reconstruction_maps["transform_case_map"],
+                reconstruction_maps["transform_signs"],
+                n_cases=table.n_cases,
+                n_q_points=table.n_q_points,
+            )
+        )
+        np.testing.assert_array_equal(generated_entry_ids, expected_entry_ids)
+
+        sign_keys = reconstruction_info["sign_lookup_keys"]
+        sign_values = reconstruction_info["sign_lookup_values"]
+        sign_probe_count = reconstruction_info["sign_lookup_max_probe_count"]
+        corrected_scales = generated_scales.copy()
+        for full_entry_id in range(len(corrected_scales)):
+            slot0 = (full_entry_id * 33) & (len(sign_keys) - 1)
+            for probe in range(sign_probe_count):
+                slot = (slot0 + probe) & (len(sign_keys) - 1)
+                if sign_keys[slot] == full_entry_id:
+                    corrected_scales[full_entry_id] *= sign_values[slot]
+                    break
+
+        np.testing.assert_array_equal(corrected_scales, expected_scales)
         assert reconstruction_info["sign_correction_count"] > 0
 
 
@@ -2316,9 +2340,10 @@ def test_generated_orbit_reconstruction_q3_payload_diagnostic_row():
     )
 
     dense_metadata_bytes = table_entry_ids.nbytes + table_entry_scales.nbytes
-    assert table_data_combined.nbytes == len(entry_ids) * np.dtype(table.dtype).itemsize
+    assert recon["kind"] == "scalar-arithmetic-orbit"
+    assert table_data_combined.nbytes > len(entry_ids) * np.dtype(table.dtype).itemsize
     assert dense_metadata_bytes == 1215972
-    assert recon["metadata_bytes"] < 100000
+    assert recon["metadata_bytes"] < 2000
 
 
 def test_table_payload_serialization_excludes_nan_sentinels_for_reduced_tables():
