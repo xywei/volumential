@@ -709,8 +709,7 @@ def _extract_symmetry_source_direction(out_kernel, source_extra_kwargs, queue):
     return np.asarray(comps, dtype=np.float64)
 
 
-def _derive_source_kernels_from_target_kernels(target_kernels):
-    from pytools import single_valued
+def _derive_source_kernels_from_target_kernels(target_kernels, *, require_single=True):
     from sumpy.kernel import TargetTransformationRemover
 
     txr = TargetTransformationRemover()
@@ -718,9 +717,15 @@ def _derive_source_kernels_from_target_kernels(target_kernels):
     if not target_kernels:
         return None
 
+    source_kernels = tuple(txr(knl) for knl in target_kernels)
+    if not require_single:
+        return source_kernels
+
+    from pytools import single_valued
+
     try:
-        source_knl = single_valued(txr(knl) for knl in target_kernels)
-    except ValueError as exc:
+        source_knl = single_valued(source_kernels)
+    except (AssertionError, ValueError) as exc:
         raise ValueError(
             "target kernels must share a single source-side kernel "
             "after removing target derivatives"
@@ -1757,12 +1762,16 @@ class FPNDSumpyTreeIndependentDataForWrangler(
         strength_usage=None,
         source_kernels=None,
     ):
+        target_has_source_derivatives = _target_kernels_include_source_derivatives(
+            target_kernels
+        )
         expansion_source_kernels = source_kernels
         if source_kernels is None:
             expansion_source_kernels = _derive_source_kernels_from_target_kernels(
-                target_kernels
+                target_kernels,
+                require_single=not target_has_source_derivatives,
             )
-            if not _target_kernels_include_source_derivatives(target_kernels):
+            if not target_has_source_derivatives:
                 source_kernels = expansion_source_kernels
 
         queue = cl.CommandQueue(cl_context)

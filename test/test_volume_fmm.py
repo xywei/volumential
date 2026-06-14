@@ -3770,6 +3770,68 @@ def test_source_kernel_derivation_preserves_source_derivatives():
     )
     assert source_knl_no_source_deriv == base_knl
 
+    source_knls = _derive_source_kernels_from_target_kernels(
+        [
+            AxisTargetDerivative(2, base_knl),
+            AxisTargetDerivative(1, AxisSourceDerivative(0, base_knl)),
+        ],
+        require_single=False,
+    )
+    assert len(source_knls) == 2
+    assert source_knls[0] == base_knl
+    assert isinstance(source_knls[1], AxisSourceDerivative)
+    assert source_knls[1].axis == 0
+    assert source_knls[1].inner_kernel == base_knl
+
+    with pytest.raises(ValueError, match="share a single source-side kernel"):
+        _derive_source_kernels_from_target_kernels(
+            [base_knl, AxisSourceDerivative(1, base_knl)]
+        )
+
+
+def test_list1_generated_orbit_sign_correction_codegen_uses_distinct_inames():
+    import loopy as lp
+    from sumpy.kernel import LaplaceKernel
+
+    from volumential.list1 import NearFieldFromCSR
+
+    near_field = NearFieldFromCSR(
+        LaplaceKernel(2),
+        {
+            "n_tables": 1,
+            "n_q_points": 1,
+            "n_cases": 1,
+            "n_table_entries": 1,
+            "reconstruction_kind": "generated-orbit",
+            "n_reconstruction_transforms": 1,
+            "n_reconstruction_lookup_entries": 1,
+            "n_reconstruction_lookup_probes": 1,
+            "n_reconstruction_sign_lookup_entries": 1,
+            "n_reconstruction_sign_lookup_probes": 1,
+        },
+        potential_kind=1,
+    )
+
+    knl = lp.add_dtypes(
+        near_field.get_optimized_kernel(),
+        {
+            "target_boxes": np.int32,
+            "box_target_starts": np.int32,
+            "neighbor_source_boxes_starts": np.int32,
+            "source_boxes": np.int32,
+            "box_levels": np.int32,
+            "case_indices": np.int32,
+            "box_source_starts": np.int32,
+            "source_coefs": np.float64,
+            "result": np.float64,
+            "root_extent": np.float64,
+            "encoding_shift": np.float64,
+            "box_centers": np.float64,
+        },
+    )
+
+    lp.generate_code_v2(knl)
+
 
 def test_helmholtz_split_policy_rejects_mixed_source_target_derivative_chain():
     from sumpy.kernel import (

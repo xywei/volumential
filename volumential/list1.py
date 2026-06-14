@@ -803,6 +803,8 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 "{ [ probe ] : 0 <= probe < n_reconstruction_lookup_probes }",
                 "{ [ sign_probe ] : "
                 "0 <= sign_probe < n_reconstruction_sign_lookup_probes }",
+                "{ [ sign_value_probe ] : "
+                "0 <= sign_value_probe < n_reconstruction_sign_lookup_probes }",
             ]
             reconstruction_code = """
                         <> reconstruction_full_entry_id = \
@@ -852,12 +854,12 @@ class NearFieldFromCSR(NearFieldEvalBase):
                                 == reconstruction_full_entry_id
                             else 0)
                         <> sign_correction = (
-                            sum((sign_probe),
+                            sum((sign_value_probe),
                                 reconstruction_sign_lookup_values[
-                                    (sign_lookup_start + sign_probe)
+                                    (sign_lookup_start + sign_value_probe)
                                     % n_reconstruction_sign_lookup_entries]
                                 if reconstruction_sign_lookup_keys[
-                                    (sign_lookup_start + sign_probe)
+                                    (sign_lookup_start + sign_value_probe)
                                     % n_reconstruction_sign_lookup_entries]
                                     == reconstruction_full_entry_id
                                 else 0)
