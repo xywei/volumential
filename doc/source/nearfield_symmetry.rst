@@ -18,8 +18,8 @@ Orbit canonicalization
 Online reconstruction modes
 ---------------------------
 
-Scalar full-symmetry kernels and axis-preserving derivative kernels use the
-arithmetic path.
+Scalar full-symmetry kernels and supported axis-preserving derivative subgroups
+use the arithmetic path.
 
 - ``case_orbit_ranks`` is stored as ``uint16[n_cases]``.
 - ``case_axis_perm``, ``case_axis_sign``, and ``case_axis_group`` are packed as
@@ -27,6 +27,9 @@ arithmetic path.
 - Axis source/target derivatives additionally pass ``axis_sign_power`` so the
   evaluator computes derivative signs analytically from the applied signed
   permutation.
+- Equal-magnitude directional source derivative subgroups additionally pass the
+  source direction signs and one representative sign axis so the evaluator
+  applies the collinearity sign analytically.
 - The evaluator decodes tensor-product source/target indices, applies the
   per-case signed permutation, resolves zero-axis flips locally, and uses a
   fixed compare-exchange sorting network for equal-absolute-value case axes.
@@ -87,20 +90,21 @@ Derivative kernels
 ------------------
 
 For derivative kernels, symmetry transforms can introduce sign changes.
-Axis source/target derivatives, mixed axis derivatives, and axis-aligned
-directional source derivatives whose symmetry subgroup fixes the derivative axes
-use signed arithmetic reconstruction rather than a sparse sign lookup. The
-runtime sign is the product of the applied flips on derivative axes with odd
-derivative order.
+Axis source/target derivatives, mixed axis derivatives, axis-aligned directional
+source derivatives, and equal-magnitude directional source derivatives use
+signed arithmetic reconstruction rather than a sparse sign lookup. The runtime
+sign is the product of the applied flips on derivative axes with odd derivative
+order and, for directional source derivatives, the sign needed to keep the fixed
+source direction collinear with ``d`` or ``-d``.
 
 This applies to target- and source-derivative kernels represented with
 ``AxisTargetDerivative`` and ``AxisSourceDerivative`` wrappers. Directional
 source derivatives are handled with sign-aware vector transforms when a fixed
 source direction is provided as ``symmetry_source_direction`` on the table.
-Axis-aligned directional source derivatives use signed arithmetic reconstruction.
-Non-axis directional subgroups currently keep using the generated descriptor
-fallback because their allowed transforms depend on the runtime direction vector
-geometry.
+Axis-aligned directions and non-axis directions whose active components have
+equal magnitude use signed arithmetic reconstruction. Other non-axis directional
+subgroups keep using the generated descriptor fallback because their allowed
+transforms depend on the runtime direction vector geometry.
 
 Odd derivative entries can be invariant under a sign-changing self-transform,
 for example when the derivative-axis case offset and both derivative-axis

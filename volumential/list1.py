@@ -718,8 +718,16 @@ class NearFieldFromCSR(NearFieldEvalBase):
                             if zero_flip{iaxis} else tgt{iaxis}_fixed)
                         <> transform_sign{iaxis} = (-1
                             if {sign_name} < 0 or zero_flip{iaxis} else 1)
-                        <> entry_sign_factor{iaxis} = (transform_sign{iaxis}
-                            if sign_power{iaxis} != 0 else 1)
+                        <> direction_sign_factor{iaxis} = (
+                            transform_sign{iaxis}
+                            * arithmetic_axis_direction_signs[{perm_name}]
+                            * arithmetic_axis_direction_signs[{iaxis}]
+                            if arithmetic_direction_sign_axis == {iaxis}
+                            else 1)
+                        <> entry_sign_factor{iaxis} = (
+                            (transform_sign{iaxis}
+                                if sign_power{iaxis} != 0 else 1)
+                            * direction_sign_factor{iaxis})
                 """
 
             reconstruction_code = f"""
@@ -767,8 +775,17 @@ class NearFieldFromCSR(NearFieldEvalBase):
                     "dim",
                     is_input=True,
                 ),
+                loopy.GlobalArg(
+                    "arithmetic_axis_direction_signs",
+                    np.int8,
+                    "dim",
+                    is_input=True,
+                ),
             ]
-            reconstruction_value_arg_names = ", quad_order, n_arithmetic_case_orbits"
+            reconstruction_value_arg_names = (
+                ", quad_order, n_arithmetic_case_orbits, "
+                "arithmetic_direction_sign_axis"
+            )
         elif self.reconstruction_kind == "generated-orbit":
             reconstruction_domains = [
                 "{ [ tr ] : 0 <= tr < n_reconstruction_transforms }",
@@ -1074,7 +1091,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
     def get_cache_key(self):
         return (
             type(self).__name__,
-            "kernel-v12",
+            "kernel-v13",
             self.name,
             self.kname,
             "complex_kernel=" + str(self.integral_kernel.is_complex_valued),
@@ -1159,6 +1176,12 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 ),
                 "arithmetic_axis_sign_power": kwargs.pop(
                     "arithmetic_axis_sign_power"
+                ),
+                "arithmetic_axis_direction_signs": kwargs.pop(
+                    "arithmetic_axis_direction_signs"
+                ),
+                "arithmetic_direction_sign_axis": kwargs.pop(
+                    "arithmetic_direction_sign_axis"
                 ),
                 "quad_order": self.quad_order,
                 "n_arithmetic_case_orbits": self.n_arithmetic_case_orbits,

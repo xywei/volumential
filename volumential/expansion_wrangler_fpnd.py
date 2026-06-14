@@ -872,15 +872,29 @@ _ARITHMETIC_RECONSTRUCTION_KINDS = {
 }
 
 
-def _case_arithmetic_axis_descriptors(case_vec, fixed_axes=()):
+def _case_arithmetic_axis_descriptors(
+    case_vec,
+    *,
+    axis_groups=None,
+    direction_signs=None,
+):
     case_vec = [int(val) for val in case_vec]
     dim = len(case_vec)
-    fixed_axes = frozenset(int(axis) for axis in fixed_axes)
+    if axis_groups is None:
+        axis_group_specs = (tuple(range(dim)),)
+    else:
+        axis_group_specs = axis_groups
+    axis_group_specs = tuple(
+        tuple(int(axis) for axis in group) for group in axis_group_specs
+    )
+    direction_signs = np.zeros(dim, dtype=np.int8) if direction_signs is None else (
+        np.asarray(direction_signs, dtype=np.int8)
+    )
 
     axis_perm = np.empty(dim, dtype=np.uint8)
     axis_signs = np.empty(dim, dtype=np.int8)
-    axis_groups = np.empty(dim, dtype=np.uint8)
-    group_id = 0
+    axis_group_ids = np.empty(dim, dtype=np.uint8)
+    next_runtime_group = 0
 
     def sign_to_negative(value):
         value = int(value)
@@ -890,31 +904,66 @@ def _case_arithmetic_axis_descriptors(case_vec, fixed_axes=()):
             return 1
         return 0
 
-    for iaxis in sorted(fixed_axes):
-        axis_perm[iaxis] = iaxis
-        axis_signs[iaxis] = sign_to_negative(case_vec[iaxis])
-        axis_groups[iaxis] = group_id
-        group_id += 1
+    for group in axis_group_specs:
+        out_axes = tuple(sorted(group))
+        active_direction_axes = [axis for axis in out_axes if direction_signs[axis] != 0]
 
-    free_axes = [iaxis for iaxis in range(dim) if iaxis not in fixed_axes]
-    free_order = sorted(
-        free_axes,
-        key=lambda iaxis: (-abs(case_vec[iaxis]), iaxis),
-    )
+        if active_direction_axes:
+            best_key = None
+            best_perm = None
+            best_line_sign = None
+            from itertools import permutations
 
-    last_abs = None
-    current_group = group_id - 1
-    for out_axis, in_axis in zip(free_axes, free_order, strict=True):
-        value = int(case_vec[in_axis])
-        abs_value = abs(value)
-        if last_abs != abs_value:
-            current_group += 1
-            last_abs = abs_value
-        axis_perm[out_axis] = in_axis
-        axis_signs[out_axis] = sign_to_negative(value)
-        axis_groups[out_axis] = current_group
+            for permuted_axes in permutations(out_axes):
+                for line_sign in (-1, 1):
+                    values = []
+                    for out_axis, in_axis in zip(out_axes, permuted_axes, strict=True):
+                        sign = (
+                            line_sign
+                            * int(direction_signs[out_axis])
+                            * int(direction_signs[in_axis])
+                        )
+                        values.append(int(case_vec[in_axis]) * sign)
 
-    return axis_perm, axis_signs, axis_groups
+                    key = (tuple(values), tuple(int(axis) for axis in permuted_axes))
+                    if best_key is None or key < best_key:
+                        best_key = key
+                        best_perm = tuple(int(axis) for axis in permuted_axes)
+                        best_line_sign = int(line_sign)
+
+            for out_axis, in_axis in zip(out_axes, best_perm, strict=True):
+                axis_perm[out_axis] = in_axis
+                axis_signs[out_axis] = (
+                    best_line_sign
+                    * int(direction_signs[out_axis])
+                    * int(direction_signs[in_axis])
+                )
+                # Avoid over-canonicalizing directional stabilizers: source/target
+                # flips in an active directional group are tied by one line sign.
+                axis_group_ids[out_axis] = next_runtime_group
+                next_runtime_group += 1
+            continue
+
+        free_order = sorted(
+            out_axes,
+            key=lambda iaxis: (-abs(case_vec[iaxis]), iaxis),
+        )
+
+        last_abs = None
+        current_runtime_group = next_runtime_group - 1
+        for out_axis, in_axis in zip(out_axes, free_order, strict=True):
+            value = int(case_vec[in_axis])
+            abs_value = abs(value)
+            if last_abs != abs_value:
+                current_runtime_group += 1
+                last_abs = abs_value
+            axis_perm[out_axis] = in_axis
+            axis_signs[out_axis] = sign_to_negative(value)
+            axis_group_ids[out_axis] = current_runtime_group
+
+        next_runtime_group = current_runtime_group + 1
+
+    return axis_perm, axis_signs, axis_group_ids
 
 
 def _canonical_case_from_axis_descriptors(case_vec, axis_perm, axis_sign):
@@ -931,11 +980,16 @@ def _kernel_axis_preserving_arithmetic_symmetry(table, reconstruction_maps):
     dim = int(table.dim)
     fixed_axes = set()
     axis_sign_power = np.zeros(dim, dtype=np.uint8)
+    direction_signs = np.zeros(dim, dtype=np.int8)
+    direction_sign_axis = -1
+    directional_groups = None
 
     kernel = table.integral_knl
     while kernel is not None:
         cls_name = kernel.__class__.__name__
         if cls_name in {"AxisTargetDerivative", "AxisSourceDerivative"}:
+            if directional_groups is not None:
+                return None
             axis = int(kernel.axis)
             if axis < 0 or axis >= dim:
                 return None
@@ -945,6 +999,8 @@ def _kernel_axis_preserving_arithmetic_symmetry(table, reconstruction_maps):
             continue
 
         if cls_name == "DirectionalSourceDerivative":
+            if np.any(axis_sign_power) or directional_groups is not None:
+                return None
             source_direction = getattr(kernel, "_volumential_source_direction", None)
             if source_direction is None:
                 return None
@@ -954,11 +1010,24 @@ def _kernel_axis_preserving_arithmetic_symmetry(table, reconstruction_maps):
             axis_candidates = np.flatnonzero(
                 np.abs(source_direction) > 100 * np.finfo(np.float64).eps
             )
-            if len(axis_candidates) != 1:
+            if len(axis_candidates) == 0:
                 return None
-            axis = int(axis_candidates[0])
-            fixed_axes.add(axis)
-            axis_sign_power[axis] ^= np.uint8(1)
+            active_abs_values = np.abs(source_direction[axis_candidates])
+            if not np.allclose(active_abs_values, active_abs_values[0]):
+                return None
+
+            active_axes = tuple(sorted(int(axis) for axis in axis_candidates))
+            inactive_axes = tuple(
+                axis for axis in range(dim) if axis not in set(active_axes)
+            )
+            directional_groups = (active_axes,)
+            if inactive_axes:
+                directional_groups += (inactive_axes,)
+            active_axis_list = list(active_axes)
+            direction_signs[active_axis_list] = np.sign(
+                source_direction[active_axis_list]
+            ).astype(np.int8)
+            direction_sign_axis = int(active_axes[0])
             kernel = kernel.inner_kernel
             continue
 
@@ -970,16 +1039,50 @@ def _kernel_axis_preserving_arithmetic_symmetry(table, reconstruction_maps):
 
     from itertools import permutations, product
 
+    if directional_groups is None:
+        free_axes = tuple(axis for axis in range(dim) if axis not in fixed_axes)
+        axis_groups = tuple((axis,) for axis in sorted(fixed_axes))
+        if free_axes:
+            axis_groups += (free_axes,)
+    else:
+        axis_groups = directional_groups
+
     expected = set()
     for sign_tuple in product([-1, 1], repeat=dim):
         for perm_tuple in permutations(range(dim)):
-            if any(int(perm_tuple[axis]) != axis for axis in fixed_axes):
-                continue
+            line_sign = 1
+            if directional_groups is None:
+                if any(int(perm_tuple[axis]) != axis for axis in fixed_axes):
+                    continue
+            else:
+                line_sign = None
+                valid = True
+                for out_axis in range(dim):
+                    in_axis = int(perm_tuple[out_axis])
+                    out_dir = int(direction_signs[out_axis])
+                    in_dir = int(direction_signs[in_axis])
+                    if out_dir == 0 or in_dir == 0:
+                        if out_dir != in_dir:
+                            valid = False
+                            break
+                        continue
+
+                    candidate = int(sign_tuple[in_axis]) * out_dir * in_dir
+                    if line_sign is None:
+                        line_sign = candidate
+                    elif candidate != line_sign:
+                        valid = False
+                        break
+
+                if not valid or line_sign is None:
+                    continue
 
             transform_sign = 1
             for axis in range(dim):
                 if int(axis_sign_power[axis]):
                     transform_sign *= int(sign_tuple[axis])
+            if directional_groups is not None:
+                transform_sign *= int(line_sign)
 
             expected.add(
                 (
@@ -1013,8 +1116,10 @@ def _kernel_axis_preserving_arithmetic_symmetry(table, reconstruction_maps):
         return None
 
     return {
-        "fixed_axes": tuple(sorted(int(axis) for axis in fixed_axes)),
+        "axis_groups": axis_groups,
         "axis_sign_power": axis_sign_power,
+        "axis_direction_signs": direction_signs,
+        "direction_sign_axis": int(direction_sign_axis),
     }
 
 
@@ -1028,11 +1133,15 @@ def _evaluate_arithmetic_orbit_entry(
     case_axis_sign,
     case_axis_group,
     axis_sign_power=None,
+    axis_direction_signs=None,
+    direction_sign_axis=-1,
     q_order,
     dim,
 ):
     if axis_sign_power is None:
         axis_sign_power = np.zeros(int(dim), dtype=np.uint8)
+    if axis_direction_signs is None:
+        axis_direction_signs = np.zeros(int(dim), dtype=np.int8)
 
     source_axes_raw = _decode_mode_axes(source_mode_id, q_order, dim)
     target_axes_raw = _decode_mode_axes(target_point_id, q_order, dim)
@@ -1062,6 +1171,12 @@ def _evaluate_arithmetic_orbit_entry(
 
         if int(axis_sign_power[in_axis]):
             entry_sign *= applied_axis_sign
+        if int(direction_sign_axis) == out_axis:
+            entry_sign *= (
+                applied_axis_sign
+                * int(axis_direction_signs[in_axis])
+                * int(axis_direction_signs[out_axis])
+            )
 
         source_axes.append(source_axis)
         target_axes.append(target_axis)
@@ -1154,6 +1269,34 @@ def _entry_has_odd_axis_stabilizer(
     return False
 
 
+def _entry_has_odd_reconstruction_stabilizer(
+    case_id,
+    source_mode_id,
+    target_point_id,
+    reconstruction_maps,
+):
+    transform_case_map = np.asarray(reconstruction_maps["transform_case_map"])
+    transform_qpoint_map = np.asarray(reconstruction_maps["transform_qpoint_map"])
+    transform_signs = np.asarray(reconstruction_maps["transform_signs"])
+
+    for transform_id, transform_sign in enumerate(transform_signs):
+        if int(transform_sign) >= 0:
+            continue
+        if int(transform_case_map[transform_id, case_id]) != int(case_id):
+            continue
+        if int(transform_qpoint_map[transform_id, source_mode_id]) != int(
+            source_mode_id
+        ):
+            continue
+        if int(transform_qpoint_map[transform_id, target_point_id]) != int(
+            target_point_id
+        ):
+            continue
+        return True
+
+    return False
+
+
 def _build_arithmetic_orbit_reconstruction(
     table,
     table_entry_ids,
@@ -1174,8 +1317,10 @@ def _build_arithmetic_orbit_reconstruction(
     if arithmetic_symmetry is None:
         return None
 
-    fixed_axes = arithmetic_symmetry["fixed_axes"]
     axis_sign_power = arithmetic_symmetry["axis_sign_power"]
+    axis_groups = arithmetic_symmetry["axis_groups"]
+    axis_direction_signs = arithmetic_symmetry["axis_direction_signs"]
+    direction_sign_axis = arithmetic_symmetry["direction_sign_axis"]
     if table.n_q_points > np.iinfo(np.uint16).max:
         return None
 
@@ -1188,7 +1333,8 @@ def _build_arithmetic_orbit_reconstruction(
     for case_id, case_vec in enumerate(case_vecs):
         axis_perm, axis_sign, axis_group = _case_arithmetic_axis_descriptors(
             case_vec,
-            fixed_axes=fixed_axes,
+            axis_groups=axis_groups,
+            direction_signs=axis_direction_signs,
         )
         canonical_vec = _canonical_case_from_axis_descriptors(
             case_vec,
@@ -1241,6 +1387,8 @@ def _build_arithmetic_orbit_reconstruction(
             case_axis_sign=case_axis_sign,
             case_axis_group=case_axis_group,
             axis_sign_power=axis_sign_power,
+            axis_direction_signs=axis_direction_signs,
+            direction_sign_axis=direction_sign_axis,
             q_order=table.quad_order,
             dim=table.dim,
         )
@@ -1252,13 +1400,11 @@ def _build_arithmetic_orbit_reconstruction(
         if existing >= 0 and existing != representative_full_id:
             raise RuntimeError("arithmetic ORBIT row layout is inconsistent")
         if existing >= 0 and int(layout_entry_scales[arithmetic_row]) != layout_scale:
-            if _entry_has_odd_axis_stabilizer(
-                case_vecs[case_id],
+            if _entry_has_odd_reconstruction_stabilizer(
+                case_id,
                 source_mode_id,
                 target_point_id,
-                axis_sign_power=axis_sign_power,
-                q_order=table.quad_order,
-                dim=table.dim,
+                reconstruction_maps,
             ):
                 sign_convention_conflict_count += 1
                 continue
@@ -1273,9 +1419,11 @@ def _build_arithmetic_orbit_reconstruction(
         case_axis_group,
         axis_sign_power,
     )
+    if direction_sign_axis >= 0:
+        metadata_arrays += (axis_direction_signs,)
     kind = (
         "signed-arithmetic-orbit"
-        if np.any(axis_sign_power)
+        if np.any(axis_sign_power) or direction_sign_axis >= 0
         else "scalar-arithmetic-orbit"
     )
 
@@ -1286,6 +1434,8 @@ def _build_arithmetic_orbit_reconstruction(
         "case_axis_sign": case_axis_sign,
         "case_axis_group": case_axis_group,
         "axis_sign_power": axis_sign_power,
+        "axis_direction_signs": axis_direction_signs,
+        "direction_sign_axis": int(direction_sign_axis),
         "layout_entry_ids": layout_entry_ids,
         "layout_entry_scales": layout_entry_scales,
         "n_case_orbits": int(len(unique_canonical_case_ids)),
@@ -2538,6 +2688,12 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
                     "arithmetic_axis_sign_power_dev": cl.array.to_device(
                         queue, reconstruction_info["axis_sign_power"]
                     ),
+                    "arithmetic_axis_direction_signs_dev": cl.array.to_device(
+                        queue, reconstruction_info["axis_direction_signs"]
+                    ),
+                    "arithmetic_direction_sign_axis": int(
+                        reconstruction_info["direction_sign_axis"]
+                    ),
                 }
             )
         elif reconstruction_kind == "generated-orbit":
@@ -2778,6 +2934,12 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
                 ],
                 "arithmetic_axis_sign_power": payload[
                     "arithmetic_axis_sign_power_dev"
+                ],
+                "arithmetic_axis_direction_signs": payload[
+                    "arithmetic_axis_direction_signs_dev"
+                ],
+                "arithmetic_direction_sign_axis": payload[
+                    "arithmetic_direction_sign_axis"
                 ],
             }
         elif reconstruction_kind == "generated-orbit":
@@ -5432,6 +5594,12 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
                 "arithmetic_axis_sign_power": payload[
                     "arithmetic_axis_sign_power_dev"
                 ],
+                "arithmetic_axis_direction_signs": payload[
+                    "arithmetic_axis_direction_signs_dev"
+                ],
+                "arithmetic_direction_sign_axis": payload[
+                    "arithmetic_direction_sign_axis"
+                ],
             }
         elif reconstruction_kind == "generated-orbit":
             reconstruction_kwargs = {
@@ -5670,6 +5838,12 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
                     ),
                     "arithmetic_axis_sign_power_dev": cl.array.to_device(
                         queue, reconstruction_info["axis_sign_power"]
+                    ),
+                    "arithmetic_axis_direction_signs_dev": cl.array.to_device(
+                        queue, reconstruction_info["axis_direction_signs"]
+                    ),
+                    "arithmetic_direction_sign_axis": int(
+                        reconstruction_info["direction_sign_axis"]
                     ),
                 }
             )
