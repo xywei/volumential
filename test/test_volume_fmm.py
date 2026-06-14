@@ -4993,7 +4993,7 @@ def test_volume_fmm_2d_helmholtz_split_directional_source_derivative_tracks_dire
     q_order = 4
     wave_number = 8.0
     nlevels = 3
-    source_direction = np.array([1.0, 0.0], dtype=np.float64)
+    source_direction = np.array([1.0, 0.5], dtype=np.float64)
     split_table = _build_laplace_output_table(
         queue,
         2,

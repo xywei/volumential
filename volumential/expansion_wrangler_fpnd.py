@@ -904,46 +904,69 @@ def _case_arithmetic_axis_descriptors(
             return 1
         return 0
 
+    active_group_specs = []
+    inactive_group_specs = []
     for group in axis_group_specs:
         out_axes = tuple(sorted(group))
         active_direction_axes = [axis for axis in out_axes if direction_signs[axis] != 0]
-
         if active_direction_axes:
-            best_key = None
-            best_perm = None
-            best_line_sign = None
-            from itertools import permutations
+            if len(active_direction_axes) != len(out_axes):
+                raise ValueError("directional arithmetic groups cannot mix active axes")
+            active_group_specs.append(out_axes)
+        else:
+            inactive_group_specs.append(out_axes)
 
-            for permuted_axes in permutations(out_axes):
-                for line_sign in (-1, 1):
-                    values = []
+    if active_group_specs:
+        from itertools import permutations, product
+
+        sorted_active_axes = tuple(
+            sorted(axis for group in active_group_specs for axis in group)
+        )
+        permutation_options = [tuple(permutations(group)) for group in active_group_specs]
+        best_key = None
+        best_axis_perm = None
+        best_axis_sign = None
+
+        for line_sign in (-1, 1):
+            for permuted_groups in product(*permutation_options):
+                candidate_axis_perm = {}
+                candidate_axis_sign = {}
+                for out_axes, permuted_axes in zip(
+                    active_group_specs,
+                    permuted_groups,
+                    strict=True,
+                ):
                     for out_axis, in_axis in zip(out_axes, permuted_axes, strict=True):
                         sign = (
-                            line_sign
+                            int(line_sign)
                             * int(direction_signs[out_axis])
                             * int(direction_signs[in_axis])
                         )
-                        values.append(int(case_vec[in_axis]) * sign)
+                        candidate_axis_perm[out_axis] = int(in_axis)
+                        candidate_axis_sign[out_axis] = int(sign)
 
-                    key = (tuple(values), tuple(int(axis) for axis in permuted_axes))
-                    if best_key is None or key < best_key:
-                        best_key = key
-                        best_perm = tuple(int(axis) for axis in permuted_axes)
-                        best_line_sign = int(line_sign)
-
-            for out_axis, in_axis in zip(out_axes, best_perm, strict=True):
-                axis_perm[out_axis] = in_axis
-                axis_signs[out_axis] = (
-                    best_line_sign
-                    * int(direction_signs[out_axis])
-                    * int(direction_signs[in_axis])
+                key = (
+                    tuple(
+                        int(case_vec[candidate_axis_perm[axis]])
+                        * int(candidate_axis_sign[axis])
+                        for axis in sorted_active_axes
+                    ),
+                    tuple(candidate_axis_perm[axis] for axis in sorted_active_axes),
                 )
-                # Avoid over-canonicalizing directional stabilizers: source/target
-                # flips in an active directional group are tied by one line sign.
-                axis_group_ids[out_axis] = next_runtime_group
-                next_runtime_group += 1
-            continue
+                if best_key is None or key < best_key:
+                    best_key = key
+                    best_axis_perm = candidate_axis_perm
+                    best_axis_sign = candidate_axis_sign
 
+        for out_axis in sorted_active_axes:
+            axis_perm[out_axis] = best_axis_perm[out_axis]
+            axis_signs[out_axis] = best_axis_sign[out_axis]
+            # Avoid over-canonicalizing directional stabilizers: source/target
+            # flips in active directional groups are tied by one line sign.
+            axis_group_ids[out_axis] = next_runtime_group
+            next_runtime_group += 1
+
+    for out_axes in inactive_group_specs:
         free_order = sorted(
             out_axes,
             key=lambda iaxis: (-abs(case_vec[iaxis]), iaxis),
@@ -982,14 +1005,15 @@ def _kernel_axis_preserving_arithmetic_symmetry(table, reconstruction_maps):
     axis_sign_power = np.zeros(dim, dtype=np.uint8)
     direction_signs = np.zeros(dim, dtype=np.int8)
     direction_sign_axis = -1
-    directional_groups = None
+    direction_abs_group = np.full(dim, -1, dtype=np.int16)
+    direction_sign_power = np.uint8(0)
+    direction_vector = None
+    has_directional_source = False
 
     kernel = table.integral_knl
     while kernel is not None:
         cls_name = kernel.__class__.__name__
         if cls_name in {"AxisTargetDerivative", "AxisSourceDerivative"}:
-            if directional_groups is not None:
-                return None
             axis = int(kernel.axis)
             if axis < 0 or axis >= dim:
                 return None
@@ -999,35 +1023,44 @@ def _kernel_axis_preserving_arithmetic_symmetry(table, reconstruction_maps):
             continue
 
         if cls_name == "DirectionalSourceDerivative":
-            if np.any(axis_sign_power) or directional_groups is not None:
-                return None
             source_direction = getattr(kernel, "_volumential_source_direction", None)
             if source_direction is None:
                 return None
             source_direction = np.asarray(source_direction, dtype=np.float64).ravel()
             if source_direction.shape != (dim,):
                 return None
+            direction_sign_power ^= np.uint8(1)
+            if has_directional_source:
+                if not np.allclose(source_direction, direction_vector):
+                    return None
+                kernel = kernel.inner_kernel
+                continue
+
             axis_candidates = np.flatnonzero(
                 np.abs(source_direction) > 100 * np.finfo(np.float64).eps
             )
             if len(axis_candidates) == 0:
                 return None
-            active_abs_values = np.abs(source_direction[axis_candidates])
-            if not np.allclose(active_abs_values, active_abs_values[0]):
-                return None
 
             active_axes = tuple(sorted(int(axis) for axis in axis_candidates))
-            inactive_axes = tuple(
-                axis for axis in range(dim) if axis not in set(active_axes)
-            )
-            directional_groups = (active_axes,)
-            if inactive_axes:
-                directional_groups += (inactive_axes,)
             active_axis_list = list(active_axes)
             direction_signs[active_axis_list] = np.sign(
                 source_direction[active_axis_list]
             ).astype(np.int8)
+            active_abs_groups = []
+            for axis in active_axes:
+                abs_value = abs(float(source_direction[axis]))
+                for group_id, (group_abs, group_axes) in enumerate(active_abs_groups):
+                    if np.isclose(abs_value, group_abs):
+                        group_axes.append(axis)
+                        direction_abs_group[axis] = group_id
+                        break
+                else:
+                    direction_abs_group[axis] = len(active_abs_groups)
+                    active_abs_groups.append((abs_value, [axis]))
             direction_sign_axis = int(active_axes[0])
+            direction_vector = source_direction.copy()
+            has_directional_source = True
             kernel = kernel.inner_kernel
             continue
 
@@ -1039,24 +1072,52 @@ def _kernel_axis_preserving_arithmetic_symmetry(table, reconstruction_maps):
 
     from itertools import permutations, product
 
-    if directional_groups is None:
+    if not has_directional_source:
         free_axes = tuple(axis for axis in range(dim) if axis not in fixed_axes)
         axis_groups = tuple((axis,) for axis in sorted(fixed_axes))
         if free_axes:
             axis_groups += (free_axes,)
     else:
-        axis_groups = directional_groups
+        axis_groups = []
+        for group_id in sorted(
+            int(group_id) for group_id in np.unique(direction_abs_group) if group_id >= 0
+        ):
+            group_axes = tuple(
+                axis for axis in range(dim) if int(direction_abs_group[axis]) == group_id
+            )
+            fixed_group_axes = tuple(axis for axis in group_axes if axis in fixed_axes)
+            free_group_axes = tuple(axis for axis in group_axes if axis not in fixed_axes)
+            axis_groups.extend((axis,) for axis in fixed_group_axes)
+            if free_group_axes:
+                axis_groups.append(free_group_axes)
+
+        inactive_fixed_axes = tuple(
+            axis
+            for axis in sorted(fixed_axes)
+            if int(direction_abs_group[axis]) < 0
+        )
+        inactive_free_axes = tuple(
+            axis
+            for axis in range(dim)
+            if int(direction_abs_group[axis]) < 0 and axis not in fixed_axes
+        )
+        axis_groups.extend((axis,) for axis in inactive_fixed_axes)
+        if inactive_free_axes:
+            axis_groups.append(inactive_free_axes)
+        axis_groups = tuple(axis_groups)
 
     expected = set()
     for sign_tuple in product([-1, 1], repeat=dim):
         for perm_tuple in permutations(range(dim)):
             line_sign = 1
-            if directional_groups is None:
+            if not has_directional_source:
                 if any(int(perm_tuple[axis]) != axis for axis in fixed_axes):
                     continue
             else:
                 line_sign = None
                 valid = True
+                if any(int(perm_tuple[axis]) != axis for axis in fixed_axes):
+                    continue
                 for out_axis in range(dim):
                     in_axis = int(perm_tuple[out_axis])
                     out_dir = int(direction_signs[out_axis])
@@ -1066,6 +1127,11 @@ def _kernel_axis_preserving_arithmetic_symmetry(table, reconstruction_maps):
                             valid = False
                             break
                         continue
+                    if int(direction_abs_group[out_axis]) != int(
+                        direction_abs_group[in_axis]
+                    ):
+                        valid = False
+                        break
 
                     candidate = int(sign_tuple[in_axis]) * out_dir * in_dir
                     if line_sign is None:
@@ -1081,7 +1147,7 @@ def _kernel_axis_preserving_arithmetic_symmetry(table, reconstruction_maps):
             for axis in range(dim):
                 if int(axis_sign_power[axis]):
                     transform_sign *= int(sign_tuple[axis])
-            if directional_groups is not None:
+            if int(direction_sign_power):
                 transform_sign *= int(line_sign)
 
             expected.add(
@@ -1119,7 +1185,7 @@ def _kernel_axis_preserving_arithmetic_symmetry(table, reconstruction_maps):
         "axis_groups": axis_groups,
         "axis_sign_power": axis_sign_power,
         "axis_direction_signs": direction_signs,
-        "direction_sign_axis": int(direction_sign_axis),
+        "direction_sign_axis": int(direction_sign_axis if direction_sign_power else -1),
     }
 
 
@@ -1242,31 +1308,6 @@ def _evaluate_scalar_arithmetic_entry(
         dim=dim,
     )
     return entry_id
-
-
-def _entry_has_odd_axis_stabilizer(
-    case_vec,
-    source_mode_id,
-    target_point_id,
-    *,
-    axis_sign_power,
-    q_order,
-    dim,
-):
-    source_axes = _decode_mode_axes(source_mode_id, q_order, dim)
-    target_axes = _decode_mode_axes(target_point_id, q_order, dim)
-    for axis in range(int(dim)):
-        if not int(axis_sign_power[axis]):
-            continue
-        if int(case_vec[axis]) != 0:
-            continue
-        if source_axes[axis] != int(q_order) - 1 - source_axes[axis]:
-            continue
-        if target_axes[axis] != int(q_order) - 1 - target_axes[axis]:
-            continue
-        return True
-
-    return False
 
 
 def _entry_has_odd_reconstruction_stabilizer(

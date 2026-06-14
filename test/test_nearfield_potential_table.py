@@ -2212,7 +2212,11 @@ def test_prepare_table_data_and_entry_map_uses_orbit_canonical_mapping():
         "source-derivative",
         "directional-axis-source-derivative",
         "directional-diagonal-source-derivative",
+        "directional-unequal-source-derivative",
+        "directional-magnitude-group-source-derivative",
+        "repeated-directional-source-derivative",
         "mixed-source-target-derivative",
+        "mixed-directional-target-derivative",
     ],
 )
 def test_arithmetic_orbit_reconstruction_matches_dense_oracle(kernel_case):
@@ -2245,11 +2249,29 @@ def test_arithmetic_orbit_reconstruction_matches_dense_oracle(kernel_case):
     elif kernel_case == "directional-diagonal-source-derivative":
         sumpy_kernel = DirectionalSourceDerivative(LaplaceKernel(dim), "dir_vec")
         symmetry_source_direction = np.array([1.0, 1.0, 0.0])
-    else:
+    elif kernel_case == "directional-unequal-source-derivative":
+        sumpy_kernel = DirectionalSourceDerivative(LaplaceKernel(dim), "dir_vec")
+        symmetry_source_direction = np.array([1.0, 2.0, 0.0])
+    elif kernel_case == "directional-magnitude-group-source-derivative":
+        sumpy_kernel = DirectionalSourceDerivative(LaplaceKernel(dim), "dir_vec")
+        symmetry_source_direction = np.array([1.0, 2.0, 2.0])
+    elif kernel_case == "repeated-directional-source-derivative":
+        sumpy_kernel = DirectionalSourceDerivative(
+            DirectionalSourceDerivative(LaplaceKernel(dim), "dir_vec"),
+            "dir_vec",
+        )
+        symmetry_source_direction = np.array([1.0, 2.0, 0.0])
+    elif kernel_case == "mixed-source-target-derivative":
         sumpy_kernel = AxisTargetDerivative(
             0,
             AxisSourceDerivative(1, LaplaceKernel(dim)),
         )
+    else:
+        sumpy_kernel = AxisTargetDerivative(
+            0,
+            DirectionalSourceDerivative(LaplaceKernel(dim), "dir_vec"),
+        )
+        symmetry_source_direction = np.array([1.0, 2.0, 0.0])
 
     table = npt.NearFieldInteractionTable(
         quad_order=q_order,
@@ -2284,8 +2306,11 @@ def test_arithmetic_orbit_reconstruction_matches_dense_oracle(kernel_case):
     dense_metadata_bytes = table_entry_ids.nbytes + table_entry_scales.nbytes
     assert reconstruction_info["metadata_bytes"] < dense_metadata_bytes
 
-    if kernel_case == "scalar-laplace":
-        assert reconstruction_info["kind"] == "scalar-arithmetic-orbit"
+    if reconstruction_info["kind"] == "scalar-arithmetic-orbit":
+        assert kernel_case in {
+            "scalar-laplace",
+            "repeated-directional-source-derivative",
+        }
         assert table_data_combined.shape[1] > len(entry_ids)
         assert reconstruction_info["metadata_bytes"] < 2000
 
@@ -2352,15 +2377,23 @@ def test_arithmetic_orbit_reconstruction_matches_dense_oracle(kernel_case):
         assert dense_convention_mismatches == reconstruction_info[
             "sign_convention_conflict_count"
         ]
-        assert dense_convention_mismatches > 0
+        if kernel_case in {
+            "target-derivative",
+            "source-derivative",
+            "directional-axis-source-derivative",
+            "directional-diagonal-source-derivative",
+            "directional-unequal-source-derivative",
+            "mixed-source-target-derivative",
+        }:
+            assert dense_convention_mismatches > 0
 
 
-def test_unequal_non_axis_directional_source_derivative_uses_generated_fallback():
+def test_directional_source_derivative_without_direction_uses_generated_fallback():
     from sumpy.kernel import DirectionalSourceDerivative, LaplaceKernel
 
     from volumential.expansion_wrangler_fpnd import _prepare_table_data_and_entry_map
 
-    q_order = 3
+    q_order = 2
     dim = 3
     table = npt.NearFieldInteractionTable(
         quad_order=q_order,
@@ -2370,7 +2403,6 @@ def test_unequal_non_axis_directional_source_derivative_uses_generated_fallback(
         kernel_type="inv_power",
         sumpy_kernel=DirectionalSourceDerivative(LaplaceKernel(dim), "dir_vec"),
         derive_kernel_func=False,
-        symmetry_source_direction=np.array([1.0, 2.0, 0.0]),
         progress_bar=False,
         precomputed_q_points=_precomputed_legendre_q_points(q_order, dim),
     )

@@ -27,9 +27,9 @@ use the arithmetic path.
 - Axis source/target derivatives additionally pass ``axis_sign_power`` so the
   evaluator computes derivative signs analytically from the applied signed
   permutation.
-- Equal-magnitude directional source derivative subgroups additionally pass the
-  source direction signs and one representative sign axis so the evaluator
-  applies the collinearity sign analytically.
+- Directional source derivative subgroups additionally pass the source direction
+  signs and, for odd directional derivative order, one representative sign axis
+  so the evaluator applies the collinearity sign analytically.
 - The evaluator decodes tensor-product source/target indices, applies the
   per-case signed permutation, resolves zero-axis flips locally, and uses a
   fixed compare-exchange sorting network for equal-absolute-value case axes.
@@ -40,7 +40,7 @@ use the arithmetic path.
   same target-fastest layout and pre-apply any row-level representative sign
   convention while packing the table values.
 
-Other constrained or sign-changing kernels use the generated descriptor
+Unsupported constrained or sign-changing kernels use the generated descriptor
 fallback.
 
 - ``transform_qpoint_map[transform, qpoint]`` and
@@ -90,21 +90,24 @@ Derivative kernels
 ------------------
 
 For derivative kernels, symmetry transforms can introduce sign changes.
-Axis source/target derivatives, mixed axis derivatives, axis-aligned directional
-source derivatives, and equal-magnitude directional source derivatives use
-signed arithmetic reconstruction rather than a sparse sign lookup. The runtime
-sign is the product of the applied flips on derivative axes with odd derivative
-order and, for directional source derivatives, the sign needed to keep the fixed
-source direction collinear with ``d`` or ``-d``.
+Axis source/target derivatives, mixed axis derivatives, fixed-direction
+directional source derivatives, and mixed axis-plus-directional derivatives use
+arithmetic reconstruction rather than a sparse sign lookup. The runtime sign is
+the product of the applied flips on derivative axes with odd derivative order
+and, for odd directional source derivative order, the sign needed to keep the
+fixed source direction collinear with ``d`` or ``-d``.
 
 This applies to target- and source-derivative kernels represented with
 ``AxisTargetDerivative`` and ``AxisSourceDerivative`` wrappers. Directional
 source derivatives are handled with sign-aware vector transforms when a fixed
-source direction is provided as ``symmetry_source_direction`` on the table.
-Axis-aligned directions and non-axis directions whose active components have
-equal magnitude use signed arithmetic reconstruction. Other non-axis directional
-subgroups keep using the generated descriptor fallback because their allowed
-transforms depend on the runtime direction vector geometry.
+source direction is provided as ``symmetry_source_direction`` on the table. Active
+direction axes are grouped by equal absolute direction magnitude; inactive axes
+keep scalar-style signed permutation freedom. Repeated directional wrappers using
+the same fixed direction are supported by parity: even directional order needs no
+collinearity sign, odd directional order does.
+
+Directional source derivatives without fixed direction metadata, or with multiple
+nonmatching fixed directions, keep using the generated descriptor fallback.
 
 Odd derivative entries can be invariant under a sign-changing self-transform,
 for example when the derivative-axis case offset and both derivative-axis
