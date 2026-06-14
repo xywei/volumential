@@ -865,34 +865,159 @@ def _evaluate_generated_orbit_reconstruction(
     return representative_entry_ids, representative_scales
 
 
-def _case_arithmetic_axis_descriptors(case_vec):
+_ARITHMETIC_RECONSTRUCTION_KINDS = {
+    "scalar-arithmetic-orbit",
+    "signed-arithmetic-orbit",
+}
+
+
+def _case_arithmetic_axis_descriptors(case_vec, fixed_axes=()):
     case_vec = [int(val) for val in case_vec]
-    order = sorted(
-        range(len(case_vec)), key=lambda iaxis: (-abs(case_vec[iaxis]), iaxis)
+    dim = len(case_vec)
+    fixed_axes = frozenset(int(axis) for axis in fixed_axes)
+
+    axis_perm = np.empty(dim, dtype=np.uint8)
+    axis_signs = np.empty(dim, dtype=np.int8)
+    axis_groups = np.empty(dim, dtype=np.uint8)
+    group_id = 0
+
+    def sign_to_negative(value):
+        value = int(value)
+        if value > 0:
+            return -1
+        if value < 0:
+            return 1
+        return 0
+
+    for iaxis in sorted(fixed_axes):
+        axis_perm[iaxis] = iaxis
+        axis_signs[iaxis] = sign_to_negative(case_vec[iaxis])
+        axis_groups[iaxis] = group_id
+        group_id += 1
+
+    free_axes = [iaxis for iaxis in range(dim) if iaxis not in fixed_axes]
+    free_order = sorted(
+        free_axes,
+        key=lambda iaxis: (-abs(case_vec[iaxis]), iaxis),
     )
 
-    axis_signs = []
-    axis_groups = []
     last_abs = None
-    group_id = -1
-    for iaxis in order:
-        value = int(case_vec[iaxis])
+    current_group = group_id - 1
+    for out_axis, in_axis in zip(free_axes, free_order, strict=True):
+        value = int(case_vec[in_axis])
         abs_value = abs(value)
         if last_abs != abs_value:
-            group_id += 1
+            current_group += 1
             last_abs = abs_value
-        axis_groups.append(group_id)
-        if value > 0:
-            axis_signs.append(-1)
-        elif value < 0:
-            axis_signs.append(1)
-        else:
-            axis_signs.append(0)
+        axis_perm[out_axis] = in_axis
+        axis_signs[out_axis] = sign_to_negative(value)
+        axis_groups[out_axis] = current_group
 
-    return order, axis_signs, axis_groups
+    return axis_perm, axis_signs, axis_groups
 
 
-def _evaluate_scalar_arithmetic_entry(
+def _canonical_case_from_axis_descriptors(case_vec, axis_perm, axis_sign):
+    canonical = []
+    for in_axis, sign in zip(axis_perm, axis_sign, strict=True):
+        value = int(case_vec[int(in_axis)])
+        sign = int(sign)
+        canonical.append(0 if sign == 0 else value * sign)
+
+    return canonical
+
+
+def _kernel_axis_preserving_arithmetic_symmetry(table, reconstruction_maps):
+    dim = int(table.dim)
+    fixed_axes = set()
+    axis_sign_power = np.zeros(dim, dtype=np.uint8)
+
+    kernel = table.integral_knl
+    while kernel is not None:
+        cls_name = kernel.__class__.__name__
+        if cls_name in {"AxisTargetDerivative", "AxisSourceDerivative"}:
+            axis = int(kernel.axis)
+            if axis < 0 or axis >= dim:
+                return None
+            fixed_axes.add(axis)
+            axis_sign_power[axis] ^= np.uint8(1)
+            kernel = kernel.inner_kernel
+            continue
+
+        if cls_name == "DirectionalSourceDerivative":
+            source_direction = getattr(kernel, "_volumential_source_direction", None)
+            if source_direction is None:
+                return None
+            source_direction = np.asarray(source_direction, dtype=np.float64).ravel()
+            if source_direction.shape != (dim,):
+                return None
+            axis_candidates = np.flatnonzero(
+                np.abs(source_direction) > 100 * np.finfo(np.float64).eps
+            )
+            if len(axis_candidates) != 1:
+                return None
+            axis = int(axis_candidates[0])
+            fixed_axes.add(axis)
+            axis_sign_power[axis] ^= np.uint8(1)
+            kernel = kernel.inner_kernel
+            continue
+
+        if hasattr(kernel, "inner_kernel"):
+            kernel = kernel.inner_kernel
+            continue
+
+        break
+
+    from itertools import permutations, product
+
+    expected = set()
+    for sign_tuple in product([-1, 1], repeat=dim):
+        for perm_tuple in permutations(range(dim)):
+            if any(int(perm_tuple[axis]) != axis for axis in fixed_axes):
+                continue
+
+            transform_sign = 1
+            for axis in range(dim):
+                if int(axis_sign_power[axis]):
+                    transform_sign *= int(sign_tuple[axis])
+
+            expected.add(
+                (
+                    tuple(int(val) for val in sign_tuple),
+                    tuple(int(val) for val in perm_tuple),
+                    int(transform_sign),
+                )
+            )
+
+    signatures = reconstruction_maps.get("transform_signatures")
+    if signatures is None:
+        return None
+
+    actual = {
+        (
+            tuple(int(val) for val in sign_tuple),
+            tuple(int(val) for val in perm_tuple),
+            int(transform_sign),
+        )
+        for (sign_tuple, perm_tuple), transform_sign in zip(
+            signatures,
+            np.asarray(reconstruction_maps["transform_signs"], dtype=np.int8),
+            strict=True,
+        )
+    }
+
+    if actual != expected:
+        return None
+
+    if len(actual) != len(signatures):
+        return None
+
+    return {
+        "fixed_axes": tuple(sorted(int(axis) for axis in fixed_axes)),
+        "axis_sign_power": axis_sign_power,
+    }
+
+
+def _evaluate_arithmetic_orbit_entry(
     case_id,
     source_mode_id,
     target_point_id,
@@ -901,30 +1026,41 @@ def _evaluate_scalar_arithmetic_entry(
     case_axis_perm,
     case_axis_sign,
     case_axis_group,
+    axis_sign_power=None,
     q_order,
     dim,
 ):
+    if axis_sign_power is None:
+        axis_sign_power = np.zeros(int(dim), dtype=np.uint8)
+
     source_axes_raw = _decode_mode_axes(source_mode_id, q_order, dim)
     target_axes_raw = _decode_mode_axes(target_point_id, q_order, dim)
 
     source_axes = []
     target_axes = []
     groups = []
+    entry_sign = 1
     for out_axis in range(int(dim)):
         in_axis = int(case_axis_perm[case_id, out_axis])
         axis_sign = int(case_axis_sign[case_id, out_axis])
         source_axis = source_axes_raw[in_axis]
         target_axis = target_axes_raw[in_axis]
+        applied_axis_sign = 1
 
         if axis_sign < 0:
             source_axis = int(q_order) - 1 - source_axis
             target_axis = int(q_order) - 1 - target_axis
+            applied_axis_sign = -1
         elif axis_sign == 0:
             flipped_source = int(q_order) - 1 - source_axis
             flipped_target = int(q_order) - 1 - target_axis
             if (flipped_source, flipped_target) < (source_axis, target_axis):
                 source_axis = flipped_source
                 target_axis = flipped_target
+                applied_axis_sign = -1
+
+        if int(axis_sign_power[in_axis]):
+            entry_sign *= applied_axis_sign
 
         source_axes.append(source_axis)
         target_axes.append(target_axis)
@@ -958,14 +1094,66 @@ def _evaluate_scalar_arithmetic_entry(
     canonical_source = _encode_mode_axes(source_axes, q_order)
     canonical_target = _encode_mode_axes(target_axes, q_order)
     n_q_points = int(q_order) ** int(dim)
-    return (
+    entry_id = (
         int(case_orbit_ranks[case_id]) * n_q_points * n_q_points
         + canonical_source * n_q_points
         + canonical_target
     )
+    return int(entry_id), int(entry_sign)
 
 
-def _build_scalar_arithmetic_orbit_reconstruction(
+def _evaluate_scalar_arithmetic_entry(
+    case_id,
+    source_mode_id,
+    target_point_id,
+    *,
+    case_orbit_ranks,
+    case_axis_perm,
+    case_axis_sign,
+    case_axis_group,
+    q_order,
+    dim,
+):
+    entry_id, _ = _evaluate_arithmetic_orbit_entry(
+        case_id,
+        source_mode_id,
+        target_point_id,
+        case_orbit_ranks=case_orbit_ranks,
+        case_axis_perm=case_axis_perm,
+        case_axis_sign=case_axis_sign,
+        case_axis_group=case_axis_group,
+        q_order=q_order,
+        dim=dim,
+    )
+    return entry_id
+
+
+def _entry_has_odd_axis_stabilizer(
+    case_vec,
+    source_mode_id,
+    target_point_id,
+    *,
+    axis_sign_power,
+    q_order,
+    dim,
+):
+    source_axes = _decode_mode_axes(source_mode_id, q_order, dim)
+    target_axes = _decode_mode_axes(target_point_id, q_order, dim)
+    for axis in range(int(dim)):
+        if not int(axis_sign_power[axis]):
+            continue
+        if int(case_vec[axis]) != 0:
+            continue
+        if source_axes[axis] != int(q_order) - 1 - source_axes[axis]:
+            continue
+        if target_axes[axis] != int(q_order) - 1 - target_axes[axis]:
+            continue
+        return True
+
+    return False
+
+
+def _build_arithmetic_orbit_reconstruction(
     table,
     table_entry_ids,
     table_entry_scales,
@@ -978,26 +1166,40 @@ def _build_scalar_arithmetic_orbit_reconstruction(
         return None
 
     reconstruction_maps = table._get_orbit_reconstruction_maps()
-    transform_signs = np.asarray(reconstruction_maps["transform_signs"], dtype=np.int8)
-    expected_transform_count = (2 ** int(table.dim)) * math.factorial(int(table.dim))
-    if len(transform_signs) != expected_transform_count:
-        return None
-    if not np.all(transform_signs == 1):
-        return None
-    if table.n_q_points > np.iinfo(np.uint16).max:
+    arithmetic_symmetry = _kernel_axis_preserving_arithmetic_symmetry(
+        table,
+        reconstruction_maps,
+    )
+    if arithmetic_symmetry is None:
         return None
 
-    table_entry_scales_real = np.real(np.asarray(table_entry_scales))
-    if not np.all(table_entry_scales_real == 1):
+    fixed_axes = arithmetic_symmetry["fixed_axes"]
+    axis_sign_power = arithmetic_symmetry["axis_sign_power"]
+    if table.n_q_points > np.iinfo(np.uint16).max:
         return None
 
     case_vecs = np.asarray(table.interaction_case_vecs, dtype=np.int32)
     canonical_case_ids = np.empty(table.n_cases, dtype=np.int32)
+    case_axis_perm = np.empty((table.n_cases, table.dim), dtype=np.uint8)
+    case_axis_sign = np.empty((table.n_cases, table.dim), dtype=np.int8)
+    case_axis_group = np.empty((table.n_cases, table.dim), dtype=np.uint8)
+
     for case_id, case_vec in enumerate(case_vecs):
-        canonical_vec = [-int(val) for val in sorted(np.abs(case_vec), reverse=True)]
+        axis_perm, axis_sign, axis_group = _case_arithmetic_axis_descriptors(
+            case_vec,
+            fixed_axes=fixed_axes,
+        )
+        canonical_vec = _canonical_case_from_axis_descriptors(
+            case_vec,
+            axis_perm,
+            axis_sign,
+        )
         canonical_case_ids[case_id] = int(
             table.case_indices[table.case_encode(canonical_vec)]
         )
+        case_axis_perm[case_id, :] = axis_perm
+        case_axis_sign[case_id, :] = axis_sign
+        case_axis_group[case_id, :] = axis_group
 
     unique_canonical_case_ids = np.unique(canonical_case_ids)
     if len(unique_canonical_case_ids) > np.iinfo(np.uint16).max:
@@ -1007,32 +1209,29 @@ def _build_scalar_arithmetic_orbit_reconstruction(
         int(case_id): rank for rank, case_id in enumerate(unique_canonical_case_ids)
     }
     case_orbit_ranks = np.empty(table.n_cases, dtype=np.uint16)
-    case_axis_perm = np.empty((table.n_cases, table.dim), dtype=np.uint8)
-    case_axis_sign = np.empty((table.n_cases, table.dim), dtype=np.int8)
-    case_axis_group = np.empty((table.n_cases, table.dim), dtype=np.uint8)
 
-    for case_id, case_vec in enumerate(case_vecs):
+    for case_id in range(table.n_cases):
         case_orbit_ranks[case_id] = canonical_case_rank_by_id[
             int(canonical_case_ids[case_id])
         ]
-        axis_perm, axis_sign, axis_group = _case_arithmetic_axis_descriptors(case_vec)
-        case_axis_perm[case_id, :] = axis_perm
-        case_axis_sign[case_id, :] = axis_sign
-        case_axis_group[case_id, :] = axis_group
 
     n_arithmetic_entries = len(unique_canonical_case_ids) * table.n_pairs
     layout_entry_ids = np.full(n_arithmetic_entries, -1, dtype=np.int64)
+    layout_entry_scales = np.ones(n_arithmetic_entries, dtype=np.int8)
+    sign_convention_conflict_count = 0
     full_entry_count = table.n_cases * table.n_pairs
     representative_entry_ids = np.asarray(
         table._get_orbit_canonical_info()["entry_ids"], dtype=np.int64
     )
+    table_entry_ids = np.asarray(table_entry_ids, dtype=np.int32)
+    expected_scales = np.real(np.asarray(table_entry_scales)).astype(np.int8)
 
     for full_entry_id in range(full_entry_count):
         case_id = full_entry_id // table.n_pairs
         pair_id = full_entry_id % table.n_pairs
         source_mode_id = pair_id // table.n_q_points
         target_point_id = pair_id % table.n_q_points
-        arithmetic_row = _evaluate_scalar_arithmetic_entry(
+        arithmetic_row, arithmetic_sign = _evaluate_arithmetic_orbit_entry(
             case_id,
             source_mode_id,
             target_point_id,
@@ -1040,35 +1239,71 @@ def _build_scalar_arithmetic_orbit_reconstruction(
             case_axis_perm=case_axis_perm,
             case_axis_sign=case_axis_sign,
             case_axis_group=case_axis_group,
+            axis_sign_power=axis_sign_power,
             q_order=table.quad_order,
             dim=table.dim,
         )
         representative_full_id = int(
             representative_entry_ids[table_entry_ids[full_entry_id]]
         )
+        layout_scale = int(expected_scales[full_entry_id]) * int(arithmetic_sign)
         existing = int(layout_entry_ids[arithmetic_row])
         if existing >= 0 and existing != representative_full_id:
             raise RuntimeError("arithmetic ORBIT row layout is inconsistent")
+        if existing >= 0 and int(layout_entry_scales[arithmetic_row]) != layout_scale:
+            if _entry_has_odd_axis_stabilizer(
+                case_vecs[case_id],
+                source_mode_id,
+                target_point_id,
+                axis_sign_power=axis_sign_power,
+                q_order=table.quad_order,
+                dim=table.dim,
+            ):
+                sign_convention_conflict_count += 1
+                continue
+            raise RuntimeError("arithmetic ORBIT row sign layout is inconsistent")
         layout_entry_ids[arithmetic_row] = representative_full_id
+        layout_entry_scales[arithmetic_row] = layout_scale
 
     metadata_arrays = (
         case_orbit_ranks,
         case_axis_perm,
         case_axis_sign,
         case_axis_group,
+        axis_sign_power,
+    )
+    kind = (
+        "signed-arithmetic-orbit"
+        if np.any(axis_sign_power)
+        else "scalar-arithmetic-orbit"
     )
 
     return {
-        "kind": "scalar-arithmetic-orbit",
+        "kind": kind,
         "case_orbit_ranks": case_orbit_ranks,
         "case_axis_perm": case_axis_perm,
         "case_axis_sign": case_axis_sign,
         "case_axis_group": case_axis_group,
+        "axis_sign_power": axis_sign_power,
         "layout_entry_ids": layout_entry_ids,
+        "layout_entry_scales": layout_entry_scales,
         "n_case_orbits": int(len(unique_canonical_case_ids)),
         "metadata_bytes": int(sum(arr.nbytes for arr in metadata_arrays)),
         "unused_layout_entry_count": int(np.count_nonzero(layout_entry_ids < 0)),
+        "sign_convention_conflict_count": int(sign_convention_conflict_count),
     }
+
+
+def _build_scalar_arithmetic_orbit_reconstruction(
+    table,
+    table_entry_ids,
+    table_entry_scales,
+):
+    return _build_arithmetic_orbit_reconstruction(
+        table,
+        table_entry_ids,
+        table_entry_scales,
+    )
 
 
 def _build_generated_orbit_reconstruction(table, table_entry_ids, table_entry_scales):
@@ -1241,8 +1476,17 @@ def _prepare_table_data_and_entry_map(table_levels):
 
     layout_entry_ids = reconstruction_info.get("layout_entry_ids", kept_entry_ids)
     layout_entry_ids = np.asarray(layout_entry_ids, dtype=np.int64)
+    layout_entry_scales = reconstruction_info.get("layout_entry_scales")
+    if layout_entry_scales is None:
+        layout_entry_scales = np.ones(len(layout_entry_ids), dtype=table0.data.dtype)
+    else:
+        layout_entry_scales = np.asarray(layout_entry_scales, dtype=table0.data.dtype)
+    if layout_entry_scales.shape != layout_entry_ids.shape:
+        raise RuntimeError("reconstruction layout entry scales have incompatible shape")
+
     used_layout_mask = layout_entry_ids >= 0
     used_layout_entry_ids = layout_entry_ids[used_layout_mask]
+    used_layout_scales = layout_entry_scales[used_layout_mask]
     if len(used_layout_entry_ids) == 0:
         raise RuntimeError("near-field reconstruction layout contains no entries")
     if not np.all(np.isfinite(table0.data[used_layout_entry_ids])):
@@ -1267,7 +1511,9 @@ def _prepare_table_data_and_entry_map(table_levels):
     )
 
     for lev, table in enumerate(table_levels):
-        table_data_combined[lev, used_layout_mask] = table.data[used_layout_entry_ids]
+        table_data_combined[lev, used_layout_mask] = (
+            table.data[used_layout_entry_ids] * used_layout_scales
+        )
         mode_nmlz_combined[lev, :] = table.mode_normalizers
         exterior_mode_nmlz_combined[lev, :] = table.kernel_exterior_normalizers
 
@@ -2187,7 +2433,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             "n_table_entries": table_data_combined.shape[1],
             "reconstruction_kind": reconstruction_kind,
         }
-        if reconstruction_kind == "scalar-arithmetic-orbit":
+        if reconstruction_kind in _ARITHMETIC_RECONSTRUCTION_KINDS:
             table_data_shapes.update(
                 {
                     "n_arithmetic_case_orbits": int(
@@ -2226,6 +2472,9 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             "generated_sign_correction_count": int(
                 reconstruction_info.get("sign_correction_count", 0)
             ),
+            "sign_convention_conflict_count": int(
+                reconstruction_info.get("sign_convention_conflict_count", 0)
+            ),
             "unused_arithmetic_layout_entries": int(
                 reconstruction_info.get("unused_layout_entry_count", 0)
             ),
@@ -2244,7 +2493,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             "reconstruction_diagnostics": reconstruction_diagnostics,
         }
 
-        if reconstruction_kind == "scalar-arithmetic-orbit":
+        if reconstruction_kind in _ARITHMETIC_RECONSTRUCTION_KINDS:
             payload.update(
                 {
                     "arithmetic_case_orbit_ranks_dev": cl.array.to_device(
@@ -2258,6 +2507,9 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
                     ),
                     "arithmetic_case_axis_group_dev": cl.array.to_device(
                         queue, reconstruction_info["case_axis_group"]
+                    ),
+                    "arithmetic_axis_sign_power_dev": cl.array.to_device(
+                        queue, reconstruction_info["axis_sign_power"]
                     ),
                 }
             )
@@ -2483,7 +2735,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         table_data_combined = payload["table_data_dev"]
         mode_nmlz_combined = payload["mode_nmlz_dev"]
         exterior_mode_nmlz_combined = payload["exterior_mode_nmlz_dev"]
-        if reconstruction_kind == "scalar-arithmetic-orbit":
+        if reconstruction_kind in _ARITHMETIC_RECONSTRUCTION_KINDS:
             reconstruction_kwargs = {
                 "arithmetic_case_orbit_ranks": payload[
                     "arithmetic_case_orbit_ranks_dev"
@@ -2496,6 +2748,9 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
                 ],
                 "arithmetic_case_axis_group": payload[
                     "arithmetic_case_axis_group_dev"
+                ],
+                "arithmetic_axis_sign_power": payload[
+                    "arithmetic_axis_sign_power_dev"
                 ],
             }
         elif reconstruction_kind == "generated-orbit":
@@ -5133,7 +5388,7 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
         table_data_combined = payload["table_data_dev"]
         mode_nmlz_combined = payload["mode_nmlz_dev"]
         exterior_mode_nmlz_combined = payload["exterior_mode_nmlz_dev"]
-        if reconstruction_kind == "scalar-arithmetic-orbit":
+        if reconstruction_kind in _ARITHMETIC_RECONSTRUCTION_KINDS:
             reconstruction_kwargs = {
                 "arithmetic_case_orbit_ranks": payload[
                     "arithmetic_case_orbit_ranks_dev"
@@ -5146,6 +5401,9 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
                 ],
                 "arithmetic_case_axis_group": payload[
                     "arithmetic_case_axis_group_dev"
+                ],
+                "arithmetic_axis_sign_power": payload[
+                    "arithmetic_axis_sign_power_dev"
                 ],
             }
         elif reconstruction_kind == "generated-orbit":
@@ -5308,7 +5566,7 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
             "n_table_entries": table_data_combined.shape[1],
             "reconstruction_kind": reconstruction_kind,
         }
-        if reconstruction_kind == "scalar-arithmetic-orbit":
+        if reconstruction_kind in _ARITHMETIC_RECONSTRUCTION_KINDS:
             table_data_shapes.update(
                 {
                     "n_arithmetic_case_orbits": int(
@@ -5347,6 +5605,9 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
             "generated_sign_correction_count": int(
                 reconstruction_info.get("sign_correction_count", 0)
             ),
+            "sign_convention_conflict_count": int(
+                reconstruction_info.get("sign_convention_conflict_count", 0)
+            ),
             "unused_arithmetic_layout_entries": int(
                 reconstruction_info.get("unused_layout_entry_count", 0)
             ),
@@ -5365,7 +5626,7 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
             "reconstruction_diagnostics": reconstruction_diagnostics,
         }
 
-        if reconstruction_kind == "scalar-arithmetic-orbit":
+        if reconstruction_kind in _ARITHMETIC_RECONSTRUCTION_KINDS:
             payload.update(
                 {
                     "arithmetic_case_orbit_ranks_dev": cl.array.to_device(
@@ -5379,6 +5640,9 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
                     ),
                     "arithmetic_case_axis_group_dev": cl.array.to_device(
                         queue, reconstruction_info["case_axis_group"]
+                    ),
+                    "arithmetic_axis_sign_power_dev": cl.array.to_device(
+                        queue, reconstruction_info["axis_sign_power"]
                     ),
                 }
             )

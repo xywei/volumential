@@ -2206,23 +2206,46 @@ def test_prepare_table_data_and_entry_map_uses_orbit_canonical_mapping():
 
 @pytest.mark.parametrize(
     "kernel_case",
-    ["scalar-laplace", "target-derivative"],
+    [
+        "scalar-laplace",
+        "target-derivative",
+        "source-derivative",
+        "directional-axis-source-derivative",
+        "mixed-source-target-derivative",
+    ],
 )
-def test_generated_orbit_reconstruction_matches_dense_oracle(kernel_case):
-    from sumpy.kernel import AxisTargetDerivative, LaplaceKernel
+def test_arithmetic_orbit_reconstruction_matches_dense_oracle(kernel_case):
+    from sumpy.kernel import (
+        AxisSourceDerivative,
+        AxisTargetDerivative,
+        DirectionalSourceDerivative,
+        LaplaceKernel,
+    )
 
     from volumential.expansion_wrangler_fpnd import (
-        _evaluate_generated_orbit_reconstruction,
+        _entry_has_odd_axis_stabilizer,
+        _evaluate_arithmetic_orbit_entry,
         _evaluate_scalar_arithmetic_entry,
         _prepare_table_data_and_entry_map,
     )
 
     q_order = 3
     dim = 3
+    symmetry_source_direction = None
     if kernel_case == "scalar-laplace":
         sumpy_kernel = LaplaceKernel(dim)
-    else:
+    elif kernel_case == "target-derivative":
         sumpy_kernel = AxisTargetDerivative(0, LaplaceKernel(dim))
+    elif kernel_case == "source-derivative":
+        sumpy_kernel = AxisSourceDerivative(0, LaplaceKernel(dim))
+    elif kernel_case == "directional-axis-source-derivative":
+        sumpy_kernel = DirectionalSourceDerivative(LaplaceKernel(dim), "dir_vec")
+        symmetry_source_direction = np.array([1.0, 0.0, 0.0])
+    else:
+        sumpy_kernel = AxisTargetDerivative(
+            0,
+            AxisSourceDerivative(1, LaplaceKernel(dim)),
+        )
 
     table = npt.NearFieldInteractionTable(
         quad_order=q_order,
@@ -2232,6 +2255,7 @@ def test_generated_orbit_reconstruction_matches_dense_oracle(kernel_case):
         kernel_type="inv_power",
         sumpy_kernel=sumpy_kernel,
         derive_kernel_func=False,
+        symmetry_source_direction=symmetry_source_direction,
         progress_bar=False,
         precomputed_q_points=_precomputed_legendre_q_points(q_order, dim),
     )
@@ -2280,38 +2304,85 @@ def test_generated_orbit_reconstruction_matches_dense_oracle(kernel_case):
             dense_value = table.data[expected_entry_ids[full_entry_id]]
             assert table_data_combined[0, arithmetic_row] == dense_value
     else:
-        assert reconstruction_info["kind"] == "generated-orbit"
-        assert table_data_combined.shape == (1, len(entry_ids))
+        assert reconstruction_info["kind"] == "signed-arithmetic-orbit"
+        assert "lookup_keys" not in reconstruction_info
+        assert "sign_lookup_keys" not in reconstruction_info
+        assert reconstruction_info["metadata_bytes"] < 2000
 
-        reconstruction_maps = table._get_orbit_reconstruction_maps()
-        generated_entry_ids, generated_scales = (
-            _evaluate_generated_orbit_reconstruction(
-                reconstruction_maps["transform_qpoint_map"],
-                reconstruction_maps["transform_case_map"],
-                reconstruction_maps["transform_signs"],
-                n_cases=table.n_cases,
-                n_q_points=table.n_q_points,
+        dense_convention_mismatches = 0
+        for full_entry_id in range(table.n_cases * table.n_pairs):
+            case_id = full_entry_id // table.n_pairs
+            pair_id = full_entry_id % table.n_pairs
+            source_mode_id = pair_id // table.n_q_points
+            target_point_id = pair_id % table.n_q_points
+            arithmetic_row, arithmetic_sign = _evaluate_arithmetic_orbit_entry(
+                case_id,
+                source_mode_id,
+                target_point_id,
+                case_orbit_ranks=reconstruction_info["case_orbit_ranks"],
+                case_axis_perm=reconstruction_info["case_axis_perm"],
+                case_axis_sign=reconstruction_info["case_axis_sign"],
+                case_axis_group=reconstruction_info["case_axis_group"],
+                axis_sign_power=reconstruction_info["axis_sign_power"],
+                q_order=table.quad_order,
+                dim=table.dim,
             )
-        )
-        np.testing.assert_array_equal(generated_entry_ids, expected_entry_ids)
+            arithmetic_value = table_data_combined[0, arithmetic_row] * arithmetic_sign
+            dense_value = (
+                table.data[expected_entry_ids[full_entry_id]]
+                * expected_scales[full_entry_id]
+            )
 
-        sign_keys = reconstruction_info["sign_lookup_keys"]
-        sign_values = reconstruction_info["sign_lookup_values"]
-        sign_probe_count = reconstruction_info["sign_lookup_max_probe_count"]
-        corrected_scales = generated_scales.copy()
-        for full_entry_id in range(len(corrected_scales)):
-            slot0 = (full_entry_id * 33) & (len(sign_keys) - 1)
-            for probe in range(sign_probe_count):
-                slot = (slot0 + probe) & (len(sign_keys) - 1)
-                if sign_keys[slot] == full_entry_id:
-                    corrected_scales[full_entry_id] *= sign_values[slot]
-                    break
+            if arithmetic_value != dense_value:
+                assert _entry_has_odd_axis_stabilizer(
+                    table.interaction_case_vecs[case_id],
+                    source_mode_id,
+                    target_point_id,
+                    axis_sign_power=reconstruction_info["axis_sign_power"],
+                    q_order=table.quad_order,
+                    dim=table.dim,
+                )
+                dense_convention_mismatches += 1
 
-        np.testing.assert_array_equal(corrected_scales, expected_scales)
-        assert reconstruction_info["sign_correction_count"] > 0
+        assert dense_convention_mismatches == reconstruction_info[
+            "sign_convention_conflict_count"
+        ]
+        assert dense_convention_mismatches > 0
 
 
-def test_generated_orbit_reconstruction_q3_payload_diagnostic_row():
+def test_non_axis_directional_source_derivative_uses_generated_fallback():
+    from sumpy.kernel import DirectionalSourceDerivative, LaplaceKernel
+
+    from volumential.expansion_wrangler_fpnd import _prepare_table_data_and_entry_map
+
+    q_order = 3
+    dim = 3
+    table = npt.NearFieldInteractionTable(
+        quad_order=q_order,
+        dim=dim,
+        build_method="DuffyRadial",
+        kernel_func=npt.constant_one,
+        kernel_type="inv_power",
+        sumpy_kernel=DirectionalSourceDerivative(LaplaceKernel(dim), "dir_vec"),
+        derive_kernel_func=False,
+        symmetry_source_direction=np.array([1.0, 1.0, 0.0]),
+        progress_bar=False,
+        precomputed_q_points=_precomputed_legendre_q_points(q_order, dim),
+    )
+    orbit_info = table._get_orbit_canonical_info()
+    entry_ids = np.asarray(orbit_info["entry_ids"], dtype=np.int64)
+    table.data.fill(np.nan)
+    table.data[entry_ids] = np.arange(1, len(entry_ids) + 1, dtype=table.dtype)
+    table.table_data_is_symmetry_reduced = True
+
+    _, _, _, _, _, reconstruction_info = _prepare_table_data_and_entry_map([table])
+
+    assert reconstruction_info["kind"] == "generated-orbit"
+    assert "lookup_keys" in reconstruction_info
+    assert "sign_lookup_keys" in reconstruction_info
+
+
+def test_arithmetic_orbit_reconstruction_q3_payload_diagnostic_row():
     from sumpy.kernel import LaplaceKernel
 
     from volumential.expansion_wrangler_fpnd import _prepare_table_data_and_entry_map

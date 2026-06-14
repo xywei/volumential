@@ -146,6 +146,7 @@ class NearFieldEvalBase(KernelCacheWrapper):
             "dense",
             "generated-orbit",
             "scalar-arithmetic-orbit",
+            "signed-arithmetic-orbit",
         }
 
         self.options = options
@@ -600,7 +601,10 @@ class NearFieldFromCSR(NearFieldEvalBase):
         else:
             potential_dtype = np.float64
 
-        if self.reconstruction_kind == "scalar-arithmetic-orbit":
+        if self.reconstruction_kind in {
+            "scalar-arithmetic-orbit",
+            "signed-arithmetic-orbit",
+        }:
             reconstruction_domains = []
 
             def select_axis(prefix, perm_name):
@@ -694,6 +698,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
                         <> {perm_name} = arithmetic_case_axis_perm[case_id, {iaxis}]
                         <> {sign_name} = arithmetic_case_axis_sign[case_id, {iaxis}]
                         <> group{iaxis} = arithmetic_case_axis_group[case_id, {iaxis}]
+                        <> sign_power{iaxis} = arithmetic_axis_sign_power[{perm_name}]
                         <> src{iaxis}_raw_perm = {select_axis("src", perm_name)}
                         <> tgt{iaxis}_raw_perm = {select_axis("tgt", perm_name)}
                         <> src{iaxis}_fixed = (quad_order - 1 - src{iaxis}_raw_perm
@@ -711,6 +716,10 @@ class NearFieldFromCSR(NearFieldEvalBase):
                             if zero_flip{iaxis} else src{iaxis}_fixed)
                         <> tgt{iaxis} = (tgt{iaxis}_flip
                             if zero_flip{iaxis} else tgt{iaxis}_fixed)
+                        <> transform_sign{iaxis} = (-1
+                            if {sign_name} < 0 or zero_flip{iaxis} else 1)
+                        <> entry_sign_factor{iaxis} = (transform_sign{iaxis}
+                            if sign_power{iaxis} != 0 else 1)
                 """
 
             reconstruction_code = f"""
@@ -722,7 +731,9 @@ class NearFieldFromCSR(NearFieldEvalBase):
                         <> arithmetic_case_rank = arithmetic_case_orbit_ranks[case_id]
                         <> entry_id = arithmetic_case_rank * (n_q_points * n_q_points) \
                                 + canonical_source_id * n_q_points + canonical_target_id
-                        <> entry_sign = 1
+                        <> entry_sign = {" * ".join(
+                            f"entry_sign_factor{iaxis}" for iaxis in range(self.dim)
+                        )}
                         <> has_entry = 1
             """
             reconstruction_args = [
@@ -748,6 +759,12 @@ class NearFieldFromCSR(NearFieldEvalBase):
                     "arithmetic_case_axis_group",
                     np.uint8,
                     "n_cases, dim",
+                    is_input=True,
+                ),
+                loopy.GlobalArg(
+                    "arithmetic_axis_sign_power",
+                    np.uint8,
+                    "dim",
                     is_input=True,
                 ),
             ]
@@ -899,8 +916,8 @@ class NearFieldFromCSR(NearFieldEvalBase):
 
         kernel_domains = [
             "{ [ tbox ] : 0 <= tbox < n_tgt_boxes }",
-            "{ [ tid, sbox ] : 0 <= tid < n_box_targets and "
-            "sbox_begin <= sbox < sbox_end }",
+            "{ [ tid ] : 0 <= tid < n_q_points }",
+            "{ [ sbox ] : sbox_begin <= sbox < sbox_end }",
             "{ [ sid ] : 0 <= sid < n_box_sources }",
         ] + reconstruction_domains
 
@@ -919,10 +936,13 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 <> tbox_extent = root_extent * (1.0 / (2**tbox_level))
 
                 for tid
+                    if tid < n_box_targets
                     <> target_id = box_target_beg + tid
+                    end
                 end
 
                 for tid, sbox
+                    if tid < n_box_targets
                     <> source_box_id  = source_boxes[sbox]
                     <> n_box_sources  = box_source_counts_nonchild[source_box_id]
                     <> box_source_beg = box_source_starts[source_box_id]
@@ -975,18 +995,22 @@ class NearFieldFromCSR(NearFieldEvalBase):
                         #db_entry_id[target_id] = entry_id
 
                     end
+                    end
                 end
 
                 for tid
+                    if tid < n_box_targets
 
                     result[target_id] = sum((sbox, sid),
-                        coef * integ) + EXTERIOR_PART {dep=integ:coef:extnmlz}
+                        coef * integ) + EXTERIOR_PART \
+                            {id=write_result,dep=integ:coef:extnmlz}
 
                     # Try inspecting case_id if something goes wrong
                     # (like segmentation fault) and look for -1's
                     # result[target_id] = min((sbox, sid), case_id)
                     # result[target_id] = vec_id_tmp
 
+                    end
                 end
             end
             """.replace("COMPUTE_VEC_ID", self.codegen_vec_id())
@@ -1039,6 +1063,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
             + reconstruction_args,
             name="near_field",
             lang_version=(2018, 2),
+            silenced_warnings=("write_race(write_result)",),
         )
 
         # lpknl = loopy.set_options(lpknl, write_code=True)
@@ -1049,7 +1074,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
     def get_cache_key(self):
         return (
             type(self).__name__,
-            "kernel-v10",
+            "kernel-v12",
             self.name,
             self.kname,
             "complex_kernel=" + str(self.integral_kernel.is_complex_valued),
@@ -1065,6 +1090,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
             "n_reconstruction_sign_lookup_probes=%d"
             % self.n_reconstruction_sign_lookup_probes,
             "n_arithmetic_case_orbits=%d" % self.n_arithmetic_case_orbits,
+            "list1_target_batch_size=%d" % self._target_batch_size(),
             "infer_scaling=" + str(self.extra_kwargs["infer_kernel_scaling"]),
             "case_encoding_bias=" + repr(self.extra_kwargs["case_encoding_bias"]),
             "scaling_policy=" + self.codegen_compute_scaling(),
@@ -1072,8 +1098,30 @@ class NearFieldFromCSR(NearFieldEvalBase):
             "table_level_policy=" + self.codegen_get_table_level(),
         )
 
+    def _target_batch_size(self):
+        target_batch_size = int(self.extra_kwargs.get("list1_target_batch_size", 1))
+        if target_batch_size < 1:
+            raise ValueError("list1_target_batch_size must be positive")
+        return target_batch_size
+
     def get_optimized_kernel(self, ncpus=None):
         knl = self.get_kernel()
+        target_batch_size = self._target_batch_size()
+        if target_batch_size > 1:
+            # Each target row is independent; keep the source-box/source-mode
+            # reduction private to one work item while mapping neighboring target
+            # points in a box to local lanes for warp/subgroup-friendly execution.
+            knl = loopy.split_iname(
+                knl,
+                "tid",
+                inner_length=target_batch_size,
+                outer_tag="g.1",
+                inner_tag="l.0",
+                slabs=(0, 1),
+            )
+
+        knl = loopy.tag_inames(knl, {"tbox": "g.0"})
+        knl = loopy.add_inames_for_unused_hw_axes(knl)
         return knl
 
     def __call__(self, queue, **kwargs):
@@ -1092,7 +1140,10 @@ class NearFieldFromCSR(NearFieldEvalBase):
         encoding_shift = kwargs.pop("encoding_shift")
         mode_nmlz_combined = kwargs.pop("mode_nmlz_combined")
         exterior_mode_nmlz_combined = kwargs.pop("exterior_mode_nmlz_combined")
-        if self.reconstruction_kind == "scalar-arithmetic-orbit":
+        if self.reconstruction_kind in {
+            "scalar-arithmetic-orbit",
+            "signed-arithmetic-orbit",
+        }:
             reconstruction_kwargs = {
                 "arithmetic_case_orbit_ranks": kwargs.pop(
                     "arithmetic_case_orbit_ranks"
@@ -1105,6 +1156,9 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 ),
                 "arithmetic_case_axis_group": kwargs.pop(
                     "arithmetic_case_axis_group"
+                ),
+                "arithmetic_axis_sign_power": kwargs.pop(
+                    "arithmetic_axis_sign_power"
                 ),
                 "quad_order": self.quad_order,
                 "n_arithmetic_case_orbits": self.n_arithmetic_case_orbits,
