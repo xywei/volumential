@@ -1317,6 +1317,144 @@ def _evaluate_scalar_arithmetic_entry(
     return entry_id
 
 
+def _rank_multiset(values, alphabet_size):
+    values = [int(value) for value in values]
+    alphabet_size = int(alphabet_size)
+    rank = 0
+    min_allowed = 0
+    nvalues = len(values)
+
+    for i, value in enumerate(values):
+        remaining = nvalues - i - 1
+        for candidate in range(min_allowed, value):
+            rank += math.comb(alphabet_size - candidate + remaining - 1, remaining)
+        min_allowed = value
+
+    return int(rank)
+
+
+def _compact_arithmetic_case_value_count(case_axis_sign, case_axis_group, q_order):
+    case_axis_sign = np.asarray(case_axis_sign, dtype=np.int8)
+    case_axis_group = np.asarray(case_axis_group, dtype=np.int64)
+    pair_count = int(q_order) * int(q_order)
+    folded_pair_count = (pair_count + 1) // 2
+    value_count = 1
+
+    for group_id in range(int(np.max(case_axis_group)) + 1):
+        axes = np.flatnonzero(case_axis_group == group_id)
+        if len(axes) == 0:
+            continue
+        alphabet_size = (
+            folded_pair_count
+            if np.any(case_axis_sign[axes] == 0)
+            else pair_count
+        )
+        value_count *= math.comb(int(alphabet_size) + len(axes) - 1, len(axes))
+
+    return int(value_count)
+
+
+def _evaluate_compact_arithmetic_orbit_entry(
+    case_id,
+    source_mode_id,
+    target_point_id,
+    *,
+    case_orbit_ranks,
+    case_value_offsets,
+    case_axis_perm,
+    case_axis_sign,
+    case_axis_group,
+    axis_sign_power=None,
+    axis_direction_signs=None,
+    direction_sign_axis=-1,
+    q_order,
+    dim,
+):
+    if axis_sign_power is None:
+        axis_sign_power = np.zeros(int(dim), dtype=np.uint8)
+    if axis_direction_signs is None:
+        axis_direction_signs = np.zeros(int(dim), dtype=np.int8)
+
+    source_axes_raw = _decode_mode_axes(source_mode_id, q_order, dim)
+    target_axes_raw = _decode_mode_axes(target_point_id, q_order, dim)
+
+    source_axes = []
+    target_axes = []
+    groups = []
+    axis_signs = []
+    entry_sign = 1
+    for out_axis in range(int(dim)):
+        in_axis = int(case_axis_perm[case_id, out_axis])
+        axis_sign = int(case_axis_sign[case_id, out_axis])
+        source_axis = source_axes_raw[in_axis]
+        target_axis = target_axes_raw[in_axis]
+        applied_axis_sign = 1
+
+        if axis_sign < 0:
+            source_axis = int(q_order) - 1 - source_axis
+            target_axis = int(q_order) - 1 - target_axis
+            applied_axis_sign = -1
+        elif axis_sign == 0:
+            flipped_source = int(q_order) - 1 - source_axis
+            flipped_target = int(q_order) - 1 - target_axis
+            if (flipped_source, flipped_target) < (source_axis, target_axis):
+                source_axis = flipped_source
+                target_axis = flipped_target
+                applied_axis_sign = -1
+
+        if int(axis_sign_power[in_axis]):
+            entry_sign *= applied_axis_sign
+        if int(direction_sign_axis) == out_axis:
+            entry_sign *= (
+                applied_axis_sign
+                * int(axis_direction_signs[in_axis])
+                * int(axis_direction_signs[out_axis])
+            )
+
+        source_axes.append(source_axis)
+        target_axes.append(target_axis)
+        groups.append(int(case_axis_group[case_id, out_axis]))
+        axis_signs.append(axis_sign)
+
+    pair_codes = [
+        int(source_axis) * int(q_order) + int(target_axis)
+        for source_axis, target_axis in zip(source_axes, target_axes, strict=True)
+    ]
+    pair_count = int(q_order) * int(q_order)
+    folded_pair_count = (pair_count + 1) // 2
+
+    group_ranks = []
+    group_value_counts = []
+    for group_id in range(max(groups) + 1):
+        axes = [axis for axis, group in enumerate(groups) if group == group_id]
+        if not axes:
+            group_ranks.append(0)
+            group_value_counts.append(1)
+            continue
+
+        alphabet_size = (
+            folded_pair_count
+            if any(axis_signs[axis] == 0 for axis in axes)
+            else pair_count
+        )
+        group_values = sorted(pair_codes[axis] for axis in axes)
+        group_ranks.append(_rank_multiset(group_values, alphabet_size))
+        group_value_counts.append(
+            math.comb(int(alphabet_size) + len(axes) - 1, len(axes))
+        )
+
+    compact_pair_rank = 0
+    for group_rank, group_value_count in zip(
+        group_ranks,
+        group_value_counts,
+        strict=True,
+    ):
+        compact_pair_rank = compact_pair_rank * int(group_value_count) + int(group_rank)
+
+    case_rank = int(case_orbit_ranks[case_id])
+    return int(case_value_offsets[case_rank]) + compact_pair_rank, int(entry_sign)
+
+
 def _entry_has_odd_reconstruction_stabilizer(
     case_id,
     source_mode_id,
@@ -1410,9 +1548,23 @@ def _build_arithmetic_orbit_reconstruction(
             int(canonical_case_ids[case_id])
         ]
 
-    n_arithmetic_entries = len(unique_canonical_case_ids) * table.n_pairs
-    layout_entry_ids = np.full(n_arithmetic_entries, -1, dtype=np.int64)
-    layout_entry_scales = np.ones(n_arithmetic_entries, dtype=np.int8)
+    case_value_counts = np.empty(len(unique_canonical_case_ids), dtype=np.int64)
+    for case_rank, canonical_case_id in enumerate(unique_canonical_case_ids):
+        case_value_counts[case_rank] = _compact_arithmetic_case_value_count(
+            case_axis_sign[canonical_case_id],
+            case_axis_group[canonical_case_id],
+            table.quad_order,
+        )
+
+    case_value_offsets_i64 = np.zeros(len(unique_canonical_case_ids) + 1, dtype=np.int64)
+    case_value_offsets_i64[1:] = np.cumsum(case_value_counts, dtype=np.int64)
+    if case_value_offsets_i64[-1] > np.iinfo(np.int32).max:
+        return None
+    case_value_offsets = case_value_offsets_i64.astype(np.int32)
+
+    n_compact_entries = int(case_value_offsets_i64[-1])
+    layout_entry_ids = np.full(n_compact_entries, -1, dtype=np.int64)
+    layout_entry_scales = np.ones(n_compact_entries, dtype=np.int8)
     sign_convention_conflict_count = 0
     full_entry_count = table.n_cases * table.n_pairs
     representative_entry_ids = np.asarray(
@@ -1426,11 +1578,12 @@ def _build_arithmetic_orbit_reconstruction(
         pair_id = full_entry_id % table.n_pairs
         source_mode_id = pair_id // table.n_q_points
         target_point_id = pair_id % table.n_q_points
-        arithmetic_row, arithmetic_sign = _evaluate_arithmetic_orbit_entry(
+        arithmetic_row, arithmetic_sign = _evaluate_compact_arithmetic_orbit_entry(
             case_id,
             source_mode_id,
             target_point_id,
             case_orbit_ranks=case_orbit_ranks,
+            case_value_offsets=case_value_offsets,
             case_axis_perm=case_axis_perm,
             case_axis_sign=case_axis_sign,
             case_axis_group=case_axis_group,
@@ -1466,6 +1619,7 @@ def _build_arithmetic_orbit_reconstruction(
         case_axis_sign,
         case_axis_group,
         axis_sign_power,
+        case_value_offsets,
     )
     if direction_sign_axis >= 0:
         metadata_arrays += (axis_direction_signs,)
@@ -1474,6 +1628,8 @@ def _build_arithmetic_orbit_reconstruction(
         if np.any(axis_sign_power) or direction_sign_axis >= 0
         else "scalar-arithmetic-orbit"
     )
+    used_layout_entry_ids = layout_entry_ids[layout_entry_ids >= 0]
+    distinct_layout_entry_count = int(len(np.unique(used_layout_entry_ids)))
 
     return {
         "kind": kind,
@@ -1481,6 +1637,7 @@ def _build_arithmetic_orbit_reconstruction(
         "case_axis_perm": case_axis_perm,
         "case_axis_sign": case_axis_sign,
         "case_axis_group": case_axis_group,
+        "case_value_offsets": case_value_offsets,
         "axis_sign_power": axis_sign_power,
         "axis_direction_signs": axis_direction_signs,
         "direction_sign_axis": int(direction_sign_axis),
@@ -1488,6 +1645,15 @@ def _build_arithmetic_orbit_reconstruction(
         "layout_entry_scales": layout_entry_scales,
         "n_case_orbits": int(len(unique_canonical_case_ids)),
         "metadata_bytes": int(sum(arr.nbytes for arr in metadata_arrays)),
+        "dense_arithmetic_layout_entry_count": int(
+            len(unique_canonical_case_ids) * table.n_pairs
+        ),
+        "compact_value_entry_count": int(n_compact_entries),
+        "representative_entry_count": int(len(representative_entry_ids)),
+        "distinct_layout_entry_count": distinct_layout_entry_count,
+        "duplicate_layout_entry_count": int(
+            len(used_layout_entry_ids) - distinct_layout_entry_count
+        ),
         "unused_layout_entry_count": int(np.count_nonzero(layout_entry_ids < 0)),
         "sign_convention_conflict_count": int(sign_convention_conflict_count),
     }
@@ -2702,7 +2868,17 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
 
         reconstruction_diagnostics = {
             "kind": reconstruction_kind,
+            "online_value_bytes": int(table_data_combined.nbytes),
             "representative_value_bytes": int(table_data_combined.nbytes),
+            "generated_reconstruction_metadata_bytes": int(
+                reconstruction_info["metadata_bytes"]
+            ),
+            "normalizer_auxiliary_bytes": int(
+                mode_nmlz_combined.nbytes + exterior_mode_nmlz_combined.nbytes
+            ),
+            "value_dense_block_equivalents": float(
+                table_data_combined.shape[1] / table0.n_pairs
+            ),
             "dense_entry_id_bytes": dense_id_bytes,
             "dense_entry_scale_bytes": dense_scale_bytes,
             "dense_metadata_bytes": int(dense_id_bytes + dense_scale_bytes),
@@ -2745,6 +2921,9 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
                     ),
                     "arithmetic_case_axis_group_dev": cl.array.to_device(
                         queue, reconstruction_info["case_axis_group"]
+                    ),
+                    "arithmetic_case_value_offsets_dev": cl.array.to_device(
+                        queue, reconstruction_info["case_value_offsets"]
                     ),
                     "arithmetic_axis_sign_power_dev": cl.array.to_device(
                         queue, reconstruction_info["axis_sign_power"]
@@ -2992,6 +3171,9 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
                 ],
                 "arithmetic_case_axis_group": payload[
                     "arithmetic_case_axis_group_dev"
+                ],
+                "arithmetic_case_value_offsets": payload[
+                    "arithmetic_case_value_offsets_dev"
                 ],
                 "arithmetic_axis_sign_power": payload[
                     "arithmetic_axis_sign_power_dev"
@@ -5652,6 +5834,9 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
                 "arithmetic_case_axis_group": payload[
                     "arithmetic_case_axis_group_dev"
                 ],
+                "arithmetic_case_value_offsets": payload[
+                    "arithmetic_case_value_offsets_dev"
+                ],
                 "arithmetic_axis_sign_power": payload[
                     "arithmetic_axis_sign_power_dev"
                 ],
@@ -5853,7 +6038,17 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
 
         reconstruction_diagnostics = {
             "kind": reconstruction_kind,
+            "online_value_bytes": int(table_data_combined.nbytes),
             "representative_value_bytes": int(table_data_combined.nbytes),
+            "generated_reconstruction_metadata_bytes": int(
+                reconstruction_info["metadata_bytes"]
+            ),
+            "normalizer_auxiliary_bytes": int(
+                mode_nmlz_combined.nbytes + exterior_mode_nmlz_combined.nbytes
+            ),
+            "value_dense_block_equivalents": float(
+                table_data_combined.shape[1] / table0.n_pairs
+            ),
             "dense_entry_id_bytes": dense_id_bytes,
             "dense_entry_scale_bytes": dense_scale_bytes,
             "dense_metadata_bytes": int(dense_id_bytes + dense_scale_bytes),
@@ -5896,6 +6091,9 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
                     ),
                     "arithmetic_case_axis_group_dev": cl.array.to_device(
                         queue, reconstruction_info["case_axis_group"]
+                    ),
+                    "arithmetic_case_value_offsets_dev": cl.array.to_device(
+                        queue, reconstruction_info["case_value_offsets"]
                     ),
                     "arithmetic_axis_sign_power_dev": cl.array.to_device(
                         queue, reconstruction_info["axis_sign_power"]

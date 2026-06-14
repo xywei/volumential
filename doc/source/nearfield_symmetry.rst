@@ -33,12 +33,19 @@ use the arithmetic path.
 - The evaluator decodes tensor-product source/target indices, applies the
   per-case signed permutation, resolves zero-axis flips locally, and uses a
   fixed compare-exchange sorting network for equal-absolute-value case axes.
-- The table layout is ``(canonical_case_orbit, canonical_source,
-  canonical_target)`` with target index fastest. This intentionally stores some
-  unused scalar layout rows to remove representative hash lookups and keep GPU
-  table accesses arithmetic and coalescing-friendly. Axis derivatives use the
-  same target-fastest layout and pre-apply any row-level representative sign
-  convention while packing the table values.
+- The table layout is compact by canonical case orbit. Each case orbit stores a
+  contiguous value segment, and the evaluator computes a compact multiset rank
+  for the canonical source/target pair under that case stabilizer. This keeps
+  scalar value rows at the persisted representative-entry count while avoiding
+  representative hash lookups and full-entry maps.
+- ``case_value_offsets`` maps a canonical case-orbit rank to the beginning of
+  its compact value segment. It is the only extra arithmetic-layout metadata
+  beyond the PR #109 descriptors.
+- Axis derivatives use the same compact layout and pre-apply any row-level
+  representative sign convention while packing the table values. Directional
+  derivative subgroups whose line-sign stabilizer couples multiple axes may use
+  a small compact envelope with duplicate representative values, still without a
+  runtime hash table.
 
 Unsupported constrained or sign-changing kernels use the generated descriptor
 fallback.
@@ -81,10 +88,11 @@ benchmarks.
 For scalar 3D Laplace at ``q=3``, the dense online reconstruction maps contain
 ``101331`` full entries and occupy ``1215972`` bytes as ``int32`` IDs plus
 ``float64`` scales. Scalar arithmetic reconstruction reduces transferred
-metadata to ``1532`` bytes in the CPU descriptor test. It uses a
-canonical-case table layout rather than the minimal representative-only layout,
-so value bytes increase relative to ``2510`` representatives while eliminating
-the transform scan and representative hash lookup in the scalar online kernel.
+metadata to ``1576`` bytes in the CPU descriptor test, including the
+``case_value_offsets`` array. The compact value layout stores ``2510`` scalar
+representative rows, matching the persisted representative-entry count while
+eliminating the transform scan and representative hash lookup in the scalar
+online kernel.
 
 Derivative kernels
 ------------------

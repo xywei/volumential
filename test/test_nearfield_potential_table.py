@@ -2254,8 +2254,7 @@ def test_arithmetic_orbit_reconstruction_matches_dense_oracle(kernel_case):
 
     from volumential.expansion_wrangler_fpnd import (
         _entry_has_odd_reconstruction_stabilizer,
-        _evaluate_arithmetic_orbit_entry,
-        _evaluate_scalar_arithmetic_entry,
+        _evaluate_compact_arithmetic_orbit_entry,
         _prepare_table_data_and_entry_map,
     )
 
@@ -2336,7 +2335,17 @@ def test_arithmetic_orbit_reconstruction_matches_dense_oracle(kernel_case):
             "scalar-laplace",
             "repeated-directional-source-derivative",
         }
-        assert table_data_combined.shape[1] > len(entry_ids)
+        assert table_data_combined.shape[1] == reconstruction_info[
+            "compact_value_entry_count"
+        ]
+        assert table_data_combined.shape[1] < reconstruction_info[
+            "dense_arithmetic_layout_entry_count"
+        ]
+        assert reconstruction_info["distinct_layout_entry_count"] == len(entry_ids)
+        if kernel_case == "scalar-laplace":
+            assert table_data_combined.shape[1] == len(entry_ids)
+            assert reconstruction_info["duplicate_layout_entry_count"] == 0
+            assert reconstruction_info["unused_layout_entry_count"] == 0
         assert reconstruction_info["metadata_bytes"] < 2000
 
         for full_entry_id in range(table.n_cases * table.n_pairs):
@@ -2344,11 +2353,12 @@ def test_arithmetic_orbit_reconstruction_matches_dense_oracle(kernel_case):
             pair_id = full_entry_id % table.n_pairs
             source_mode_id = pair_id // table.n_q_points
             target_point_id = pair_id % table.n_q_points
-            arithmetic_row = _evaluate_scalar_arithmetic_entry(
+            arithmetic_row, arithmetic_sign = _evaluate_compact_arithmetic_orbit_entry(
                 case_id,
                 source_mode_id,
                 target_point_id,
                 case_orbit_ranks=reconstruction_info["case_orbit_ranks"],
+                case_value_offsets=reconstruction_info["case_value_offsets"],
                 case_axis_perm=reconstruction_info["case_axis_perm"],
                 case_axis_sign=reconstruction_info["case_axis_sign"],
                 case_axis_group=reconstruction_info["case_axis_group"],
@@ -2356,11 +2366,21 @@ def test_arithmetic_orbit_reconstruction_matches_dense_oracle(kernel_case):
                 dim=table.dim,
             )
             dense_value = table.data[expected_entry_ids[full_entry_id]]
-            assert table_data_combined[0, arithmetic_row] == dense_value
+            assert (
+                table_data_combined[0, arithmetic_row] * arithmetic_sign
+                == dense_value
+            )
     else:
         assert reconstruction_info["kind"] == "signed-arithmetic-orbit"
         assert "lookup_keys" not in reconstruction_info
         assert "sign_lookup_keys" not in reconstruction_info
+        assert table_data_combined.shape[1] == reconstruction_info[
+            "compact_value_entry_count"
+        ]
+        assert table_data_combined.shape[1] <= reconstruction_info[
+            "dense_arithmetic_layout_entry_count"
+        ]
+        assert reconstruction_info["distinct_layout_entry_count"] == len(entry_ids)
         assert reconstruction_info["metadata_bytes"] < 2000
 
         dense_convention_mismatches = 0
@@ -2370,11 +2390,12 @@ def test_arithmetic_orbit_reconstruction_matches_dense_oracle(kernel_case):
             pair_id = full_entry_id % table.n_pairs
             source_mode_id = pair_id // table.n_q_points
             target_point_id = pair_id % table.n_q_points
-            arithmetic_row, arithmetic_sign = _evaluate_arithmetic_orbit_entry(
+            arithmetic_row, arithmetic_sign = _evaluate_compact_arithmetic_orbit_entry(
                 case_id,
                 source_mode_id,
                 target_point_id,
                 case_orbit_ranks=reconstruction_info["case_orbit_ranks"],
+                case_value_offsets=reconstruction_info["case_value_offsets"],
                 case_axis_perm=reconstruction_info["case_axis_perm"],
                 case_axis_sign=reconstruction_info["case_axis_sign"],
                 case_axis_group=reconstruction_info["case_axis_group"],
@@ -2475,9 +2496,14 @@ def test_arithmetic_orbit_reconstruction_q3_payload_diagnostic_row():
 
     dense_metadata_bytes = table_entry_ids.nbytes + table_entry_scales.nbytes
     assert recon["kind"] == "scalar-arithmetic-orbit"
-    assert table_data_combined.nbytes > len(entry_ids) * np.dtype(table.dtype).itemsize
+    assert table_data_combined.shape[1] == len(entry_ids)
+    assert table_data_combined.nbytes == len(entry_ids) * np.dtype(table.dtype).itemsize
+    assert recon["compact_value_entry_count"] == 2510
+    assert recon["representative_entry_count"] == 2510
+    assert recon["dense_arithmetic_layout_entry_count"] == 7290
+    assert recon["unused_layout_entry_count"] == 0
     assert dense_metadata_bytes == 1215972
-    assert recon["metadata_bytes"] < 2000
+    assert recon["metadata_bytes"] == 1576
 
 
 def test_table_payload_serialization_excludes_nan_sentinels_for_reduced_tables():

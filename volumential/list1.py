@@ -628,8 +628,6 @@ class NearFieldFromCSR(NearFieldEvalBase):
                         <> tgt_raw_0 = target_point_id // quad_order
                         <> tgt_raw_1 = target_point_id % quad_order
                 """
-                encode_source = "src0_s * quad_order + src1_s"
-                encode_target = "tgt0_s * quad_order + tgt1_s"
                 sort_code = """
                         <> swap01 = (1 if group0 == group1
                             and (src1 < src0 or (src1 == src0 and tgt1 < tgt0))
@@ -648,12 +646,6 @@ class NearFieldFromCSR(NearFieldEvalBase):
                         <> tgt_raw_1 = (target_point_id // quad_order) % quad_order
                         <> tgt_raw_2 = target_point_id % quad_order
                 """
-                encode_source = (
-                    "src0_s * (quad_order * quad_order) + src1_s * quad_order + src2_s"
-                )
-                encode_target = (
-                    "tgt0_s * (quad_order * quad_order) + tgt1_s * quad_order + tgt2_s"
-                )
                 sort_code = """
                         <> swap01_a = (1 if group0 == group1
                             and (src1 < src0 or (src1 == src0 and tgt1 < tgt0))
@@ -701,6 +693,110 @@ class NearFieldFromCSR(NearFieldEvalBase):
             else:
                 raise NotImplementedError("arithmetic ORBIT supports dim 2 or 3")
 
+            pair_code = ""
+            for iaxis in range(self.dim):
+                pair_code += f"""
+                        <> pair{iaxis} = src{iaxis}_s * quad_order + tgt{iaxis}_s
+                """
+            pair_code += """
+                        <> pair_count = quad_order * quad_order
+                        <> folded_pair_count = (pair_count + 1) // 2
+            """
+
+            def min_expr(values):
+                result = values[0]
+                for value in values[1:]:
+                    result = f"({result} if {result} <= {value} else {value})"
+                return result
+
+            def max_expr(values):
+                result = values[0]
+                for value in values[1:]:
+                    result = f"({result} if {result} >= {value} else {value})"
+                return result
+
+            rank_code = ""
+            for group_id in range(self.dim):
+                size_terms = [
+                    f"(1 if group{iaxis} == {group_id} else 0)"
+                    for iaxis in range(self.dim)
+                ]
+                zero_terms = [
+                    f"(1 if group{iaxis} == {group_id} "
+                    f"and axis_sign{iaxis} == 0 else 0)"
+                    for iaxis in range(self.dim)
+                ]
+                min_terms = [
+                    f"(pair{iaxis} if group{iaxis} == {group_id} else pair_count)"
+                    for iaxis in range(self.dim)
+                ]
+                max_terms = [
+                    f"(pair{iaxis} if group{iaxis} == {group_id} else -1)"
+                    for iaxis in range(self.dim)
+                ]
+                sum_terms = [
+                    f"(pair{iaxis} if group{iaxis} == {group_id} else 0)"
+                    for iaxis in range(self.dim)
+                ]
+                rank_code += f"""
+                        <> group{group_id}_size = {' + '.join(size_terms)}
+                        <> group{group_id}_zero_count = {' + '.join(zero_terms)}
+                        <> group{group_id}_alphabet = (folded_pair_count
+                            if group{group_id}_zero_count > 0 else pair_count)
+                        <> group{group_id}_lo = {min_expr(min_terms)}
+                        <> group{group_id}_hi = {max_expr(max_terms)}
+                        <> group{group_id}_sum = {' + '.join(sum_terms)}
+                        <> group{group_id}_mid = group{group_id}_sum \
+                                - group{group_id}_lo - group{group_id}_hi
+                        <> group{group_id}_value_count = (
+                            1 if group{group_id}_size == 0 else (
+                            group{group_id}_alphabet
+                            if group{group_id}_size == 1 else (
+                            (group{group_id}_alphabet
+                            * (group{group_id}_alphabet + 1)) // 2
+                            if group{group_id}_size == 2 else
+                            (group{group_id}_alphabet
+                            * (group{group_id}_alphabet + 1)
+                            * (group{group_id}_alphabet + 2)) // 6)))
+                        <> group{group_id}_rank = (
+                            0 if group{group_id}_size == 0 else (
+                            group{group_id}_lo
+                            if group{group_id}_size == 1 else (
+                            (group{group_id}_alphabet
+                            * (group{group_id}_alphabet + 1)) // 2
+                            - ((group{group_id}_alphabet - group{group_id}_lo)
+                            * (group{group_id}_alphabet - group{group_id}_lo + 1)
+                            ) // 2
+                            + (group{group_id}_hi - group{group_id}_lo)
+                            if group{group_id}_size == 2 else
+                            (group{group_id}_alphabet
+                            * (group{group_id}_alphabet + 1)
+                            * (group{group_id}_alphabet + 2)) // 6
+                            - ((group{group_id}_alphabet - group{group_id}_lo)
+                            * (group{group_id}_alphabet - group{group_id}_lo + 1)
+                            * (group{group_id}_alphabet - group{group_id}_lo + 2)
+                            ) // 6
+                            + ((group{group_id}_alphabet - group{group_id}_lo)
+                            * (group{group_id}_alphabet - group{group_id}_lo + 1)
+                            ) // 2
+                            - ((group{group_id}_alphabet - group{group_id}_mid)
+                            * (group{group_id}_alphabet - group{group_id}_mid + 1)
+                            ) // 2
+                            + (group{group_id}_hi - group{group_id}_mid))))
+                """
+
+            if self.dim == 2:
+                compact_pair_rank = (
+                    "group0_rank * group1_value_count + group1_rank"
+                )
+            elif self.dim == 3:
+                compact_pair_rank = (
+                    "(group0_rank * group1_value_count + group1_rank) "
+                    "* group2_value_count + group2_rank"
+                )
+            else:
+                raise NotImplementedError("arithmetic ORBIT supports dim 2 or 3")
+
             axis_code = ""
             for iaxis in range(self.dim):
                 perm_name = f"perm{iaxis}"
@@ -745,11 +841,12 @@ class NearFieldFromCSR(NearFieldEvalBase):
                         {decode_code}
                         {axis_code}
                         {sort_code}
-                        <> canonical_source_id = {encode_source}
-                        <> canonical_target_id = {encode_target}
+                        {pair_code}
+                        {rank_code}
                         <> arithmetic_case_rank = arithmetic_case_orbit_ranks[case_id]
-                        <> entry_id = arithmetic_case_rank * (n_q_points * n_q_points) \
-                                + canonical_source_id * n_q_points + canonical_target_id
+                        <> compact_pair_rank = {compact_pair_rank}
+                        <> entry_id = arithmetic_case_value_offsets[
+                                arithmetic_case_rank] + compact_pair_rank
                         <> entry_sign = {" * ".join(
                             f"entry_sign_factor{iaxis}" for iaxis in range(self.dim)
                         )}
@@ -778,6 +875,12 @@ class NearFieldFromCSR(NearFieldEvalBase):
                     "arithmetic_case_axis_group",
                     np.uint8,
                     "n_cases, dim",
+                    is_input=True,
+                ),
+                loopy.GlobalArg(
+                    "arithmetic_case_value_offsets",
+                    np.int32,
+                    "n_arithmetic_case_orbits + 1",
                     is_input=True,
                 ),
                 loopy.GlobalArg(
@@ -1104,7 +1207,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
     def get_cache_key(self):
         return (
             type(self).__name__,
-            "kernel-v13",
+            "kernel-v14",
             self.name,
             self.kname,
             "complex_kernel=" + str(self.integral_kernel.is_complex_valued),
@@ -1186,6 +1289,9 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 ),
                 "arithmetic_case_axis_group": kwargs.pop(
                     "arithmetic_case_axis_group"
+                ),
+                "arithmetic_case_value_offsets": kwargs.pop(
+                    "arithmetic_case_value_offsets"
                 ),
                 "arithmetic_axis_sign_power": kwargs.pop(
                     "arithmetic_axis_sign_power"
