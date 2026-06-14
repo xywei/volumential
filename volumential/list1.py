@@ -117,12 +117,29 @@ class NearFieldEvalBase(KernelCacheWrapper):
         self.n_q_points = table_data_shapes["n_q_points"]
         self.n_table_entries = table_data_shapes["n_table_entries"]
         self.n_cases = table_data_shapes.get("n_cases", 0)
+        self.reconstruction_kind = table_data_shapes.get("reconstruction_kind", "dense")
+        self.n_reconstruction_transforms = table_data_shapes.get(
+            "n_reconstruction_transforms", 0
+        )
+        self.n_reconstruction_lookup_entries = table_data_shapes.get(
+            "n_reconstruction_lookup_entries", 0
+        )
+        self.n_reconstruction_lookup_probes = table_data_shapes.get(
+            "n_reconstruction_lookup_probes", 0
+        )
+        self.n_reconstruction_sign_lookup_entries = table_data_shapes.get(
+            "n_reconstruction_sign_lookup_entries", 0
+        )
+        self.n_reconstruction_sign_lookup_probes = table_data_shapes.get(
+            "n_reconstruction_sign_lookup_probes", 0
+        )
         self.potential_kind = potential_kind
 
         assert np.isreal(self.n_tables)
         assert np.isreal(self.n_q_points)
         assert np.isreal(self.n_table_entries)
         assert np.isreal(self.n_cases)
+        assert self.reconstruction_kind in {"dense", "generated-orbit"}
 
         self.options = options
         self.name = name or self.default_name
@@ -570,13 +587,160 @@ class NearFieldFromCSR(NearFieldEvalBase):
         else:
             potential_dtype = np.float64
 
+        if self.reconstruction_kind == "generated-orbit":
+            reconstruction_domains = [
+                "{ [ tr ] : 0 <= tr < n_reconstruction_transforms }",
+                "{ [ probe ] : 0 <= probe < n_reconstruction_lookup_probes }",
+                "{ [ sign_probe ] : "
+                "0 <= sign_probe < n_reconstruction_sign_lookup_probes }",
+            ]
+            reconstruction_code = """
+                        <> reconstruction_full_entry_id = \
+                                case_id * (n_q_points * n_q_points) \
+                                + source_mode_id * n_q_points + target_point_id
+                        <> best_reconstruction_key = min((tr),
+                            (
+                                reconstruction_case_map[tr, case_id]
+                                * (n_q_points * n_q_points)
+                                + reconstruction_qpoint_map[tr, source_mode_id]
+                                * n_q_points
+                                + reconstruction_qpoint_map[tr, target_point_id]
+                            ) * (2 * n_reconstruction_transforms)
+                            + (0 if reconstruction_signs[tr] > 0 else 1)
+                            * n_reconstruction_transforms
+                            + tr)
+                        <> best_transform_id = \
+                                best_reconstruction_key % n_reconstruction_transforms
+                        <> representative_entry_id = \
+                                best_reconstruction_key \
+                                / (2 * n_reconstruction_transforms)
+                        <> lookup_start = (representative_entry_id * 33) \
+                                % n_reconstruction_lookup_entries
+                        <> lookup_match_count = sum((probe),
+                            1
+                            if reconstruction_lookup_keys[
+                                (lookup_start + probe)
+                                % n_reconstruction_lookup_entries]
+                                == representative_entry_id
+                            else 0)
+                        <> entry_id = sum((probe),
+                            reconstruction_lookup_values[
+                                (lookup_start + probe)
+                                % n_reconstruction_lookup_entries]
+                            if reconstruction_lookup_keys[
+                                (lookup_start + probe)
+                                % n_reconstruction_lookup_entries]
+                                == representative_entry_id
+                            else 0)
+                        <> sign_lookup_start = (reconstruction_full_entry_id * 33) \
+                                % n_reconstruction_sign_lookup_entries
+                        <> sign_correction_match_count = sum((sign_probe),
+                            1
+                            if reconstruction_sign_lookup_keys[
+                                (sign_lookup_start + sign_probe)
+                                % n_reconstruction_sign_lookup_entries]
+                                == reconstruction_full_entry_id
+                            else 0)
+                        <> sign_correction = (
+                            sum((sign_probe),
+                                reconstruction_sign_lookup_values[
+                                    (sign_lookup_start + sign_probe)
+                                    % n_reconstruction_sign_lookup_entries]
+                                if reconstruction_sign_lookup_keys[
+                                    (sign_lookup_start + sign_probe)
+                                    % n_reconstruction_sign_lookup_entries]
+                                    == reconstruction_full_entry_id
+                                else 0)
+                            if sign_correction_match_count > 0
+                            else 1)
+                        <> entry_sign = reconstruction_signs[best_transform_id] \
+                                * sign_correction
+                        <> has_entry = lookup_match_count > 0
+            """
+            reconstruction_args = [
+                loopy.GlobalArg(
+                    "reconstruction_qpoint_map",
+                    np.int32,
+                    "n_reconstruction_transforms, n_q_points",
+                ),
+                loopy.GlobalArg(
+                    "reconstruction_case_map",
+                    np.int32,
+                    "n_reconstruction_transforms, n_cases",
+                ),
+                loopy.GlobalArg(
+                    "reconstruction_signs",
+                    np.int8,
+                    "n_reconstruction_transforms",
+                ),
+                loopy.GlobalArg(
+                    "reconstruction_lookup_keys",
+                    np.int32,
+                    "n_reconstruction_lookup_entries",
+                ),
+                loopy.GlobalArg(
+                    "reconstruction_lookup_values",
+                    np.int32,
+                    "n_reconstruction_lookup_entries",
+                ),
+                loopy.GlobalArg(
+                    "reconstruction_sign_lookup_keys",
+                    np.int32,
+                    "n_reconstruction_sign_lookup_entries",
+                ),
+                loopy.GlobalArg(
+                    "reconstruction_sign_lookup_values",
+                    np.int8,
+                    "n_reconstruction_sign_lookup_entries",
+                ),
+            ]
+            reconstruction_value_arg_names = (
+                ", n_reconstruction_transforms, "
+                "n_reconstruction_lookup_entries, n_reconstruction_lookup_probes, "
+                "n_reconstruction_sign_lookup_entries, "
+                "n_reconstruction_sign_lookup_probes"
+            )
+        else:
+            reconstruction_domains = []
+            reconstruction_code = """
+                        <> source_mode_id_sym = mode_qpoint_map[source_mode_id, source_mode_id]
+                        <> target_point_id_sym = mode_qpoint_map[source_mode_id, target_point_id]
+                        <> case_id_sym = mode_case_map[source_mode_id, case_id]
+                        <> mode_map_sign = mode_case_scale[source_mode_id, case_id]
+                        <> pair_id = source_mode_id_sym * n_q_points + target_point_id_sym
+                        <> entry_id_full = case_id_sym * (n_q_points * n_q_points) + pair_id
+                        <> entry_id = table_entry_ids[entry_id_full]
+                        <> entry_sign = table_entry_scales[entry_id_full] * mode_map_sign
+                        <> has_entry = entry_id >= 0
+            """
+            reconstruction_args = [
+                loopy.GlobalArg(
+                    "table_entry_ids", np.int32, "n_cases*n_q_points*n_q_points"
+                ),
+                loopy.GlobalArg(
+                    "table_entry_scales",
+                    potential_dtype,
+                    "n_cases*n_q_points*n_q_points",
+                ),
+                loopy.GlobalArg("mode_qpoint_map", np.int32, "n_q_points, n_q_points"),
+                loopy.GlobalArg("mode_case_map", np.int32, "n_q_points, n_cases"),
+                loopy.GlobalArg(
+                    "mode_case_scale",
+                    potential_dtype,
+                    "n_q_points, n_cases",
+                ),
+            ]
+            reconstruction_value_arg_names = ""
+
+        kernel_domains = [
+            "{ [ tbox ] : 0 <= tbox < n_tgt_boxes }",
+            "{ [ tid, sbox ] : 0 <= tid < n_box_targets and "
+            "sbox_begin <= sbox < sbox_end }",
+            "{ [ sid ] : 0 <= sid < n_box_sources }",
+        ] + reconstruction_domains
+
         lpknl = loopy.make_kernel(
-            [
-                "{ [ tbox ] : 0 <= tbox < n_tgt_boxes }",
-                "{ [ tid, sbox ] : 0 <= tid < n_box_targets and \
-                        sbox_begin <= sbox < sbox_end }",
-                "{ [ sid ] : 0 <= sid < n_box_sources }",
-            ],
+            kernel_domains,
             """
             for tbox
                 <> target_box_id    = target_boxes[tbox]
@@ -624,15 +788,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
 
                         <> source_id = box_source_beg + sid
                         <> source_mode_id = source_mode_ids[source_id]
-                        <> source_mode_id_sym = mode_qpoint_map[source_mode_id, source_mode_id]
-                        <> target_point_id_sym = mode_qpoint_map[source_mode_id, target_point_id]
-                        <> case_id_sym = mode_case_map[source_mode_id, case_id]
-                        <> mode_map_sign = mode_case_scale[source_mode_id, case_id]
-                        <> pair_id = source_mode_id_sym * n_q_points + target_point_id_sym
-                        <> entry_id_full = case_id_sym * (n_q_points * n_q_points) + pair_id
-                        <> entry_id = table_entry_ids[entry_id_full]
-                        <> entry_sign = table_entry_scales[entry_id_full] * mode_map_sign
-                        <> has_entry = entry_id >= 0
+                        RECONSTRUCT_ENTRY
 
                         <> displacement = COMPUTE_DISPLACEMENT
 
@@ -669,6 +825,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 end
             end
             """.replace("COMPUTE_VEC_ID", self.codegen_vec_id())
+            .replace("RECONSTRUCT_ENTRY", reconstruction_code)
             .replace("COMPUTE_SCALING", self.codegen_compute_scaling())
             .replace("COMPUTE_DISPLACEMENT", self.codegen_compute_displacement())
             .replace("COMPUTE_TGT_SCALING", self.codegen_compute_scaling("tbox"))
@@ -693,21 +850,6 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 loopy.GlobalArg(
                     "table_data", potential_dtype, "n_tables, n_table_entries"
                 ),
-                loopy.GlobalArg(
-                    "table_entry_ids", np.int32, "n_cases*n_q_points*n_q_points"
-                ),
-                loopy.GlobalArg(
-                    "table_entry_scales",
-                    potential_dtype,
-                    "n_cases*n_q_points*n_q_points",
-                ),
-                loopy.GlobalArg("mode_qpoint_map", np.int32, "n_q_points, n_q_points"),
-                loopy.GlobalArg("mode_case_map", np.int32, "n_q_points, n_cases"),
-                loopy.GlobalArg(
-                    "mode_case_scale",
-                    potential_dtype,
-                    "n_q_points, n_cases",
-                ),
                 loopy.GlobalArg("source_boxes", np.int32, "n_source_boxes"),
                 loopy.GlobalArg("box_centers", None, "dim, aligned_nboxes"),
                 loopy.GlobalArg(
@@ -722,11 +864,14 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 loopy.ValueArg("table_root_extent", np.float64),
                 loopy.ValueArg("table_starting_level", np.int32),
                 loopy.ValueArg(
-                    "dim, n_source_boxes, n_tables, n_q_points, n_cases, n_table_entries, n_source_particles, n_target_particles",
+                    "dim, n_source_boxes, n_tables, n_q_points, n_cases, "
+                    "n_table_entries, n_source_particles, n_target_particles"
+                    + reconstruction_value_arg_names,
                     np.int32,
                 ),
                 "...",
-            ],
+            ]
+            + reconstruction_args,
             name="near_field",
             lang_version=(2018, 2),
         )
@@ -744,6 +889,16 @@ class NearFieldFromCSR(NearFieldEvalBase):
             self.kname,
             "complex_kernel=" + str(self.integral_kernel.is_complex_valued),
             "potential_kind=%d" % self.potential_kind,
+            "reconstruction_kind=" + self.reconstruction_kind,
+            "n_reconstruction_transforms=%d" % self.n_reconstruction_transforms,
+            "n_reconstruction_lookup_entries=%d"
+            % self.n_reconstruction_lookup_entries,
+            "n_reconstruction_lookup_probes=%d"
+            % self.n_reconstruction_lookup_probes,
+            "n_reconstruction_sign_lookup_entries=%d"
+            % self.n_reconstruction_sign_lookup_entries,
+            "n_reconstruction_sign_lookup_probes=%d"
+            % self.n_reconstruction_sign_lookup_probes,
             "infer_scaling=" + str(self.extra_kwargs["infer_kernel_scaling"]),
             "case_encoding_bias=" + repr(self.extra_kwargs["case_encoding_bias"]),
             "scaling_policy=" + self.codegen_compute_scaling(),
@@ -771,11 +926,43 @@ class NearFieldFromCSR(NearFieldEvalBase):
         encoding_shift = kwargs.pop("encoding_shift")
         mode_nmlz_combined = kwargs.pop("mode_nmlz_combined")
         exterior_mode_nmlz_combined = kwargs.pop("exterior_mode_nmlz_combined")
-        mode_qpoint_map = kwargs.pop("mode_qpoint_map")
-        mode_case_map = kwargs.pop("mode_case_map")
-        mode_case_scale = kwargs.pop("mode_case_scale")
-        table_entry_ids = kwargs.pop("table_entry_ids")
-        table_entry_scales = kwargs.pop("table_entry_scales")
+        if self.reconstruction_kind == "generated-orbit":
+            reconstruction_kwargs = {
+                "reconstruction_qpoint_map": kwargs.pop("reconstruction_qpoint_map"),
+                "reconstruction_case_map": kwargs.pop("reconstruction_case_map"),
+                "reconstruction_signs": kwargs.pop("reconstruction_signs"),
+                "reconstruction_lookup_keys": kwargs.pop(
+                    "reconstruction_lookup_keys"
+                ),
+                "reconstruction_lookup_values": kwargs.pop(
+                    "reconstruction_lookup_values"
+                ),
+                "reconstruction_sign_lookup_keys": kwargs.pop(
+                    "reconstruction_sign_lookup_keys"
+                ),
+                "reconstruction_sign_lookup_values": kwargs.pop(
+                    "reconstruction_sign_lookup_values"
+                ),
+                "n_reconstruction_transforms": self.n_reconstruction_transforms,
+                "n_reconstruction_lookup_entries": (
+                    self.n_reconstruction_lookup_entries
+                ),
+                "n_reconstruction_lookup_probes": self.n_reconstruction_lookup_probes,
+                "n_reconstruction_sign_lookup_entries": (
+                    self.n_reconstruction_sign_lookup_entries
+                ),
+                "n_reconstruction_sign_lookup_probes": (
+                    self.n_reconstruction_sign_lookup_probes
+                ),
+            }
+        else:
+            reconstruction_kwargs = {
+                "mode_qpoint_map": kwargs.pop("mode_qpoint_map"),
+                "mode_case_map": kwargs.pop("mode_case_map"),
+                "mode_case_scale": kwargs.pop("mode_case_scale"),
+                "table_entry_ids": kwargs.pop("table_entry_ids"),
+                "table_entry_scales": kwargs.pop("table_entry_scales"),
+            }
         root_extent = kwargs.pop("root_extent")
         table_root_extent = kwargs.pop("table_root_extent")
         table_starting_level = kwargs.pop("table_starting_level")
@@ -887,11 +1074,6 @@ class NearFieldFromCSR(NearFieldEvalBase):
             encoding_shift=encoding_shift,
             mode_nmlz=mode_nmlz_combined,
             exterior_mode_nmlz=exterior_mode_nmlz_combined,
-            table_entry_ids=table_entry_ids,
-            table_entry_scales=table_entry_scales,
-            mode_qpoint_map=mode_qpoint_map,
-            mode_case_map=mode_case_map,
-            mode_case_scale=mode_case_scale,
             n_tgt_boxes=len(target_boxes),
             neighbor_source_boxes_starts=neighbor_source_boxes_starts,
             root_extent=root_extent,
@@ -906,6 +1088,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
             n_target_particles=len(target_point_ids),
             table_root_extent=table_root_extent,
             table_starting_level=table_starting_level,
+            **reconstruction_kwargs,
             **extra_knl_args_from_init,
         )
 
