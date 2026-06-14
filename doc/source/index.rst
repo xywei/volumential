@@ -12,8 +12,10 @@ Welcome to Volumential's Documentation!
 
    intro
    m1_kernels
+   derivative_support
    nearfield_symmetry
    helmholtz_split
+   validation_matrix
    install
    development
    api/modules

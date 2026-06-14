@@ -25,6 +25,7 @@ import logging
 import hashlib
 import math
 from collections import OrderedDict
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -51,10 +52,34 @@ from volumential.expansion_wrangler_interface import (
     ExpansionWranglerInterface,
     TreeIndependentDataForWranglerInterface,
 )
+from volumential.lagrange import barycentric_lagrange_weights
 from volumential.nearfield_potential_table import NearFieldInteractionTable
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class HelmholtzSplitCacheAccounting:
+    split_enabled: bool
+    split_order: int
+    parameter_count: int
+    base_table_count: int
+    split_term_table_count: int
+    basis_table_count: int
+    base_table_payload_bytes: int
+    split_term_table_payload_bytes: int
+    total_table_payload_bytes: int
+    split_term_keys: tuple
+    uses_online_coefficients: bool
+    uses_online_remainder: bool
+
+
+def _nearfield_table_payload_bytes(table):
+    data = np.asarray(table.data)
+    if bool(getattr(table, "table_data_is_symmetry_reduced", False)):
+        return int(np.count_nonzero(np.isfinite(data)) * data.dtype.itemsize)
+    return int(data.nbytes)
 
 
 def _table_data_fingerprint(arr, sample_bytes=4096):
@@ -79,20 +104,18 @@ def _gauss_legendre_nodes_and_weights(order):
 
 
 def _barycentric_interp_matrix(source_nodes, target_nodes):
-    from scipy.interpolate import BarycentricInterpolator as Interpolator
-
     source_nodes = np.asarray(source_nodes, dtype=np.float64)
     target_nodes = np.asarray(target_nodes, dtype=np.float64)
 
     if source_nodes.size == 1:
         return np.ones((target_nodes.size, 1), dtype=np.float64)
 
-    weights = np.asarray(Interpolator(xi=source_nodes, yi=None).wi, dtype=np.float64)
+    weights = barycentric_lagrange_weights(source_nodes)
     interp_mat = np.empty((target_nodes.size, source_nodes.size), dtype=np.float64)
 
     for i, x_tgt in enumerate(target_nodes):
         diff = x_tgt - source_nodes
-        hit = np.where(np.abs(diff) < 1.0e-15)[0]
+        hit = np.where(diff == 0.0)[0]
         if hit.size:
             interp_mat[i, :] = 0.0
             interp_mat[i, int(hit[0])] = 1.0
@@ -1193,11 +1216,17 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         if self.helmholtz_split:
             split_supported, split_reason = self._split_target_kernel_support_status()
             if not split_supported:
-                logger.info(
-                    "[split:disable] unsupported target kernels: %s",
-                    split_reason,
-                )
-                self.helmholtz_split = False
+                if helmholtz_split is None:
+                    logger.info(
+                        "[split:disable] unsupported target kernels: %s",
+                        split_reason,
+                    )
+                    self.helmholtz_split = False
+                else:
+                    raise RuntimeError(
+                        "helmholtz_split does not support the requested target "
+                        f"kernels; {split_reason}"
+                    )
 
         if self.helmholtz_split:
             base_table_supported, base_table_reason = (
@@ -1579,6 +1608,58 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         self._nearfield_device_payload_cache_max = 16
 
     # }}} End constructor
+
+    def get_helmholtz_split_cache_accounting(self, parameter_count=1):
+        """Return table-storage accounting for Helmholtz/Yukawa split mode."""
+        if not isinstance(parameter_count, int):
+            try:
+                parameter_count = len(parameter_count)
+            except TypeError as exc:
+                raise TypeError(
+                    "parameter_count must be an integer or a sized parameter collection"
+                ) from exc
+        parameter_count = int(parameter_count)
+        if parameter_count < 1:
+            raise ValueError("parameter_count must be >= 1")
+
+        base_tables = [
+            table
+            for tables in self.near_field_table.values()
+            for table in tables
+        ]
+        split_term_items = sorted(
+            self.helmholtz_split_term_tables.items(),
+            key=lambda item: _format_helmholtz_split_term_key(item[0]),
+        )
+        split_term_tables = [
+            table
+            for _, tables in split_term_items
+            for table in tables
+        ]
+
+        base_table_payload_bytes = sum(
+            _nearfield_table_payload_bytes(table) for table in base_tables
+        )
+        split_term_table_payload_bytes = sum(
+            _nearfield_table_payload_bytes(table) for table in split_term_tables
+        )
+
+        return HelmholtzSplitCacheAccounting(
+            split_enabled=bool(self.helmholtz_split),
+            split_order=int(self.helmholtz_split_order),
+            parameter_count=parameter_count,
+            base_table_count=len(base_tables),
+            split_term_table_count=len(split_term_tables),
+            basis_table_count=len(base_tables) + len(split_term_tables),
+            base_table_payload_bytes=int(base_table_payload_bytes),
+            split_term_table_payload_bytes=int(split_term_table_payload_bytes),
+            total_table_payload_bytes=int(
+                base_table_payload_bytes + split_term_table_payload_bytes
+            ),
+            split_term_keys=tuple(key for key, _ in split_term_items),
+            uses_online_coefficients=bool(self.helmholtz_split and split_term_tables),
+            uses_online_remainder=bool(self.helmholtz_split),
+        )
 
     # {{{ data vector utilities
 
@@ -2387,6 +2468,14 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         return "__" + "__".join(parts)
 
     @staticmethod
+    def _helmholtz_split_wrapper_chain_has_mixed_source_target(wrappers):
+        has_target = any(kind == "axis_target" for kind, _value in wrappers)
+        has_source = any(
+            kind in ("axis_source", "directional_source") for kind, _value in wrappers
+        )
+        return has_target and has_source
+
+    @staticmethod
     def _apply_helmholtz_split_kernel_wrappers_with_chain(kernel, wrapper_chain):
         wrapped = kernel
         for kind, value in reversed(wrapper_chain):
@@ -2482,9 +2571,21 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
                 return False, f"unsupported dimension {base_knl.dim}"
 
             try:
-                self._extract_helmholtz_split_kernel_wrapper_chain(out_knl, base_knl)
+                wrapper_chain = self._extract_helmholtz_split_kernel_wrapper_chain(
+                    out_knl,
+                    base_knl,
+                )
             except NotImplementedError as exc:
                 return False, str(exc)
+
+            if self._helmholtz_split_wrapper_chain_has_mixed_source_target(
+                wrapper_chain
+            ):
+                return (
+                    False,
+                    "mixed source/target derivative wrapper chains are unsupported "
+                    "in split mode without a dedicated regression test and scaling rule",
+                )
 
             param_name = self._split_wave_number_parameter_name(base_knl)
             if not isinstance(param_name, str) or not param_name:

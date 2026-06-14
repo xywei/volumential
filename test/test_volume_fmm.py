@@ -92,6 +92,56 @@ def test_interpolation_target_coverage_reports_missing_targets():
         )
 
 
+def test_volume_fmm_loopy_interpolation_uses_shared_barycentric_weights():
+    from volumential import lagrange
+    from volumential.volume_fmm import compute_barycentric_lagrange_params
+
+    q_order = 16
+    nodes, weights = compute_barycentric_lagrange_params(q_order)
+
+    np.testing.assert_allclose(
+        weights,
+        lagrange.barycentric_lagrange_weights(nodes),
+        rtol=0.0,
+        atol=0.0,
+    )
+
+    values = lagrange.evaluate_lagrange_basis_1d(nodes, 7, nodes, weights=weights)
+    expected = np.zeros(q_order)
+    expected[7] = 1.0
+    np.testing.assert_array_equal(values, expected)
+
+
+def test_barycentric_interp_matrix_is_exact_at_source_nodes():
+    from volumential.expansion_wrangler_fpnd import _barycentric_interp_matrix
+
+    source_nodes = np.polynomial.legendre.leggauss(16)[0]
+    source_nodes = 0.5 * (source_nodes + 1.0)
+
+    interp = _barycentric_interp_matrix(source_nodes, source_nodes)
+
+    np.testing.assert_allclose(interp, np.eye(source_nodes.size), rtol=0.0, atol=0.0)
+
+
+def test_barycentric_interp_matrix_matches_shared_near_node_behavior():
+    from volumential import lagrange
+    from volumential.expansion_wrangler_fpnd import _barycentric_interp_matrix
+
+    source_nodes = np.polynomial.legendre.leggauss(16)[0]
+    source_nodes = 0.5 * (source_nodes + 1.0)
+    target_node = np.nextafter(source_nodes[7], source_nodes[8])
+
+    interp = _barycentric_interp_matrix(source_nodes, np.array([target_node]))
+    expected = np.array(
+        [
+            lagrange.evaluate_lagrange_basis_1d(source_nodes, i, target_node)
+            for i in range(source_nodes.size)
+        ]
+    )
+
+    np.testing.assert_allclose(interp[0], expected, rtol=1.0e-14, atol=1.0e-14)
+
+
 def test_list1_gallery_includes_mixed_source_levels():
     from volumential.list1_gallery import generate_interactions
 
@@ -247,6 +297,72 @@ def test_autobuild_split_source_levels_uses_base_table_levels():
         [("power_log", 2)],
     )
     assert inferred_levels == [-1]
+
+
+def test_helmholtz_split_cache_accounting_separates_parameter_count():
+    from volumential.expansion_wrangler_fpnd import FPNDExpansionWrangler
+
+    def table(data, reduced=False):
+        return SimpleNamespace(
+            data=np.asarray(data, dtype=np.float64),
+            table_data_is_symmetry_reduced=reduced,
+        )
+
+    wrangler = FPNDExpansionWrangler.__new__(FPNDExpansionWrangler)
+    wrangler.helmholtz_split = True
+    wrangler.helmholtz_split_order = 3
+    wrangler.near_field_table = {
+        "LaplaceKernel(2)": [
+            table([1.0, 2.0, 3.0]),
+            table([4.0, np.nan, 6.0], reduced=True),
+        ],
+    }
+    wrangler.helmholtz_split_term_tables = {
+        ("power_log", 2): [table([7.0, 8.0])],
+        ("power_log", 4): [table([9.0, np.nan, 11.0], reduced=True)],
+    }
+
+    one_parameter = wrangler.get_helmholtz_split_cache_accounting(parameter_count=1)
+    three_parameters = wrangler.get_helmholtz_split_cache_accounting(
+        parameter_count=[2.0, 4.0, 8.0]
+    )
+
+    assert one_parameter.split_enabled
+    assert one_parameter.split_order == 3
+    assert one_parameter.base_table_count == 2
+    assert one_parameter.split_term_table_count == 2
+    assert one_parameter.basis_table_count == 4
+    assert one_parameter.split_term_keys == (("power_log", 2), ("power_log", 4))
+    assert one_parameter.uses_online_coefficients
+    assert one_parameter.uses_online_remainder
+    assert one_parameter.base_table_payload_bytes == 5 * np.dtype(np.float64).itemsize
+    assert one_parameter.split_term_table_payload_bytes == (
+        4 * np.dtype(np.float64).itemsize
+    )
+    assert one_parameter.total_table_payload_bytes == (
+        one_parameter.base_table_payload_bytes
+        + one_parameter.split_term_table_payload_bytes
+    )
+
+    assert three_parameters.parameter_count == 3
+    assert three_parameters.basis_table_count == one_parameter.basis_table_count
+    assert (
+        three_parameters.total_table_payload_bytes
+        == one_parameter.total_table_payload_bytes
+    )
+
+
+def test_helmholtz_split_cache_accounting_rejects_empty_parameter_sweep():
+    from volumential.expansion_wrangler_fpnd import FPNDExpansionWrangler
+
+    wrangler = FPNDExpansionWrangler.__new__(FPNDExpansionWrangler)
+    wrangler.helmholtz_split = True
+    wrangler.helmholtz_split_order = 1
+    wrangler.near_field_table = {}
+    wrangler.helmholtz_split_term_tables = {}
+
+    with pytest.raises(ValueError, match="parameter_count must be >= 1"):
+        wrangler.get_helmholtz_split_cache_accounting(parameter_count=0)
 
 
 def test_rebuild_tob_from_geometry_restores_unit_level_edges():
@@ -3472,6 +3588,65 @@ def test_list1_helmholtz_infer_scaling_rejected():
         )
 
 
+def test_list1_scaling_policy_documents_per_level_tables_for_helmholtz():
+    from sumpy.kernel import HelmholtzKernel
+
+    from volumential.list1 import NearFieldFromCSR
+
+    near_field = NearFieldFromCSR(
+        HelmholtzKernel(3),
+        {
+            "n_tables": 3,
+            "n_q_points": 1,
+            "n_cases": 1,
+            "n_table_entries": 1,
+        },
+        potential_kind=1,
+    )
+
+    policy = near_field.get_kernel_scaling_policy()
+    assert policy.mode == "per_level_tables"
+    assert not policy.infer_kernel_scaling
+    assert not policy.single_table_scaling_supported
+    assert policy.reference_table_level is None
+    assert policy.scaling_code == "1.0"
+    assert policy.displacement_code == "0.0"
+    assert "sbox_level" in policy.table_level_code
+    assert policy.scaling_code == near_field.codegen_compute_scaling()
+    assert policy.displacement_code == near_field.codegen_compute_displacement()
+    assert policy.table_level_code == near_field.codegen_get_table_level()
+
+
+def test_list1_scaling_policy_documents_fixed_single_table_for_helmholtz():
+    from sumpy.kernel import HelmholtzKernel
+
+    from volumential.list1 import NearFieldFromCSR
+
+    near_field = NearFieldFromCSR(
+        HelmholtzKernel(3),
+        {
+            "n_tables": 1,
+            "n_q_points": 1,
+            "n_cases": 1,
+            "n_table_entries": 1,
+        },
+        potential_kind=1,
+    )
+
+    policy = near_field.get_kernel_scaling_policy()
+    assert policy.mode == "fixed_single_table"
+    assert not policy.infer_kernel_scaling
+    assert not policy.single_table_scaling_supported
+    assert policy.reference_table_level == 0
+    assert policy.scaling_code == "1.0"
+    assert policy.displacement_code == "0.0"
+    assert policy.table_level_code == "0.0"
+    assert "runtime checks reject mixed source levels" in policy.notes
+    assert policy.scaling_code == near_field.codegen_compute_scaling()
+    assert policy.displacement_code == near_field.codegen_compute_displacement()
+    assert policy.table_level_code == near_field.codegen_get_table_level()
+
+
 def test_list1_laplace_derivative_infer_scaling_is_first_order():
     from sumpy.kernel import AxisSourceDerivative, AxisTargetDerivative, LaplaceKernel
 
@@ -3491,6 +3666,66 @@ def test_list1_laplace_derivative_infer_scaling_is_first_order():
         near_field = NearFieldFromCSR(out_knl, table_shapes, potential_kind=1)
         scaling = "".join(near_field.codegen_compute_scaling().split())
         assert scaling == "sbox_extent/table_root_extent"
+
+
+def test_list1_laplace_scaling_policy_documents_canonical_table():
+    from sumpy.kernel import LaplaceKernel
+
+    from volumential.list1 import NearFieldFromCSR
+
+    near_field = NearFieldFromCSR(
+        LaplaceKernel(2),
+        {
+            "n_tables": 1,
+            "n_q_points": 1,
+            "n_cases": 1,
+            "n_table_entries": 1,
+        },
+        potential_kind=1,
+    )
+
+    policy = near_field.get_kernel_scaling_policy()
+    assert policy.mode == "canonical_single_table"
+    assert policy.infer_kernel_scaling
+    assert policy.single_table_scaling_supported
+    assert policy.reference_table_level == 0
+    assert "sbox_extent" in policy.scaling_code
+    assert "log(sbox_extent / table_root_extent)" in policy.displacement_code
+    assert policy.table_level_code == "0.0"
+    assert policy.scaling_code == near_field.codegen_compute_scaling()
+    assert policy.displacement_code == near_field.codegen_compute_displacement()
+    assert policy.table_level_code == near_field.codegen_get_table_level()
+
+
+def test_list1_custom_scaling_policy_documents_user_code():
+    from sumpy.kernel import HelmholtzKernel
+
+    from volumential.list1 import NearFieldFromCSR
+
+    near_field = NearFieldFromCSR(
+        HelmholtzKernel(3),
+        {
+            "n_tables": 1,
+            "n_q_points": 1,
+            "n_cases": 1,
+            "n_table_entries": 1,
+        },
+        potential_kind=1,
+        kernel_scaling_code="2 * BOX_extent",
+        kernel_displacement_code="BOX_level",
+    )
+
+    policy = near_field.get_kernel_scaling_policy()
+    assert policy.mode == "custom_single_table"
+    assert not policy.infer_kernel_scaling
+    assert policy.single_table_scaling_supported
+    assert policy.reference_table_level == 0
+    assert policy.scaling_code == "2 * sbox_extent"
+    assert policy.displacement_code == "sbox_level"
+    assert policy.table_level_code == "0.0"
+    assert policy.scaling_code == near_field.codegen_compute_scaling()
+    assert policy.displacement_code == near_field.codegen_compute_displacement()
+    assert policy.table_level_code == near_field.codegen_get_table_level()
 
 
 def test_list1_laplace_2d_derivative_infer_scaling_has_no_log_displacement():
@@ -3534,6 +3769,55 @@ def test_source_kernel_derivation_preserves_source_derivatives():
         [AxisTargetDerivative(2, base_knl)]
     )
     assert source_knl_no_source_deriv == base_knl
+
+
+def test_helmholtz_split_policy_rejects_mixed_source_target_derivative_chain():
+    from sumpy.kernel import (
+        AxisSourceDerivative,
+        AxisTargetDerivative,
+        DirectionalSourceDerivative,
+        HelmholtzKernel,
+    )
+
+    from volumential.expansion_wrangler_fpnd import FPNDExpansionWrangler
+
+    base_knl = HelmholtzKernel(2)
+    for out_knl in (
+        AxisTargetDerivative(0, AxisSourceDerivative(1, base_knl)),
+        AxisTargetDerivative(0, DirectionalSourceDerivative(base_knl, "dir_vec")),
+    ):
+        wrangler = FPNDExpansionWrangler.__new__(FPNDExpansionWrangler)
+        wrangler.tree_indep = SimpleNamespace(target_kernels=[out_knl])
+
+        supported, reason = wrangler._split_target_kernel_support_status()
+
+        assert not supported
+        assert "mixed source/target derivative wrapper chains" in reason
+
+
+def test_helmholtz_split_policy_accepts_single_source_or_target_derivative_chain():
+    from sumpy.kernel import (
+        AxisSourceDerivative,
+        AxisTargetDerivative,
+        DirectionalSourceDerivative,
+        HelmholtzKernel,
+    )
+
+    from volumential.expansion_wrangler_fpnd import FPNDExpansionWrangler
+
+    base_knl = HelmholtzKernel(2)
+
+    for out_knl in (
+        AxisTargetDerivative(0, base_knl),
+        AxisSourceDerivative(1, base_knl),
+        DirectionalSourceDerivative(base_knl, "dir_vec"),
+    ):
+        wrangler = FPNDExpansionWrangler.__new__(FPNDExpansionWrangler)
+        wrangler.tree_indep = SimpleNamespace(target_kernels=[out_knl])
+
+        supported, reason = wrangler._split_target_kernel_support_status()
+
+        assert supported, reason
 
 
 def test_volume_fmm_3d_laplace_source_target_derivative_antisymmetry(tmp_path):

@@ -163,5 +163,10 @@ jobs:
           python examples/laplace2d.py
           python examples/helmholtz2d.py
           python examples/helmholtz3d.py
+          python benchmarks/table_equivalence_cache.py --mode smoke
+          python benchmarks/accuracy_preservation.py --mode smoke
+          python benchmarks/adaptive_timing.py --mode smoke
+          python benchmarks/performance_suite.py --list-cases
+          python benchmarks/performance_suite.py --mode smoke --dry-run
 
 # vim: sw=2

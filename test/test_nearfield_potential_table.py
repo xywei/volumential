@@ -39,6 +39,7 @@ if (
     )
 
 import volumential.nearfield_potential_table as npt
+from volumential import lagrange
 from volumential.table_manager import ConstantKernel
 
 
@@ -61,6 +62,30 @@ def _make_build_queue_or_skip():
             return cl.CommandQueue(cl.Context([devices[0]]))
 
     pytest.skip("No OpenCL devices available for table builds")
+
+
+def _make_legendre_table_without_cl(q_order, dim):
+    nodes = np.polynomial.legendre.leggauss(q_order)[0]
+    nodes = 0.5 * (nodes + 1.0)
+
+    table = npt.NearFieldInteractionTable.__new__(npt.NearFieldInteractionTable)
+    table.quad_order = q_order
+    table.dim = dim
+    table.n_q_points = q_order**dim
+    table.source_box_extent = 1.0
+    table.dtype = np.float64
+
+    if dim == 1:
+        q_points = [(x,) for x in nodes]
+    elif dim == 2:
+        q_points = [(x, y) for x in nodes for y in nodes]
+    elif dim == 3:
+        q_points = [(x, y, z) for x in nodes for y in nodes for z in nodes]
+    else:
+        raise NotImplementedError("dimension %d not supported" % dim)
+
+    table.q_points = np.asarray(q_points, dtype=np.float64)
+    return table
 
 
 def test_const_order_1():
@@ -236,6 +261,33 @@ def test_modes_cheb_coeffs():
     drive_test_modes_cheb_coeffs(3, 5, 5)
     drive_test_modes_cheb_coeffs(3, 5, 10)
     drive_test_modes_cheb_coeffs(3, 10, 10)
+
+
+def test_high_order_modes_are_barycentric_at_nodes():
+    q_order = 16
+    dim = 2
+    mode_index = 7 * q_order + 9
+    table = _make_legendre_table_without_cl(q_order, dim)
+
+    mode = table.get_template_mode(mode_index)
+    values = np.asarray([mode(*qpt) for qpt in table.q_points])
+    expected = np.zeros(q_order**dim)
+    expected[mode_index] = 1.0
+
+    np.testing.assert_array_equal(values, expected)
+
+
+def test_nearfield_batched_duffy_uses_shared_barycentric_weights():
+    table = _make_legendre_table_without_cl(q_order=16, dim=2)
+
+    xi, weights = table._get_barycentric_data()
+
+    np.testing.assert_allclose(
+        weights,
+        lagrange.barycentric_lagrange_weights(xi),
+        rtol=0.0,
+        atol=0.0,
+    )
 
 
 @pytest.mark.parametrize("q_order", [1, 2, 3, 5, 8])
@@ -550,6 +602,127 @@ def test_online_symmetry_maps_match_orbit_canonical_signs(
         )
 
         assert np.isclose(mapped_sign, canonical_sign)
+
+
+def _symmetry_diagnostic_test_table(kernel_case, dtype=np.float64):
+    from sumpy.kernel import (
+        AxisSourceDerivative,
+        AxisTargetDerivative,
+        DirectionalSourceDerivative,
+        LaplaceKernel,
+    )
+
+    symmetry_source_direction = None
+    kernel_type = "const"
+    kernel_func = npt.constant_one
+    sumpy_kernel = ConstantKernel(2)
+
+    if kernel_case == "target-derivative":
+        kernel_type = "inv_power"
+        sumpy_kernel = AxisTargetDerivative(0, LaplaceKernel(2))
+    elif kernel_case == "source-derivative":
+        kernel_type = "inv_power"
+        sumpy_kernel = AxisSourceDerivative(1, LaplaceKernel(2))
+    elif kernel_case == "directional-source":
+        kernel_type = "inv_power"
+        sumpy_kernel = DirectionalSourceDerivative(LaplaceKernel(2), "dir_vec")
+        symmetry_source_direction = np.array([1.0, 0.0])
+    elif kernel_case == "mixed-source-target":
+        kernel_type = "inv_power"
+        sumpy_kernel = AxisTargetDerivative(
+            0,
+            AxisSourceDerivative(1, LaplaceKernel(2)),
+        )
+    elif kernel_case != "scalar":
+        raise ValueError(f"unknown kernel_case {kernel_case!r}")
+
+    q1d = np.linspace(0.25, 0.75, 3)
+    precomputed_q_points = np.array(
+        [(x, y) for x in q1d for y in q1d],
+        dtype=np.float64,
+    )
+
+    return npt.NearFieldInteractionTable(
+        quad_order=3,
+        dim=2,
+        build_method="DuffyRadial",
+        kernel_func=kernel_func,
+        kernel_type=kernel_type,
+        sumpy_kernel=sumpy_kernel,
+        derive_kernel_func=False,
+        symmetry_source_direction=symmetry_source_direction,
+        precomputed_q_points=precomputed_q_points,
+        dtype=dtype,
+        progress_bar=False,
+    )
+
+
+@pytest.mark.parametrize(
+    "kernel_case",
+    [
+        "scalar",
+        "target-derivative",
+        "source-derivative",
+        "directional-source",
+        "mixed-source-target",
+    ],
+)
+def test_symmetry_diagnostics_reconstruct_full_table(kernel_case):
+    table = _symmetry_diagnostic_test_table(kernel_case)
+    orbit_info = table._get_orbit_canonical_info()
+    entry_ids = np.asarray(orbit_info["entry_ids"], dtype=np.int64)
+    canonical_entry_ids = np.asarray(orbit_info["canonical_entry_ids"], dtype=np.int64)
+    canonical_scales = np.asarray(orbit_info["canonical_scales"], dtype=table.dtype)
+
+    rng = np.random.default_rng(seed=101)
+    reference_data = np.empty(len(table.data), dtype=table.dtype)
+    reference_data.fill(np.nan)
+    reference_data[entry_ids] = rng.normal(size=len(entry_ids))
+    reference_data[:] = canonical_scales * reference_data[canonical_entry_ids]
+
+    reconstructed = table.reconstruct_full_table_from_symmetry(reference_data)
+    np.testing.assert_allclose(reconstructed, reference_data, rtol=0.0, atol=0.0)
+
+    diagnostics = table.get_symmetry_reduction_diagnostics(reference_data)
+    assert diagnostics.full_entry_count == len(table.data)
+    assert diagnostics.representative_count == len(entry_ids)
+    assert diagnostics.compression_ratio > 1.0
+    assert diagnostics.reconstructed_payload_bytes < diagnostics.unreduced_payload_bytes
+    assert diagnostics.metadata_payload_bytes > 0
+    assert sum(
+        orbit_size * count
+        for orbit_size, count in diagnostics.orbit_size_histogram
+    ) == len(table.data)
+    assert diagnostics.max_reconstruction_error == 0.0
+    assert diagnostics.l2_reconstruction_error == 0.0
+
+    if kernel_case == "scalar":
+        assert diagnostics.negative_scale_count == 0
+        assert diagnostics.sign_metadata_count == 0
+    else:
+        assert diagnostics.negative_scale_count > 0
+        assert diagnostics.sign_metadata_count >= diagnostics.negative_scale_count
+
+
+def test_symmetry_diagnostics_count_signs_for_complex_tables():
+    table = _symmetry_diagnostic_test_table(
+        "target-derivative",
+        dtype=np.complex128,
+    )
+    orbit_info = table._get_orbit_canonical_info()
+    entry_ids = np.asarray(orbit_info["entry_ids"], dtype=np.int64)
+    canonical_entry_ids = np.asarray(orbit_info["canonical_entry_ids"], dtype=np.int64)
+    canonical_scales = np.asarray(orbit_info["canonical_scales"], dtype=table.dtype)
+
+    reference_data = np.empty(len(table.data), dtype=table.dtype)
+    reference_data.fill(np.nan + 1j * np.nan)
+    reference_data[entry_ids] = np.arange(1, len(entry_ids) + 1) * (1.0 + 2.0j)
+    reference_data[:] = canonical_scales * reference_data[canonical_entry_ids]
+
+    diagnostics = table.get_symmetry_reduction_diagnostics(reference_data)
+    assert diagnostics.negative_scale_count > 0
+    assert diagnostics.sign_metadata_count >= diagnostics.negative_scale_count
+    assert diagnostics.max_reconstruction_error == 0.0
 
 
 def test_duffy_radial_routes_queue_to_batched_builder(monkeypatch):

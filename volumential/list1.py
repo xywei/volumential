@@ -21,6 +21,8 @@ THE SOFTWARE.
 """
 
 __doc__ = """
+.. autoclass:: KernelScalingPolicy
+   :members:
 .. autoclass:: NearFieldEvalBase
    :members:
 .. autoclass:: NearFieldFromCSR
@@ -28,7 +30,7 @@ __doc__ = """
 """
 
 import logging
-from dataclasses import fields
+from dataclasses import dataclass, fields
 
 import numpy as np
 
@@ -42,6 +44,21 @@ logger = logging.getLogger(__name__)
 
 
 CASE_ENCODING_BIAS_DEFAULT = 1.0e-10
+
+
+@dataclass(frozen=True)
+class KernelScalingPolicy:
+    """Describes how a List 1 evaluator selects and rescales table data."""
+
+    kernel_name: str
+    mode: str
+    infer_kernel_scaling: bool
+    single_table_scaling_supported: bool
+    reference_table_level: int | None
+    scaling_code: str
+    displacement_code: str
+    table_level_code: str
+    notes: str
 
 
 def _array_layout_cache_token(ary, queue):
@@ -227,6 +244,167 @@ class NearFieldFromCSR(NearFieldEvalBase):
             or self._is_axis_source_derivative_of_laplace(3)
         )
 
+    def _inferred_scaling_code(self):
+        if self._is_axis_target_derivative_of_laplace(2):
+            logger.info("scaling for Grad(LapKnl2D)")
+            return "BOX_extent / table_root_extent"
+
+        if self._is_axis_target_derivative_of_laplace(3):
+            logger.info("scaling for Grad(LapKnl3D)")
+            return "BOX_extent / table_root_extent"
+
+        if self._is_axis_source_derivative_of_laplace(2):
+            logger.info("scaling for SourceGrad(LapKnl2D)")
+            return "BOX_extent / table_root_extent"
+
+        if self._is_axis_source_derivative_of_laplace(3):
+            logger.info("scaling for SourceGrad(LapKnl3D)")
+            return "BOX_extent / table_root_extent"
+
+        if self._is_laplace_kernel(2):
+            logger.info("scaling for LapKnl2D")
+            return "BOX_extent * BOX_extent / \
+                    (table_root_extent * table_root_extent)"
+
+        if self._is_constant_kernel(2):
+            logger.info("scaling for CstKnl2D")
+            return "BOX_extent * BOX_extent / \
+                    (table_root_extent * table_root_extent)"
+
+        if self._is_laplace_kernel(3):
+            logger.info("scaling for Lapknl3D")
+            return "BOX_extent * BOX_extent / \
+                    (table_root_extent * table_root_extent)"
+
+        if self._is_constant_kernel(3):
+            logger.info("scaling for CstKnl3D")
+            return "BOX_extent * BOX_extent * BOX_extent / \
+                    (table_root_extent * table_root_extent * table_root_extent)"
+
+        raise RuntimeError(f"no inferred scaling rule for {self.integral_kernel!r}")
+
+    def _inferred_displacement_code(self):
+        if self._is_axis_target_derivative_of_laplace(2):
+            logger.info("no displacement for Grad(LapKnl2D)")
+            return "0.0"
+
+        if self._is_axis_target_derivative_of_laplace(3):
+            logger.info("no displacement for Grad(LapKnl3D)")
+            return "0.0"
+
+        if self._is_axis_source_derivative_of_laplace(2):
+            logger.info("no displacement for SourceGrad(LapKnl2D)")
+            return "0.0"
+
+        if self._is_axis_source_derivative_of_laplace(3):
+            logger.info("no displacement for SourceGrad(LapKnl3D)")
+            return "0.0"
+
+        if self._is_laplace_kernel(2):
+            logger.info("displacement for laplace 2D")
+            s = "-0.5 / PI * scaling * \
+                    log(BOX_extent / table_root_extent) * \
+                    mode_nmlz[table_lev, sid]"
+            import math
+
+            return s.replace("PI", str(math.pi))
+
+        if self._is_constant_kernel(2):
+            logger.info("no displacement for CstKnl2D")
+            return "0.0"
+
+        if self._is_laplace_kernel(3):
+            logger.info("no displacement for LapKnl3D")
+            return "0.0"
+
+        if self._is_constant_kernel(3):
+            logger.info("no displacement for CstKnl3D")
+            return "0.0"
+
+        raise RuntimeError(f"no inferred displacement rule for {self.integral_kernel!r}")
+
+    def _inferred_table_level_code(self):
+        logger.info("scaling from table[0] for " + self.kname)
+        return "0.0"
+
+    def get_kernel_scaling_policy(self, box_name="sbox"):
+        """Return the table-level and scaling policy used by generated List 1 code.
+
+        ``mode == "canonical_single_table"`` means table level 0 is reused for
+        all source-box levels with ``scaling_code`` and ``displacement_code``.
+        ``mode == "fixed_single_table"`` means table level 0 is used without
+        scaling and runtime checks require all source boxes to match the table
+        starting level.
+        ``mode == "per_level_tables"`` means no kernel scaling is applied and
+        the table level is selected from the source-box level.
+        """
+        if self.extra_kwargs.get("infer_kernel_scaling", False):
+            return KernelScalingPolicy(
+                kernel_name=self.kname,
+                mode="canonical_single_table",
+                infer_kernel_scaling=True,
+                single_table_scaling_supported=True,
+                reference_table_level=0,
+                scaling_code=self._inferred_scaling_code().replace("BOX", box_name),
+                displacement_code=self._inferred_displacement_code().replace(
+                    "BOX", box_name
+                ),
+                table_level_code=self._inferred_table_level_code().replace(
+                    "BOX", box_name
+                ),
+                notes="Uses table level 0 for all source-box levels with inferred exact scaling.",
+            )
+
+        if "kernel_scaling_code" in self.extra_kwargs:
+            return KernelScalingPolicy(
+                kernel_name=self.kname,
+                mode="custom_single_table",
+                infer_kernel_scaling=False,
+                single_table_scaling_supported=True,
+                reference_table_level=0,
+                scaling_code=self.extra_kwargs["kernel_scaling_code"].replace(
+                    "BOX", box_name
+                ),
+                displacement_code=self.extra_kwargs["kernel_displacement_code"].replace(
+                    "BOX", box_name
+                ),
+                table_level_code="0.0",
+                notes="Uses user-provided scaling and displacement code with table level 0.",
+            )
+
+        if self.n_tables == 1:
+            return KernelScalingPolicy(
+                kernel_name=self.kname,
+                mode="fixed_single_table",
+                infer_kernel_scaling=False,
+                single_table_scaling_supported=False,
+                reference_table_level=0,
+                scaling_code="1.0",
+                displacement_code="0.0",
+                table_level_code="0.0",
+                notes=(
+                    "Uses the only cached table level without kernel scaling; "
+                    "runtime checks reject mixed source levels or a table level mismatch."
+                ),
+            )
+
+        return KernelScalingPolicy(
+            kernel_name=self.kname,
+            mode="per_level_tables",
+            infer_kernel_scaling=False,
+            single_table_scaling_supported=False,
+            reference_table_level=None,
+            scaling_code="1.0",
+            displacement_code="0.0",
+            table_level_code=(
+                "(0 if BOX_level < table_starting_level "
+                "else (BOX_level - table_starting_level "
+                "if BOX_level - table_starting_level < n_tables "
+                "else n_tables - 1))"
+            ).replace("BOX", box_name),
+            notes="Selects one cached table level per source-box level without kernel scaling.",
+        )
+
     def codegen_vec_component(self, d=None):
         if d is None:
             dimension = self.dim - 1
@@ -330,60 +508,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
 
     def codegen_compute_scaling(self, box_name="sbox"):
         """box_name: the name of the box whose extent is used."""
-        if ("infer_kernel_scaling" in self.extra_kwargs) and (
-            self.extra_kwargs["infer_kernel_scaling"]
-        ):
-            if self._is_axis_target_derivative_of_laplace(2):
-                logger.info("scaling for Grad(LapKnl2D)")
-                code = "BOX_extent / table_root_extent"
-
-            elif self._is_axis_target_derivative_of_laplace(3):
-                logger.info("scaling for Grad(LapKnl3D)")
-                code = "BOX_extent / table_root_extent"
-
-            elif self._is_axis_source_derivative_of_laplace(2):
-                logger.info("scaling for SourceGrad(LapKnl2D)")
-                code = "BOX_extent / table_root_extent"
-
-            elif self._is_axis_source_derivative_of_laplace(3):
-                logger.info("scaling for SourceGrad(LapKnl3D)")
-                code = "BOX_extent / table_root_extent"
-
-            # Laplace 2D
-            elif self._is_laplace_kernel(2):
-                logger.info("scaling for LapKnl2D")
-                code = "BOX_extent * BOX_extent / \
-                        (table_root_extent * table_root_extent)"
-
-            # Constant 2D
-            elif self._is_constant_kernel(2):
-                logger.info("scaling for CstKnl2D")
-                code = "BOX_extent * BOX_extent / \
-                        (table_root_extent * table_root_extent)"
-
-            # Laplace 3D
-            elif self._is_laplace_kernel(3):
-                logger.info("scaling for Lapknl3D")
-                code = "BOX_extent * BOX_extent / \
-                        (table_root_extent * table_root_extent)"
-
-            # Constant 3D
-            elif self._is_constant_kernel(3):
-                logger.info("scaling for CstKnl3D")
-                code = "BOX_extent * BOX_extent * BOX_extent / \
-                        (table_root_extent * table_root_extent * table_root_extent)"
-
-            else:
-                logger.warning(
-                    "Kernel not scalable and not using multiple tables, "
-                    "to get correct results, please make sure that your "
-                    "tree is uniform and only needs one table."
-                )
-                code = "1.0"
-
-            return code.replace("BOX", box_name)
-
-        elif "kernel_scaling_code" in self.extra_kwargs:
+        if "kernel_scaling_code" in self.extra_kwargs:
             # user-defined scaling rule
             assert isinstance(self.extra_kwargs["kernel_scaling_code"], str)
             logger.info(
@@ -391,63 +516,16 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 self.extra_kwargs["kernel_scaling_code"],
                 self.kname,
             )
-            return self.extra_kwargs["kernel_scaling_code"].replace("BOX", box_name)
-        else:
+            return self.get_kernel_scaling_policy(box_name=box_name).scaling_code
+
+        if not self.extra_kwargs.get("infer_kernel_scaling", False):
             logger.info("not scaling for " + self.kname)
             logger.info("(using multiple tables)")
-            return "1.0"
+
+        return self.get_kernel_scaling_policy(box_name=box_name).scaling_code
 
     def codegen_compute_displacement(self, box_name="sbox"):
-        if ("infer_kernel_scaling" in self.extra_kwargs) and (
-            self.extra_kwargs["infer_kernel_scaling"]
-        ):
-            if self._is_axis_target_derivative_of_laplace(2):
-                logger.info("no displacement for Grad(LapKnl2D)")
-                code = "0.0"
-
-            elif self._is_axis_target_derivative_of_laplace(3):
-                logger.info("no displacement for Grad(LapKnl3D)")
-                code = "0.0"
-
-            elif self._is_axis_source_derivative_of_laplace(2):
-                logger.info("no displacement for SourceGrad(LapKnl2D)")
-                code = "0.0"
-
-            elif self._is_axis_source_derivative_of_laplace(3):
-                logger.info("no displacement for SourceGrad(LapKnl3D)")
-                code = "0.0"
-
-            # Laplace 2D
-            elif self._is_laplace_kernel(2):
-                logger.info("displacement for laplace 2D")
-                s = "-0.5 / PI * scaling * \
-                        log(BOX_extent / table_root_extent) * \
-                        mode_nmlz[table_lev, sid]"
-                import math
-
-                code = s.replace("PI", str(math.pi))
-
-            # Constant 2D
-            elif self._is_constant_kernel(2):
-                logger.info("no displacement for CstKnl2D")
-                code = "0.0"
-            # Laplace 3D
-            elif self._is_laplace_kernel(3):
-                logger.info("no displacement for LapKnl3D")
-                code = "0.0"
-            # Constant 3D
-            elif self._is_constant_kernel(3):
-                logger.info("no displacement for CstKnl3D")
-                code = "0.0"
-            else:
-                logger.warning(
-                    "Kernel not scalable and not using multiple tables, "
-                    "to get correct results, please make sure that either "
-                    "no displacement is needed, or the box "
-                    "tree is uniform and only needs one table."
-                )
-                code = "0.0"
-        elif "kernel_displacement_code" in self.extra_kwargs:
+        if "kernel_displacement_code" in self.extra_kwargs:
             # user-defined displacement rule
             assert isinstance(self.extra_kwargs["kernel_displacement_code"], str)
             logger.info(
@@ -455,53 +533,24 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 self.extra_kwargs["kernel_displacement_code"],
                 self.kname,
             )
-            code = self.extra_kwargs["kernel_displacement_code"].replace(
-                "BOX", box_name
-            )
-        else:
+            return self.get_kernel_scaling_policy(box_name=box_name).displacement_code
+
+        if not self.extra_kwargs.get("infer_kernel_scaling", False):
             logger.info("no displacement for " + self.kname)
             logger.info("(using multiple tables)")
-            code = "0.0"
 
-        return code.replace("BOX", box_name)
+        return self.get_kernel_scaling_policy(box_name=box_name).displacement_code
 
     def codegen_get_table_level(self, box_name="sbox"):
-        if ("infer_kernel_scaling" in self.extra_kwargs) and (
-            self.extra_kwargs["infer_kernel_scaling"]
-        ):
-            if (
-                self._is_laplace_kernel(2)
-                or self._is_laplace_kernel(3)
-                or self._is_constant_kernel(2)
-                or self._is_constant_kernel(3)
-                or self._is_axis_target_derivative_of_laplace(2)
-                or self._is_axis_target_derivative_of_laplace(3)
-                or self._is_axis_source_derivative_of_laplace(2)
-                or self._is_axis_source_derivative_of_laplace(3)
-            ):
-                logger.info("scaling from table[0] for " + self.kname)
-                code = "0.0"
-            else:
-                logger.warning(
-                    "Kernel not scalable and not using multiple tables, "
-                    "to get correct results, please make sure that your "
-                    "tree is uniform and only needs one table."
-                )
-                code = "0.0"
-        elif "kernel_scaling_code" in self.extra_kwargs:
+        if "kernel_scaling_code" in self.extra_kwargs:
             # Using custom scaling
-            code = "0.0"
-        else:
+            return self.get_kernel_scaling_policy(box_name=box_name).table_level_code
+
+        if not self.extra_kwargs.get("infer_kernel_scaling", False):
             logger.info("computing table level from box size")
             logger.info("(using multiple tables)")
-            code = (
-                "(0 if BOX_level < table_starting_level "
-                "else (BOX_level - table_starting_level "
-                "if BOX_level - table_starting_level < n_tables "
-                "else n_tables - 1))"
-            )
 
-        return code.replace("BOX", box_name)
+        return self.get_kernel_scaling_policy(box_name=box_name).table_level_code
 
     def codegen_exterior_part(self):
         """Computes the exterior contribution. This is nonzero for

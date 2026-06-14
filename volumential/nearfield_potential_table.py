@@ -27,7 +27,6 @@ from dataclasses import dataclass
 from functools import partial
 
 import numpy as np
-from scipy.interpolate import BarycentricInterpolator as Interpolator
 
 import loopy as lp
 import pyopencl as cl
@@ -35,6 +34,10 @@ from pytools import memoize_method
 
 import volumential.list1_gallery as gallery
 import volumential.singular_integral_2d as squad
+from volumential.lagrange import (
+    barycentric_lagrange_weights,
+    evaluate_lagrange_basis_1d,
+)
 
 
 logger = logging.getLogger("NearFieldInteractionTable")
@@ -196,6 +199,21 @@ class DuffyBuildConfig:
     auto_tune_samples: int = 5
     auto_tune_floor_factor: float = 8.0
     auto_tune_candidates: object = None
+
+
+@dataclass(frozen=True)
+class SymmetryReductionDiagnostics:
+    full_entry_count: int
+    representative_count: int
+    compression_ratio: float
+    orbit_size_histogram: tuple
+    sign_metadata_count: int
+    negative_scale_count: int
+    unreduced_payload_bytes: int
+    reconstructed_payload_bytes: int
+    metadata_payload_bytes: int
+    max_reconstruction_error: object = None
+    l2_reconstruction_error: object = None
 
 
 def _self_tp(vec, tpd=2):
@@ -693,12 +711,7 @@ class NearFieldInteractionTable:
         )
         assert len(xi) == self.quad_order
 
-        yi = []
-        for d in range(self.dim):
-            yi.append(np.zeros(self.quad_order, dtype=self.dtype))
-            yi[d][idx[d]] = 1
-
-        axis_interp = [Interpolator(xi, yi[d]) for d in range(self.dim)]
+        bary_w = barycentric_lagrange_weights(xi)
 
         def mode(*coords):
             assert len(coords) == self.dim
@@ -706,11 +719,7 @@ class NearFieldInteractionTable:
             is_scalar = all(np.asarray(coord).ndim == 0 for coord in coords)
             fvals = np.ones(coords0.shape, dtype=self.dtype)
             for d, coord in zip(range(self.dim), coords):
-                val = axis_interp[d](np.array(coord))
-                if is_scalar:
-                    val = np.asarray(val)
-                    if val.size == 1:
-                        val = val.item()
+                val = evaluate_lagrange_basis_1d(xi, idx[d], coord, weights=bary_w)
                 fvals = np.multiply(fvals, val)
             if is_scalar and fvals.size == 1:
                 return fvals.item()
@@ -742,12 +751,7 @@ class NearFieldInteractionTable:
         xi = np.array([p[self.dim - 1] for p in self.q_points[: self.quad_order]])
         assert len(xi) == self.quad_order
 
-        yi = []
-        for d in range(self.dim):
-            yi.append(np.zeros(self.quad_order, dtype=self.dtype))
-            yi[d][idx[d]] = 1
-
-        axis_interp = [Interpolator(xi, yi[d]) for d in range(self.dim)]
+        bary_w = barycentric_lagrange_weights(xi)
 
         def _to_source_box_coords(coord):
             coord = np.asarray(coord)
@@ -764,11 +768,12 @@ class NearFieldInteractionTable:
             is_scalar = all(np.asarray(coord).ndim == 0 for coord in coords)
             fvals = np.ones(coords0.shape, dtype=self.dtype)
             for d, coord in zip(range(self.dim), coords):
-                val = axis_interp[d](_to_source_box_coords(coord))
-                if is_scalar:
-                    val = np.asarray(val)
-                    if val.size == 1:
-                        val = val.item()
+                val = evaluate_lagrange_basis_1d(
+                    xi,
+                    idx[d],
+                    _to_source_box_coords(coord),
+                    weights=bary_w,
+                )
                 fvals = np.multiply(fvals, val)
             if is_scalar and fvals.size == 1:
                 return fvals.item()
@@ -1056,15 +1061,89 @@ class NearFieldInteractionTable:
             [p[self.dim - 1] for p in self.q_points[: self.quad_order]],
             dtype=geom_dtype,
         )
-        bw = np.ones(self.quad_order, dtype=geom_dtype)
-        for i in range(self.quad_order):
-            for j in range(self.quad_order):
-                if i != j:
-                    bw[i] /= xi[i] - xi[j]
-        return xi, bw.astype(geom_dtype)
+        return xi, barycentric_lagrange_weights(xi).astype(geom_dtype)
 
     def _get_invariant_entry_info(self):
         return self._get_orbit_canonical_info()
+
+    def reconstruct_full_table_from_symmetry(self, canonical_data=None):
+        """Reconstruct full table data from orbit-canonical representatives."""
+        orbit_info = self._get_orbit_canonical_info()
+        canonical_entry_ids = np.asarray(orbit_info["canonical_entry_ids"], dtype=np.int64)
+        canonical_scales = np.asarray(orbit_info["canonical_scales"], dtype=self.dtype)
+
+        if canonical_data is None:
+            canonical_data = self.data
+        canonical_data = np.asarray(canonical_data, dtype=self.dtype)
+
+        if canonical_data.shape[0] != len(self.data):
+            raise ValueError(
+                "canonical_data must be indexed by full table entry ids; "
+                f"expected length {len(self.data)}, got {canonical_data.shape[0]}"
+            )
+
+        return canonical_scales * canonical_data[canonical_entry_ids]
+
+    def get_symmetry_reduction_diagnostics(self, reference_data=None):
+        """Return paper-facing symmetry-reduction counts and reconstruction errors."""
+        orbit_info = self._get_orbit_canonical_info()
+        entry_ids = np.asarray(orbit_info["entry_ids"], dtype=np.int64)
+        canonical_entry_ids = np.asarray(orbit_info["canonical_entry_ids"], dtype=np.int64)
+        canonical_scales = np.asarray(orbit_info["canonical_scales"], dtype=self.dtype)
+        canonical_scale_signs = np.real(canonical_scales).astype(np.float64)
+
+        full_entry_count = int(len(canonical_entry_ids))
+        representative_count = int(len(entry_ids))
+        unique_ids, orbit_sizes = np.unique(canonical_entry_ids, return_counts=True)
+        del unique_ids
+        size_values, size_counts = np.unique(orbit_sizes, return_counts=True)
+        orbit_size_histogram = tuple(
+            (int(size), int(count))
+            for size, count in zip(size_values.tolist(), size_counts.tolist())
+        )
+
+        scale_differs = ~np.isclose(canonical_scale_signs, 1.0)
+        sign_metadata_count = int(np.count_nonzero(scale_differs))
+        negative_scale_count = int(np.count_nonzero(canonical_scale_signs < 0))
+
+        unreduced_payload_bytes = int(full_entry_count * np.dtype(self.dtype).itemsize)
+        reconstructed_payload_bytes = int(
+            representative_count * np.dtype(self.dtype).itemsize
+        )
+        metadata_payload_bytes = int(canonical_entry_ids.nbytes + canonical_scales.nbytes)
+
+        max_reconstruction_error = None
+        l2_reconstruction_error = None
+        if reference_data is None:
+            reference_data = self.data
+        reference_data = np.asarray(reference_data, dtype=self.dtype)
+        if reference_data.shape[0] != full_entry_count:
+            raise ValueError(
+                "reference_data must be indexed by full table entry ids; "
+                f"expected length {full_entry_count}, got {reference_data.shape[0]}"
+            )
+
+        if np.all(np.isfinite(reference_data[canonical_entry_ids])) and np.all(
+            np.isfinite(reference_data)
+        ):
+            reconstructed = self.reconstruct_full_table_from_symmetry(reference_data)
+            errors = np.abs(reconstructed - reference_data)
+            max_reconstruction_error = float(np.max(errors))
+            l2_reconstruction_error = float(np.linalg.norm(errors))
+
+        return SymmetryReductionDiagnostics(
+            full_entry_count=full_entry_count,
+            representative_count=representative_count,
+            compression_ratio=float(full_entry_count / representative_count),
+            orbit_size_histogram=orbit_size_histogram,
+            sign_metadata_count=sign_metadata_count,
+            negative_scale_count=negative_scale_count,
+            unreduced_payload_bytes=unreduced_payload_bytes,
+            reconstructed_payload_bytes=reconstructed_payload_bytes,
+            metadata_payload_bytes=metadata_payload_bytes,
+            max_reconstruction_error=max_reconstruction_error,
+            l2_reconstruction_error=l2_reconstruction_error,
+        )
 
     @memoize_method
     def _get_case_target_points(self):
