@@ -24,6 +24,7 @@ import json
 import logging
 import hashlib
 import math
+import warnings
 from collections import OrderedDict
 from dataclasses import dataclass
 
@@ -1659,6 +1660,15 @@ def _prepare_table_data_and_entry_map(table_levels):
             table_entry_ids,
             table_entry_scales,
         )
+        if reconstruction_info is not None:
+            warnings.warn(
+                "using generated-orbit fallback for near-field table "
+                "reconstruction; this compact fallback is correct but not "
+                "GPU-ideal because it still uses transform scans and lookup "
+                f"tables (kernel={table0.integral_knl!r})",
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
     if reconstruction_info is None:
         reconstruction_info = {

@@ -2412,7 +2412,8 @@ def test_directional_source_derivative_without_direction_uses_generated_fallback
     table.data[entry_ids] = np.arange(1, len(entry_ids) + 1, dtype=table.dtype)
     table.table_data_is_symmetry_reduced = True
 
-    _, _, _, _, _, reconstruction_info = _prepare_table_data_and_entry_map([table])
+    with pytest.warns(RuntimeWarning, match="generated-orbit fallback"):
+        _, _, _, _, _, reconstruction_info = _prepare_table_data_and_entry_map([table])
 
     assert reconstruction_info["kind"] == "generated-orbit"
     assert "lookup_keys" in reconstruction_info
