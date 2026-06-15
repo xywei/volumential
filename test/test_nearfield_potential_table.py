@@ -355,12 +355,12 @@ def test_invariant_entry_info_matches_orbit_decode_metadata(dim, q_order):
 
     invariant_info = table._get_invariant_entry_info()
     invariant_entry_ids = np.array(invariant_info["entry_ids"], dtype=np.int64)
-    canonical_entry_ids = np.array(
-        invariant_info["canonical_entry_ids"], dtype=np.int64
-    )
-
-    assert canonical_entry_ids.shape == (len(table.data),)
-    assert np.array_equal(np.unique(canonical_entry_ids), invariant_entry_ids)
+    if "canonical_entry_ids" in invariant_info:
+        canonical_entry_ids = np.array(
+            invariant_info["canonical_entry_ids"], dtype=np.int64
+        )
+        assert canonical_entry_ids.shape == (len(table.data),)
+        assert np.array_equal(np.unique(canonical_entry_ids), invariant_entry_ids)
 
     decoded_case_ids = np.array(
         [
@@ -395,6 +395,70 @@ def test_invariant_entry_info_matches_orbit_decode_metadata(dim, q_order):
     assert np.array_equal(invariant_info["mode_axes"], expected_mode_axes)
 
 
+def test_scalar_arithmetic_invariant_info_skips_signed_union_find(monkeypatch):
+    from sumpy.kernel import LaplaceKernel
+
+    from volumential.expansion_wrangler_fpnd import _prepare_table_data_and_entry_map
+
+    table = npt.NearFieldInteractionTable(
+        quad_order=3,
+        dim=3,
+        build_method="DuffyRadial",
+        kernel_func=npt.constant_one,
+        kernel_type="inv_power",
+        sumpy_kernel=LaplaceKernel(3),
+        derive_kernel_func=False,
+        progress_bar=False,
+        precomputed_q_points=_precomputed_legendre_q_points(3, 3),
+    )
+
+    def fail_union(cls, parent, rank, rel, ia, ib, sign_b_over_a):
+        raise AssertionError("scalar arithmetic invariant info used signed union-find")
+
+    monkeypatch.setattr(
+        npt.NearFieldInteractionTable,
+        "_signed_uf_union",
+        classmethod(fail_union),
+    )
+
+    invariant_info = table._get_invariant_entry_info()
+    invariant_entry_ids = np.asarray(invariant_info["entry_ids"], dtype=np.int64)
+    assert invariant_info["kind"] == "scalar-arithmetic-orbit"
+    assert "canonical_entry_ids" not in invariant_info
+    assert len(invariant_entry_ids) == 2510
+
+    def fake_batched_values(
+        queue,
+        invariant_info,
+        local_entry_indices,
+        radial_rule,
+        deg_theta,
+        radial_quad_order,
+        mp_dps,
+        kernel_kwargs=None,
+    ):
+        del queue, invariant_info, radial_rule, deg_theta, radial_quad_order, mp_dps
+        del kernel_kwargs
+        return np.asarray(local_entry_indices, dtype=table.dtype) + 1
+
+    monkeypatch.setattr(
+        table, "_batched_duffy_values_for_local_indices", fake_batched_values
+    )
+    table.build_table_via_duffy_radial_batched(
+        queue=None,
+        radial_rule="tanh-sinh-fast",
+        deg_theta=8,
+        radial_quad_order=31,
+    )
+
+    _, _, _, table_entry_ids, table_entry_scales, recon = (
+        _prepare_table_data_and_entry_map([table])
+    )
+    assert recon["kind"] == "scalar-arithmetic-orbit"
+    assert table_entry_ids.size == 0
+    assert table_entry_scales.size == 0
+
+
 def test_orbit_canonicalization_preserves_value_lookup_equivalence():
     from volumential.table_manager import ConstantKernel
 
@@ -408,7 +472,7 @@ def test_orbit_canonicalization_preserves_value_lookup_equivalence():
         progress_bar=False,
     )
 
-    info = table._get_invariant_entry_info()
+    info = table._get_orbit_canonical_info()
     canonical_entry_ids = np.array(info["canonical_entry_ids"], dtype=np.int64)
 
     rng = np.random.default_rng(seed=11)
@@ -457,7 +521,7 @@ def test_orbit_canonicalization_tracks_sign_for_target_derivative_kernel():
         progress_bar=False,
     )
 
-    info = table._get_invariant_entry_info()
+    info = table._get_orbit_canonical_info()
     scales = np.asarray(info["canonical_scales"])
 
     # Derivative kernels are odd under some reflections; orbit metadata must
@@ -480,7 +544,7 @@ def test_orbit_canonicalization_tracks_sign_for_directional_source_derivative():
         progress_bar=False,
     )
 
-    info = table._get_invariant_entry_info()
+    info = table._get_orbit_canonical_info()
     scales = np.asarray(info["canonical_scales"])
     assert np.any(scales < 0)
 
@@ -1992,9 +2056,11 @@ def test_duffy_radial_batched_stores_compact_orbit_payload(monkeypatch):
 
     assert table.table_data_is_symmetry_reduced
     assert table.data.shape == (len(invariant_entry_ids),)
-    assert table.data.nbytes == len(invariant_entry_ids) * np.dtype(table.dtype).itemsize
+    assert table.data.nbytes == (
+        len(invariant_entry_ids) * np.dtype(table.dtype).itemsize
+    )
     assert len(table.data) == 2510
-    np.testing.assert_array_equal(table.reduced_entry_ids, invariant_entry_ids)
+    np.testing.assert_array_equal(table.reduced_entry_ids, np.sort(invariant_entry_ids))
     np.testing.assert_allclose(
         table.get_entry_data_for_full_indices(invariant_entry_ids),
         np.arange(1, len(invariant_entry_ids) + 1, dtype=table.dtype),
@@ -2091,7 +2157,7 @@ def test_duffy_radial_batched_keeps_symmetry_reduced_storage(ctx_factory):
     )
     assert table.table_data_is_symmetry_reduced
     assert table.data.shape == (len(invariant_entry_ids),)
-    np.testing.assert_array_equal(table.reduced_entry_ids, invariant_entry_ids)
+    np.testing.assert_array_equal(table.reduced_entry_ids, np.sort(invariant_entry_ids))
     assert table.has_entry_data_for_full_indices(invariant_entry_ids)
 
     dense_reconstructed = table.reconstruct_full_table_from_symmetry()
@@ -2412,10 +2478,20 @@ def test_arithmetic_orbit_reconstruction_matches_dense_oracle(kernel_case):
         reconstruction_info,
     ) = _prepare_table_data_and_entry_map([table])
 
-    expected_entry_ids = entry_ids[table_entry_ids]
-    expected_scales = np.real(table_entry_scales).astype(np.int8)
-
-    dense_metadata_bytes = table_entry_ids.nbytes + table_entry_scales.nbytes
+    if table_entry_ids.size == 0:
+        canonical_entry_ids = np.asarray(
+            orbit_info["canonical_entry_ids"], dtype=np.int64
+        )
+        canonical_scales = np.asarray(orbit_info["canonical_scales"], dtype=table.dtype)
+        expected_entry_ids = canonical_entry_ids
+        expected_scales = np.real(canonical_scales).astype(np.int8)
+        dense_metadata_bytes = (
+            canonical_entry_ids.astype(np.int32).nbytes + canonical_scales.nbytes
+        )
+    else:
+        expected_entry_ids = entry_ids[table_entry_ids]
+        expected_scales = np.real(table_entry_scales).astype(np.int8)
+        dense_metadata_bytes = table_entry_ids.nbytes + table_entry_scales.nbytes
     assert reconstruction_info["metadata_bytes"] < dense_metadata_bytes
 
     if reconstruction_info["kind"] == "scalar-arithmetic-orbit":
@@ -2590,7 +2666,7 @@ def test_arithmetic_orbit_reconstruction_q3_payload_diagnostic_row():
     assert recon["representative_entry_count"] == 2510
     assert recon["dense_arithmetic_layout_entry_count"] == 7290
     assert recon["unused_layout_entry_count"] == 0
-    assert dense_metadata_bytes == 1215972
+    assert dense_metadata_bytes == 0
     assert recon["metadata_bytes"] == 1576
 
 

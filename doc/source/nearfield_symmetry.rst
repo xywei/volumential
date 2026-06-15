@@ -10,6 +10,10 @@ Orbit canonicalization
 - A full table entry is mapped to a canonical representative entry.
 - The dense compatibility path uses an index map from full entry IDs to
   canonical entry IDs.
+- Scalar full-symmetry table construction enumerates compact arithmetic ORBIT
+  representatives directly. It does not build the dense canonical entry map or
+  run signed union-find unless a diagnostic/reconstruction API explicitly asks
+  for dense canonical metadata.
 - Scalar arithmetic ORBIT reconstruction avoids sending that full-entry map to
   the GPU for full-symmetry scalar tables. The List 1 evaluator canonicalizes
   ``(source_mode, target_point, case)`` with packed per-case descriptors and
