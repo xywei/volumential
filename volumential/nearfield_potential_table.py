@@ -38,6 +38,10 @@ from volumential.lagrange import (
     barycentric_lagrange_weights,
     evaluate_lagrange_basis_1d,
 )
+from volumential.orbit_arithmetic import (
+    build_arithmetic_case_metadata,
+    enumerate_scalar_arithmetic_representatives,
+)
 
 
 logger = logging.getLogger("NearFieldInteractionTable")
@@ -45,6 +49,7 @@ logger = logging.getLogger("NearFieldInteractionTable")
 
 _TABLE_BUILD_METHOD = "DuffyRadial"
 _DUFFY_PROGRESS_STAGES = 3
+_ARITHMETIC_INVARIANT_CACHE = {}
 _ORBIT_CANONICAL_CACHE = {}
 
 
@@ -1178,7 +1183,74 @@ class NearFieldInteractionTable:
         )
         return xi, barycentric_lagrange_weights(xi).astype(geom_dtype)
 
+    def _orbit_cache_key(self):
+        return (
+            int(self.dim),
+            int(self.quad_order),
+            tuple(tuple(int(c) for c in vec) for vec in self.interaction_case_vecs),
+            repr(self.integral_knl),
+            None
+            if self.symmetry_source_direction is None
+            else tuple(
+                np.asarray(self.symmetry_source_direction, dtype=float).tolist()
+            ),
+        )
+
+    def _get_scalar_arithmetic_invariant_entry_info(self):
+        if self.dim not in (2, 3):
+            return None
+        if _kernel_requires_identity_online_symmetry_maps(self.integral_knl):
+            return None
+
+        cache_key = ("scalar-arithmetic", self._orbit_cache_key())
+        cached = self._orbit_info_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        cached = _ARITHMETIC_INVARIANT_CACHE.get(cache_key)
+        if cached is not None:
+            self._orbit_info_cache[cache_key] = cached
+            return cached
+
+        metadata = build_arithmetic_case_metadata(self)
+        if metadata is None:
+            return None
+
+        entry_ids = enumerate_scalar_arithmetic_representatives(self, metadata)
+        n_q_points_i64 = np.int64(self.n_q_points)
+        n_pairs_i64 = np.int64(self.n_pairs)
+
+        source_mode_indices = (
+            (entry_ids % n_pairs_i64) // n_q_points_i64
+        ).astype(np.int32)
+        target_point_indices = (entry_ids % n_q_points_i64).astype(np.int32)
+        case_indices = (entry_ids // n_pairs_i64).astype(np.int32)
+        mode_axes = np.ascontiguousarray(
+            self._get_all_mode_axes()[source_mode_indices], dtype=np.int32
+        )
+
+        metadata_payload = {
+            key: value
+            for key, value in metadata.items()
+            if key not in {"case_value_offsets_i64"}
+        }
+        result = {
+            "kind": "scalar-arithmetic-orbit",
+            "entry_ids": np.ascontiguousarray(entry_ids, dtype=np.int64),
+            "case_indices": case_indices,
+            "target_point_indices": target_point_indices,
+            "source_mode_indices": source_mode_indices,
+            "mode_axes": mode_axes,
+            "arithmetic_metadata": metadata_payload,
+        }
+        _ARITHMETIC_INVARIANT_CACHE[cache_key] = result
+        self._orbit_info_cache[cache_key] = result
+        return result
+
     def _get_invariant_entry_info(self):
+        fast_info = self._get_scalar_arithmetic_invariant_entry_info()
+        if fast_info is not None:
+            return fast_info
         return self._get_orbit_canonical_info()
 
     def reconstruct_full_table_from_symmetry(self, canonical_data=None):
@@ -1573,17 +1645,7 @@ class NearFieldInteractionTable:
     def _get_orbit_canonical_info(self):
         """Canonicalize (source_mode, target_mode, case) under full group action."""
 
-        cache_key = (
-            int(self.dim),
-            int(self.quad_order),
-            tuple(tuple(int(c) for c in vec) for vec in self.interaction_case_vecs),
-            repr(self.integral_knl),
-            None
-            if self.symmetry_source_direction is None
-            else tuple(
-                np.asarray(self.symmetry_source_direction, dtype=float).tolist()
-            ),
-        )
+        cache_key = self._orbit_cache_key()
         cached = self._orbit_info_cache.get(cache_key)
         if cached is not None:
             return cached

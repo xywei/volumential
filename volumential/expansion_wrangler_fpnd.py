@@ -56,28 +56,13 @@ from volumential.expansion_wrangler_interface import (
 )
 from volumential.lagrange import barycentric_lagrange_weights
 from volumential.nearfield_potential_table import NearFieldInteractionTable
+from volumential.orbit_arithmetic import _decode_mode_axes, _encode_mode_axes
 
 
 logger = logging.getLogger(__name__)
 
 
 _ORBIT_RECONSTRUCTION_HASH_MULTIPLIER = 33
-
-
-def _encode_mode_axes(axes, q_order):
-    result = 0
-    for axis_value in axes:
-        result = result * int(q_order) + int(axis_value)
-    return int(result)
-
-
-def _decode_mode_axes(mode_id, q_order, dim):
-    axes = [0] * int(dim)
-    residual = int(mode_id)
-    for iaxis in range(int(dim) - 1, -1, -1):
-        axes[iaxis] = residual % int(q_order)
-        residual //= int(q_order)
-    return axes
 
 
 @dataclass(frozen=True)
@@ -1675,6 +1660,68 @@ def _build_scalar_arithmetic_orbit_reconstruction(
     )
 
 
+def _build_fast_scalar_arithmetic_orbit_reconstruction(table):
+    if not hasattr(table, "_get_scalar_arithmetic_invariant_entry_info"):
+        return None
+    if not bool(getattr(table, "table_data_is_symmetry_reduced", False)):
+        return None
+
+    invariant_info = table._get_scalar_arithmetic_invariant_entry_info()
+    if invariant_info is None:
+        return None
+
+    metadata = invariant_info.get("arithmetic_metadata")
+    if metadata is None:
+        return None
+
+    layout_entry_ids = np.asarray(invariant_info["entry_ids"], dtype=np.int64)
+    layout_entry_scales = np.ones(len(layout_entry_ids), dtype=np.int8)
+    axis_direction_signs = np.asarray(
+        metadata["axis_direction_signs"], dtype=np.int8
+    )
+    direction_sign_axis = int(metadata["direction_sign_axis"])
+
+    metadata_arrays = (
+        np.asarray(metadata["case_orbit_ranks"], dtype=np.uint16),
+        np.asarray(metadata["case_axis_perm"], dtype=np.uint8),
+        np.asarray(metadata["case_axis_sign"], dtype=np.int8),
+        np.asarray(metadata["case_axis_group"], dtype=np.uint8),
+        np.asarray(metadata["axis_sign_power"], dtype=np.uint8),
+        np.asarray(metadata["case_value_offsets"], dtype=np.int32),
+    )
+    if direction_sign_axis >= 0:
+        metadata_arrays += (axis_direction_signs,)
+
+    n_case_orbits = int(metadata_arrays[5].size - 1)
+    distinct_layout_entry_count = int(len(np.unique(layout_entry_ids)))
+    return {
+        "kind": "scalar-arithmetic-orbit",
+        "case_orbit_ranks": metadata_arrays[0],
+        "case_axis_perm": metadata_arrays[1],
+        "case_axis_sign": metadata_arrays[2],
+        "case_axis_group": metadata_arrays[3],
+        "case_value_offsets": metadata_arrays[5],
+        "axis_sign_power": metadata_arrays[4],
+        "axis_direction_signs": axis_direction_signs,
+        "direction_sign_axis": direction_sign_axis,
+        "layout_entry_ids": layout_entry_ids,
+        "layout_entry_scales": layout_entry_scales,
+        "n_case_orbits": n_case_orbits,
+        "metadata_bytes": int(sum(arr.nbytes for arr in metadata_arrays)),
+        "dense_arithmetic_layout_entry_count": int(
+            n_case_orbits * table.n_pairs
+        ),
+        "compact_value_entry_count": int(len(layout_entry_ids)),
+        "representative_entry_count": int(len(layout_entry_ids)),
+        "distinct_layout_entry_count": distinct_layout_entry_count,
+        "duplicate_layout_entry_count": int(
+            len(layout_entry_ids) - distinct_layout_entry_count
+        ),
+        "unused_layout_entry_count": 0,
+        "sign_convention_conflict_count": 0,
+    }
+
+
 def _build_generated_orbit_reconstruction(table, table_entry_ids, table_entry_scales):
     if not hasattr(table, "_get_orbit_reconstruction_maps"):
         return None
@@ -1775,6 +1822,63 @@ def _prepare_table_data_and_entry_map(table_levels):
         table_value_dtype = np.asarray(table0_values).dtype
     else:
         table_value_dtype = np.asarray(table0.data).dtype
+
+    if reduced_flags[0]:
+        fast_reconstruction_info = _build_fast_scalar_arithmetic_orbit_reconstruction(
+            table0
+        )
+        if fast_reconstruction_info is not None:
+            layout_entry_ids = np.asarray(
+                fast_reconstruction_info["layout_entry_ids"], dtype=np.int64
+            )
+            layout_entry_scales = np.asarray(
+                fast_reconstruction_info["layout_entry_scales"], dtype=table_value_dtype
+            )
+            if len(layout_entry_ids) == 0:
+                raise RuntimeError(
+                    "near-field reconstruction layout contains no entries"
+                )
+
+            if not table0.has_entry_data_for_full_indices(layout_entry_ids):
+                raise RuntimeError(
+                    "near-field reconstruction layout references missing data"
+                )
+            for table in table_levels[1:]:
+                if not table.has_entry_data_for_full_indices(layout_entry_ids):
+                    raise RuntimeError(
+                        "near-field levels disagree on reconstruction layout "
+                        "availability"
+                    )
+
+            table_data_combined = np.zeros(
+                (len(table_levels), len(layout_entry_ids)),
+                dtype=table_value_dtype,
+            )
+            mode_nmlz_combined = np.zeros(
+                (len(table_levels), len(table0.mode_normalizers)),
+                dtype=table0.mode_normalizers.dtype,
+            )
+            exterior_mode_nmlz_combined = np.zeros(
+                (len(table_levels), len(table0.kernel_exterior_normalizers)),
+                dtype=table0.kernel_exterior_normalizers.dtype,
+            )
+
+            for lev, table in enumerate(table_levels):
+                layout_values = table.get_entry_data_for_full_indices(layout_entry_ids)
+                table_data_combined[lev, :] = layout_values * layout_entry_scales
+                mode_nmlz_combined[lev, :] = table.mode_normalizers
+                exterior_mode_nmlz_combined[lev, :] = (
+                    table.kernel_exterior_normalizers
+                )
+
+            return (
+                table_data_combined,
+                mode_nmlz_combined,
+                exterior_mode_nmlz_combined,
+                np.empty(0, dtype=np.int32),
+                np.empty(0, dtype=table_value_dtype),
+                fast_reconstruction_info,
+            )
 
     if reduced_flags[0]:
         table_entry_scales = np.ones(n_full_entries, dtype=table_value_dtype)
