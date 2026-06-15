@@ -218,8 +218,8 @@ def laplace_const_source_same_box(table_2d_order1, queue, q_order, dim=2):
             pair_id = source_mode_index * n_q_points + target_point_index
             entry_id = case_same_box * n_pairs + pair_id
             # print(source_mode_index, target_point_index, pair_id, entry_id,
-            # nft.data[entry_id])
-            pot[target_point_index] += 1.0 * nft.data[entry_id]
+            # nft.get_entry_data(entry_id))
+            pot[target_point_index] += 1.0 * nft.get_entry_data(entry_id)
 
     return pot
 
@@ -239,8 +239,8 @@ def laplace_cons_source_neighbor_box(table_2d_order1, queue, q_order, case_id, d
             pair_id = source_mode_index * n_q_points + target_point_index
             entry_id = case_id * n_pairs + pair_id
             # print(source_mode_index, target_point_index, pair_id, entry_id,
-            # nft.data[entry_id])
-            pot[target_point_index] += 1.0 * nft.data[entry_id]
+            # nft.get_entry_data(entry_id))
+            pot[target_point_index] += 1.0 * nft.get_entry_data(entry_id)
 
     return pot
 

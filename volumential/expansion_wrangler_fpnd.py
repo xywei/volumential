@@ -97,9 +97,13 @@ class HelmholtzSplitCacheAccounting:
 
 
 def _nearfield_table_payload_bytes(table):
-    data = np.asarray(table.data)
     if bool(getattr(table, "table_data_is_symmetry_reduced", False)):
+        if hasattr(table, "get_reduced_table_data"):
+            _, values = table.get_reduced_table_data()
+            return int(np.asarray(values).nbytes)
+        data = np.asarray(table.data)
         return int(np.count_nonzero(np.isfinite(data)) * data.dtype.itemsize)
+    data = np.asarray(table.data)
     return int(data.nbytes)
 
 
@@ -1752,7 +1756,10 @@ def _prepare_table_data_and_entry_map(table_levels):
         raise ValueError("table_levels cannot be empty")
 
     table0 = table_levels[0]
-    n_full_entries = len(table0.data)
+    if hasattr(table0, "n_cases") and hasattr(table0, "n_pairs"):
+        n_full_entries = int(table0.n_cases * table0.n_pairs)
+    else:
+        n_full_entries = len(table0.data)
 
     reduced_flags = [
         bool(getattr(table, "table_data_is_symmetry_reduced", False))
@@ -1761,8 +1768,16 @@ def _prepare_table_data_and_entry_map(table_levels):
     if any(flag != reduced_flags[0] for flag in reduced_flags[1:]):
         raise RuntimeError("mixed full/reduced near-field table storage across levels")
 
+    if hasattr(table0, "dtype"):
+        table_value_dtype = np.dtype(table0.dtype)
+    elif hasattr(table0, "get_reduced_table_data"):
+        _, table0_values = table0.get_reduced_table_data()
+        table_value_dtype = np.asarray(table0_values).dtype
+    else:
+        table_value_dtype = np.asarray(table0.data).dtype
+
     if reduced_flags[0]:
-        table_entry_scales = np.ones(n_full_entries, dtype=table0.data.dtype)
+        table_entry_scales = np.ones(n_full_entries, dtype=table_value_dtype)
         orbit_info = None
         if hasattr(table0, "_get_orbit_canonical_info"):
             orbit_info = table0._get_orbit_canonical_info()
@@ -1775,15 +1790,29 @@ def _prepare_table_data_and_entry_map(table_levels):
             if len(kept_entry_ids) == 0:
                 raise RuntimeError("near-field table contains no canonical entries")
 
-            finite_mask = np.isfinite(table0.data)
-            if not np.all(finite_mask[kept_entry_ids]):
+            if hasattr(table0, "has_entry_data_for_full_indices"):
+                has_kept_entries = table0.has_entry_data_for_full_indices(
+                    kept_entry_ids
+                )
+            else:
+                finite_mask = np.isfinite(table0.data)
+                has_kept_entries = bool(np.all(finite_mask[kept_entry_ids]))
+            if not has_kept_entries:
                 raise RuntimeError(
                     "near-field table is missing finite values for canonical entries"
                 )
 
             for table in table_levels[1:]:
-                level_finite_mask = np.isfinite(table.data)
-                if not np.all(level_finite_mask[kept_entry_ids]):
+                if hasattr(table, "has_entry_data_for_full_indices"):
+                    level_has_kept_entries = table.has_entry_data_for_full_indices(
+                        kept_entry_ids
+                    )
+                else:
+                    level_finite_mask = np.isfinite(table.data)
+                    level_has_kept_entries = bool(
+                        np.all(level_finite_mask[kept_entry_ids])
+                    )
+                if not level_has_kept_entries:
                     raise RuntimeError(
                         "near-field levels disagree on canonical entry availability"
                     )
@@ -1793,18 +1822,28 @@ def _prepare_table_data_and_entry_map(table_levels):
             table_entry_ids = compact_ids[canonical_entry_ids]
             if "canonical_scales" in orbit_info:
                 table_entry_scales = np.asarray(
-                    orbit_info["canonical_scales"], dtype=table0.data.dtype
+                    orbit_info["canonical_scales"], dtype=table_value_dtype
                 )
         else:
-            finite_mask = np.isfinite(table0.data)
+            if hasattr(table0, "get_reduced_table_data"):
+                kept_entry_ids, _ = table0.get_reduced_table_data()
+                kept_entry_ids = np.asarray(kept_entry_ids, dtype=np.int64)
+                finite_mask = None
+            else:
+                finite_mask = np.isfinite(table0.data)
+                kept_entry_ids = np.flatnonzero(finite_mask).astype(np.int64)
             for table in table_levels[1:]:
-                level_finite_mask = np.isfinite(table.data)
-                if not np.array_equal(level_finite_mask, finite_mask):
+                if hasattr(table, "get_reduced_table_data"):
+                    level_entry_ids, _ = table.get_reduced_table_data()
+                    level_matches = np.array_equal(level_entry_ids, kept_entry_ids)
+                else:
+                    level_finite_mask = np.isfinite(table.data)
+                    level_matches = np.array_equal(level_finite_mask, finite_mask)
+                if not level_matches:
                     raise RuntimeError(
                         "near-field levels disagree on symmetry-reduced entry ids"
                     )
 
-            kept_entry_ids = np.flatnonzero(finite_mask).astype(np.int64)
             if len(kept_entry_ids) == 0:
                 raise RuntimeError("near-field table contains no finite entries")
 
@@ -1819,7 +1858,7 @@ def _prepare_table_data_and_entry_map(table_levels):
         kept_entry_ids = np.arange(n_full_entries, dtype=np.int64)
         table_entry_ids = np.full(n_full_entries, -1, dtype=np.int32)
         table_entry_ids[kept_entry_ids] = np.arange(len(kept_entry_ids), dtype=np.int32)
-        table_entry_scales = np.ones(n_full_entries, dtype=table0.data.dtype)
+        table_entry_scales = np.ones(n_full_entries, dtype=table_value_dtype)
 
     reconstruction_info = _build_scalar_arithmetic_orbit_reconstruction(
         table0,
@@ -1852,9 +1891,9 @@ def _prepare_table_data_and_entry_map(table_levels):
     layout_entry_ids = np.asarray(layout_entry_ids, dtype=np.int64)
     layout_entry_scales = reconstruction_info.get("layout_entry_scales")
     if layout_entry_scales is None:
-        layout_entry_scales = np.ones(len(layout_entry_ids), dtype=table0.data.dtype)
+        layout_entry_scales = np.ones(len(layout_entry_ids), dtype=table_value_dtype)
     else:
-        layout_entry_scales = np.asarray(layout_entry_scales, dtype=table0.data.dtype)
+        layout_entry_scales = np.asarray(layout_entry_scales, dtype=table_value_dtype)
     if layout_entry_scales.shape != layout_entry_ids.shape:
         raise RuntimeError("reconstruction layout entry scales have incompatible shape")
 
@@ -1863,17 +1902,33 @@ def _prepare_table_data_and_entry_map(table_levels):
     used_layout_scales = layout_entry_scales[used_layout_mask]
     if len(used_layout_entry_ids) == 0:
         raise RuntimeError("near-field reconstruction layout contains no entries")
-    if not np.all(np.isfinite(table0.data[used_layout_entry_ids])):
+    if hasattr(table0, "has_entry_data_for_full_indices"):
+        layout_entries_available = table0.has_entry_data_for_full_indices(
+            used_layout_entry_ids
+        )
+    else:
+        layout_entries_available = bool(
+            np.all(np.isfinite(table0.data[used_layout_entry_ids]))
+        )
+    if not layout_entries_available:
         raise RuntimeError("near-field reconstruction layout references missing data")
     for table in table_levels[1:]:
-        if not np.all(np.isfinite(table.data[used_layout_entry_ids])):
+        if hasattr(table, "has_entry_data_for_full_indices"):
+            level_layout_entries_available = table.has_entry_data_for_full_indices(
+                used_layout_entry_ids
+            )
+        else:
+            level_layout_entries_available = bool(
+                np.all(np.isfinite(table.data[used_layout_entry_ids]))
+            )
+        if not level_layout_entries_available:
             raise RuntimeError(
                 "near-field levels disagree on reconstruction layout availability"
             )
 
     table_data_combined = np.zeros(
         (len(table_levels), len(layout_entry_ids)),
-        dtype=table0.data.dtype,
+        dtype=table_value_dtype,
     )
     mode_nmlz_combined = np.zeros(
         (len(table_levels), len(table0.mode_normalizers)),
@@ -1885,9 +1940,11 @@ def _prepare_table_data_and_entry_map(table_levels):
     )
 
     for lev, table in enumerate(table_levels):
-        table_data_combined[lev, used_layout_mask] = (
-            table.data[used_layout_entry_ids] * used_layout_scales
-        )
+        if hasattr(table, "get_entry_data_for_full_indices"):
+            layout_values = table.get_entry_data_for_full_indices(used_layout_entry_ids)
+        else:
+            layout_values = table.data[used_layout_entry_ids]
+        table_data_combined[lev, used_layout_mask] = layout_values * used_layout_scales
         mode_nmlz_combined[lev, :] = table.mode_normalizers
         exterior_mode_nmlz_combined[lev, :] = table.kernel_exterior_normalizers
 

@@ -148,7 +148,7 @@ def test_duffy_batched_gpu_constant_kernel_matches_exact_volume(ctx_factory, dim
     exact = table.source_box_extent**dim
     for case_id in range(table.n_cases):
         entry_id = table.get_entry_index(0, 0, case_id)
-        rel_err = abs(table.data[entry_id] - exact) / max(1.0, abs(exact))
+        rel_err = abs(table.get_entry_data(entry_id) - exact) / max(1.0, abs(exact))
         assert rel_err < 1e-11
 
 
@@ -213,7 +213,7 @@ def test_duffy_batched_gpu_laplace_derivative_matches_finite_difference(
 
     # AxisTargetDerivative in this table setup carries the opposite sign
     # of d/d(target_x) applied to the box integral assembled above.
-    rel_err = abs(table_dx.data[entry_id] + fd_target_derivative) / max(
+    rel_err = abs(table_dx.get_entry_data(entry_id) + fd_target_derivative) / max(
         1.0, abs(fd_target_derivative)
     )
     assert rel_err < 1e-8
@@ -269,15 +269,15 @@ def test_duffy_batched_gpu_helmholtz_plane_wave_matches_exact_values(ctx_factory
     exact_potential = (np.sin(k * (1.0 - target_x)) - np.sin(-k * target_x)) / k
     exact_target_derivative = np.cos(k * target_x) - np.cos(k * (1.0 - target_x))
 
-    pot_rel_err = abs(table.data[entry_id] - exact_potential) / max(
+    pot_rel_err = abs(table.get_entry_data(entry_id) - exact_potential) / max(
         1.0, abs(exact_potential)
     )
     assert pot_rel_err < 1e-8
 
     # Same sign convention as in the Laplace derivative test above.
-    dpot_rel_err = abs(table_dx.data[entry_id] + exact_target_derivative) / max(
-        1.0, abs(exact_target_derivative)
-    )
+    dpot_rel_err = abs(
+        table_dx.get_entry_data(entry_id) + exact_target_derivative
+    ) / max(1.0, abs(exact_target_derivative))
     assert dpot_rel_err < 1e-8
 
 
@@ -341,7 +341,7 @@ def test_duffy_batched_gpu_yukawa_derivative_matches_finite_difference(
     )
 
     # Same sign convention as Laplace/Helmholtz target-derivative checks above.
-    rel_err = abs(table_dx.data[entry_id] + fd_target_derivative) / max(
+    rel_err = abs(table_dx.get_entry_data(entry_id) + fd_target_derivative) / max(
         1.0, abs(fd_target_derivative)
     )
     assert rel_err < 1e-7

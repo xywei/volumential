@@ -588,8 +588,8 @@ class NearFieldInteractionTable:
         else:
             raise NotImplementedError
 
-        self.data = np.empty(self.n_pairs * self.n_cases, dtype=self.dtype)
-        self.data.fill(np.nan)
+        self.reduced_entry_ids = None
+        self._data = None
 
         if self.dim == 2:
             total_evals = self.n_q_points + _DUFFY_PROGRESS_STAGES
@@ -609,6 +609,19 @@ class NearFieldInteractionTable:
         self.table_data_is_symmetry_reduced = False
 
     # }}} End constructor
+
+    @property
+    def data(self):
+        if self._data is None:
+            self._data = np.empty(self._full_entry_count(), dtype=self.dtype)
+            self._data.fill(np.nan)
+        return self._data
+
+    @data.setter
+    def data(self, value):
+        self._data = np.asarray(value, dtype=self.dtype)
+        self.reduced_entry_ids = None
+        self.table_data_is_symmetry_reduced = False
 
     def _get_geom_dtype(self):
         value_dtype = np.dtype(self.dtype)
@@ -958,22 +971,124 @@ class NearFieldInteractionTable:
 
     def get_entry_data(self, entry_id):
         """Return the requested entry value from full or orbit-reduced storage."""
-        value = self.data[entry_id]
-        if np.isfinite(value):
-            return value
+        if not self.table_data_is_symmetry_reduced:
+            if self._data is None:
+                raise RuntimeError("table data has not been built")
+            return self._data[entry_id]
 
         orbit_info = self._get_orbit_canonical_info()
         canonical_entry_ids = orbit_info["canonical_entry_ids"]
         canonical_scales = orbit_info["canonical_scales"]
         canonical_entry_id = int(canonical_entry_ids[entry_id])
-        canonical_value = self.data[canonical_entry_id]
-
-        if not np.isfinite(canonical_value):
-            raise RuntimeError(
-                "missing canonical table entry data for orbit-reduced table"
-            )
+        canonical_value = self.get_entry_data_for_full_indices([canonical_entry_id])[0]
 
         return self.dtype(canonical_scales[entry_id]) * canonical_value
+
+    def _full_entry_count(self):
+        return int(self.n_cases * self.n_pairs)
+
+    def _uses_dense_entry_indexing(self):
+        return self._data is not None and int(len(self._data)) == self._full_entry_count()
+
+    def get_reduced_entry_ids(self):
+        """Return full entry IDs stored by the current reduced representation."""
+
+        if not self.table_data_is_symmetry_reduced:
+            if self._data is None:
+                return np.empty(0, dtype=np.int64)
+            return np.arange(len(self._data), dtype=np.int64)
+
+        if self.reduced_entry_ids is not None:
+            return np.asarray(self.reduced_entry_ids, dtype=np.int64)
+
+        if self._uses_dense_entry_indexing():
+            return np.flatnonzero(np.isfinite(self._data)).astype(np.int64)
+
+        raise RuntimeError("compact reduced table is missing reduced_entry_ids")
+
+    def get_reduced_table_data(self):
+        """Return ``(full_entry_ids, values)`` for stored table entries."""
+
+        if not self.table_data_is_symmetry_reduced:
+            if self._data is None:
+                return (
+                    np.empty(0, dtype=np.int64),
+                    np.empty(0, dtype=self.dtype),
+                )
+            data = np.asarray(self._data)
+            return np.arange(len(data), dtype=np.int64), data
+
+        entry_ids = self.get_reduced_entry_ids()
+        if not self._uses_dense_entry_indexing():
+            return entry_ids, np.asarray(self._data)
+        return entry_ids, np.asarray(self._data)[entry_ids]
+
+    def set_reduced_table_data(self, entry_ids, values):
+        """Store reduced table values compactly by full entry ID."""
+
+        entry_ids = np.asarray(entry_ids, dtype=np.int64)
+        values = np.asarray(values, dtype=self.dtype)
+        if entry_ids.ndim != 1 or values.ndim != 1:
+            raise ValueError("entry_ids and values must be one-dimensional")
+        if entry_ids.shape != values.shape:
+            raise ValueError(
+                "entry_ids and values must have the same shape for reduced storage"
+            )
+        if entry_ids.size and not np.all(entry_ids[:-1] <= entry_ids[1:]):
+            order = np.argsort(entry_ids, kind="stable")
+            entry_ids = entry_ids[order]
+            values = values[order]
+        if entry_ids.size:
+            if entry_ids[0] < 0 or entry_ids[-1] >= self._full_entry_count():
+                raise ValueError("entry_ids must be valid full table entry IDs")
+            if np.any(entry_ids[:-1] == entry_ids[1:]):
+                raise ValueError("entry_ids must be unique")
+        entry_ids = np.ascontiguousarray(entry_ids, dtype=np.int64)
+        values = np.ascontiguousarray(values, dtype=self.dtype)
+        self.reduced_entry_ids = entry_ids
+        self._data = values
+        self.table_data_is_symmetry_reduced = True
+
+    def get_entry_data_for_full_indices(self, entry_ids):
+        """Return stored values addressed by full table entry IDs."""
+
+        entry_ids = np.asarray(entry_ids, dtype=np.int64)
+        if not self.table_data_is_symmetry_reduced:
+            if self._data is None:
+                raise RuntimeError("table data has not been built")
+            return np.asarray(self._data)[entry_ids]
+
+        if self._uses_dense_entry_indexing():
+            values = np.asarray(self._data)[entry_ids]
+            if not np.all(np.isfinite(values)):
+                raise RuntimeError(
+                    "missing canonical table entry data for orbit-reduced table"
+                )
+            return values
+
+        stored_entry_ids = self.get_reduced_entry_ids()
+        positions = np.searchsorted(stored_entry_ids, entry_ids)
+        if np.any(positions >= len(stored_entry_ids)) or not np.array_equal(
+            stored_entry_ids[positions], entry_ids
+        ):
+            raise RuntimeError(
+                "missing canonical table entry data for compact orbit-reduced table"
+            )
+        return np.asarray(self._data)[positions]
+
+    def has_entry_data_for_full_indices(self, entry_ids):
+        """Return whether all full entry IDs have stored finite values."""
+
+        entry_ids = np.asarray(entry_ids, dtype=np.int64)
+        if not self.table_data_is_symmetry_reduced:
+            if self._data is None:
+                return False
+            return bool(np.all(np.isfinite(np.asarray(self._data)[entry_ids])))
+        try:
+            values = self.get_entry_data_for_full_indices(entry_ids)
+        except RuntimeError:
+            return False
+        return bool(np.all(np.isfinite(values)))
 
     def compute_table_entry_duffy_radial(
         self,
@@ -1069,20 +1184,32 @@ class NearFieldInteractionTable:
     def reconstruct_full_table_from_symmetry(self, canonical_data=None):
         """Reconstruct full table data from orbit-canonical representatives."""
         orbit_info = self._get_orbit_canonical_info()
+        entry_ids = np.asarray(orbit_info["entry_ids"], dtype=np.int64)
         canonical_entry_ids = np.asarray(orbit_info["canonical_entry_ids"], dtype=np.int64)
         canonical_scales = np.asarray(orbit_info["canonical_scales"], dtype=self.dtype)
 
         if canonical_data is None:
-            canonical_data = self.data
-        canonical_data = np.asarray(canonical_data, dtype=self.dtype)
+            representative_values = self.get_entry_data_for_full_indices(entry_ids)
+        else:
+            canonical_data = np.asarray(canonical_data, dtype=self.dtype)
+            if canonical_data.shape[0] == self._full_entry_count():
+                representative_values = canonical_data[entry_ids]
+            elif canonical_data.shape[0] == len(entry_ids):
+                representative_values = canonical_data
+            else:
+                raise ValueError(
+                    "canonical_data must be indexed by full table entry ids or "
+                    "by orbit representatives; "
+                    f"expected length {self._full_entry_count()} or "
+                    f"{len(entry_ids)}, got {canonical_data.shape[0]}"
+                )
 
-        if canonical_data.shape[0] != len(self.data):
-            raise ValueError(
-                "canonical_data must be indexed by full table entry ids; "
-                f"expected length {len(self.data)}, got {canonical_data.shape[0]}"
-            )
-
-        return canonical_scales * canonical_data[canonical_entry_ids]
+        representative_positions = np.searchsorted(entry_ids, canonical_entry_ids)
+        if np.any(representative_positions >= len(entry_ids)) or not np.array_equal(
+            entry_ids[representative_positions], canonical_entry_ids
+        ):
+            raise RuntimeError("orbit canonical IDs are not present in representatives")
+        return canonical_scales * representative_values[representative_positions]
 
     def get_symmetry_reduction_diagnostics(self, reference_data=None):
         """Return paper-facing symmetry-reduction counts and reconstruction errors."""
@@ -1115,17 +1242,21 @@ class NearFieldInteractionTable:
         max_reconstruction_error = None
         l2_reconstruction_error = None
         if reference_data is None:
-            reference_data = self.data
-        reference_data = np.asarray(reference_data, dtype=self.dtype)
-        if reference_data.shape[0] != full_entry_count:
-            raise ValueError(
-                "reference_data must be indexed by full table entry ids; "
-                f"expected length {full_entry_count}, got {reference_data.shape[0]}"
-            )
+            if self.table_data_is_symmetry_reduced:
+                reference_data = None
+            else:
+                reference_data = self.data
+        if reference_data is not None:
+            reference_data = np.asarray(reference_data, dtype=self.dtype)
+            if reference_data.shape[0] != full_entry_count:
+                raise ValueError(
+                    "reference_data must be indexed by full table entry ids; "
+                    f"expected length {full_entry_count}, got {reference_data.shape[0]}"
+                )
 
-        if np.all(np.isfinite(reference_data[canonical_entry_ids])) and np.all(
-            np.isfinite(reference_data)
-        ):
+        if reference_data is not None and np.all(
+            np.isfinite(reference_data[canonical_entry_ids])
+        ) and np.all(np.isfinite(reference_data)):
             reconstructed = self.reconstruct_full_table_from_symmetry(reference_data)
             errors = np.abs(reconstructed - reference_data)
             max_reconstruction_error = float(np.max(errors))
@@ -2484,8 +2615,7 @@ class NearFieldInteractionTable:
         self._progress_step()
 
         t_scatter_start = time.perf_counter()
-        for ientry, entry_id in enumerate(invariant_entry_ids):
-            self.data[entry_id] = table_host[ientry]
+        self.set_reduced_table_data(invariant_entry_ids, table_host)
         t_scatter_end = time.perf_counter()
         self._progress_step()
 
@@ -2496,7 +2626,6 @@ class NearFieldInteractionTable:
         t_symmetry_fill_end = t_symmetry_fill_start
         self._progress_step()
 
-        self.table_data_is_symmetry_reduced = bool(np.any(np.isnan(self.data)))
         self.is_built = True
 
         t_total_end = time.perf_counter()
@@ -2717,7 +2846,8 @@ class NearFieldInteractionTable:
             self._progress_step()
 
             t_quadrature_start = time.perf_counter()
-            for entry_id in invariant_entry_ids:
+            table_values = np.empty(len(invariant_entry_ids), dtype=self.dtype)
+            for ientry, entry_id in enumerate(invariant_entry_ids):
                 _, entry_val = self.compute_table_entry_duffy_radial(
                     entry_id,
                     radial_rule=radial_rule,
@@ -2725,7 +2855,7 @@ class NearFieldInteractionTable:
                     radial_quad_order=radial_quad_order,
                     mp_dps=mp_dps,
                 )
-                self.data[entry_id] = entry_val
+                table_values[ientry] = entry_val
             t_quadrature_end = time.perf_counter()
             self._progress_step()
 
@@ -2736,7 +2866,7 @@ class NearFieldInteractionTable:
             t_symmetry_fill_end = t_symmetry_fill_start
             self._progress_step()
 
-            self.table_data_is_symmetry_reduced = bool(np.isnan(self.data).any())
+            self.set_reduced_table_data(invariant_entry_ids, table_values)
             self.is_built = True
 
             t_total_end = time.perf_counter()

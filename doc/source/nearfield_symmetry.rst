@@ -70,6 +70,22 @@ preparation validates generated representative IDs and generated signs against
 ``table_entry_ids`` / ``table_entry_scales`` before the generated descriptor is
 used.
 
+Compact table storage
+---------------------
+
+Symmetry-reduced Duffy builds store representative values directly in a compact
+``table.data`` array and keep the corresponding full table IDs in
+``reduced_entry_ids``. Reduced tables do not use a dense
+``n_cases*n_q_points**2`` value buffer as their storage representation.
+
+``get_entry_data`` and ``reconstruct_full_table_from_symmetry`` are the dense
+compatibility adapters. A caller that needs full dense values must request an
+explicit reconstructed array and keep it outside the table/cache storage path.
+Cache payloads always use ``reduced_entry_ids`` plus compact ``reduced_data`` for
+reduced tables, and online List 1 payload preparation reads representative
+values through the same full-entry-ID adapter before applying the compact
+arithmetic ORBIT layout.
+
 GPU scheduling
 --------------
 
