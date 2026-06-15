@@ -1914,7 +1914,7 @@ def test_duffy_radial_batched_matches_scalar_reference_entries(
     )
 
     invariant_entry_ids = table._get_invariant_entry_info()["entry_ids"]
-    assert np.all(np.isfinite(table.data[invariant_entry_ids]))
+    assert table.has_entry_data_for_full_indices(invariant_entry_ids)
 
     sample_entry_ids = sorted(
         {
@@ -1940,8 +1940,63 @@ def test_duffy_radial_batched_matches_scalar_reference_entries(
             deg_theta=regular_quad_order,
             radial_quad_order=radial_quad_order,
         )
-        rel_err = abs(table.data[entry_id] - ref_val) / max(1.0, abs(ref_val))
+        rel_err = abs(table.get_entry_data(entry_id) - ref_val) / max(1.0, abs(ref_val))
         assert rel_err < rtol
+
+
+def test_duffy_radial_batched_stores_compact_orbit_payload(monkeypatch):
+    from sumpy.kernel import LaplaceKernel
+
+    q_order = 3
+    dim = 3
+    table = npt.NearFieldInteractionTable(
+        quad_order=q_order,
+        dim=dim,
+        build_method="DuffyRadial",
+        kernel_func=npt.constant_one,
+        kernel_type="inv_power",
+        sumpy_kernel=LaplaceKernel(dim),
+        derive_kernel_func=False,
+        progress_bar=False,
+        precomputed_q_points=_precomputed_legendre_q_points(q_order, dim),
+    )
+    invariant_entry_ids = np.asarray(
+        table._get_invariant_entry_info()["entry_ids"], dtype=np.int64
+    )
+
+    def fake_batched_values(
+        queue,
+        invariant_info,
+        local_entry_indices,
+        radial_rule,
+        deg_theta,
+        radial_quad_order,
+        mp_dps,
+        kernel_kwargs=None,
+    ):
+        del queue, invariant_info, radial_rule, deg_theta, radial_quad_order, mp_dps
+        del kernel_kwargs
+        return np.asarray(local_entry_indices, dtype=table.dtype) + 1
+
+    monkeypatch.setattr(
+        table, "_batched_duffy_values_for_local_indices", fake_batched_values
+    )
+    table.build_table_via_duffy_radial_batched(
+        queue=None,
+        radial_rule="tanh-sinh-fast",
+        deg_theta=8,
+        radial_quad_order=31,
+    )
+
+    assert table.table_data_is_symmetry_reduced
+    assert table.data.shape == (len(invariant_entry_ids),)
+    assert table.data.nbytes == len(invariant_entry_ids) * np.dtype(table.dtype).itemsize
+    assert len(table.data) == 2510
+    np.testing.assert_array_equal(table.reduced_entry_ids, invariant_entry_ids)
+    np.testing.assert_allclose(
+        table.get_entry_data_for_full_indices(invariant_entry_ids),
+        np.arange(1, len(invariant_entry_ids) + 1, dtype=table.dtype),
+    )
 
 
 def test_duffy_radial_batched_laplace_center_case_is_finite(ctx_factory):
@@ -2000,20 +2055,19 @@ def test_duffy_radial_batched_keeps_symmetry_reduced_storage(ctx_factory):
     invariant_entry_ids = np.asarray(
         table._get_invariant_entry_info()["entry_ids"], dtype=np.int64
     )
-    non_invariant_ids = np.setdiff1d(
-        np.arange(len(table.data), dtype=np.int64),
-        invariant_entry_ids,
-    )
-
-    assert non_invariant_ids.size > 0
     assert table.table_data_is_symmetry_reduced
-    assert np.all(np.isfinite(table.data[invariant_entry_ids]))
-    assert np.all(np.isnan(table.data[non_invariant_ids]))
+    assert table.data.shape == (len(invariant_entry_ids),)
+    np.testing.assert_array_equal(table.reduced_entry_ids, invariant_entry_ids)
+    assert table.has_entry_data_for_full_indices(invariant_entry_ids)
 
-    # Reduced tables must still provide finite values through get_entry_index.
+    dense_reconstructed = table.reconstruct_full_table_from_symmetry()
+    assert dense_reconstructed.shape == (table.n_cases * table.n_pairs,)
+    assert np.all(np.isfinite(dense_reconstructed))
+
+    # Reduced tables must still provide finite values through the dense adapter.
     for case_id in range(table.n_cases):
         entry_id = table.get_entry_index(0, 0, case_id)
-        assert np.isfinite(table.data[entry_id])
+        assert np.isfinite(table.get_entry_data(entry_id))
 
 
 def test_prepare_table_data_and_entry_map_rejects_mixed_storage_modes():
@@ -2522,6 +2576,7 @@ def test_table_payload_serialization_excludes_nan_sentinels_for_reduced_tables()
         kernel_type="const",
         sumpy_kernel=ConstantKernel(2),
         progress_bar=False,
+        precomputed_q_points=_precomputed_legendre_q_points(2, 2),
     )
 
     table.data[:] = np.array([1.0, np.nan, 2.0] + [np.nan] * (len(table.data) - 3))

@@ -180,7 +180,6 @@ def _deserialize_array(blob):
 
 
 def _serialize_table_payload(table):
-    data = np.array(table.data)
     table_data_is_symmetry_reduced = bool(
         getattr(table, "table_data_is_symmetry_reduced", False)
     )
@@ -204,10 +203,18 @@ def _serialize_table_payload(table):
         )
 
     if table_data_is_symmetry_reduced:
-        reduced_entry_ids = np.flatnonzero(np.isfinite(data)).astype(np.int64)
+        if hasattr(table, "get_reduced_table_data"):
+            reduced_entry_ids, reduced_data = table.get_reduced_table_data()
+            reduced_entry_ids = np.asarray(reduced_entry_ids, dtype=np.int64)
+            reduced_data = np.asarray(reduced_data)
+        else:
+            data = np.array(table.data)
+            reduced_entry_ids = np.flatnonzero(np.isfinite(data)).astype(np.int64)
+            reduced_data = data[reduced_entry_ids]
         payload["reduced_entry_ids"] = reduced_entry_ids
-        payload["reduced_data"] = data[reduced_entry_ids]
+        payload["reduced_data"] = reduced_data
     else:
+        data = np.array(table.data)
         payload["data"] = data
 
     with BytesIO() as f:
@@ -1592,8 +1599,13 @@ class NearFieldInteractionTableManager:
             if "data" in payload:
                 table.data[:] = payload["data"]
             elif "reduced_entry_ids" in payload and "reduced_data" in payload:
-                table.data[:] = np.nan
-                table.data[payload["reduced_entry_ids"]] = payload["reduced_data"]
+                if hasattr(table, "set_reduced_table_data"):
+                    table.set_reduced_table_data(
+                        payload["reduced_entry_ids"], payload["reduced_data"]
+                    )
+                else:
+                    table.data[:] = np.nan
+                    table.data[payload["reduced_entry_ids"]] = payload["reduced_data"]
             else:
                 raise KeyError("payload is missing table data arrays")
 
