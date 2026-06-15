@@ -621,6 +621,7 @@ class NearFieldInteractionTable:
     def data(self, value):
         self._data = np.asarray(value, dtype=self.dtype)
         self.reduced_entry_ids = None
+        self.table_data_is_symmetry_reduced = False
 
     def _get_geom_dtype(self):
         value_dtype = np.dtype(self.dtype)
@@ -971,7 +972,9 @@ class NearFieldInteractionTable:
     def get_entry_data(self, entry_id):
         """Return the requested entry value from full or orbit-reduced storage."""
         if not self.table_data_is_symmetry_reduced:
-            return self.data[entry_id]
+            if self._data is None:
+                raise RuntimeError("table data has not been built")
+            return self._data[entry_id]
 
         orbit_info = self._get_orbit_canonical_info()
         canonical_entry_ids = orbit_info["canonical_entry_ids"]
@@ -991,37 +994,57 @@ class NearFieldInteractionTable:
         """Return full entry IDs stored by the current reduced representation."""
 
         if not self.table_data_is_symmetry_reduced:
-            return np.arange(len(self.data), dtype=np.int64)
+            if self._data is None:
+                return np.empty(0, dtype=np.int64)
+            return np.arange(len(self._data), dtype=np.int64)
 
         if self.reduced_entry_ids is not None:
             return np.asarray(self.reduced_entry_ids, dtype=np.int64)
 
         if self._uses_dense_entry_indexing():
-            return np.flatnonzero(np.isfinite(self.data)).astype(np.int64)
+            return np.flatnonzero(np.isfinite(self._data)).astype(np.int64)
 
         raise RuntimeError("compact reduced table is missing reduced_entry_ids")
 
     def get_reduced_table_data(self):
         """Return ``(full_entry_ids, values)`` for stored table entries."""
 
+        if not self.table_data_is_symmetry_reduced:
+            if self._data is None:
+                return (
+                    np.empty(0, dtype=np.int64),
+                    np.empty(0, dtype=self.dtype),
+                )
+            data = np.asarray(self._data)
+            return np.arange(len(data), dtype=np.int64), data
+
         entry_ids = self.get_reduced_entry_ids()
-        if self.table_data_is_symmetry_reduced and not self._uses_dense_entry_indexing():
-            return entry_ids, np.asarray(self.data)
-        return entry_ids, np.asarray(self.data)[entry_ids]
+        if not self._uses_dense_entry_indexing():
+            return entry_ids, np.asarray(self._data)
+        return entry_ids, np.asarray(self._data)[entry_ids]
 
     def set_reduced_table_data(self, entry_ids, values):
         """Store reduced table values compactly by full entry ID."""
 
-        entry_ids = np.ascontiguousarray(entry_ids, dtype=np.int64)
-        values = np.ascontiguousarray(values, dtype=self.dtype)
+        entry_ids = np.asarray(entry_ids, dtype=np.int64)
+        values = np.asarray(values, dtype=self.dtype)
+        if entry_ids.ndim != 1 or values.ndim != 1:
+            raise ValueError("entry_ids and values must be one-dimensional")
         if entry_ids.shape != values.shape:
             raise ValueError(
                 "entry_ids and values must have the same shape for reduced storage"
             )
         if entry_ids.size and not np.all(entry_ids[:-1] <= entry_ids[1:]):
             order = np.argsort(entry_ids, kind="stable")
-            entry_ids = np.ascontiguousarray(entry_ids[order], dtype=np.int64)
-            values = np.ascontiguousarray(values[order], dtype=self.dtype)
+            entry_ids = entry_ids[order]
+            values = values[order]
+        if entry_ids.size:
+            if entry_ids[0] < 0 or entry_ids[-1] >= self._full_entry_count():
+                raise ValueError("entry_ids must be valid full table entry IDs")
+            if np.any(entry_ids[:-1] == entry_ids[1:]):
+                raise ValueError("entry_ids must be unique")
+        entry_ids = np.ascontiguousarray(entry_ids, dtype=np.int64)
+        values = np.ascontiguousarray(values, dtype=self.dtype)
         self.reduced_entry_ids = entry_ids
         self._data = values
         self.table_data_is_symmetry_reduced = True
@@ -1031,10 +1054,12 @@ class NearFieldInteractionTable:
 
         entry_ids = np.asarray(entry_ids, dtype=np.int64)
         if not self.table_data_is_symmetry_reduced:
-            return np.asarray(self.data)[entry_ids]
+            if self._data is None:
+                raise RuntimeError("table data has not been built")
+            return np.asarray(self._data)[entry_ids]
 
         if self._uses_dense_entry_indexing():
-            values = np.asarray(self.data)[entry_ids]
+            values = np.asarray(self._data)[entry_ids]
             if not np.all(np.isfinite(values)):
                 raise RuntimeError(
                     "missing canonical table entry data for orbit-reduced table"
@@ -1049,14 +1074,16 @@ class NearFieldInteractionTable:
             raise RuntimeError(
                 "missing canonical table entry data for compact orbit-reduced table"
             )
-        return np.asarray(self.data)[positions]
+        return np.asarray(self._data)[positions]
 
     def has_entry_data_for_full_indices(self, entry_ids):
         """Return whether all full entry IDs have stored finite values."""
 
         entry_ids = np.asarray(entry_ids, dtype=np.int64)
         if not self.table_data_is_symmetry_reduced:
-            return bool(np.all(np.isfinite(np.asarray(self.data)[entry_ids])))
+            if self._data is None:
+                return False
+            return bool(np.all(np.isfinite(np.asarray(self._data)[entry_ids])))
         try:
             values = self.get_entry_data_for_full_indices(entry_ids)
         except RuntimeError:

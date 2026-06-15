@@ -1947,6 +1947,8 @@ def test_duffy_radial_batched_matches_scalar_reference_entries(
 def test_duffy_radial_batched_stores_compact_orbit_payload(monkeypatch):
     from sumpy.kernel import LaplaceKernel
 
+    from volumential.expansion_wrangler_fpnd import _prepare_table_data_and_entry_map
+
     q_order = 3
     dim = 3
     table = npt.NearFieldInteractionTable(
@@ -1997,6 +1999,38 @@ def test_duffy_radial_batched_stores_compact_orbit_payload(monkeypatch):
         table.get_entry_data_for_full_indices(invariant_entry_ids),
         np.arange(1, len(invariant_entry_ids) + 1, dtype=table.dtype),
     )
+
+    table_data_combined, _, _, _, _, recon = _prepare_table_data_and_entry_map([table])
+    assert table.data.shape == (len(invariant_entry_ids),)
+    assert table_data_combined.shape[1] == len(invariant_entry_ids)
+    assert recon["kind"] == "scalar-arithmetic-orbit"
+
+
+def test_compact_reduced_storage_validates_entry_ids():
+    table = npt.NearFieldInteractionTable(
+        quad_order=2,
+        dim=2,
+        build_method="DuffyRadial",
+        kernel_func=npt.constant_one,
+        kernel_type="const",
+        sumpy_kernel=ConstantKernel(2),
+        progress_bar=False,
+        precomputed_q_points=_precomputed_legendre_q_points(2, 2),
+    )
+
+    with pytest.raises(ValueError, match="one-dimensional"):
+        table.set_reduced_table_data(np.array([[0, 1]]), np.array([[1.0, 2.0]]))
+
+    with pytest.raises(ValueError, match="valid full table entry IDs"):
+        table.set_reduced_table_data(np.array([-1]), np.array([1.0]))
+
+    with pytest.raises(ValueError, match="valid full table entry IDs"):
+        table.set_reduced_table_data(
+            np.array([table.n_cases * table.n_pairs]), np.array([1.0])
+        )
+
+    with pytest.raises(ValueError, match="unique"):
+        table.set_reduced_table_data(np.array([1, 1]), np.array([1.0, 2.0]))
 
 
 def test_duffy_radial_batched_laplace_center_case_is_finite(ctx_factory):

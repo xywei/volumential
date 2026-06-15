@@ -1768,8 +1768,16 @@ def _prepare_table_data_and_entry_map(table_levels):
     if any(flag != reduced_flags[0] for flag in reduced_flags[1:]):
         raise RuntimeError("mixed full/reduced near-field table storage across levels")
 
+    if hasattr(table0, "dtype"):
+        table_value_dtype = np.dtype(table0.dtype)
+    elif hasattr(table0, "get_reduced_table_data"):
+        _, table0_values = table0.get_reduced_table_data()
+        table_value_dtype = np.asarray(table0_values).dtype
+    else:
+        table_value_dtype = np.asarray(table0.data).dtype
+
     if reduced_flags[0]:
-        table_entry_scales = np.ones(n_full_entries, dtype=table0.data.dtype)
+        table_entry_scales = np.ones(n_full_entries, dtype=table_value_dtype)
         orbit_info = None
         if hasattr(table0, "_get_orbit_canonical_info"):
             orbit_info = table0._get_orbit_canonical_info()
@@ -1814,7 +1822,7 @@ def _prepare_table_data_and_entry_map(table_levels):
             table_entry_ids = compact_ids[canonical_entry_ids]
             if "canonical_scales" in orbit_info:
                 table_entry_scales = np.asarray(
-                    orbit_info["canonical_scales"], dtype=table0.data.dtype
+                    orbit_info["canonical_scales"], dtype=table_value_dtype
                 )
         else:
             if hasattr(table0, "get_reduced_table_data"):
@@ -1850,7 +1858,7 @@ def _prepare_table_data_and_entry_map(table_levels):
         kept_entry_ids = np.arange(n_full_entries, dtype=np.int64)
         table_entry_ids = np.full(n_full_entries, -1, dtype=np.int32)
         table_entry_ids[kept_entry_ids] = np.arange(len(kept_entry_ids), dtype=np.int32)
-        table_entry_scales = np.ones(n_full_entries, dtype=table0.data.dtype)
+        table_entry_scales = np.ones(n_full_entries, dtype=table_value_dtype)
 
     reconstruction_info = _build_scalar_arithmetic_orbit_reconstruction(
         table0,
@@ -1883,9 +1891,9 @@ def _prepare_table_data_and_entry_map(table_levels):
     layout_entry_ids = np.asarray(layout_entry_ids, dtype=np.int64)
     layout_entry_scales = reconstruction_info.get("layout_entry_scales")
     if layout_entry_scales is None:
-        layout_entry_scales = np.ones(len(layout_entry_ids), dtype=table0.data.dtype)
+        layout_entry_scales = np.ones(len(layout_entry_ids), dtype=table_value_dtype)
     else:
-        layout_entry_scales = np.asarray(layout_entry_scales, dtype=table0.data.dtype)
+        layout_entry_scales = np.asarray(layout_entry_scales, dtype=table_value_dtype)
     if layout_entry_scales.shape != layout_entry_ids.shape:
         raise RuntimeError("reconstruction layout entry scales have incompatible shape")
 
@@ -1920,7 +1928,7 @@ def _prepare_table_data_and_entry_map(table_levels):
 
     table_data_combined = np.zeros(
         (len(table_levels), len(layout_entry_ids)),
-        dtype=table0.data.dtype,
+        dtype=table_value_dtype,
     )
     mode_nmlz_combined = np.zeros(
         (len(table_levels), len(table0.mode_normalizers)),
