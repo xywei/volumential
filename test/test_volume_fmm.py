@@ -1341,6 +1341,112 @@ def _get_yukawa_2d_dx_table(
     return tables
 
 
+@pytest.mark.skipif(
+    mg.provider != "meshgen_boxtree",
+    reason="Adaptive mesh module is not available",
+)
+def test_volume_fmm_3d_laplace_pde_boundary_shell_matches_full_list1(
+    ctx_factory,
+    tmp_path,
+):
+    from sumpy.expansion import DefaultExpansionFactory
+    from sumpy.kernel import LaplaceKernel
+
+    from volumential.expansion_wrangler_fpnd import (
+        FPNDExpansionWrangler,
+        FPNDTreeIndependentDataForWrangler,
+    )
+    from volumential.volume_fmm import drive_volume_fmm
+
+    ctx = ctx_factory()
+    queue = cl.CommandQueue(ctx)
+    dim = 3
+    q_order = 3
+    nlevels = 2
+    fmm_order = 6
+
+    mesh = mg.MeshGen3D(q_order, nlevels, -0.5, 0.5, queue=queue)
+    q_points, source_weights, tree, traversal = mg.build_geometry_info(
+        ctx,
+        queue,
+        dim,
+        q_order,
+        mesh,
+        bbox=np.array([[-0.5, 0.5]] * dim, dtype=np.float64),
+    )
+    source_coords_host = np.array([coords.get(queue) for coords in q_points])
+    x, y, z = source_coords_host
+    source_vals_host = np.exp(0.2 * x - 0.1 * y + 0.3 * z) * np.cos(x + 2.0 * y)
+    source_vals = cl.array.to_device(
+        queue,
+        np.ascontiguousarray(source_vals_host.astype(np.float64)),
+    )
+    weighted_sources = source_vals * source_weights
+
+    table = _get_laplace_3d_table(queue, tmp_path / "laplace3d-q3.sqlite", q_order)
+    knl = LaplaceKernel(dim)
+    expn_factory = DefaultExpansionFactory()
+    local_expn_class = expn_factory.get_local_expansion_class(knl)
+    mpole_expn_class = expn_factory.get_multipole_expansion_class(knl)
+
+    def make_wrangler(target_mode_compression):
+        tree_indep = FPNDTreeIndependentDataForWrangler(
+            ctx,
+            partial(mpole_expn_class, knl),
+            partial(local_expn_class, knl),
+            [knl],
+            exclude_self=True,
+        )
+        return FPNDExpansionWrangler(
+            tree_indep=tree_indep,
+            queue=queue,
+            traversal=traversal,
+            near_field_table=table,
+            dtype=np.float64,
+            fmm_level_to_order=lambda kernel, kernel_args, tree, lev: fmm_order,
+            quad_order=q_order,
+            self_extra_kwargs={
+                "target_to_source": np.arange(tree.ntargets, dtype=np.int32)
+            },
+            list1_extra_kwargs={
+                "target_mode_compression": target_mode_compression,
+            },
+        )
+
+    full_wrangler = make_wrangler("full")
+    auto_wrangler = make_wrangler("auto")
+    (full_pot,) = drive_volume_fmm(
+        traversal,
+        full_wrangler,
+        weighted_sources,
+        source_vals,
+        direct_evaluation=False,
+        list1_only=True,
+    )
+    (auto_pot,) = drive_volume_fmm(
+        traversal,
+        auto_wrangler,
+        weighted_sources,
+        source_vals,
+        direct_evaluation=False,
+        list1_only=True,
+    )
+
+    full_host = full_wrangler.tree_indep._setup_actx.to_numpy(full_pot)
+    auto_host = auto_wrangler.tree_indep._setup_actx.to_numpy(auto_pot)
+    rel_diff = np.linalg.norm(auto_host - full_host) / np.linalg.norm(full_host)
+    assert float(rel_diff) < 2.0e-2
+
+    diagnostics = [
+        payload["reconstruction_diagnostics"]
+        for payload in auto_wrangler._nearfield_device_payload_cache.values()
+    ]
+    assert diagnostics
+    assert diagnostics[0]["kind"] == "pde-boundary-shell"
+    assert diagnostics[0]["pde_boundary_target_point_count"] == 26
+    assert diagnostics[0]["pde_interior_target_point_count"] == 1
+
+
 def _get_laplace_2d_axis_source_derivative_table(
     queue,
     table_path,

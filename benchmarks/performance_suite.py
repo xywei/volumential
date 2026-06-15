@@ -49,6 +49,12 @@ SUITE_CASES = (
         accepts_backend=True,
     ),
     SuiteCase(
+        name="pde-target-compression",
+        description="PDE boundary-shell target compression size and loss",
+        script="benchmarks/pde_target_compression.py",
+        output_name="pde_target_compression.csv",
+    ),
+    SuiteCase(
         name="adaptive-timing",
         description="adaptive-tree geometry, table build/load, and FMM wall time",
         script="benchmarks/adaptive_timing.py",

@@ -1747,6 +1747,208 @@ def _build_generated_orbit_reconstruction(table, table_entry_ids, table_entry_sc
     }
 
 
+def _kernel_base_for_pde_targets(kernel):
+    base_kernel = kernel
+    if hasattr(base_kernel, "get_base_kernel"):
+        base_kernel = base_kernel.get_base_kernel()
+    elif hasattr(base_kernel, "inner_kernel"):
+        inner_kernel = base_kernel.inner_kernel
+        if hasattr(inner_kernel, "get_base_kernel"):
+            base_kernel = inner_kernel.get_base_kernel()
+        else:
+            base_kernel = inner_kernel
+    return base_kernel
+
+
+def _supports_laplace_boundary_shell_targets(kernel, dim):
+    base_kernel = _kernel_base_for_pde_targets(kernel)
+    if not isinstance(base_kernel, LaplaceKernel):
+        return False
+    if dim not in (2, 3):
+        return False
+    if not hasattr(base_kernel, "get_pde_as_diff_op"):
+        return False
+
+    try:
+        pde = base_kernel.get_pde_as_diff_op()
+    except Exception:
+        return False
+
+    return getattr(pde, "spatial_dim", None) == dim and len(getattr(pde, "eqs", ())) == 1
+
+
+def _select_target_mode_compression(policy, table, kernel, potential_kind):
+    if policy is None:
+        policy = "auto"
+    policy = str(policy)
+    if policy in {"none", "dense", "full", "full-target"}:
+        return "full"
+    if policy not in {"auto", "pde-boundary-shell"}:
+        raise ValueError(
+            "target_mode_compression must be one of 'auto', 'full', or "
+            f"'pde-boundary-shell', got {policy!r}"
+        )
+
+    supported = (
+        potential_kind == 1
+        and table.quad_order > 2
+        and _supports_laplace_boundary_shell_targets(kernel, table.dim)
+    )
+    if supported:
+        return "pde-boundary-shell"
+    if policy == "pde-boundary-shell":
+        raise NotImplementedError(
+            "pde-boundary-shell target compression currently supports only "
+            "Laplace-family volume-potential kernels in dimensions 2 and 3 "
+            "with quad_order > 2"
+        )
+    return "full"
+
+
+def _full_nearfield_table_data(table):
+    if getattr(table, "table_data_is_symmetry_reduced", False):
+        return np.asarray(table.reconstruct_full_table_from_symmetry())
+    return np.asarray(table.data)
+
+
+def _find_self_case_id(table):
+    matches = [
+        case_id
+        for case_id, case_vec in enumerate(table.interaction_case_vecs)
+        if all(int(component) == 0 for component in case_vec)
+    ]
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"expected exactly one same-box near-field case, found {len(matches)}"
+        )
+    return matches[0]
+
+
+def _combine_nearfield_normalizers(table_levels):
+    table0 = table_levels[0]
+    mode_nmlz_combined = np.zeros(
+        (len(table_levels), len(table0.mode_normalizers)),
+        dtype=table0.mode_normalizers.dtype,
+    )
+    exterior_mode_nmlz_combined = np.zeros(
+        (len(table_levels), len(table0.kernel_exterior_normalizers)),
+        dtype=table0.kernel_exterior_normalizers.dtype,
+    )
+    for lev, table in enumerate(table_levels):
+        mode_nmlz_combined[lev, :] = table.mode_normalizers
+        exterior_mode_nmlz_combined[lev, :] = table.kernel_exterior_normalizers
+
+    return mode_nmlz_combined, exterior_mode_nmlz_combined
+
+
+def _prepare_pde_boundary_shell_table_data(table_levels):
+    from volumential.nearfield_pde_targets import (
+        boundary_shell_reconstruction_diagnostics,
+        build_laplace_boundary_shell_reduction,
+        pack_boundary_shell_table,
+        self_case_correction_table,
+    )
+
+    if not table_levels:
+        raise ValueError("table_levels cannot be empty")
+
+    table0 = table_levels[0]
+    reduction = build_laplace_boundary_shell_reduction(
+        table0.q_points,
+        table0.quad_order,
+        table0.dim,
+    )
+    self_case_id = _find_self_case_id(table0)
+    table_data_combined = np.zeros(
+        (
+            len(table_levels),
+            table0.n_cases * table0.n_q_points * reduction.n_boundary_points,
+        ),
+        dtype=table0.data.dtype,
+    )
+    self_correction_combined = np.zeros(
+        (len(table_levels), reduction.n_interior_points, table0.n_q_points),
+        dtype=table0.data.dtype,
+    )
+
+    full_table0 = None
+    for lev, table in enumerate(table_levels):
+        if table.n_q_points != table0.n_q_points or table.n_cases != table0.n_cases:
+            raise RuntimeError("near-field levels disagree on table dimensions")
+        full_table_data = _full_nearfield_table_data(table)
+        if not np.all(np.isfinite(full_table_data)):
+            raise RuntimeError("PDE target compression requires finite full table data")
+        table_data_combined[lev, :] = pack_boundary_shell_table(
+            full_table_data,
+            reduction,
+            table0.n_cases,
+        )
+        self_correction_combined[lev, :, :] = self_case_correction_table(
+            full_table_data,
+            reduction,
+            self_case_id,
+            table0.n_cases,
+        )
+        if lev == 0:
+            full_table0 = full_table_data
+
+    if full_table0 is None:
+        diagnostics = {}
+    else:
+        diagnostics = boundary_shell_reconstruction_diagnostics(
+            full_table0,
+            reduction,
+            self_case_id,
+            table0.n_cases,
+        )
+
+    mode_nmlz_combined, exterior_mode_nmlz_combined = _combine_nearfield_normalizers(
+        table_levels
+    )
+    metadata_bytes = int(
+        reduction.boundary_ids.nbytes
+        + reduction.full_to_boundary.nbytes
+        + reduction.full_to_interior.nbytes
+        + reduction.recovery_matrix.nbytes
+    )
+    reconstruction_info = {
+        "kind": "pde-boundary-shell",
+        "metadata_bytes": metadata_bytes,
+        "target_reduction": reduction,
+        "self_case_id": int(self_case_id),
+        "self_correction": self_correction_combined,
+        "diagnostics": diagnostics,
+    }
+
+    return (
+        table_data_combined,
+        mode_nmlz_combined,
+        exterior_mode_nmlz_combined,
+        reconstruction_info,
+    )
+
+
+def _compute_box_local_target_ids(queue, tree, n_q_points, aligned_nboxes):
+    particle_local_ids = _compute_box_local_ids(queue, tree, n_q_points).get(queue)
+    box_target_starts = tree.box_target_starts.get(queue)
+    box_target_counts = tree.box_target_counts_nonchild.get(queue)
+    box_local_target_ids = np.full(
+        int(aligned_nboxes) * int(n_q_points),
+        -1,
+        dtype=np.int32,
+    )
+
+    for box_id, count in enumerate(box_target_counts):
+        if count != n_q_points:
+            continue
+        start = int(box_target_starts[box_id])
+        for particle_id in range(start, start + int(count)):
+            local_id = int(particle_local_ids[particle_id])
+            box_local_target_ids[box_id * n_q_points + local_id] = particle_id
+
+    return cl.array.to_device(queue, box_local_target_ids)
+
+
 def _prepare_table_data_and_entry_map(table_levels):
     if not table_levels:
         raise ValueError("table_levels cannot be empty")
@@ -2778,6 +2980,8 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         table0,
         near_field_tables,
         eval_dtype,
+        out_kernel,
+        target_mode_compression,
     ):
         payload = self._nearfield_device_payload_cache.get(cache_key)
         if payload is not None:
@@ -2791,14 +2995,30 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         base = len(range(min(distinct_numbers), max(distinct_numbers) + 1))
         shift = -min(distinct_numbers)
 
-        (
-            table_data_combined,
-            mode_nmlz_combined,
-            exterior_mode_nmlz_combined,
-            table_entry_ids,
-            table_entry_scales,
-            reconstruction_info,
-        ) = _prepare_table_data_and_entry_map(near_field_tables)
+        selected_target_mode_compression = _select_target_mode_compression(
+            target_mode_compression,
+            table0,
+            out_kernel,
+            self.potential_kind,
+        )
+        if selected_target_mode_compression == "pde-boundary-shell":
+            (
+                table_data_combined,
+                mode_nmlz_combined,
+                exterior_mode_nmlz_combined,
+                reconstruction_info,
+            ) = _prepare_pde_boundary_shell_table_data(near_field_tables)
+            table_entry_ids = np.empty(0, dtype=np.int32)
+            table_entry_scales = np.empty(0, dtype=table0.data.dtype)
+        else:
+            (
+                table_data_combined,
+                mode_nmlz_combined,
+                exterior_mode_nmlz_combined,
+                table_entry_ids,
+                table_entry_scales,
+                reconstruction_info,
+            ) = _prepare_table_data_and_entry_map(near_field_tables)
 
         case_indices_dev = cl.array.to_device(queue, table0.case_indices)
         reconstruction_kind = reconstruction_info["kind"]
@@ -2811,6 +3031,18 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             mode_nmlz_combined = mode_nmlz_combined.astype(eval_dtype)
         if exterior_mode_nmlz_combined.dtype != eval_dtype:
             exterior_mode_nmlz_combined = exterior_mode_nmlz_combined.astype(eval_dtype)
+        if reconstruction_kind == "pde-boundary-shell":
+            pde_self_correction = reconstruction_info["self_correction"]
+            pde_recovery_matrix = reconstruction_info[
+                "target_reduction"
+            ].recovery_matrix
+            if pde_self_correction.dtype != eval_dtype:
+                pde_self_correction = pde_self_correction.astype(eval_dtype)
+            if pde_recovery_matrix.dtype != eval_dtype:
+                pde_recovery_matrix = pde_recovery_matrix.astype(eval_dtype)
+            reconstruction_info = dict(reconstruction_info)
+            reconstruction_info["self_correction"] = pde_self_correction
+            reconstruction_info["pde_recovery_matrix"] = pde_recovery_matrix
 
         if reconstruction_kind == "dense":
             symmetry_maps = table0._get_online_symmetry_maps()
@@ -2865,6 +3097,18 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
                     ),
                 }
             )
+        elif reconstruction_kind == "pde-boundary-shell":
+            target_reduction = reconstruction_info["target_reduction"]
+            table_data_shapes.update(
+                {
+                    "n_pde_boundary_target_points": int(
+                        target_reduction.n_boundary_points
+                    ),
+                    "n_pde_interior_target_points": int(
+                        target_reduction.n_interior_points
+                    ),
+                }
+            )
 
         representative_entry_count = int(
             reconstruction_info.get(
@@ -2874,7 +3118,11 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         )
         reconstruction_diagnostics = {
             "kind": reconstruction_kind,
-            "online_value_bytes": int(table_data_combined.nbytes),
+            "target_mode_compression": selected_target_mode_compression,
+            "online_value_bytes": int(
+                table_data_combined.nbytes
+                + reconstruction_info.get("self_correction", np.empty(0)).nbytes
+            ),
             "representative_value_bytes": int(
                 representative_entry_count
                 * len(near_field_tables)
@@ -2903,6 +3151,43 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
                 reconstruction_info.get("unused_layout_entry_count", 0)
             ),
         }
+        reconstruction_diagnostics.update(reconstruction_info.get("diagnostics", {}))
+        if reconstruction_kind == "pde-boundary-shell":
+            target_reduction = reconstruction_info["target_reduction"]
+            full_entry_count = table0.n_cases * table0.n_q_points * table0.n_q_points
+            shell_entry_count = (
+                table0.n_cases
+                * table0.n_q_points
+                * target_reduction.n_boundary_points
+            )
+            self_correction_entry_count = int(
+                reconstruction_info["self_correction"].shape[1]
+                * reconstruction_info["self_correction"].shape[2]
+            )
+            reconstruction_diagnostics.update(
+                {
+                    "pde_boundary_target_point_count": int(
+                        target_reduction.n_boundary_points
+                    ),
+                    "pde_interior_target_point_count": int(
+                        target_reduction.n_interior_points
+                    ),
+                    "pde_full_target_point_count": int(table0.n_q_points),
+                    "pde_shell_table_entry_count": int(shell_entry_count),
+                    "pde_self_correction_entry_count": int(
+                        self_correction_entry_count
+                    ),
+                    "pde_full_table_entry_count": int(full_entry_count),
+                    "pde_online_value_bytes": int(
+                        table_data_combined.nbytes
+                        + reconstruction_info["self_correction"].nbytes
+                    ),
+                    "pde_shell_value_bytes": int(table_data_combined.nbytes),
+                    "pde_self_correction_value_bytes": int(
+                        reconstruction_info["self_correction"].nbytes
+                    ),
+                }
+            )
 
         payload = {
             "base": base,
@@ -2943,6 +3228,27 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
                     ),
                     "arithmetic_direction_sign_axis": int(
                         reconstruction_info["direction_sign_axis"]
+                    ),
+                }
+            )
+        elif reconstruction_kind == "pde-boundary-shell":
+            target_reduction = reconstruction_info["target_reduction"]
+            payload.update(
+                {
+                    "pde_target_boundary_ids_dev": cl.array.to_device(
+                        queue, target_reduction.full_to_boundary
+                    ),
+                    "pde_target_interior_ids_dev": cl.array.to_device(
+                        queue, target_reduction.full_to_interior
+                    ),
+                    "pde_boundary_target_point_ids_dev": cl.array.to_device(
+                        queue, target_reduction.boundary_ids
+                    ),
+                    "pde_recovery_matrix_dev": cl.array.to_device(
+                        queue, reconstruction_info["pde_recovery_matrix"]
+                    ),
+                    "pde_self_correction_dev": cl.array.to_device(
+                        queue, reconstruction_info["self_correction"]
                     ),
                 }
             )
@@ -3084,6 +3390,9 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
 
         if list1_extra_kwargs is None:
             list1_extra_kwargs = self.list1_extra_kwargs
+        target_mode_compression = list1_extra_kwargs.get(
+            "target_mode_compression", "auto"
+        )
 
         n_tables_local = len(near_field_tables)
         table0 = near_field_tables[0]
@@ -3140,6 +3449,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             None
             if symmetry_source_direction is None
             else tuple(np.asarray(symmetry_source_direction, dtype=float).tolist()),
+            str(target_mode_compression),
         )
         payload = self._get_cached_nearfield_payload(
             cache_key,
@@ -3147,6 +3457,8 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
             table0,
             near_field_tables,
             eval_dtype,
+            out_kernel,
+            target_mode_compression,
         )
 
         base = payload["base"]
@@ -3215,6 +3527,16 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
                     "reconstruction_sign_lookup_values_dev"
                 ],
             }
+        elif reconstruction_kind == "pde-boundary-shell":
+            reconstruction_kwargs = {
+                "pde_target_boundary_ids": payload["pde_target_boundary_ids_dev"],
+                "pde_target_interior_ids": payload["pde_target_interior_ids_dev"],
+                "pde_boundary_target_point_ids": payload[
+                    "pde_boundary_target_point_ids_dev"
+                ],
+                "pde_recovery_matrix": payload["pde_recovery_matrix_dev"],
+                "pde_self_correction": payload["pde_self_correction_dev"],
+            }
         else:
             reconstruction_kwargs = {
                 "mode_qpoint_map": payload["mode_qpoint_map_dev"],
@@ -3224,6 +3546,16 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
                 "table_entry_scales": payload["table_entry_scales_dev"],
             }
         particle_local_ids = _compute_box_local_ids(queue, self.tree, table0.n_q_points)
+        if reconstruction_kind == "pde-boundary-shell":
+            aligned_nboxes = self.tree.box_centers.shape[1]
+            reconstruction_kwargs["pde_box_local_target_ids"] = (
+                _compute_box_local_target_ids(
+                    queue,
+                    self.tree,
+                    table0.n_q_points,
+                    aligned_nboxes,
+                )
+            )
 
         _validate_table_box_particle_layout_cached(
             queue,

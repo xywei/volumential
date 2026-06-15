@@ -36,6 +36,7 @@ import numpy as np
 
 import loopy
 import pyopencl as cl
+from pytools import memoize_method
 
 from volumential.tools import KernelCacheWrapper
 
@@ -136,6 +137,12 @@ class NearFieldEvalBase(KernelCacheWrapper):
         self.n_arithmetic_case_orbits = table_data_shapes.get(
             "n_arithmetic_case_orbits", 0
         )
+        self.n_pde_boundary_target_points = table_data_shapes.get(
+            "n_pde_boundary_target_points", 0
+        )
+        self.n_pde_interior_target_points = table_data_shapes.get(
+            "n_pde_interior_target_points", 0
+        )
         self.potential_kind = potential_kind
 
         assert np.isreal(self.n_tables)
@@ -147,6 +154,7 @@ class NearFieldEvalBase(KernelCacheWrapper):
             "generated-orbit",
             "scalar-arithmetic-orbit",
             "signed-arithmetic-orbit",
+            "pde-boundary-shell",
         }
 
         self.options = options
@@ -1015,6 +1023,24 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 "n_reconstruction_sign_lookup_entries, "
                 "n_reconstruction_sign_lookup_probes"
             )
+        elif self.reconstruction_kind == "pde-boundary-shell":
+            reconstruction_domains = []
+            reconstruction_code = """
+                        <> target_boundary_point_id = \
+                                pde_target_boundary_ids[target_point_id]
+                        <> entry_id = case_id \
+                                * (n_q_points * n_pde_boundary_target_points) \
+                                + source_mode_id * n_pde_boundary_target_points \
+                                + target_boundary_point_id
+                        <> entry_sign = 1
+                        <> has_entry = target_boundary_point_id >= 0
+            """
+            reconstruction_args = [
+                loopy.GlobalArg(
+                    "pde_target_boundary_ids", np.int32, "n_q_points"
+                ),
+            ]
+            reconstruction_value_arg_names = ", n_pde_boundary_target_points"
         else:
             reconstruction_domains = []
             reconstruction_code = """
@@ -1204,6 +1230,118 @@ class NearFieldFromCSR(NearFieldEvalBase):
 
         return lpknl
 
+    @memoize_method
+    def get_pde_recovery_kernel(self):
+        if self.integral_kernel.is_complex_valued:
+            potential_dtype = np.complex128
+        else:
+            potential_dtype = np.float64
+
+        lpknl = loopy.make_kernel(
+            [
+                "{ [ tbox ] : 0 <= tbox < n_tgt_boxes }",
+                "{ [ tid ] : 0 <= tid < n_q_points }",
+                "{ [ bid ] : 0 <= bid < n_pde_boundary_target_points }",
+                "{ [ sid ] : 0 <= sid < n_q_points }",
+            ],
+            """
+            for tbox
+                <> target_box_id = target_boxes[tbox]
+                <> box_target_beg = box_target_starts[target_box_id]
+                <> n_box_targets = box_target_counts_nonchild[target_box_id]
+
+                <> tbox_level = box_levels[target_box_id]
+                <> tbox_extent = root_extent * (1.0 / (2**tbox_level))
+
+                table_lev_tmp = GET_TABLE_LEVEL {id=tab_lev_tmp}
+                table_lev = table_lev_tmp + 0.5 {id=tab_lev,dep=tab_lev_tmp}
+                <> scaling = COMPUTE_SCALING
+
+                for tid
+                    if tid < n_box_targets
+                    <> target_id = box_target_beg + tid
+                    <> target_point_id = target_point_ids[target_id]
+                    <> interior_id = pde_target_interior_ids[target_point_id]
+                    result[target_id] = (
+                        sum((bid),
+                            pde_recovery_matrix[interior_id, bid]
+                            * shell_result[pde_box_local_target_ids[
+                                target_box_id * n_q_points
+                                + pde_boundary_target_point_ids[bid]]]) \
+                        + sum((sid),
+                                pde_self_correction[
+                                    table_lev, interior_id, sid]
+                                * source_coefs[pde_box_local_target_ids[
+                                    target_box_id * n_q_points + sid]]
+                                * scaling)
+                        if interior_id >= 0 else shell_result[target_id]) \
+                        {id=write_recovered,dep=tab_lev}
+                    end
+                end
+            end
+            """
+            .replace("COMPUTE_SCALING", self.codegen_compute_scaling("tbox"))
+            .replace("GET_TABLE_LEVEL", self.codegen_get_table_level("tbox")),
+            [
+                loopy.TemporaryVariable("table_lev", np.int32),
+                loopy.TemporaryVariable("table_lev_tmp", np.float64),
+                loopy.GlobalArg("result", potential_dtype, "n_target_particles"),
+                loopy.GlobalArg(
+                    "shell_result", potential_dtype, "n_target_particles"
+                ),
+                loopy.GlobalArg("source_coefs", potential_dtype, "n_source_particles"),
+                loopy.GlobalArg("target_boxes", np.int32, "n_tgt_boxes"),
+                loopy.GlobalArg("box_centers", None, "dim, aligned_nboxes"),
+                loopy.GlobalArg("box_levels", None, "nboxes"),
+                loopy.GlobalArg(
+                    "box_target_counts_nonchild", np.int32, "aligned_nboxes"
+                ),
+                loopy.GlobalArg("box_target_starts", np.int32, "nboxes"),
+                loopy.GlobalArg("target_point_ids", np.int32, "n_target_particles"),
+                loopy.GlobalArg(
+                    "pde_target_interior_ids", np.int32, "n_q_points"
+                ),
+                loopy.GlobalArg(
+                    "pde_boundary_target_point_ids",
+                    np.int32,
+                    "n_pde_boundary_target_points",
+                ),
+                loopy.GlobalArg(
+                    "pde_box_local_target_ids",
+                    np.int32,
+                    "aligned_nboxes*n_q_points",
+                ),
+                loopy.GlobalArg(
+                    "pde_recovery_matrix",
+                    potential_dtype,
+                    "n_pde_interior_target_points, n_pde_boundary_target_points",
+                ),
+                loopy.GlobalArg(
+                    "pde_self_correction",
+                    potential_dtype,
+                    "n_tables, n_pde_interior_target_points, n_q_points",
+                ),
+                loopy.ValueArg("aligned_nboxes", np.int32),
+                loopy.ValueArg("root_extent", np.float64),
+                loopy.ValueArg("table_root_extent", np.float64),
+                loopy.ValueArg("table_starting_level", np.int32),
+                loopy.ValueArg(
+                    "dim, nboxes, n_tables, n_q_points, n_tgt_boxes, "
+                    "n_target_particles, n_source_particles, "
+                    "n_pde_boundary_target_points, n_pde_interior_target_points",
+                    np.int32,
+                ),
+                "...",
+            ],
+            name="near_field_pde_recovery",
+            lang_version=(2018, 2),
+            silenced_warnings=("write_race(write_recovered)",),
+        )
+        lpknl = loopy.set_options(lpknl, return_dict=True)
+        lpknl = loopy.tag_inames(lpknl, {"tbox": "g.0"})
+        lpknl = loopy.add_inames_for_unused_hw_axes(lpknl)
+        return lpknl
+
     def get_cache_key(self):
         return (
             type(self).__name__,
@@ -1223,6 +1361,8 @@ class NearFieldFromCSR(NearFieldEvalBase):
             "n_reconstruction_sign_lookup_probes=%d"
             % self.n_reconstruction_sign_lookup_probes,
             "n_arithmetic_case_orbits=%d" % self.n_arithmetic_case_orbits,
+            "n_pde_boundary_target_points=%d" % self.n_pde_boundary_target_points,
+            "n_pde_interior_target_points=%d" % self.n_pde_interior_target_points,
             "list1_target_batch_size=%d" % self._target_batch_size(),
             "infer_scaling=" + str(self.extra_kwargs["infer_kernel_scaling"]),
             "case_encoding_bias=" + repr(self.extra_kwargs["case_encoding_bias"]),
@@ -1273,6 +1413,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
         encoding_shift = kwargs.pop("encoding_shift")
         mode_nmlz_combined = kwargs.pop("mode_nmlz_combined")
         exterior_mode_nmlz_combined = kwargs.pop("exterior_mode_nmlz_combined")
+        pde_recovery_kwargs = {}
         if self.reconstruction_kind in {
             "scalar-arithmetic-orbit",
             "signed-arithmetic-orbit",
@@ -1334,6 +1475,21 @@ class NearFieldFromCSR(NearFieldEvalBase):
                     self.n_reconstruction_sign_lookup_probes
                 ),
             }
+        elif self.reconstruction_kind == "pde-boundary-shell":
+            reconstruction_kwargs = {
+                "pde_target_boundary_ids": kwargs.pop("pde_target_boundary_ids"),
+                "n_pde_boundary_target_points": self.n_pde_boundary_target_points,
+            }
+            pde_recovery_kwargs = {
+                "pde_target_interior_ids": kwargs.pop("pde_target_interior_ids"),
+                "pde_boundary_target_point_ids": kwargs.pop(
+                    "pde_boundary_target_point_ids"
+                ),
+                "pde_box_local_target_ids": kwargs.pop("pde_box_local_target_ids"),
+                "pde_recovery_matrix": kwargs.pop("pde_recovery_matrix"),
+                "pde_self_correction": kwargs.pop("pde_self_correction"),
+                "n_pde_interior_target_points": self.n_pde_interior_target_points,
+            }
         else:
             reconstruction_kwargs = {
                 "mode_qpoint_map": kwargs.pop("mode_qpoint_map"),
@@ -1352,6 +1508,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
         target_boxes = kwargs.pop("target_boxes")
         source_mode_ids = kwargs.pop("source_mode_ids")
         target_point_ids = kwargs.pop("target_point_ids")
+        aligned_nboxes = box_centers.shape[1]
 
         if (
             self.n_tables == 1
@@ -1428,10 +1585,16 @@ class NearFieldFromCSR(NearFieldEvalBase):
         )
 
         knl_exec = knl.executor(queue.context)
+        first_pass_result = result
+        if self.reconstruction_kind == "pde-boundary-shell":
+            if isinstance(result, cl.array.Array):
+                first_pass_result = cl.array.empty_like(result)
+            else:
+                first_pass_result = np.empty_like(result)
 
         evt, res = knl_exec(
             queue,
-            result=result,
+            result=first_pass_result,
             # db_table_lev=np.zeros(out_pot.shape),
             # db_case_id=np.zeros(out_pot.shape),
             # db_vec_id=np.zeros(out_pot.shape),
@@ -1449,6 +1612,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
             n_table_entries=self.n_table_entries,
             n_q_points=self.n_q_points,
             n_cases=self.n_cases,
+            aligned_nboxes=aligned_nboxes,
             encoding_base=encoding_base,
             encoding_shift=encoding_shift,
             mode_nmlz=mode_nmlz_combined,
@@ -1470,6 +1634,50 @@ class NearFieldFromCSR(NearFieldEvalBase):
             **reconstruction_kwargs,
             **extra_knl_args_from_init,
         )
+
+        if (
+            self.reconstruction_kind == "pde-boundary-shell"
+            and self.n_pde_interior_target_points
+        ):
+            recovery_knl = self.get_pde_recovery_kernel()
+            recovery_exec = recovery_knl.executor(queue.context)
+            evt, recovery_res = recovery_exec(
+                queue,
+                result=result,
+                shell_result=res["result"],
+                source_coefs=mode_coefs,
+                target_boxes=target_boxes,
+                box_centers=box_centers,
+                box_levels=box_levels,
+                box_target_counts_nonchild=box_target_counts_nonchild,
+                box_target_starts=box_target_starts,
+                target_point_ids=target_point_ids,
+                n_tgt_boxes=len(target_boxes),
+                nboxes=len(box_levels),
+                n_target_particles=len(target_point_ids),
+                n_source_particles=len(source_mode_ids),
+                n_tables=self.n_tables,
+                n_q_points=self.n_q_points,
+                aligned_nboxes=aligned_nboxes,
+                root_extent=root_extent,
+                table_root_extent=table_root_extent,
+                table_starting_level=table_starting_level,
+                pde_target_interior_ids=pde_recovery_kwargs[
+                    "pde_target_interior_ids"
+                ],
+                pde_boundary_target_point_ids=pde_recovery_kwargs[
+                    "pde_boundary_target_point_ids"
+                ],
+                pde_box_local_target_ids=pde_recovery_kwargs[
+                    "pde_box_local_target_ids"
+                ],
+                pde_recovery_matrix=pde_recovery_kwargs["pde_recovery_matrix"],
+                pde_self_correction=pde_recovery_kwargs["pde_self_correction"],
+                n_pde_boundary_target_points=self.n_pde_boundary_target_points,
+                n_pde_interior_target_points=self.n_pde_interior_target_points,
+                **extra_knl_args_from_init,
+            )
+            res["result"] = recovery_res["result"]
 
         res["result"].add_event(evt)
         if isinstance(result, cl.array.Array):

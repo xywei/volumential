@@ -202,6 +202,107 @@ def test_sumpy_kernel_to_lambda_applies_wrapper_postprocess():
     assert knl_func(4.0) == 30.0
 
 
+def test_laplace_boundary_shell_target_reduction_counts_and_recovers_harmonic():
+    from volumential.nearfield_pde_targets import (
+        build_laplace_boundary_shell_reduction,
+    )
+
+    q_order = 4
+    dim = 3
+    table = _make_legendre_table_without_cl(q_order, dim)
+
+    reduction = build_laplace_boundary_shell_reduction(
+        table.q_points,
+        q_order,
+        dim,
+    )
+
+    assert reduction.n_boundary_points == q_order**dim - (q_order - 2) ** dim
+    assert reduction.n_interior_points == (q_order - 2) ** dim
+
+    harmonic_values = (
+        table.q_points[:, 0] ** 2
+        - table.q_points[:, 1] ** 2
+        + 2.0 * table.q_points[:, 2]
+        + 1.0
+    )
+    recovered = reduction.recovery_matrix @ harmonic_values[reduction.boundary_ids]
+    assert np.allclose(recovered, harmonic_values[reduction.interior_ids])
+
+
+def test_boundary_shell_table_reconstruction_with_self_correction():
+    from volumential.nearfield_pde_targets import (
+        build_laplace_boundary_shell_reduction,
+        pack_boundary_shell_table,
+        reconstruct_boundary_shell_table,
+        self_case_correction_table,
+    )
+
+    q_order = 4
+    dim = 2
+    n_cases = 7
+    self_case_id = 3
+    rng = np.random.default_rng(17)
+    table = _make_legendre_table_without_cl(q_order, dim)
+    reduction = build_laplace_boundary_shell_reduction(
+        table.q_points,
+        q_order,
+        dim,
+    )
+
+    shell = rng.normal(
+        size=(n_cases, reduction.n_q_points, reduction.n_boundary_points)
+    )
+    self_correction = rng.normal(
+        size=(reduction.n_interior_points, reduction.n_q_points)
+    )
+    full = reconstruct_boundary_shell_table(
+        shell.reshape(-1),
+        self_correction,
+        reduction,
+        self_case_id,
+        n_cases,
+    )
+
+    packed = pack_boundary_shell_table(full, reduction, n_cases)
+    recovered_self_correction = self_case_correction_table(
+        full,
+        reduction,
+        self_case_id,
+        n_cases,
+    )
+    reconstructed = reconstruct_boundary_shell_table(
+        packed,
+        recovered_self_correction,
+        reduction,
+        self_case_id,
+        n_cases,
+    )
+
+    assert packed.size == n_cases * reduction.n_q_points * reduction.n_boundary_points
+    assert np.allclose(recovered_self_correction, self_correction)
+    assert np.allclose(reconstructed, full)
+
+
+def test_target_mode_compression_auto_selects_laplace_pde_shell():
+    from sumpy.kernel import LaplaceKernel, YukawaKernel
+
+    from volumential.expansion_wrangler_fpnd import _select_target_mode_compression
+
+    class FakeTable:
+        quad_order = 4
+        dim = 3
+
+    table = FakeTable()
+    assert (
+        _select_target_mode_compression("auto", table, LaplaceKernel(3), 1)
+        == "pde-boundary-shell"
+    )
+    assert _select_target_mode_compression("auto", table, LaplaceKernel(3), 2) == "full"
+    assert _select_target_mode_compression("full", table, LaplaceKernel(3), 1) == "full"
+    assert _select_target_mode_compression("auto", table, YukawaKernel(3), 1) == "full"
+
+
 def test_kernel_displacement_uses_target_minus_source_for_sumpy_kernels():
     from sumpy.kernel import AxisTargetDerivative, LaplaceKernel, YukawaKernel
 

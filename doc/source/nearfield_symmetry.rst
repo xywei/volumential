@@ -70,6 +70,43 @@ preparation validates generated representative IDs and generated signs against
 ``table_entry_ids`` / ``table_entry_scales`` before the generated descriptor is
 used.
 
+PDE-conforming target compression
+---------------------------------
+
+For supported PDE kernels, the target-side tensor-product nodes can also be
+compressed by enforcing the target-box PDE. The first implementation uses the
+tensor-grid boundary shell as the free target data:
+
+.. math::
+
+   B = \{(i,j,k): i \in \{0,q-1\}
+       \text{ or } j \in \{0,q-1\}
+       \text{ or } k \in \{0,q-1\}\}.
+
+The shell has ``q**dim - (q-2)**dim`` nodes, so the 3D target side drops from
+``q**3`` nodes to ``6*q**2 - 12*q + 8`` shell nodes. Homogeneous neighbor-box
+contributions are accumulated only on the shell and then interior nodes are
+recovered once per target box with a precomputed collocation Laplace recovery
+matrix.
+
+The List 1 policy is controlled by ``target_mode_compression``:
+
+- ``"auto"`` selects ``"pde-boundary-shell"`` for supported Laplace-family
+  volume-potential kernels and otherwise uses the existing full/ORBIT path.
+- ``"full"`` keeps the current full-target path.
+- ``"pde-boundary-shell"`` requires the PDE path and raises if unsupported.
+
+The same-box case is inhomogeneous. The current boundary-shell path stores an
+explicit same-box correction after harmonic shell recovery so the singular
+self-box table remains consistent with the dense baseline while homogeneous
+neighbor cases get the ``O(q**5)`` shell table layout. A future separable
+inhomogeneous solve can replace this correction to make the same-box auxiliary
+work asymptotically match the shell path.
+
+The PDE path is intentionally separate from ORBIT reconstruction for now. The
+boundary shell preserves cube node permutations, so geometric shell ORBIT can be
+composed with it after the PDE loss/benchmark data is established.
+
 GPU scheduling
 --------------
 
