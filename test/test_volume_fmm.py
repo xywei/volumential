@@ -1414,7 +1414,7 @@ def test_volume_fmm_3d_laplace_pde_boundary_shell_matches_full_list1(
         )
 
     full_wrangler = make_wrangler("full")
-    auto_wrangler = make_wrangler("auto")
+    pde_wrangler = make_wrangler("pde-boundary-shell")
     (full_pot,) = drive_volume_fmm(
         traversal,
         full_wrangler,
@@ -1423,9 +1423,9 @@ def test_volume_fmm_3d_laplace_pde_boundary_shell_matches_full_list1(
         direct_evaluation=False,
         list1_only=True,
     )
-    (auto_pot,) = drive_volume_fmm(
+    (pde_pot,) = drive_volume_fmm(
         traversal,
-        auto_wrangler,
+        pde_wrangler,
         weighted_sources,
         source_vals,
         direct_evaluation=False,
@@ -1433,13 +1433,13 @@ def test_volume_fmm_3d_laplace_pde_boundary_shell_matches_full_list1(
     )
 
     full_host = full_wrangler.tree_indep._setup_actx.to_numpy(full_pot)
-    auto_host = auto_wrangler.tree_indep._setup_actx.to_numpy(auto_pot)
-    rel_diff = np.linalg.norm(auto_host - full_host) / np.linalg.norm(full_host)
+    pde_host = pde_wrangler.tree_indep._setup_actx.to_numpy(pde_pot)
+    rel_diff = np.linalg.norm(pde_host - full_host) / np.linalg.norm(full_host)
     assert float(rel_diff) < 2.0e-2
 
     diagnostics = [
         payload["reconstruction_diagnostics"]
-        for payload in auto_wrangler._nearfield_device_payload_cache.values()
+        for payload in pde_wrangler._nearfield_device_payload_cache.values()
     ]
     assert diagnostics
     assert diagnostics[0]["kind"] == "pde-boundary-shell"

@@ -91,10 +91,21 @@ matrix.
 
 The List 1 policy is controlled by ``target_mode_compression``:
 
-- ``"auto"`` selects ``"pde-boundary-shell"`` for supported Laplace-family
-  volume-potential kernels and otherwise uses the existing full/ORBIT path.
-- ``"full"`` keeps the current full-target path.
-- ``"pde-boundary-shell"`` requires the PDE path and raises if unsupported.
+- ``"auto"`` currently keeps the existing full/ORBIT path. This preserves the
+  lossless dense-table semantics until a PDE-conforming target representation is
+  validated as a default.
+- ``"full"`` also keeps the current full-target path.
+- ``"pde-boundary-shell"`` explicitly enables the experimental PDE shell path
+  and raises if unsupported.
+
+This boundary-shell path is a PDE-conforming projection of the existing dense
+nodal table, not a lossless compression of it. The exact harmonic potential
+sampled at tensor-product nodes does not generally have a tensor-product nodal
+interpolant that satisfies the collocation PDE exactly, so reconstruction loss is
+expected when comparing against the full dense nodal table. A Sumpy-style
+PDE-conforming target basis can reduce this projection mismatch and has a better
+constant than the ``Q`` shell, but it changes the target representation rather
+than losslessly compressing existing nodal data.
 
 The same-box case is inhomogeneous. The current boundary-shell path stores an
 explicit same-box correction after harmonic shell recovery so the singular

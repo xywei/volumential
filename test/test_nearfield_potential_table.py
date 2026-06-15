@@ -284,7 +284,7 @@ def test_boundary_shell_table_reconstruction_with_self_correction():
     assert np.allclose(reconstructed, full)
 
 
-def test_target_mode_compression_auto_selects_laplace_pde_shell():
+def test_target_mode_compression_auto_keeps_full_path():
     from sumpy.kernel import LaplaceKernel, YukawaKernel
 
     from volumential.expansion_wrangler_fpnd import _select_target_mode_compression
@@ -294,8 +294,14 @@ def test_target_mode_compression_auto_selects_laplace_pde_shell():
         dim = 3
 
     table = FakeTable()
+    assert _select_target_mode_compression("auto", table, LaplaceKernel(3), 1) == "full"
     assert (
-        _select_target_mode_compression("auto", table, LaplaceKernel(3), 1)
+        _select_target_mode_compression(
+            "pde-boundary-shell",
+            table,
+            LaplaceKernel(3),
+            1,
+        )
         == "pde-boundary-shell"
     )
     assert _select_target_mode_compression("auto", table, LaplaceKernel(3), 2) == "full"

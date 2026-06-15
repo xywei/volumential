@@ -1781,7 +1781,7 @@ def _select_target_mode_compression(policy, table, kernel, potential_kind):
     if policy is None:
         policy = "auto"
     policy = str(policy)
-    if policy in {"none", "dense", "full", "full-target"}:
+    if policy in {"auto", "none", "dense", "full", "full-target"}:
         return "full"
     if policy not in {"auto", "pde-boundary-shell"}:
         raise ValueError(
@@ -1796,13 +1796,12 @@ def _select_target_mode_compression(policy, table, kernel, potential_kind):
     )
     if supported:
         return "pde-boundary-shell"
-    if policy == "pde-boundary-shell":
-        raise NotImplementedError(
-            "pde-boundary-shell target compression currently supports only "
-            "Laplace-family volume-potential kernels in dimensions 2 and 3 "
-            "with quad_order > 2"
-        )
-    return "full"
+
+    raise NotImplementedError(
+        "pde-boundary-shell target compression currently supports only "
+        "Laplace-family volume-potential kernels in dimensions 2 and 3 "
+        "with quad_order > 2"
+    )
 
 
 def _full_nearfield_table_data(table):
