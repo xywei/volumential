@@ -1692,6 +1692,7 @@ def _build_fast_scalar_arithmetic_orbit_reconstruction(table):
     if direction_sign_axis >= 0:
         metadata_arrays += (axis_direction_signs,)
 
+    n_case_orbits = int(metadata_arrays[5].size - 1)
     distinct_layout_entry_count = int(len(np.unique(layout_entry_ids)))
     return {
         "kind": "scalar-arithmetic-orbit",
@@ -1705,10 +1706,10 @@ def _build_fast_scalar_arithmetic_orbit_reconstruction(table):
         "direction_sign_axis": direction_sign_axis,
         "layout_entry_ids": layout_entry_ids,
         "layout_entry_scales": layout_entry_scales,
-        "n_case_orbits": int(len(metadata["canonical_case_ids"])),
+        "n_case_orbits": n_case_orbits,
         "metadata_bytes": int(sum(arr.nbytes for arr in metadata_arrays)),
         "dense_arithmetic_layout_entry_count": int(
-            len(metadata["canonical_case_ids"]) * table.n_pairs
+            n_case_orbits * table.n_pairs
         ),
         "compact_value_entry_count": int(len(layout_entry_ids)),
         "representative_entry_count": int(len(layout_entry_ids)),

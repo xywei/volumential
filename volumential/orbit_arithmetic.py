@@ -369,12 +369,11 @@ def _kernel_axis_preserving_arithmetic_symmetry(table, reconstruction_maps):
     }
 
 
-def _evaluate_arithmetic_orbit_entry(
+def _canonicalize_arithmetic_entry_axes(
     case_id,
     source_mode_id,
     target_point_id,
     *,
-    case_orbit_ranks,
     case_axis_perm,
     case_axis_sign,
     case_axis_group,
@@ -395,6 +394,7 @@ def _evaluate_arithmetic_orbit_entry(
     source_axes = []
     target_axes = []
     groups = []
+    axis_signs = []
     entry_sign = 1
     for out_axis in range(int(dim)):
         in_axis = int(case_axis_perm[case_id, out_axis])
@@ -427,6 +427,41 @@ def _evaluate_arithmetic_orbit_entry(
         source_axes.append(source_axis)
         target_axes.append(target_axis)
         groups.append(int(case_axis_group[case_id, out_axis]))
+        axis_signs.append(axis_sign)
+
+    return source_axes, target_axes, groups, axis_signs, entry_sign
+
+
+def _evaluate_arithmetic_orbit_entry(
+    case_id,
+    source_mode_id,
+    target_point_id,
+    *,
+    case_orbit_ranks,
+    case_axis_perm,
+    case_axis_sign,
+    case_axis_group,
+    axis_sign_power=None,
+    axis_direction_signs=None,
+    direction_sign_axis=-1,
+    q_order,
+    dim,
+):
+    source_axes, target_axes, groups, _, entry_sign = (
+        _canonicalize_arithmetic_entry_axes(
+            case_id,
+            source_mode_id,
+            target_point_id,
+            case_axis_perm=case_axis_perm,
+            case_axis_sign=case_axis_sign,
+            case_axis_group=case_axis_group,
+            axis_sign_power=axis_sign_power,
+            axis_direction_signs=axis_direction_signs,
+            direction_sign_axis=direction_sign_axis,
+            q_order=q_order,
+            dim=dim,
+        )
+    )
 
     def compare_swap(iaxis, jaxis):
         if groups[iaxis] != groups[jaxis]:
@@ -544,51 +579,21 @@ def _evaluate_compact_arithmetic_orbit_entry(
     q_order,
     dim,
 ):
-    if axis_sign_power is None:
-        axis_sign_power = np.zeros(int(dim), dtype=np.uint8)
-    if axis_direction_signs is None:
-        axis_direction_signs = np.zeros(int(dim), dtype=np.int8)
-
-    source_axes_raw = _decode_mode_axes(source_mode_id, q_order, dim)
-    target_axes_raw = _decode_mode_axes(target_point_id, q_order, dim)
-
-    source_axes = []
-    target_axes = []
-    groups = []
-    axis_signs = []
-    entry_sign = 1
-    for out_axis in range(int(dim)):
-        in_axis = int(case_axis_perm[case_id, out_axis])
-        axis_sign = int(case_axis_sign[case_id, out_axis])
-        source_axis = source_axes_raw[in_axis]
-        target_axis = target_axes_raw[in_axis]
-        applied_axis_sign = 1
-
-        if axis_sign < 0:
-            source_axis = int(q_order) - 1 - source_axis
-            target_axis = int(q_order) - 1 - target_axis
-            applied_axis_sign = -1
-        elif axis_sign == 0:
-            flipped_source = int(q_order) - 1 - source_axis
-            flipped_target = int(q_order) - 1 - target_axis
-            if (flipped_source, flipped_target) < (source_axis, target_axis):
-                source_axis = flipped_source
-                target_axis = flipped_target
-                applied_axis_sign = -1
-
-        if int(axis_sign_power[in_axis]):
-            entry_sign *= applied_axis_sign
-        if int(direction_sign_axis) == out_axis:
-            entry_sign *= (
-                applied_axis_sign
-                * int(axis_direction_signs[in_axis])
-                * int(axis_direction_signs[out_axis])
-            )
-
-        source_axes.append(source_axis)
-        target_axes.append(target_axis)
-        groups.append(int(case_axis_group[case_id, out_axis]))
-        axis_signs.append(axis_sign)
+    source_axes, target_axes, groups, axis_signs, entry_sign = (
+        _canonicalize_arithmetic_entry_axes(
+            case_id,
+            source_mode_id,
+            target_point_id,
+            case_axis_perm=case_axis_perm,
+            case_axis_sign=case_axis_sign,
+            case_axis_group=case_axis_group,
+            axis_sign_power=axis_sign_power,
+            axis_direction_signs=axis_direction_signs,
+            direction_sign_axis=direction_sign_axis,
+            q_order=q_order,
+            dim=dim,
+        )
+    )
 
     pair_codes = [
         int(source_axis) * int(q_order) + int(target_axis)
