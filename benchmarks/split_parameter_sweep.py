@@ -14,12 +14,16 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+
+TABLE_ROOT_EXTENT = 2.0
 
 
 FIELDS = (
@@ -29,6 +33,13 @@ FIELDS = (
     "dim",
     "parameter_name",
     "parameter_value",
+    "table_root_extent",
+    "source_box_level",
+    "table_side_length",
+    "effective_parameter",
+    "resolution_metric_name",
+    "resolution_metric",
+    "effective_parameter_regime",
     "split_order",
     "q_order",
     "nlevels",
@@ -111,6 +122,52 @@ def _select_opencl_device(cl, backend: str):
     raise RuntimeError("No OpenCL GPU/CPU device with fp64 support found")
 
 
+def _table_side_length(source_box_level: int, table_root_extent: float) -> float:
+    return float(table_root_extent) / float(2**int(source_box_level))
+
+
+def _effective_parameter_regime(theta: float) -> str:
+    if theta <= 1.0:
+        return "resolved"
+    if theta <= 2.0:
+        return "transition"
+    return "stress"
+
+
+def _resolution_diagnostics(
+    *,
+    kernel: str,
+    parameter: float,
+    q_order: int,
+    source_box_level: int,
+    table_root_extent: float,
+) -> dict[str, Any]:
+    side_length = _table_side_length(source_box_level, table_root_extent)
+    theta = abs(float(parameter)) * side_length
+    if theta == 0.0:
+        metric = math.inf
+    elif kernel == "Helmholtz":
+        metric = 2.0 * math.pi * float(q_order) / theta
+    elif kernel == "Yukawa":
+        metric = float(q_order) / theta
+    else:
+        raise ValueError(f"unknown kernel: {kernel}")
+    metric_name = (
+        "points_per_wavelength"
+        if kernel == "Helmholtz"
+        else "nodes_per_decay_length"
+    )
+    return {
+        "table_root_extent": float(table_root_extent),
+        "source_box_level": int(source_box_level),
+        "table_side_length": side_length,
+        "effective_parameter": theta,
+        "resolution_metric_name": metric_name,
+        "resolution_metric": metric,
+        "effective_parameter_regime": _effective_parameter_regime(theta),
+    }
+
+
 def _build_config(q_order: int):
     from volumential.nearfield_potential_table import DuffyBuildConfig
 
@@ -121,11 +178,13 @@ def _build_config(q_order: int):
     )
 
 
-def _get_laplace_2d_table(queue, cache_path: Path, q_order: int):
+def _get_laplace_2d_table(
+    queue, cache_path: Path, q_order: int, table_root_extent: float
+):
     from volumential.table_manager import NearFieldInteractionTableManager
 
     with NearFieldInteractionTableManager(
-        str(cache_path), root_extent=2.0, queue=queue
+        str(cache_path), root_extent=table_root_extent, queue=queue
     ) as table_manager:
         table, _ = table_manager.get_table(
             2,
@@ -138,11 +197,18 @@ def _get_laplace_2d_table(queue, cache_path: Path, q_order: int):
     return table
 
 
-def _get_yukawa_2d_table(queue, cache_path: Path, q_order: int, lam: float, level: int):
+def _get_yukawa_2d_table(
+    queue,
+    cache_path: Path,
+    q_order: int,
+    lam: float,
+    level: int,
+    table_root_extent: float,
+):
     from volumential.table_manager import NearFieldInteractionTableManager
 
     with NearFieldInteractionTableManager(
-        str(cache_path), root_extent=2.0, queue=queue
+        str(cache_path), root_extent=table_root_extent, queue=queue
     ) as table_manager:
         table, _ = table_manager.get_table(
             2,
@@ -158,14 +224,19 @@ def _get_yukawa_2d_table(queue, cache_path: Path, q_order: int, lam: float, leve
 
 
 def _build_helmholtz_2d_table(
-    queue, cache_path: Path, q_order: int, wave_number: float, level: int
+    queue,
+    cache_path: Path,
+    q_order: int,
+    wave_number: float,
+    level: int,
+    table_root_extent: float,
 ):
     from sumpy.kernel import HelmholtzKernel
     from volumential.table_manager import NearFieldInteractionTableManager
 
     kernel = HelmholtzKernel(2)
     with NearFieldInteractionTableManager(
-        str(cache_path), root_extent=2.0, dtype=np.complex128, queue=queue
+        str(cache_path), root_extent=table_root_extent, dtype=np.complex128, queue=queue
     ) as table_manager:
         table, _ = table_manager.get_table(
             2,
@@ -327,6 +398,7 @@ def _row_from_result(
     parameter_name: str,
     parameter: float,
     split_order: int,
+    table_root_extent: float,
     q_order: int,
     nlevels: int,
     fmm_order: int,
@@ -340,13 +412,24 @@ def _row_from_result(
     diff = split_values - reference_values
     reference_norm = max(float(np.linalg.norm(reference_values)), 1.0e-300)
     accounting_dict = asdict(accounting)
+    resolution = _resolution_diagnostics(
+        kernel=kernel,
+        parameter=parameter,
+        q_order=q_order,
+        source_box_level=nlevels,
+        table_root_extent=table_root_extent,
+    )
     return {
-        "case_id": f"{kernel.lower()}2d-{parameter_name}{parameter:g}-p{split_order}",
+        "case_id": (
+            f"{kernel.lower()}2d-q{q_order}-l{nlevels}-"
+            f"{parameter_name}{parameter:g}-p{split_order}"
+        ),
         "mode": mode,
         "kernel": kernel,
         "dim": 2,
         "parameter_name": parameter_name,
         "parameter_value": parameter,
+        **resolution,
         "split_order": split_order,
         "q_order": q_order,
         "nlevels": nlevels,
@@ -376,6 +459,7 @@ def run_benchmark(
     q_order: int,
     nlevels: int,
     fmm_order: int,
+    table_root_extent: float,
     split_orders: list[int],
     helmholtz_k: list[float],
     yukawa_lam: list[float],
@@ -391,7 +475,10 @@ def run_benchmark(
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     split_table = _get_laplace_2d_table(
-        queue, cache_dir / f"split-laplace-q{q_order}.sqlite", q_order
+        queue,
+        cache_dir / f"split-laplace-q{q_order}.sqlite",
+        q_order,
+        table_root_extent,
     )
     rows: list[dict[str, Any]] = []
 
@@ -412,19 +499,23 @@ def run_benchmark(
                 )
                 direct_reference_table = _build_helmholtz_2d_table(
                     queue,
-                    cache_dir / f"direct-helmholtz-k{parameter:g}-q{q_order}.sqlite",
+                    cache_dir
+                    / f"direct-helmholtz-k{parameter:g}-q{q_order}-l{nlevels}.sqlite",
                     q_order,
                     parameter,
                     nlevels,
+                    table_root_extent,
                 )
             else:
                 source_values_host = _gaussian_source_host(_coords_host(queue, q_points))
                 direct_reference_table = _get_yukawa_2d_table(
                     queue,
-                    cache_dir / f"direct-yukawa-lambda{parameter:g}-q{q_order}.sqlite",
+                    cache_dir
+                    / f"direct-yukawa-lambda{parameter:g}-q{q_order}-l{nlevels}.sqlite",
                     q_order,
                     parameter,
                     nlevels,
+                    table_root_extent,
                 )
 
             reference_values, reference_warm_s, _ = _run_path(
@@ -476,6 +567,7 @@ def run_benchmark(
                         parameter_name=parameter_name,
                         parameter=parameter,
                         split_order=split_order,
+                        table_root_extent=table_root_extent,
                         q_order=q_order,
                         nlevels=nlevels,
                         fmm_order=fmm_order,
@@ -514,8 +606,11 @@ def main() -> int:
         default=Path("build/benchmarks/split-parameter-cache"),
     )
     parser.add_argument("--q-order", type=int)
+    parser.add_argument("--q-orders")
     parser.add_argument("--nlevels", type=int)
+    parser.add_argument("--nlevels-list")
     parser.add_argument("--fmm-order", type=int)
+    parser.add_argument("--table-root-extent", type=float, default=TABLE_ROOT_EXTENT)
     parser.add_argument("--split-orders")
     parser.add_argument("--helmholtz-k")
     parser.add_argument("--yukawa-lambda")
@@ -524,22 +619,32 @@ def main() -> int:
     smoke = args.mode == "smoke"
     q_order = args.q_order if args.q_order is not None else (2 if smoke else 4)
     nlevels = args.nlevels if args.nlevels is not None else (2 if smoke else 3)
+    q_orders = _parse_csv_ints(args.q_orders) if args.q_orders else [q_order]
+    nlevels_list = (
+        _parse_csv_ints(args.nlevels_list) if args.nlevels_list else [nlevels]
+    )
     fmm_order = args.fmm_order if args.fmm_order is not None else (8 if smoke else 16)
     split_orders = _parse_csv_ints(args.split_orders or ("1,2" if smoke else "1,2,3"))
     helmholtz_k = _parse_csv_floats(args.helmholtz_k or ("4" if smoke else "4,8,12"))
     yukawa_lam = _parse_csv_floats(args.yukawa_lambda or ("4" if smoke else "4,8,12"))
 
-    rows = run_benchmark(
-        mode=args.mode,
-        backend=args.backend,
-        cache_dir=args.cache_dir,
-        q_order=q_order,
-        nlevels=nlevels,
-        fmm_order=fmm_order,
-        split_orders=split_orders,
-        helmholtz_k=helmholtz_k,
-        yukawa_lam=yukawa_lam,
-    )
+    rows = []
+    for q_order_i in q_orders:
+        for nlevels_i in nlevels_list:
+            rows.extend(
+                run_benchmark(
+                    mode=args.mode,
+                    backend=args.backend,
+                    cache_dir=args.cache_dir,
+                    q_order=q_order_i,
+                    nlevels=nlevels_i,
+                    fmm_order=fmm_order,
+                    table_root_extent=args.table_root_extent,
+                    split_orders=split_orders,
+                    helmholtz_k=helmholtz_k,
+                    yukawa_lam=yukawa_lam,
+                )
+            )
     write_csv(args.out, rows)
     return 0
 
