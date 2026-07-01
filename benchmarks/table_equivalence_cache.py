@@ -214,16 +214,26 @@ def _full_table_data(table) -> np.ndarray:
     return np.asarray(table.data, dtype=table.dtype)
 
 
-def _apply_log_scaling(canonical_table, canonical_data: np.ndarray, extent_ratio: float):
+def _apply_log_laplace_scaling(
+    canonical_table,
+    canonical_data: np.ndarray,
+    *,
+    extent_ratio: float,
+    scale_factor: float,
+):
     scaled = np.array(canonical_data, copy=True)
     for entry_id, value in enumerate(canonical_data):
         if not np.isfinite(value):
             continue
-        scaled[entry_id] = canonical_table.get_potential_scaler(
-            entry_id,
-            source_box_size=extent_ratio,
-            kernel_type="log",
-        )(value)
+        source_mode_index = canonical_table.decode_index(entry_id)["source_mode_index"]
+        displacement = (
+            -0.5
+            / np.pi
+            * scale_factor
+            * np.log(extent_ratio)
+            * canonical_table.mode_normalizers[source_mode_index]
+        )
+        scaled[entry_id] = scale_factor * value + displacement
     return scaled
 
 
@@ -255,10 +265,11 @@ def _equivalence_row(
     canonical_data = _full_table_data(canonical_table)
     scaled_canonical_without_log_correction = scale_factor * canonical_data
     if case.scale_rule == "log":
-        scaled_canonical = _apply_log_scaling(
+        scaled_canonical = _apply_log_laplace_scaling(
             canonical_table,
             canonical_data,
-            extent_ratio,
+            extent_ratio=extent_ratio,
+            scale_factor=scale_factor,
         )
     else:
         scaled_canonical = scaled_canonical_without_log_correction
