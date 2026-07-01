@@ -44,7 +44,7 @@ python /path/to/boxcode-paper/tools/run_benchmark_with_metadata.py \
   --mode full \
   --repo volumential=/path/to/volumential \
   --param kernel=laplace \
-  --param dimension=3 \
+  --param dimensions=2,3 \
   --param cache_state=cold-and-warm \
   --result-file table_equivalence.csv \
   --result-file cache_economics.csv \
@@ -54,7 +54,7 @@ python /path/to/boxcode-paper/tools/run_benchmark_with_metadata.py \
 
 The script writes:
 
-- `table_equivalence.csv`: max absolute/relative mismatch between direct per-level tables and a scaled canonical level-0 table.
+- `table_equivalence.csv`: max absolute/relative mismatch between direct per-level tables and a scaled canonical level-0 table. Log-Laplace rows also report the mismatch when the separable logarithmic correction is intentionally omitted.
 - `cache_economics.csv`: cold build, warm load, payload bytes, cache bytes, and symmetry-reduction counts from the table manager and table diagnostics.
 
 ## Accuracy Preservation
