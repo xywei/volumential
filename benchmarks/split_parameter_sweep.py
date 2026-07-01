@@ -3,8 +3,8 @@
 
 The benchmark sweeps the Helmholtz wave number and Yukawa screening parameter
 while recording split-table accounting. For each kernel parameter, rows compare
-against the highest split order in the same run, giving a direct split-order
-convergence measurement without changing the pretabulated basis-table family.
+against a fixed-parameter direct near-field table, giving an independent
+reference for the split/RKE channel family.
 
 Smoke mode is intended for CI/local validation. Full mode is intended for
 metadata-wrapped runs on controlled machines such as ``ipa``.
@@ -264,7 +264,7 @@ def _run_path(
     elif kernel == "Yukawa":
         out_kernel = YukawaKernel(2)
         kernel_kwargs = {out_kernel.yukawa_lambda_name: float(parameter)}
-        dtype = np.complex128 if split else np.float64
+        dtype = np.complex128
     else:
         raise ValueError(f"unknown kernel: {kernel}")
 
@@ -420,8 +420,39 @@ def run_benchmark(
                 source_values_host, _exact_values = _helmholtz_manufactured_source_and_exact(
                     _coords_host(queue, q_points), parameter
                 )
+                direct_reference_table = _build_helmholtz_2d_table(
+                    queue,
+                    cache_dir / f"direct-helmholtz-k{parameter:g}-q{q_order}.sqlite",
+                    q_order,
+                    parameter,
+                    nlevels,
+                )
             else:
                 source_values_host = _gaussian_source_host(_coords_host(queue, q_points))
+                direct_reference_table = _get_yukawa_2d_table(
+                    queue,
+                    cache_dir / f"direct-yukawa-lambda{parameter:g}-q{q_order}.sqlite",
+                    q_order,
+                    parameter,
+                    nlevels,
+                )
+
+            reference_values, reference_warm_s, _ = _run_path(
+                ctx=ctx,
+                queue=queue,
+                traversal=traversal,
+                q_order=q_order,
+                fmm_order=fmm_order,
+                kernel=kernel,
+                parameter=parameter,
+                table=direct_reference_table,
+                source_weights=source_weights,
+                q_points=q_points,
+                source_values_host=source_values_host,
+                split=False,
+                split_order=1,
+            )
+            reference_path = "direct_fixed_parameter_table"
 
             split_results = []
             for split_order in split_orders:
@@ -447,10 +478,6 @@ def run_benchmark(
                     (split_order, split_values, split_warm_s, accounting)
                 )
 
-            reference_split_order, reference_values, reference_warm_s, _ = max(
-                split_results, key=lambda result: result[0]
-            )
-            reference_path = f"split_order_{reference_split_order}"
             for split_order, split_values, split_warm_s, accounting in split_results:
                 rows.append(
                     _row_from_result(
