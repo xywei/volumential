@@ -79,4 +79,4 @@ The benchmark sweeps 2D scalar Helmholtz wave numbers and Yukawa screening param
 python benchmarks/adaptive_timing.py --mode smoke --out build/benchmarks/adaptive-timing.csv
 ```
 
-The benchmark runs 2D Laplace evaluations on deterministically adapted meshes and writes one cold-cache and one warm-cache row per case. Rows report mesh/adaptation setup, geometry construction, table build or load, FMM wall time, and the timing categories exposed by `drive_volume_fmm`. Full paper runs should be wrapped with the paper repository metadata tool before their CSVs are promoted to manuscript data.
+The benchmark runs 2D Laplace evaluations on deterministically adapted meshes and writes one cold-cache and one warm-cache row per case. Rows report mesh/adaptation setup, geometry construction, table build or load, FMM wall time, repeated FMM timing on the same adapted tree/table, and amortized per-evaluation table-plus-FMM costs. Use `--fmm-repeats` to override the mode-dependent repeat count. Full paper runs should be wrapped with the paper repository metadata tool before their CSVs are promoted to manuscript data.
