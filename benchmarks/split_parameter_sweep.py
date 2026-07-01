@@ -41,6 +41,7 @@ FIELDS = (
     "resolution_metric",
     "effective_parameter_regime",
     "split_order",
+    "split_smooth_quad_order",
     "q_order",
     "nlevels",
     "fmm_order",
@@ -307,6 +308,7 @@ def _run_path(
     source_values_host=None,
     split: bool,
     split_order: int,
+    split_smooth_quad_order: int | None,
 ):
     from functools import partial
 
@@ -361,6 +363,7 @@ def _run_path(
         self_extra_kwargs=self_extra_kwargs,
         helmholtz_split=split,
         helmholtz_split_order=split_order,
+        helmholtz_split_smooth_quad_order=split_smooth_quad_order,
     )
 
     # Warm compilation/caches first, then time the second application.
@@ -398,6 +401,7 @@ def _row_from_result(
     parameter_name: str,
     parameter: float,
     split_order: int,
+    split_smooth_quad_order: int | None,
     table_root_extent: float,
     q_order: int,
     nlevels: int,
@@ -419,10 +423,15 @@ def _row_from_result(
         source_box_level=nlevels,
         table_root_extent=table_root_extent,
     )
+    smooth_order_suffix = (
+        "default"
+        if split_smooth_quad_order is None
+        else f"s{int(split_smooth_quad_order)}"
+    )
     return {
         "case_id": (
             f"{kernel.lower()}2d-q{q_order}-l{nlevels}-"
-            f"{parameter_name}{parameter:g}-p{split_order}"
+            f"{parameter_name}{parameter:g}-p{split_order}-{smooth_order_suffix}"
         ),
         "mode": mode,
         "kernel": kernel,
@@ -431,6 +440,9 @@ def _row_from_result(
         "parameter_value": parameter,
         **resolution,
         "split_order": split_order,
+        "split_smooth_quad_order": (
+            "" if split_smooth_quad_order is None else int(split_smooth_quad_order)
+        ),
         "q_order": q_order,
         "nlevels": nlevels,
         "fmm_order": fmm_order,
@@ -461,6 +473,7 @@ def run_benchmark(
     fmm_order: int,
     table_root_extent: float,
     split_orders: list[int],
+    split_smooth_quad_orders: list[int] | None,
     helmholtz_k: list[float],
     yukawa_lam: list[float],
 ) -> list[dict[str, Any]]:
@@ -532,34 +545,55 @@ def run_benchmark(
                 source_values_host=source_values_host,
                 split=False,
                 split_order=1,
+                split_smooth_quad_order=None,
             )
             reference_path = "direct_fixed_parameter_table"
 
             split_results = []
             for split_order in split_orders:
-                split_values, split_warm_s, split_wrangler = _run_path(
-                    ctx=ctx,
-                    queue=queue,
-                    traversal=traversal,
-                    q_order=q_order,
-                    fmm_order=fmm_order,
-                    kernel=kernel,
-                    parameter=parameter,
-                    table=split_table,
-                    source_weights=source_weights,
-                    q_points=q_points,
-                    source_values_host=source_values_host,
-                    split=True,
-                    split_order=split_order,
+                smooth_orders = (
+                    (split_smooth_quad_orders or [q_order])
+                    if split_order > 1
+                    else [None]
                 )
-                accounting = split_wrangler.get_helmholtz_split_cache_accounting(
-                    parameter_count=parameter_count_by_kernel[kernel]
-                )
-                split_results.append(
-                    (split_order, split_values, split_warm_s, accounting)
-                )
+                for split_smooth_quad_order in smooth_orders:
+                    effective_smooth_order = split_smooth_quad_order
+                    split_values, split_warm_s, split_wrangler = _run_path(
+                        ctx=ctx,
+                        queue=queue,
+                        traversal=traversal,
+                        q_order=q_order,
+                        fmm_order=fmm_order,
+                        kernel=kernel,
+                        parameter=parameter,
+                        table=split_table,
+                        source_weights=source_weights,
+                        q_points=q_points,
+                        source_values_host=source_values_host,
+                        split=True,
+                        split_order=split_order,
+                        split_smooth_quad_order=effective_smooth_order,
+                    )
+                    accounting = split_wrangler.get_helmholtz_split_cache_accounting(
+                        parameter_count=parameter_count_by_kernel[kernel]
+                    )
+                    split_results.append(
+                        (
+                            split_order,
+                            effective_smooth_order,
+                            split_values,
+                            split_warm_s,
+                            accounting,
+                        )
+                    )
 
-            for split_order, split_values, split_warm_s, accounting in split_results:
+            for (
+                split_order,
+                split_smooth_quad_order,
+                split_values,
+                split_warm_s,
+                accounting,
+            ) in split_results:
                 rows.append(
                     _row_from_result(
                         mode=mode,
@@ -567,6 +601,7 @@ def run_benchmark(
                         parameter_name=parameter_name,
                         parameter=parameter,
                         split_order=split_order,
+                        split_smooth_quad_order=split_smooth_quad_order,
                         table_root_extent=table_root_extent,
                         q_order=q_order,
                         nlevels=nlevels,
@@ -612,6 +647,7 @@ def main() -> int:
     parser.add_argument("--fmm-order", type=int)
     parser.add_argument("--table-root-extent", type=float, default=TABLE_ROOT_EXTENT)
     parser.add_argument("--split-orders")
+    parser.add_argument("--split-smooth-quad-orders")
     parser.add_argument("--helmholtz-k")
     parser.add_argument("--yukawa-lambda")
     args = parser.parse_args()
@@ -625,6 +661,11 @@ def main() -> int:
     )
     fmm_order = args.fmm_order if args.fmm_order is not None else (8 if smoke else 16)
     split_orders = _parse_csv_ints(args.split_orders or ("1,2" if smoke else "1,2,3"))
+    split_smooth_quad_orders = (
+        _parse_csv_ints(args.split_smooth_quad_orders)
+        if args.split_smooth_quad_orders
+        else None
+    )
     helmholtz_k = _parse_csv_floats(args.helmholtz_k or ("4" if smoke else "4,8,12"))
     yukawa_lam = _parse_csv_floats(args.yukawa_lambda or ("4" if smoke else "4,8,12"))
 
@@ -641,6 +682,7 @@ def main() -> int:
                     fmm_order=fmm_order,
                     table_root_extent=args.table_root_extent,
                     split_orders=split_orders,
+                    split_smooth_quad_orders=split_smooth_quad_orders,
                     helmholtz_k=helmholtz_k,
                     yukawa_lam=yukawa_lam,
                 )
