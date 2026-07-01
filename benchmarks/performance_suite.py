@@ -50,7 +50,7 @@ SUITE_CASES = (
     ),
     SuiteCase(
         name="adaptive-timing",
-        description="adaptive-tree geometry, table build/load, and FMM wall time",
+        description="adaptive-tree geometry, table build/load, FMM, and amortized repeats",
         script="benchmarks/adaptive_timing.py",
         output_name="adaptive_timing.csv",
         accepts_backend=True,

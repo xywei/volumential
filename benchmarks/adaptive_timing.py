@@ -4,7 +4,8 @@
 The benchmark runs 2D Laplace volume-potential evaluations on meshes refined by
 a fixed Gaussian indicator. It records cold-cache and warm-cache timing stacks
 for geometry construction, table build/load, and FMM phases exposed by
-``drive_volume_fmm``.
+``drive_volume_fmm``. It also records repeated FMM timings on the same adapted
+tree/table so table build or load overhead can be amortized across evaluations.
 """
 
 from __future__ import annotations
@@ -39,6 +40,11 @@ FIELDS = (
     "table_load_s",
     "table_payload_bytes",
     "fmm_wall_s",
+    "fmm_repeat_count",
+    "fmm_repeat_wall_s",
+    "fmm_repeat_mean_s",
+    "table_fmm_amortized_s",
+    "geometry_table_fmm_amortized_s",
     "timing_form_multipoles_s",
     "timing_coarsen_multipoles_s",
     "timing_eval_direct_s",
@@ -52,6 +58,8 @@ FIELDS = (
 
 SMOKE_CASES = ((3, 2, 1),)
 FULL_CASES = ((3, 2, 2), (4, 2, 2), (4, 3, 2))
+SMOKE_FMM_REPEATS = 2
+FULL_FMM_REPEATS = 5
 
 
 def _device_supports_fp64(device) -> bool:
@@ -249,6 +257,29 @@ def _run_fmm(ctx, queue, traversal, table, q_order: int, fmm_order: int, q_weigh
     return time.perf_counter() - start, timing_data
 
 
+def _run_fmm_repeats(
+    ctx,
+    queue,
+    traversal,
+    table,
+    q_order: int,
+    fmm_order: int,
+    q_weights,
+    q_points,
+    repeat_count: int,
+):
+    wall_times = []
+    first_timings: dict[str, Any] | None = None
+    for _ in range(repeat_count):
+        fmm_wall_s, fmm_timings = _run_fmm(
+            ctx, queue, traversal, table, q_order, fmm_order, q_weights, q_points
+        )
+        wall_times.append(fmm_wall_s)
+        if first_timings is None:
+            first_timings = fmm_timings
+    return wall_times, first_timings or {}
+
+
 def _table_phase_seconds(timings, phase: str) -> float | str:
     if not timings:
         return ""
@@ -279,9 +310,13 @@ def _row(
     geometry_s: float,
     table_timings,
     fmm_wall_s: float,
+    fmm_repeat_wall_s: float,
+    fmm_repeat_count: int,
     fmm_timings,
 ) -> dict[str, Any]:
     min_level, max_level = _leaf_level_stats(mesh)
+    table_get_s = table_timings.get("total_s", "") if table_timings else ""
+    table_get_float = float(table_get_s) if table_get_s != "" else 0.0
     return {
         "case_id": f"laplace2d-q{q_order}-l{initial_nlevels}-a{adapt_steps}",
         "mode": mode,
@@ -297,11 +332,22 @@ def _row(
         "mesh_init_s": mesh_init_s,
         "adapt_s": adapt_s,
         "geometry_s": geometry_s,
-        "table_get_s": table_timings.get("total_s", "") if table_timings else "",
+        "table_get_s": table_get_s,
         "table_build_s": _table_phase_seconds(table_timings, "compute"),
         "table_load_s": _table_phase_seconds(table_timings, "load"),
         "table_payload_bytes": _table_payload_bytes(table_timings),
         "fmm_wall_s": fmm_wall_s,
+        "fmm_repeat_count": fmm_repeat_count,
+        "fmm_repeat_wall_s": fmm_repeat_wall_s,
+        "fmm_repeat_mean_s": fmm_repeat_wall_s / fmm_repeat_count,
+        "table_fmm_amortized_s": (
+            table_get_float + fmm_repeat_wall_s
+        )
+        / fmm_repeat_count,
+        "geometry_table_fmm_amortized_s": (
+            geometry_s + table_get_float + fmm_repeat_wall_s
+        )
+        / fmm_repeat_count,
         "timing_form_multipoles_s": _timing_seconds(fmm_timings.get("form_multipoles")),
         "timing_coarsen_multipoles_s": _timing_seconds(fmm_timings.get("coarsen_multipoles")),
         "timing_eval_direct_s": _timing_seconds(fmm_timings.get("eval_direct")),
@@ -313,7 +359,17 @@ def _row(
     }
 
 
-def run_case(ctx, queue, *, mode: str, cache_dir: Path, q_order: int, initial_nlevels: int, adapt_steps: int):
+def run_case(
+    ctx,
+    queue,
+    *,
+    mode: str,
+    cache_dir: Path,
+    q_order: int,
+    initial_nlevels: int,
+    adapt_steps: int,
+    fmm_repeats: int,
+):
     cache_path = cache_dir / f"adaptive-laplace2d-q{q_order}.sqlite"
     if cache_path.exists():
         cache_path.unlink()
@@ -327,8 +383,16 @@ def run_case(ctx, queue, *, mode: str, cache_dir: Path, q_order: int, initial_nl
         table, table_timings = _get_table(
             queue, cache_path, q_order, force_recompute=force_recompute
         )
-        fmm_wall_s, fmm_timings = _run_fmm(
-            ctx, queue, traversal, table, q_order, fmm_order, q_weights, q_points
+        fmm_wall_times, fmm_timings = _run_fmm_repeats(
+            ctx,
+            queue,
+            traversal,
+            table,
+            q_order,
+            fmm_order,
+            q_weights,
+            q_points,
+            fmm_repeats,
         )
         rows.append(
             _row(
@@ -343,18 +407,26 @@ def run_case(ctx, queue, *, mode: str, cache_dir: Path, q_order: int, initial_nl
                 adapt_s=adapt_s,
                 geometry_s=geometry_s,
                 table_timings=table_timings,
-                fmm_wall_s=fmm_wall_s,
+                fmm_wall_s=fmm_wall_times[0],
+                fmm_repeat_wall_s=sum(fmm_wall_times),
+                fmm_repeat_count=fmm_repeats,
                 fmm_timings=fmm_timings,
             )
         )
     return rows
 
 
-def run_benchmark(*, mode: str, backend: str, cache_dir: Path):
+def run_benchmark(
+    *, mode: str, backend: str, cache_dir: Path, fmm_repeats: int | None
+):
     device = _select_opencl_device(backend)
     ctx = cl.Context([device])
     queue = cl.CommandQueue(ctx)
     cases = SMOKE_CASES if mode == "smoke" else FULL_CASES
+    if fmm_repeats is None:
+        fmm_repeats = SMOKE_FMM_REPEATS if mode == "smoke" else FULL_FMM_REPEATS
+    if fmm_repeats < 1:
+        raise ValueError("fmm_repeats must be at least 1")
     rows = []
     for q_order, initial_nlevels, adapt_steps in cases:
         rows.extend(
@@ -366,6 +438,7 @@ def run_benchmark(*, mode: str, backend: str, cache_dir: Path):
                 q_order=q_order,
                 initial_nlevels=initial_nlevels,
                 adapt_steps=adapt_steps,
+                fmm_repeats=fmm_repeats,
             )
         )
     return rows
@@ -393,8 +466,21 @@ def main() -> int:
         type=Path,
         default=Path("build/benchmarks/adaptive-timing-cache"),
     )
+    parser.add_argument(
+        "--fmm-repeats",
+        type=int,
+        default=None,
+        help="FMM evaluations per cold/warm row; defaults depend on --mode.",
+    )
     args = parser.parse_args()
-    rows = run_benchmark(mode=args.mode, backend=args.backend, cache_dir=args.cache_dir)
+    if args.fmm_repeats is not None and args.fmm_repeats < 1:
+        parser.error("--fmm-repeats must be at least 1")
+    rows = run_benchmark(
+        mode=args.mode,
+        backend=args.backend,
+        cache_dir=args.cache_dir,
+        fmm_repeats=args.fmm_repeats,
+    )
     write_csv(args.out, rows)
     return 0
 
