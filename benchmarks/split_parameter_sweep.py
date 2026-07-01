@@ -161,33 +161,23 @@ def _build_helmholtz_2d_table(
     queue, cache_path: Path, q_order: int, wave_number: float, level: int
 ):
     from sumpy.kernel import HelmholtzKernel
-
-    import volumential.nearfield_potential_table as npt
+    from volumential.table_manager import NearFieldInteractionTableManager
 
     kernel = HelmholtzKernel(2)
-    kernel_kwargs = {kernel.helmholtz_k_name: float(wave_number)}
-    table = npt.NearFieldInteractionTable(
-        quad_order=q_order,
-        dim=2,
-        build_method="DuffyRadial",
-        kernel_func=npt.sumpy_kernel_to_lambda(kernel, parameter_values=kernel_kwargs),
-        kernel_type="helmholtz-direct",
-        sumpy_kernel=kernel,
-        source_box_extent=2.0 * (2 ** (-int(level))),
-        dtype=np.complex128,
-        progress_bar=False,
-    )
-    table.source_box_level = int(level)
-    table.table_root_extent = 2.0
-    table._table_cache_filename = str(cache_path)
-    table._table_cache_root_extent = 2.0
-    table.build_table_via_duffy_radial(
-        queue=queue,
-        radial_rule="tanh-sinh-fast",
-        regular_quad_order=max(8, 4 * q_order),
-        radial_quad_order=max(21, 10 * q_order),
-        **kernel_kwargs,
-    )
+    with NearFieldInteractionTableManager(
+        str(cache_path), root_extent=2.0, dtype=np.complex128, queue=queue
+    ) as table_manager:
+        table, _ = table_manager.get_table(
+            2,
+            "Helmholtz-Reference",
+            q_order,
+            source_box_level=int(level),
+            force_recompute=False,
+            queue=queue,
+            build_config=_build_config(q_order),
+            sumpy_knl=kernel,
+            **{kernel.helmholtz_k_name: float(wave_number)},
+        )
     return table
 
 
