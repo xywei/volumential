@@ -31,6 +31,7 @@ class BenchmarkCase:
     q_orders: tuple[int, ...]
     max_level: int
     scale_exponent: int
+    scale_rule: str = "power"
 
 
 SMOKE_CASES = (
@@ -48,6 +49,25 @@ SMOKE_CASES = (
         dim=3,
         kernel_type="Laplace-Dx",
         derivative="target_dx",
+        q_orders=(1,),
+        max_level=1,
+        scale_exponent=1,
+    ),
+    BenchmarkCase(
+        case_id="laplace2d-log-q1-l0-1",
+        dim=2,
+        kernel_type="Laplace",
+        derivative="none",
+        q_orders=(1,),
+        max_level=1,
+        scale_exponent=2,
+        scale_rule="log",
+    ),
+    BenchmarkCase(
+        case_id="laplace3d-source-dx-q1-l0-1",
+        dim=3,
+        kernel_type="Laplace-Sx",
+        derivative="source_dx",
         q_orders=(1,),
         max_level=1,
         scale_exponent=1,
@@ -73,6 +93,25 @@ FULL_CASES = (
         max_level=4,
         scale_exponent=1,
     ),
+    BenchmarkCase(
+        case_id="laplace2d-log-q1-4-l0-4",
+        dim=2,
+        kernel_type="Laplace",
+        derivative="none",
+        q_orders=(1, 2, 3, 4),
+        max_level=4,
+        scale_exponent=2,
+        scale_rule="log",
+    ),
+    BenchmarkCase(
+        case_id="laplace3d-source-dx-q1-3-l0-4",
+        dim=3,
+        kernel_type="Laplace-Sx",
+        derivative="source_dx",
+        q_orders=(1, 2, 3),
+        max_level=4,
+        scale_exponent=1,
+    ),
 )
 
 
@@ -87,10 +126,14 @@ EQUIVALENCE_FIELDS = (
     "source_box_extent",
     "canonical_source_box_extent",
     "scale_exponent",
+    "scale_rule",
     "scale_factor",
+    "log_correction_applied",
     "finite_entry_count",
     "max_abs_mismatch",
     "max_rel_mismatch",
+    "max_abs_mismatch_without_log_correction",
+    "max_rel_mismatch_without_log_correction",
     "reference_linf",
 )
 
@@ -171,6 +214,31 @@ def _full_table_data(table) -> np.ndarray:
     return np.asarray(table.data, dtype=table.dtype)
 
 
+def _apply_log_scaling(canonical_table, canonical_data: np.ndarray, extent_ratio: float):
+    scaled = np.array(canonical_data, copy=True)
+    for entry_id, value in enumerate(canonical_data):
+        if not np.isfinite(value):
+            continue
+        scaled[entry_id] = canonical_table.get_potential_scaler(
+            entry_id,
+            source_box_size=extent_ratio,
+            kernel_type="log",
+        )(value)
+    return scaled
+
+
+def _mismatch_stats(reference: np.ndarray, candidate: np.ndarray):
+    finite_mask = np.isfinite(candidate) & np.isfinite(reference)
+    if not np.any(finite_mask):
+        return finite_mask, np.nan, np.nan, np.nan
+
+    diff = np.abs(reference[finite_mask] - candidate[finite_mask])
+    reference_linf = float(np.max(np.abs(reference[finite_mask])))
+    max_abs_mismatch = float(np.max(diff))
+    max_rel_mismatch = float(max_abs_mismatch / max(reference_linf, 1e-300))
+    return finite_mask, max_abs_mismatch, max_rel_mismatch, reference_linf
+
+
 def _equivalence_row(
     *,
     mode: str,
@@ -181,20 +249,28 @@ def _equivalence_row(
 ) -> dict[str, Any]:
     canonical_extent = float(canonical_table.source_box_extent)
     level_extent = float(level_table.source_box_extent)
-    scale_factor = (level_extent / canonical_extent) ** case.scale_exponent
+    extent_ratio = level_extent / canonical_extent
+    scale_factor = extent_ratio ** case.scale_exponent
 
-    scaled_canonical = scale_factor * _full_table_data(canonical_table)
-    level_data = _full_table_data(level_table)
-    finite_mask = np.isfinite(scaled_canonical) & np.isfinite(level_data)
-    if not np.any(finite_mask):
-        max_abs_mismatch = np.nan
-        max_rel_mismatch = np.nan
-        reference_linf = np.nan
+    canonical_data = _full_table_data(canonical_table)
+    scaled_canonical_without_log_correction = scale_factor * canonical_data
+    if case.scale_rule == "log":
+        scaled_canonical = _apply_log_scaling(
+            canonical_table,
+            canonical_data,
+            extent_ratio,
+        )
     else:
-        diff = np.abs(level_data[finite_mask] - scaled_canonical[finite_mask])
-        reference_linf = float(np.max(np.abs(level_data[finite_mask])))
-        max_abs_mismatch = float(np.max(diff))
-        max_rel_mismatch = float(max_abs_mismatch / max(reference_linf, 1e-300))
+        scaled_canonical = scaled_canonical_without_log_correction
+    level_data = _full_table_data(level_table)
+    finite_mask, max_abs_mismatch, max_rel_mismatch, reference_linf = _mismatch_stats(
+        level_data,
+        scaled_canonical,
+    )
+    _, max_abs_mismatch_without_log, max_rel_mismatch_without_log, _ = _mismatch_stats(
+        level_data,
+        scaled_canonical_without_log_correction,
+    )
 
     return {
         "case_id": case.case_id,
@@ -207,10 +283,18 @@ def _equivalence_row(
         "source_box_extent": level_extent,
         "canonical_source_box_extent": canonical_extent,
         "scale_exponent": case.scale_exponent,
+        "scale_rule": case.scale_rule,
         "scale_factor": scale_factor,
+        "log_correction_applied": case.scale_rule == "log",
         "finite_entry_count": int(np.count_nonzero(finite_mask)),
         "max_abs_mismatch": max_abs_mismatch,
         "max_rel_mismatch": max_rel_mismatch,
+        "max_abs_mismatch_without_log_correction": (
+            max_abs_mismatch_without_log if case.scale_rule == "log" else None
+        ),
+        "max_rel_mismatch_without_log_correction": (
+            max_rel_mismatch_without_log if case.scale_rule == "log" else None
+        ),
         "reference_linf": reference_linf,
     }
 
@@ -263,6 +347,12 @@ def _cache_row(
 
 
 def _build_or_load_table(tm, *, case: BenchmarkCase, q_order: int, level: int, queue):
+    build_kwargs = {"build_config": _default_build_config(q_order)}
+    if case.derivative == "source_dx":
+        from sumpy.kernel import AxisSourceDerivative, LaplaceKernel
+
+        build_kwargs["sumpy_knl"] = AxisSourceDerivative(0, LaplaceKernel(case.dim))
+
     return tm.get_table(
         case.dim,
         case.kernel_type,
@@ -270,7 +360,7 @@ def _build_or_load_table(tm, *, case: BenchmarkCase, q_order: int, level: int, q
         source_box_level=level,
         force_recompute=False,
         queue=queue,
-        build_config=_default_build_config(q_order),
+        **build_kwargs,
     )
 
 
