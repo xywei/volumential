@@ -44,7 +44,7 @@ python /path/to/boxcode-paper/tools/run_benchmark_with_metadata.py \
   --mode full \
   --repo volumential=/path/to/volumential \
   --param kernel=laplace \
-  --param dimension=3 \
+  --param dimensions=2,3 \
   --param cache_state=cold-and-warm \
   --result-file table_equivalence.csv \
   --result-file cache_economics.csv \
