@@ -47,6 +47,8 @@ FIELDS = (
     "fmm_order",
     "n_targets",
     "reference_path",
+    "reference_l2_norm",
+    "diff_l2_norm",
     "rel_l2_error",
     "linf_error",
     "reference_warm_s",
@@ -415,6 +417,7 @@ def _row_from_result(
 ) -> dict[str, Any]:
     diff = split_values - reference_values
     reference_norm = max(float(np.linalg.norm(reference_values)), 1.0e-300)
+    diff_norm = float(np.linalg.norm(diff))
     accounting_dict = asdict(accounting)
     resolution = _resolution_diagnostics(
         kernel=kernel,
@@ -448,7 +451,9 @@ def _row_from_result(
         "fmm_order": fmm_order,
         "n_targets": int(reference_values.size),
         "reference_path": reference_path,
-        "rel_l2_error": float(np.linalg.norm(diff) / reference_norm),
+        "reference_l2_norm": float(reference_norm),
+        "diff_l2_norm": diff_norm,
+        "rel_l2_error": float(diff_norm / reference_norm),
         "linf_error": float(np.max(np.abs(diff))),
         "reference_warm_s": reference_warm_s,
         "split_warm_s": float(split_warm_s),
