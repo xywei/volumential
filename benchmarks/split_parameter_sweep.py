@@ -537,16 +537,26 @@ def run_benchmark(
     )
     cache_dir.mkdir(parents=True, exist_ok=True)
 
-    split_table = _get_laplace_2d_table(
-        queue,
-        cache_dir / f"split-laplace-q{q_order}.sqlite",
-        q_order,
-        table_root_extent,
-        build_config=_split_channel_build_config(
+    split_tables = {}
+    if helmholtz_k:
+        split_tables["Helmholtz"] = _get_laplace_2d_table(
+            queue,
+            cache_dir / f"split-laplace-helmholtz-q{q_order}.sqlite",
             q_order,
-            high_accuracy=mode == "full",
-        ),
-    )
+            table_root_extent,
+            build_config=_build_config(q_order),
+        )
+    if yukawa_lam:
+        split_tables["Yukawa"] = _get_laplace_2d_table(
+            queue,
+            cache_dir / f"split-laplace-yukawa-q{q_order}.sqlite",
+            q_order,
+            table_root_extent,
+            build_config=_split_channel_build_config(
+                q_order,
+                high_accuracy=mode == "full",
+            ),
+        )
     rows: list[dict[str, Any]] = []
 
     sweep_specs = [
@@ -624,7 +634,7 @@ def run_benchmark(
                         fmm_order=fmm_order,
                         kernel=kernel,
                         parameter=parameter,
-                        table=split_table,
+                        table=split_tables[kernel],
                         source_weights=source_weights,
                         q_points=q_points,
                         source_values_host=source_values_host,
