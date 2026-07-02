@@ -185,6 +185,22 @@ def _build_config(q_order: int):
     )
 
 
+def _yukawa_reference_build_config(q_order: int, *, high_accuracy: bool):
+    if not high_accuracy:
+        return _build_config(q_order)
+
+    from volumential.nearfield_potential_table import DuffyBuildConfig
+
+    # 2D Yukawa direct tables use the scalar Duffy path. The default order is
+    # enough for smoke runs but can under-integrate the logarithmic singularity
+    # in paper-facing fixed-parameter references.
+    return DuffyBuildConfig(
+        radial_rule="tanh-sinh-fast",
+        regular_quad_order=max(32, 12 * q_order),
+        radial_quad_order=max(80, 40 * q_order),
+    )
+
+
 def _get_laplace_2d_table(
     queue, cache_path: Path, q_order: int, table_root_extent: float
 ):
@@ -211,6 +227,7 @@ def _get_yukawa_2d_table(
     lam: float,
     level: int,
     table_root_extent: float,
+    build_config=None,
 ):
     from volumential.table_manager import NearFieldInteractionTableManager
 
@@ -224,7 +241,9 @@ def _get_yukawa_2d_table(
             source_box_level=int(level),
             force_recompute=False,
             queue=queue,
-            build_config=_build_config(q_order),
+            build_config=(
+                _build_config(q_order) if build_config is None else build_config
+            ),
             lam=float(lam),
         )
     return table
@@ -538,6 +557,10 @@ def run_benchmark(
                     parameter,
                     nlevels,
                     table_root_extent,
+                    build_config=_yukawa_reference_build_config(
+                        q_order,
+                        high_accuracy=mode == "full",
+                    ),
                 )
 
             reference_values, reference_warm_s, _ = _run_path(
