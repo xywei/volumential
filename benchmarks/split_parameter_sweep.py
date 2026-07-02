@@ -196,8 +196,8 @@ def _yukawa_reference_build_config(q_order: int, *, high_accuracy: bool):
     # in paper-facing fixed-parameter references.
     return DuffyBuildConfig(
         radial_rule="tanh-sinh-fast",
-        regular_quad_order=max(32, 12 * q_order),
-        radial_quad_order=max(80, 40 * q_order),
+        regular_quad_order=max(80, 20 * q_order),
+        radial_quad_order=max(320, 80 * q_order),
     )
 
 
