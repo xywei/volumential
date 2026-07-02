@@ -68,9 +68,13 @@ FIELDS = (
 )
 
 
-def _parse_csv_floats(raw: str) -> list[float]:
+def _parse_csv_floats(raw: str, *, allow_empty: bool = False) -> list[float]:
+    if allow_empty and raw.strip().lower() in {"", "none", "skip"}:
+        return []
     values = [float(part.strip()) for part in raw.split(",") if part.strip()]
     if not values:
+        if allow_empty:
+            return []
         raise ValueError("expected at least one float value")
     return values
 
@@ -671,8 +675,18 @@ def main() -> int:
         if args.split_smooth_quad_orders
         else None
     )
-    helmholtz_k = _parse_csv_floats(args.helmholtz_k or ("4" if smoke else "4,8,12"))
-    yukawa_lam = _parse_csv_floats(args.yukawa_lambda or ("4" if smoke else "4,8,12"))
+    helmholtz_k = _parse_csv_floats(
+        args.helmholtz_k
+        if args.helmholtz_k is not None
+        else ("4" if smoke else "4,8,12"),
+        allow_empty=True,
+    )
+    yukawa_lam = _parse_csv_floats(
+        args.yukawa_lambda
+        if args.yukawa_lambda is not None
+        else ("4" if smoke else "4,8,12"),
+        allow_empty=True,
+    )
 
     rows = []
     for q_order_i in q_orders:
