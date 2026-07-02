@@ -201,8 +201,28 @@ def _yukawa_reference_build_config(q_order: int, *, high_accuracy: bool):
     )
 
 
+def _split_channel_build_config(q_order: int, *, high_accuracy: bool):
+    if not high_accuracy:
+        return _build_config(q_order)
+
+    from volumential.nearfield_potential_table import DuffyBuildConfig
+
+    # The Laplace table's build config is reused for auto-built log-power split
+    # channel tables. Use the same paper-facing accuracy target as the 2D
+    # Yukawa direct reference so the split-order trend is not table-noise-limited.
+    return DuffyBuildConfig(
+        radial_rule="tanh-sinh-fast",
+        regular_quad_order=max(32, 12 * q_order),
+        radial_quad_order=max(80, 40 * q_order),
+    )
+
+
 def _get_laplace_2d_table(
-    queue, cache_path: Path, q_order: int, table_root_extent: float
+    queue,
+    cache_path: Path,
+    q_order: int,
+    table_root_extent: float,
+    build_config=None,
 ):
     from volumential.table_manager import NearFieldInteractionTableManager
 
@@ -215,7 +235,9 @@ def _get_laplace_2d_table(
             q_order,
             force_recompute=False,
             queue=queue,
-            build_config=_build_config(q_order),
+            build_config=(
+                _build_config(q_order) if build_config is None else build_config
+            ),
         )
     return table
 
@@ -520,6 +542,10 @@ def run_benchmark(
         cache_dir / f"split-laplace-q{q_order}.sqlite",
         q_order,
         table_root_extent,
+        build_config=_split_channel_build_config(
+            q_order,
+            high_accuracy=mode == "full",
+        ),
     )
     rows: list[dict[str, Any]] = []
 
