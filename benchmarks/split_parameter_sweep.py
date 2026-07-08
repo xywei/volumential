@@ -217,9 +217,10 @@ def _split_channel_build_config(q_order: int, *, high_accuracy: bool):
     )
 
 
-def _get_laplace_2d_table(
+def _get_laplace_table(
     queue,
     cache_path: Path,
+    dim: int,
     q_order: int,
     table_root_extent: float,
     build_config=None,
@@ -230,7 +231,7 @@ def _get_laplace_2d_table(
         str(cache_path), root_extent=table_root_extent, queue=queue
     ) as table_manager:
         table, _ = table_manager.get_table(
-            2,
+            dim,
             "Laplace",
             q_order,
             force_recompute=False,
@@ -242,9 +243,10 @@ def _get_laplace_2d_table(
     return table
 
 
-def _get_yukawa_2d_table(
+def _get_yukawa_table(
     queue,
     cache_path: Path,
+    dim: int,
     q_order: int,
     lam: float,
     level: int,
@@ -257,7 +259,7 @@ def _get_yukawa_2d_table(
         str(cache_path), root_extent=table_root_extent, queue=queue
     ) as table_manager:
         table, _ = table_manager.get_table(
-            2,
+            dim,
             "Yukawa",
             q_order,
             source_box_level=int(level),
@@ -271,9 +273,10 @@ def _get_yukawa_2d_table(
     return table
 
 
-def _build_helmholtz_2d_table(
+def _build_helmholtz_table(
     queue,
     cache_path: Path,
+    dim: int,
     q_order: int,
     wave_number: float,
     level: int,
@@ -282,12 +285,12 @@ def _build_helmholtz_2d_table(
     from sumpy.kernel import HelmholtzKernel
     from volumential.table_manager import NearFieldInteractionTableManager
 
-    kernel = HelmholtzKernel(2)
+    kernel = HelmholtzKernel(dim)
     with NearFieldInteractionTableManager(
         str(cache_path), root_extent=table_root_extent, dtype=np.complex128, queue=queue
     ) as table_manager:
         table, _ = table_manager.get_table(
-            2,
+            dim,
             "Helmholtz-Reference",
             q_order,
             source_box_level=int(level),
@@ -300,17 +303,18 @@ def _build_helmholtz_2d_table(
     return table
 
 
-def _build_geometry(ctx, queue, q_order: int, nlevels: int):
+def _build_geometry(ctx, queue, dim: int, q_order: int, nlevels: int):
     import volumential.meshgen as mg
 
-    mesh = mg.MeshGen2D(q_order, nlevels, -0.5, 0.5, queue=queue)
+    mesh_cls = {2: mg.MeshGen2D, 3: mg.MeshGen3D}[dim]
+    mesh = mesh_cls(q_order, nlevels, -0.5, 0.5, queue=queue)
     return mg.build_geometry_info(
         ctx,
         queue,
-        2,
+        dim,
         q_order,
         mesh,
-        bbox=np.array([[-0.5, 0.5]] * 2, dtype=np.float64),
+        bbox=np.array([[-0.5, 0.5]] * dim, dtype=np.float64),
     )
 
 
@@ -319,16 +323,19 @@ def _coords_host(queue, q_points):
 
 
 def _gaussian_source_host(coords):
-    x = coords[0]
-    y = coords[1]
-    return np.exp(-35.0 * ((x + 0.11) ** 2 + (y - 0.07) ** 2))
+    offsets = np.array([0.11, -0.07, 0.03], dtype=coords.dtype)[: coords.shape[0]]
+    r2 = sum((coords[axis] + offsets[axis]) ** 2 for axis in range(coords.shape[0]))
+    return np.exp(-35.0 * r2)
 
 
 def _helmholtz_manufactured_source_and_exact(coords, wave_number: float):
     alpha = 80.0
-    r2 = coords[0] * coords[0] + coords[1] * coords[1]
+    dim = coords.shape[0]
+    r2 = sum(coords[axis] * coords[axis] for axis in range(dim))
     exact = np.exp(-alpha * r2)
-    source = (4 * alpha - 4 * alpha * alpha * r2 - wave_number * wave_number) * exact
+    source = (
+        2 * dim * alpha - 4 * alpha * alpha * r2 - wave_number * wave_number
+    ) * exact
     return source, exact
 
 
@@ -345,6 +352,7 @@ def _run_path(
     ctx,
     queue,
     traversal,
+    dim: int,
     q_order: int,
     fmm_order: int,
     kernel: str,
@@ -368,11 +376,11 @@ def _run_path(
     from volumential.volume_fmm import drive_volume_fmm
 
     if kernel == "Helmholtz":
-        out_kernel = HelmholtzKernel(2)
+        out_kernel = HelmholtzKernel(dim)
         kernel_kwargs = {out_kernel.helmholtz_k_name: float(parameter)}
         dtype = np.complex128
     elif kernel == "Yukawa":
-        out_kernel = YukawaKernel(2)
+        out_kernel = YukawaKernel(dim)
         kernel_kwargs = {out_kernel.yukawa_lambda_name: float(parameter)}
         dtype = np.complex128
     else:
@@ -447,6 +455,7 @@ def _row_from_result(
     kernel: str,
     parameter_name: str,
     parameter: float,
+    dim: int,
     split_order: int,
     split_smooth_quad_order: int | None,
     table_root_extent: float,
@@ -478,12 +487,12 @@ def _row_from_result(
     )
     return {
         "case_id": (
-            f"{kernel.lower()}2d-q{q_order}-l{nlevels}-"
+            f"{kernel.lower()}{dim}d-q{q_order}-l{nlevels}-"
             f"{parameter_name}{parameter:g}-p{split_order}-{smooth_order_suffix}"
         ),
         "mode": mode,
         "kernel": kernel,
-        "dim": 2,
+        "dim": dim,
         "parameter_name": parameter_name,
         "parameter_value": parameter,
         **resolution,
@@ -518,6 +527,7 @@ def run_benchmark(
     mode: str,
     backend: str,
     cache_dir: Path,
+    dim: int,
     q_order: int,
     nlevels: int,
     fmm_order: int,
@@ -533,23 +543,25 @@ def run_benchmark(
     ctx = cl.Context([device])
     queue = cl.CommandQueue(ctx)
     q_points, source_weights, _tree, traversal = _build_geometry(
-        ctx, queue, q_order, nlevels
+        ctx, queue, dim, q_order, nlevels
     )
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     split_tables = {}
     if helmholtz_k:
-        split_tables["Helmholtz"] = _get_laplace_2d_table(
+        split_tables["Helmholtz"] = _get_laplace_table(
             queue,
-            cache_dir / f"split-laplace-helmholtz-q{q_order}.sqlite",
+            cache_dir / f"split-laplace-helmholtz-{dim}d-q{q_order}.sqlite",
+            dim,
             q_order,
             table_root_extent,
             build_config=_build_config(q_order),
         )
     if yukawa_lam:
-        split_tables["Yukawa"] = _get_laplace_2d_table(
+        split_tables["Yukawa"] = _get_laplace_table(
             queue,
-            cache_dir / f"split-laplace-yukawa-q{q_order}.sqlite",
+            cache_dir / f"split-laplace-yukawa-{dim}d-q{q_order}.sqlite",
+            dim,
             q_order,
             table_root_extent,
             build_config=_split_channel_build_config(
@@ -574,10 +586,11 @@ def run_benchmark(
                 source_values_host, _exact_values = _helmholtz_manufactured_source_and_exact(
                     _coords_host(queue, q_points), parameter
                 )
-                direct_reference_table = _build_helmholtz_2d_table(
+                direct_reference_table = _build_helmholtz_table(
                     queue,
                     cache_dir
-                    / f"direct-helmholtz-k{parameter:g}-q{q_order}-l{nlevels}.sqlite",
+                    / f"direct-helmholtz-{dim}d-k{parameter:g}-q{q_order}-l{nlevels}.sqlite",
+                    dim,
                     q_order,
                     parameter,
                     nlevels,
@@ -585,10 +598,11 @@ def run_benchmark(
                 )
             else:
                 source_values_host = _gaussian_source_host(_coords_host(queue, q_points))
-                direct_reference_table = _get_yukawa_2d_table(
+                direct_reference_table = _get_yukawa_table(
                     queue,
                     cache_dir
-                    / f"direct-yukawa-lambda{parameter:g}-q{q_order}-l{nlevels}.sqlite",
+                    / f"direct-yukawa-{dim}d-lambda{parameter:g}-q{q_order}-l{nlevels}.sqlite",
+                    dim,
                     q_order,
                     parameter,
                     nlevels,
@@ -603,6 +617,7 @@ def run_benchmark(
                 ctx=ctx,
                 queue=queue,
                 traversal=traversal,
+                dim=dim,
                 q_order=q_order,
                 fmm_order=fmm_order,
                 kernel=kernel,
@@ -630,6 +645,7 @@ def run_benchmark(
                         ctx=ctx,
                         queue=queue,
                         traversal=traversal,
+                        dim=dim,
                         q_order=q_order,
                         fmm_order=fmm_order,
                         kernel=kernel,
@@ -668,6 +684,7 @@ def run_benchmark(
                         kernel=kernel,
                         parameter_name=parameter_name,
                         parameter=parameter,
+                        dim=dim,
                         split_order=split_order,
                         split_smooth_quad_order=split_smooth_quad_order,
                         table_root_extent=table_root_extent,
@@ -698,6 +715,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("smoke", "full"), default="smoke")
     parser.add_argument("--backend", default="auto")
+    parser.add_argument("--dim", type=int, choices=(2, 3), default=2)
     parser.add_argument(
         "--out",
         type=Path,
@@ -755,6 +773,7 @@ def main() -> int:
                     mode=args.mode,
                     backend=args.backend,
                     cache_dir=args.cache_dir,
+                    dim=args.dim,
                     q_order=q_order_i,
                     nlevels=nlevels_i,
                     fmm_order=fmm_order,
