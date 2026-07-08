@@ -377,7 +377,7 @@ def sumpy_kernel_to_lambda(sknl, fallback_dim=None, parameter_values=None):
             "get_expression and get_global_scaling_const methods"
         )
 
-    from sympy import Symbol, lambdify, symbols
+    from sympy import Matrix, Symbol, lambdify, symbols
 
     import scipy.special as sp
 
@@ -392,11 +392,12 @@ def sumpy_kernel_to_lambda(sknl, fallback_dim=None, parameter_values=None):
     var_names = " ".join([var_name_prefix + str(i) for i in range(dim)])
     arg_names = symbols(var_names)
     args = [Symbol(var_name_prefix + str(i)) for i in range(dim)]
+    arg_vec = Matrix(args)
 
     expr = (
         sknl.postprocess_at_target(
-            sknl.postprocess_at_source(sknl.get_expression(args), args),
-            args,
+            sknl.postprocess_at_source(sknl.get_expression(args), arg_vec),
+            arg_vec,
         )
         * sknl.get_global_scaling_const()
     )
