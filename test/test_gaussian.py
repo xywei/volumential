@@ -1,4 +1,5 @@
 import math
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -10,8 +11,18 @@ from volumential.gaussian import (
     evaluate_gaussian_mixture,
     gaussian_mixture_tail_report,
     laplace3d_gaussian_potential,
+    mesh_leaf_box_arrays,
     nearest_axis_slice,
+    write_json_metadata,
 )
+
+
+class _FakeDeviceArray:
+    def __init__(self, ary):
+        self._ary = np.asarray(ary)
+
+    def get(self):
+        return self._ary
 
 
 def test_evaluate_gaussian_mixture_accepts_point_or_axis_major_points():
@@ -93,6 +104,16 @@ def test_axis_aligned_slice_grid_embeds_2d_grid_in_3d_box():
     np.testing.assert_allclose(grid.axis_values[1], [-3.0, -1.0, 1.0, 3.0])
 
 
+def test_axis_aligned_slice_grid_rejects_degenerate_axes_and_outside_plane():
+    bbox = np.array([[-1.0, 1.0], [-2.0, 2.0], [-3.0, 3.0]])
+
+    with pytest.raises(ValueError, match="distinct non-fixed axes"):
+        axis_aligned_slice_grid(bbox, fixed_axis=2, axes=(0, 0))
+
+    with pytest.raises(ValueError, match="fixed_value"):
+        axis_aligned_slice_grid(bbox, fixed_axis=2, fixed_value=4.0)
+
+
 def test_nearest_axis_slice_selects_nearest_plane_and_fields():
     points = np.array(
         [
@@ -112,3 +133,33 @@ def test_nearest_axis_slice_selects_nearest_plane_and_fields():
     np.testing.assert_array_equal(result["indices"], [1, 2])
     np.testing.assert_allclose(result["value"], [11.0, 12.0])
     np.testing.assert_allclose(result["axis_distances"], [0.1, 0.1])
+
+
+def test_mesh_leaf_box_arrays_exports_active_leaf_geometry():
+    mesh = SimpleNamespace(
+        dim=2,
+        boxtree=SimpleNamespace(
+            active_boxes=_FakeDeviceArray([1, 3]),
+            box_levels=_FakeDeviceArray([0, 1, 1, 2]),
+            box_centers=_FakeDeviceArray(
+                [
+                    [0.0, 0.25, -0.25, 0.5],
+                    [0.0, -0.25, 0.25, 0.5],
+                ]
+            ),
+            root_extent=2.0,
+        ),
+    )
+
+    arrays = mesh_leaf_box_arrays(mesh)
+
+    np.testing.assert_array_equal(arrays["leaf_box_ids"], [1, 3])
+    np.testing.assert_array_equal(arrays["leaf_levels"], [1, 2])
+    np.testing.assert_allclose(arrays["leaf_centers"], [[0.25, -0.25], [0.5, 0.5]])
+    np.testing.assert_allclose(arrays["leaf_side_lengths"], [1.0, 0.5])
+    np.testing.assert_allclose(arrays["leaf_measures"], [1.0, 0.25])
+
+
+def test_write_json_metadata_rejects_nonfinite_values(tmp_path):
+    with pytest.raises(ValueError, match="non-finite"):
+        write_json_metadata(tmp_path / "metadata.json", {"bad": np.array([math.nan])})

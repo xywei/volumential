@@ -273,8 +273,17 @@ def axis_aligned_slice_grid(
     if axes is None:
         computed_axes = tuple(axis for axis in range(3) if axis != fixed_axis)
         axes = (computed_axes[0], computed_axes[1])
-    if len(axes) != 2 or fixed_axis in axes or any(axis < 0 or axis >= 3 for axis in axes):
-        raise ValueError("axes must contain the two non-fixed axes")
+    if len(axes) != 2:
+        raise ValueError("axes must contain two distinct non-fixed axes")
+    axes = (int(axes[0]), int(axes[1]))
+    if (
+        len(set(axes)) != 2
+        or fixed_axis in axes
+        or any(axis < 0 or axis >= 3 for axis in axes)
+    ):
+        raise ValueError("axes must contain two distinct non-fixed axes")
+    if not (bbox[fixed_axis, 0] <= fixed_value <= bbox[fixed_axis, 1]):
+        raise ValueError("fixed_value must lie within bbox[fixed_axis]")
     if len(shape) != 2 or shape[0] < 2 or shape[1] < 2:
         raise ValueError("shape must contain two entries >= 2")
 
@@ -366,9 +375,13 @@ def mesh_leaf_box_arrays(mesh: Any) -> dict[str, np.ndarray]:
 
 def _json_safe(value: Any) -> Any:
     if isinstance(value, np.ndarray):
-        return value.tolist()
+        return _json_safe(value.tolist())
     if isinstance(value, np.generic):
-        return value.item()
+        return _json_safe(value.item())
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("metadata contains a non-finite float")
+        return value
     if isinstance(value, dict):
         return {str(key): _json_safe(val) for key, val in value.items()}
     if isinstance(value, (list, tuple)):
@@ -381,7 +394,10 @@ def write_json_metadata(path: Path, metadata: dict[str, Any]) -> None:
 
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(_json_safe(metadata), indent=2, sort_keys=True) + "\n")
+    path.write_text(
+        json.dumps(_json_safe(metadata), allow_nan=False, indent=2, sort_keys=True)
+        + "\n"
+    )
 
 
 def write_npz(path: Path, **arrays: np.ndarray) -> None:
