@@ -93,4 +93,6 @@ The benchmark isolates a controlled 3D Laplace Gaussian split with multiplier
 the analytic Gaussian-filtered density, and writes CSV/JSON/NPZ diagnostics. It
 records the source Gaussian variance, the DMK-style split scale
 `sigma = box_side_length / sqrt(log(1/epsilon))`, and the fact that residual SOG
-terms are not part of this controlled smoke diagnostic.
+terms are not part of this controlled diagnostic. Smoke mode defaults to a
+uniform `q=4`, `nlevels=2` run so the split-vs-Volumential comparison is
+meaningful while remaining lightweight.

@@ -484,9 +484,9 @@ def main() -> int:
     args = parser.parse_args()
 
     smoke = args.mode == "smoke"
-    q_order = args.q_order if args.q_order is not None else (2 if smoke else 3)
+    q_order = args.q_order if args.q_order is not None else (4 if smoke else 3)
     nlevels = args.nlevels if args.nlevels is not None else (2 if smoke else 3)
-    fmm_order = args.fmm_order if args.fmm_order is not None else (8 if smoke else 12)
+    fmm_order = args.fmm_order if args.fmm_order is not None else (10 if smoke else 12)
     regular_quad_order = (
         args.regular_quad_order
         if args.regular_quad_order is not None
