@@ -122,6 +122,22 @@ def test_gaussian_filter_mixture_preserves_mass_and_broadens_variance():
     assert effective_mass == pytest.approx(source_mass)
 
 
+def test_gaussian_filter_mixture_rejects_invalid_sigma():
+    mixture = GaussianMixture(
+        "single",
+        (GaussianComponent(2.0, (0.0, 0.0, 0.0), 5.0),),
+    )
+
+    with pytest.raises(ValueError, match="sigma"):
+        gaussian_filter_mixture(mixture, 0.0)
+
+    with pytest.raises(ValueError, match="sigma"):
+        gaussian_filter_mixture(mixture, -1.0)
+
+    with pytest.raises(ValueError, match="sigma"):
+        gaussian_filter_mixture(mixture, float("inf"))
+
+
 def test_axis_aligned_slice_grid_embeds_2d_grid_in_3d_box():
     grid = axis_aligned_slice_grid(
         np.array([[-1.0, 1.0], [-2.0, 2.0], [-3.0, 3.0]]),
