@@ -140,9 +140,9 @@ def laplace3d_gaussian_potential(
 ) -> np.ndarray:
     """Evaluate the full-space 3D Laplace potential of ``mixture``.
 
-    The default ``kernel_scale=1`` matches Volumential/Sumpy's 3D Laplace
-    convention ``K(x, y) = 1 / |x-y|``. Use ``kernel_scale=1/(4*pi)`` for the
-    classical Green's function normalization.
+    The default ``kernel_scale=1`` gives the unnormalized kernel
+    ``K(x, y) = 1 / |x-y|``. Use ``kernel_scale=1/(4*pi)`` for the classical
+    Green's function normalization used by Sumpy's 3D Laplace global scaling.
     """
 
     if mixture.dim != 3:

@@ -345,12 +345,18 @@ def run_benchmark(
     coords = _coords_host(queue, q_points)
     weights = q_weights.get(queue)
     source = evaluate_gaussian_mixture(mixture, coords)
-    reference = laplace3d_gaussian_potential(mixture, coords)
+    kernel_scale = 1.0 / (4.0 * np.pi)
+    reference = laplace3d_gaussian_potential(
+        mixture, coords, kernel_scale=kernel_scale
+    )
+    root_extent = 2.0 * root_radius
+    root_extent_tag = f"extent{root_extent:.12g}".replace("-", "m").replace(".", "p")
 
     table, table_timings = _get_table(
         queue,
-        cache_path=cache_dir / f"gaussian-free-space-laplace3d-q{q_order}.sqlite",
-        root_extent=2.0 * root_radius,
+        cache_path=cache_dir
+        / f"gaussian-free-space-laplace3d-q{q_order}-{root_extent_tag}.sqlite",
+        root_extent=root_extent,
         q_order=q_order,
         regular_quad_order=regular_quad_order,
         radial_quad_order=radial_quad_order,
@@ -380,14 +386,14 @@ def run_benchmark(
         "problem": "gaussian-mixture-free-space",
         "dim": 3,
         "kernel": "Laplace",
-        "kernel_normalization": "sumpy_1_over_r",
+        "kernel_normalization": "sumpy_global_scaling_1_over_4pi_r",
         "q_order": q_order,
         "nlevels": nlevels,
         "adapt_steps": adapt_steps,
         "fmm_order": fmm_order,
         "regular_quad_order": regular_quad_order,
         "radial_quad_order": radial_quad_order,
-        "root_extent": 2.0 * root_radius,
+        "root_extent": root_extent,
         "n_targets": int(tree.ntargets),
         "n_active_boxes": int(mesh.n_active_cells()),
         "n_total_boxes": int(mesh.n_cells()),
@@ -432,7 +438,9 @@ def run_benchmark(
         shape=(slice_size, slice_size),
     )
     analytic_slice_source = evaluate_gaussian_mixture(mixture, analytic_slice.points)
-    analytic_slice_reference = laplace3d_gaussian_potential(mixture, analytic_slice.points)
+    analytic_slice_reference = laplace3d_gaussian_potential(
+        mixture, analytic_slice.points, kernel_scale=kernel_scale
+    )
 
     arrays = {
         "node_coords": coords,
@@ -464,8 +472,9 @@ def run_benchmark(
         "kernel": {
             "name": "Laplace",
             "dimension": 3,
-            "normalization": "sumpy_1_over_r",
-            "analytic_reference": "sum_i mass_i * erf(sqrt(alpha_i) r_i) / r_i",
+            "normalization": "sumpy_global_scaling_1_over_4pi_r",
+            "kernel_scale": kernel_scale,
+            "analytic_reference": "kernel_scale * sum_i mass_i * erf(sqrt(alpha_i) r_i) / r_i",
         },
         "fixture": mixture.as_metadata(),
         "bbox": bbox,
