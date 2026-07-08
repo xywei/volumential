@@ -166,7 +166,11 @@ def run_benchmark(
     coords = _coords_host(queue, q_points)
     weights = q_weights.get(queue)
     root_extent = 2.0 * root_radius
-    split_box_side_length = root_extent / (2**nlevels)
+    leaf_arrays = mesh_leaf_box_arrays(mesh)
+    leaf_side_lengths = leaf_arrays["leaf_side_lengths"]
+    split_box_side_length = float(np.max(leaf_side_lengths))
+    if not np.allclose(leaf_side_lengths, split_box_side_length):
+        raise RuntimeError("DMK effective-density diagnostic expects a uniform mesh")
     if split_sigma is None:
         split_sigma = dmk_gaussian_split_sigma(split_box_side_length, split_epsilon)
 
@@ -202,7 +206,6 @@ def run_benchmark(
         source_host=effective_density,
     )
 
-    leaf_arrays = mesh_leaf_box_arrays(mesh)
     min_leaf_level, max_leaf_level = _leaf_stats(leaf_arrays)
     source_tail = gaussian_mixture_tail_report(mixture, bbox)
     effective_tail = gaussian_mixture_tail_report(effective_mixture, bbox)
@@ -484,7 +487,7 @@ def main() -> int:
     args = parser.parse_args()
 
     smoke = args.mode == "smoke"
-    q_order = args.q_order if args.q_order is not None else (4 if smoke else 3)
+    q_order = args.q_order if args.q_order is not None else 4
     nlevels = args.nlevels if args.nlevels is not None else (2 if smoke else 3)
     fmm_order = args.fmm_order if args.fmm_order is not None else (10 if smoke else 12)
     regular_quad_order = (
