@@ -87,12 +87,12 @@ The benchmark runs 2D Laplace evaluations on deterministically adapted meshes an
 python benchmarks/dmk_effective_density.py --mode smoke --slice-size 8
 ```
 
-The benchmark isolates a controlled 3D Laplace Gaussian split with multiplier
-`exp(-sigma^2 |k|^2 / 2) / |k|^2`, defines `rho_eff` by
-`K * rho_eff = K_sigma * rho`, applies Volumential's singular Laplace path to
-the analytic Gaussian-filtered density, and writes CSV/JSON/NPZ diagnostics. It
-records the source Gaussian variance, the DMK-style split scale
-`sigma = box_side_length / sqrt(log(1/epsilon))`, and the fact that residual SOG
-terms are not part of this controlled diagnostic. Smoke mode defaults to a
-uniform `q=4`, `nlevels=2` run so the split-vs-Volumential comparison is
-meaningful while remaining lightweight.
+The benchmark isolates a controlled 3D Laplace DMK minimal-smoothing model with
+multiplier `exp(-sigma_l^2 |k|^2 / 4) / |k|^2`, defines `rho_eff` by
+`K * rho_eff = K_sigma_l * rho`, applies Volumential's singular Laplace path to
+the analytic Gaussian-filtered density, and writes CSV/JSON/NPZ diagnostics. In
+the effective-density view, the density smoothing standard deviation is
+`sigma_l / sqrt(2)`, where `sigma_l = box_side_length / sqrt(log(1/epsilon))`.
+Full mode uses an enlarged root box by default so truncation of the smoothed
+density is negligible while preserving the same leaf-side smoothing scale. Smoke
+mode defaults to a uniform `q=4`, `nlevels=2` run and remains lightweight.
