@@ -8,7 +8,9 @@ from volumential.gaussian import (
     GaussianComponent,
     GaussianMixture,
     axis_aligned_slice_grid,
+    dmk_gaussian_split_sigma,
     evaluate_gaussian_mixture,
+    gaussian_filter_mixture,
     gaussian_mixture_tail_report,
     laplace3d_gaussian_potential,
     mesh_leaf_box_arrays,
@@ -87,6 +89,53 @@ def test_gaussian_tail_report_uses_separable_box_mass():
     assert report["total_abs_component_mass"] == pytest.approx(math.sqrt(math.pi))
     assert report["omitted_abs_fraction"] == pytest.approx(math.erfc(1.0))
     assert report["components"][0]["omitted_abs_fraction"] == pytest.approx(math.erfc(1.0))
+
+
+def test_dmk_gaussian_split_sigma_uses_box_side_and_requested_precision():
+    sigma = dmk_gaussian_split_sigma(0.25, 1.0e-6)
+
+    assert sigma == pytest.approx(0.25 / math.sqrt(math.log(1.0e6)))
+
+    with pytest.raises(ValueError, match="box_side_length"):
+        dmk_gaussian_split_sigma(0.0, 1.0e-6)
+
+    with pytest.raises(ValueError, match="epsilon"):
+        dmk_gaussian_split_sigma(0.25, 1.0)
+
+
+def test_gaussian_filter_mixture_preserves_mass_and_broadens_variance():
+    mixture = GaussianMixture(
+        "single",
+        (GaussianComponent(2.0, (0.0, 0.0, 0.0), 5.0),),
+    )
+
+    filtered = gaussian_filter_mixture(mixture, 0.2)
+    source = mixture.components[0]
+    effective = filtered.components[0]
+    source_mass = source.amplitude * (math.pi / source.alpha) ** (source.dim / 2.0)
+    effective_mass = effective.amplitude * (math.pi / effective.alpha) ** (
+        effective.dim / 2.0
+    )
+
+    assert effective.alpha == pytest.approx(source.alpha / (1.0 + 2.0 * source.alpha * 0.2**2))
+    assert effective.alpha < source.alpha
+    assert effective_mass == pytest.approx(source_mass)
+
+
+def test_gaussian_filter_mixture_rejects_invalid_sigma():
+    mixture = GaussianMixture(
+        "single",
+        (GaussianComponent(2.0, (0.0, 0.0, 0.0), 5.0),),
+    )
+
+    with pytest.raises(ValueError, match="sigma"):
+        gaussian_filter_mixture(mixture, 0.0)
+
+    with pytest.raises(ValueError, match="sigma"):
+        gaussian_filter_mixture(mixture, -1.0)
+
+    with pytest.raises(ValueError, match="sigma"):
+        gaussian_filter_mixture(mixture, float("inf"))
 
 
 def test_axis_aligned_slice_grid_embeds_2d_grid_in_3d_box():

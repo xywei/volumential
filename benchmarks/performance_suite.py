@@ -26,6 +26,8 @@ class SuiteCase:
     script: str
     output_name: str | None
     accepts_backend: bool = False
+    arrays_output_name: str | None = None
+    metadata_output_name: str | None = None
 
 
 SUITE_CASES = (
@@ -55,6 +57,15 @@ SUITE_CASES = (
         output_name="adaptive_timing.csv",
         accepts_backend=True,
     ),
+    SuiteCase(
+        name="dmk-effective-density",
+        description="controlled Gaussian split effective-density diagnostic",
+        script="benchmarks/dmk_effective_density.py",
+        output_name="dmk_effective_density.csv",
+        accepts_backend=True,
+        arrays_output_name="dmk_effective_density_arrays.npz",
+        metadata_output_name="dmk_effective_density_metadata.json",
+    ),
 )
 
 
@@ -62,9 +73,16 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _case_output_arg(case: SuiteCase, case_dir: Path) -> list[str]:
+    args = []
     if case.output_name is None:
-        return ["--out-dir", str(case_dir)]
-    return ["--out", str(case_dir / case.output_name)]
+        args.extend(["--out-dir", str(case_dir)])
+    else:
+        args.extend(["--out", str(case_dir / case.output_name)])
+    if case.arrays_output_name is not None:
+        args.extend(["--arrays-out", str(case_dir / case.arrays_output_name)])
+    if case.metadata_output_name is not None:
+        args.extend(["--metadata-out", str(case_dir / case.metadata_output_name)])
+    return args
 
 
 def _case_cache_arg(case_dir: Path) -> list[str]:
