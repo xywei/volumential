@@ -80,3 +80,17 @@ python benchmarks/adaptive_timing.py --mode smoke --out build/benchmarks/adaptiv
 ```
 
 The benchmark runs 2D Laplace evaluations on deterministically adapted meshes and writes one cold-cache and one warm-cache row per case. Rows report mesh/adaptation setup, geometry construction, table build or load, FMM wall time, and the timing categories exposed by `drive_volume_fmm`. Full paper runs should be wrapped with the paper repository metadata tool before their CSVs are promoted to manuscript data.
+
+## DMK Effective-Density Diagnostic
+
+```bash
+python benchmarks/dmk_effective_density.py --mode smoke --slice-size 8
+```
+
+The benchmark isolates a controlled 3D Laplace Gaussian split with multiplier
+`exp(-sigma^2 |k|^2 / 2) / |k|^2`, defines `rho_eff` by
+`K * rho_eff = K_sigma * rho`, applies Volumential's singular Laplace path to
+the analytic Gaussian-filtered density, and writes CSV/JSON/NPZ diagnostics. It
+records the source Gaussian variance, the DMK-style split scale
+`sigma = box_side_length / sqrt(log(1/epsilon))`, and the fact that residual SOG
+terms are not part of this controlled smoke diagnostic.

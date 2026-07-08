@@ -132,6 +132,63 @@ def evaluate_gaussian_mixture(mixture: GaussianMixture, points: np.ndarray) -> n
     return result
 
 
+def dmk_gaussian_split_sigma(box_side_length: float, epsilon: float) -> float:
+    """Return the DMK-style Gaussian split scale for one box level.
+
+    Jiang--Greengard DMK chooses a Gaussian kernel-splitting scale proportional
+    to ``r_l / sqrt(log(1/epsilon))`` for box side length ``r_l`` and requested
+    precision ``epsilon``. This helper records that normalization for controlled
+    diagnostics; it does not include the separate residual sum-of-Gaussians fit.
+    """
+
+    box_side_length = float(box_side_length)
+    epsilon = float(epsilon)
+    if not math.isfinite(box_side_length) or box_side_length <= 0.0:
+        raise ValueError("box_side_length must be finite and positive")
+    if not math.isfinite(epsilon) or not (0.0 < epsilon < 1.0):
+        raise ValueError("epsilon must be finite and between 0 and 1")
+    return box_side_length / math.sqrt(math.log(1.0 / epsilon))
+
+
+def gaussian_filter_mixture(mixture: GaussianMixture, sigma: float) -> GaussianMixture:
+    """Convolve ``mixture`` with a normalized isotropic Gaussian filter.
+
+    The filter is
+
+    ``gamma_sigma(x) = (2*pi*sigma**2)^(-d/2) exp(-|x|**2/(2*sigma**2))``
+
+    and has Fourier multiplier ``exp(-sigma**2 |k|**2 / 2)`` under the
+    convention where the 3D Laplace Green's function ``1/(4*pi*r)`` has
+    multiplier ``1/|k|**2``. Convolving each ``A exp(-alpha |x-c|^2)`` component
+    preserves its mass and maps it to another Gaussian with
+
+    ``alpha_eff = alpha / (1 + 2 alpha sigma**2)``.
+    """
+
+    sigma = float(sigma)
+    if not math.isfinite(sigma) or sigma <= 0.0:
+        raise ValueError("sigma must be finite and positive")
+
+    components = []
+    for component in mixture.components:
+        alpha_eff = component.alpha / (1.0 + 2.0 * component.alpha * sigma**2)
+        amplitude_eff = component.amplitude * (alpha_eff / component.alpha) ** (
+            component.dim / 2.0
+        )
+        components.append(
+            GaussianComponent(
+                amplitude=amplitude_eff,
+                center=component.center,
+                alpha=alpha_eff,
+            )
+        )
+
+    return GaussianMixture(
+        name=f"{mixture.name}-gaussian-filter-sigma-{sigma:.6g}",
+        components=tuple(components),
+    )
+
+
 def laplace3d_gaussian_potential(
     mixture: GaussianMixture,
     points: np.ndarray,

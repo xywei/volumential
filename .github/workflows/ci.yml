@@ -166,6 +166,7 @@ jobs:
           python benchmarks/table_equivalence_cache.py --mode smoke
           python benchmarks/accuracy_preservation.py --mode smoke
           python benchmarks/gaussian_free_space.py --mode smoke --slice-size 8
+          python benchmarks/dmk_effective_density.py --mode smoke --slice-size 8
           python benchmarks/adaptive_timing.py --mode smoke
           python benchmarks/performance_suite.py --list-cases
           python benchmarks/performance_suite.py --mode smoke --dry-run

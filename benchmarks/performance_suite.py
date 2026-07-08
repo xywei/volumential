@@ -55,6 +55,13 @@ SUITE_CASES = (
         output_name="adaptive_timing.csv",
         accepts_backend=True,
     ),
+    SuiteCase(
+        name="dmk-effective-density",
+        description="controlled Gaussian split effective-density diagnostic",
+        script="benchmarks/dmk_effective_density.py",
+        output_name="dmk_effective_density.csv",
+        accepts_backend=True,
+    ),
 )
 
 
