@@ -1,6 +1,6 @@
 # Benchmarks
 
-These scripts emit reproducible CSV artifacts for manuscript evidence. Keep smoke modes lightweight enough for CI/local checks and reserve full sweeps for controlled machines such as `ipa`.
+These scripts emit reproducible CSV artifacts for manuscript evidence. Keep smoke modes lightweight enough for CI/local checks and reserve full sweeps for a suitable, currently idle remote compute host. Keep infrastructure-identifying metadata private and redact it from public artifacts.
 
 ## Performance Suite Driver
 
@@ -11,7 +11,7 @@ layout and JSON command manifest:
 python benchmarks/performance_suite.py --mode smoke --out-dir build/benchmarks/performance-suite
 ```
 
-For full runs, execute on a controlled machine such as `ipa` and wrap the suite
+For full runs, execute on a controlled remote compute host and wrap the suite
 with the paper repository metadata tool before promoting results:
 
 ```bash
@@ -71,7 +71,7 @@ The benchmark compares canonical rescaled tables, direct per-level tables, and d
 python benchmarks/split_parameter_sweep.py --mode smoke --out build/benchmarks/split-parameter-sweep.csv
 ```
 
-The benchmark sweeps 2D scalar Helmholtz wave numbers and Yukawa screening parameters. Rows compare each split order against the highest split order in the same run for that kernel parameter, giving a split-order convergence measurement while holding the pretabulated basis-table family fixed. Each row records split cache accounting. In `_row_from_result`, the `online_remainder_s` column is a conservative upper bound: it equals `split_warm_s` when `uses_online_remainder` is true, and is `0.0` otherwise, because the current wrangler instrumentation does not isolate smooth online-remainder work from the rest of the warm FMM/List-1 evaluation.
+The benchmark sweeps 2D scalar Helmholtz wave numbers and Yukawa screening parameters. Each row compares the full implemented split evaluator against a direct fixed-parameter near-field table at the same parameter and application level. It separately records direct-table and RKE-channel setup/load costs, payload, repeated full applications, isolated coefficient and residual diagnostics, cold/warm strategy totals, and a linear break-even model. `--direct-levels` controls the levels provisioned by the direct setup strategy, while `--nlevels` is the application level; `--repeat-count` is the number of applications per parameter, and `break_even_repeat_count` uses the same per-parameter unit.
 
 ## Adaptive Timing
 
@@ -87,12 +87,15 @@ The benchmark runs 2D Laplace evaluations on deterministically adapted meshes an
 python benchmarks/dmk_effective_density.py --mode smoke --slice-size 8
 ```
 
-The benchmark isolates a controlled 3D Laplace DMK minimal-smoothing model with
-multiplier `exp(-sigma_l^2 |k|^2 / 4) / |k|^2`, defines `rho_eff` by
-`K * rho_eff = K_sigma_l * rho`, applies Volumential's singular Laplace path to
-the analytic Gaussian-filtered density, and writes CSV/JSON/NPZ diagnostics. In
-the effective-density view, the density smoothing standard deviation is
+The benchmark isolates a controlled 3D Laplace DMK far-plus-residual effective
+density model. The far density is the analytic Gaussian-filtered source with
+multiplier `exp(-sigma_l^2 |k|^2 / 4)` and smoothing standard deviation
 `sigma_l / sqrt(2)`, where `sigma_l = box_side_length / sqrt(log(1/epsilon))`.
-Full mode uses an enlarged root box by default so truncation of the smoothed
-density is negligible while preserving the same leaf-side smoothing scale. Smoke
-mode defaults to a uniform `q=4`, `nlevels=2` run and remains lightweight.
+The residual uses the all-space fourth-order Taylor/asymptotic model for
+`erfc(r/sigma_l)/(4*pi*r)`, converts `u_R ~= c0 rho + c1 Delta rho + c2 Delta^2 rho`
+to an equivalent density by `rho_R_eff = -Delta u_R`, and applies Volumential's
+singular Laplace path to the total density. CSV/JSON/NPZ diagnostics report the
+Volumential error against the analytic asymptotic split and the residual split
+bias against the unsmoothed Gaussian reference. Smoke mode uses a lightweight
+uniform `q=4`, `nlevels=2`, root-half-width `0.5` mesh; full mode uses the
+resolved `q=4`, `nlevels=4`, root-half-width `1.0` configuration.

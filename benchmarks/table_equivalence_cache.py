@@ -7,7 +7,7 @@ the expected scale factor is applied, and records cold-build/warm-load cache
 timings exposed by :mod:`volumential.table_manager`.
 
 Smoke mode is intended for CI/local validation. Full mode is intended for paper
-artifact generation on a controlled machine such as ``ipa``.
+artifact generation on a controlled remote compute host.
 """
 
 from __future__ import annotations
