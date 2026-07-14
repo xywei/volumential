@@ -9,6 +9,7 @@ from volumential.gaussian import (
     GaussianMixture,
     axis_aligned_slice_grid,
     dmk_gaussian_split_sigma,
+    evaluate_gaussian_laplacian_power,
     evaluate_gaussian_mixture,
     gaussian_filter_mixture,
     gaussian_mixture_tail_report,
@@ -43,6 +44,60 @@ def test_evaluate_gaussian_mixture_accepts_point_or_axis_major_points():
     np.testing.assert_allclose(values, axis_major_values)
     np.testing.assert_allclose(values[0], 2.0 + 0.5 * math.exp(-4.0))
     np.testing.assert_allclose(values[1], 2.0 * math.exp(-1.0) + 0.5)
+
+
+def test_evaluate_gaussian_laplacian_power_matches_closed_forms():
+    amplitude = 1.25
+    alpha = 3.0
+    dim = 3
+    mixture = GaussianMixture(
+        "single",
+        (GaussianComponent(amplitude, (0.0, 0.0, 0.0), alpha),),
+    )
+    points = np.array([[0.0, 0.0, 0.0], [0.5, 0.0, 0.0]])
+    radius_sq = np.sum(points**2, axis=1)
+    gaussian = amplitude * np.exp(-alpha * radius_sq)
+
+    np.testing.assert_allclose(
+        evaluate_gaussian_laplacian_power(mixture, points, order=0),
+        gaussian,
+    )
+    np.testing.assert_allclose(
+        evaluate_gaussian_laplacian_power(mixture, points, order=1),
+        gaussian * (-2.0 * alpha * dim + 4.0 * alpha**2 * radius_sq),
+    )
+    np.testing.assert_allclose(
+        evaluate_gaussian_laplacian_power(mixture, points, order=2),
+        gaussian
+        * (
+            4.0 * alpha**2 * dim * (dim + 2.0)
+            - 16.0 * alpha**3 * (dim + 2.0) * radius_sq
+            + 16.0 * alpha**4 * radius_sq**2
+        ),
+    )
+    np.testing.assert_allclose(
+        evaluate_gaussian_laplacian_power(mixture, points, order=3),
+        gaussian
+        * (
+            -8.0 * alpha**3 * dim * (dim + 2.0) * (dim + 4.0)
+            + 48.0 * alpha**4 * (dim + 2.0) * (dim + 4.0) * radius_sq
+            - 96.0 * alpha**5 * (dim + 4.0) * radius_sq**2
+            + 64.0 * alpha**6 * radius_sq**3
+        ),
+    )
+
+
+def test_evaluate_gaussian_laplacian_power_rejects_invalid_order():
+    mixture = GaussianMixture(
+        "single",
+        (GaussianComponent(1.0, (0.0, 0.0, 0.0), 1.0),),
+    )
+
+    with pytest.raises(ValueError, match="non-negative"):
+        evaluate_gaussian_laplacian_power(mixture, np.zeros((1, 3)), order=-1)
+
+    with pytest.raises(ValueError, match="0, 1, 2, or 3"):
+        evaluate_gaussian_laplacian_power(mixture, np.zeros((1, 3)), order=4)
 
 
 def test_laplace3d_gaussian_potential_matches_center_limit_and_kernel_scale():

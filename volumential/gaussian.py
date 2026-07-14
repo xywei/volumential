@@ -132,6 +132,65 @@ def evaluate_gaussian_mixture(mixture: GaussianMixture, points: np.ndarray) -> n
     return result
 
 
+def _laplacian_power_polynomial_coefficients(
+    *, alpha: float, dim: int, order: int
+) -> tuple[float, ...]:
+    """Return coefficients for ``Delta**order exp(-alpha*r**2)``."""
+
+    if order == 0:
+        return (1.0,)
+    if order == 1:
+        return (-2.0 * alpha * dim, 4.0 * alpha**2)
+    if order == 2:
+        return (
+            4.0 * alpha**2 * dim * (dim + 2.0),
+            -16.0 * alpha**3 * (dim + 2.0),
+            16.0 * alpha**4,
+        )
+    if order == 3:
+        return (
+            -8.0 * alpha**3 * dim * (dim + 2.0) * (dim + 4.0),
+            48.0 * alpha**4 * (dim + 2.0) * (dim + 4.0),
+            -96.0 * alpha**5 * (dim + 4.0),
+            64.0 * alpha**6,
+        )
+    raise ValueError("order must be 0, 1, 2, or 3")
+
+
+def evaluate_gaussian_laplacian_power(
+    mixture: GaussianMixture,
+    points: np.ndarray,
+    *,
+    order: int,
+) -> np.ndarray:
+    """Evaluate ``Delta**order`` of an isotropic Gaussian mixture.
+
+    Orders through three are provided because the fourth-order DMK residual
+    effective-density correction needs ``Delta rho``, ``Delta**2 rho``, and
+    ``Delta**3 rho`` for a Gaussian source.
+    """
+
+    if not isinstance(order, int):
+        raise TypeError("order must be an integer")
+    if order < 0:
+        raise ValueError("order must be non-negative")
+
+    points = _as_points(points, mixture.dim)
+    result = np.zeros(points.shape[0], dtype=np.float64)
+    for component in mixture.components:
+        center = np.asarray(component.center, dtype=np.float64)
+        radius_sq = np.sum((points - center) ** 2, axis=1)
+        gaussian = component.amplitude * np.exp(-component.alpha * radius_sq)
+        coefficients = _laplacian_power_polynomial_coefficients(
+            alpha=component.alpha, dim=component.dim, order=order
+        )
+        polynomial = np.zeros_like(radius_sq)
+        for coefficient in reversed(coefficients):
+            polynomial = polynomial * radius_sq + coefficient
+        result += gaussian * polynomial
+    return result
+
+
 def dmk_gaussian_split_sigma(box_side_length: float, epsilon: float) -> float:
     """Return the DMK-style Gaussian split scale for one box level.
 
