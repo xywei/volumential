@@ -739,7 +739,9 @@ def drive_volume_fmm(
         field_name="src_func",
     )
 
-    assert (ns := len(src_weights)) == len(src_func)
+    ns = len(src_weights)
+    if ns != len(src_func):
+        raise ValueError("src_weights and src_func must have the same field count")
 
     list1_only = bool(kwargs.get("list1_only", False))
     auto_interpolate_targets = bool(kwargs.pop("auto_interpolate_targets", True))
@@ -781,7 +783,14 @@ def drive_volume_fmm(
         if queue is None:
             raise TypeError("unable to infer command queue for FMMLib wrangler")
 
-        traversal = traversal.get(queue)
+        if hasattr(traversal, "get"):
+            traversal = traversal.get(queue)
+        else:
+            from boxtree.array_context import (
+                PyOpenCLArrayContext as BoxtreePyOpenCLArrayContext,
+            )
+
+            traversal = BoxtreePyOpenCLArrayContext(queue).to_numpy(traversal)
 
         if isinstance(src_weights[0], cl.array.Array):
             src_weights = obj_array_1d([sw.get(queue) for sw in src_weights])

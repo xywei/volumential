@@ -41,6 +41,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+fmmlib = ["pyfmmlib>=2024.1"]
 gmsh_support = ["gmsh_interop"]
 test = ["filelock", "gmsh_interop", "pytest"]
 doc = ["sphinx", "sphinx_rtd_theme"]

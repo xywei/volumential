@@ -32,7 +32,11 @@ import numpy as np
 
 import pyopencl as cl
 import pyopencl.array
-from boxtree.pyfmmlib_integration import FMMLibExpansionWrangler
+from boxtree.pyfmmlib_integration import (
+    FMMLibExpansionWrangler,
+    FMMLibTreeIndependentDataForWrangler,
+    Kernel as FMMLibKernel,
+)
 from pytools import memoize_method
 from pytools.obj_array import new_1d as obj_array_1d
 from sumpy.array_context import PyOpenCLArrayContext
@@ -5476,6 +5480,7 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
 
 class FPNDFMMLibTreeIndependentDataForWrangler(
     TreeIndependentDataForWranglerInterface,
+    FMMLibTreeIndependentDataForWrangler,
 ):
     """Objects of this type serve as a place to keep the code needed
     for ExpansionWrangler if it is using fmmlib to perform multipole
@@ -5502,6 +5507,29 @@ class FPNDFMMLibTreeIndependentDataForWrangler(
 
         self.target_kernels = target_kernels
         self.exclude_self = True
+
+        base_kernels = [kernel.get_base_kernel() for kernel in target_kernels]
+        if not base_kernels:
+            raise ValueError("target_kernels must not be empty")
+        if not all(type(kernel) is type(base_kernels[0]) for kernel in base_kernels):
+            raise ValueError("FMMLib target kernels must share one base kernel type")
+
+        base_kernel = base_kernels[0]
+        if isinstance(base_kernel, LaplaceKernel):
+            fmmlib_kernel = FMMLibKernel.LAPLACE
+        elif isinstance(base_kernel, HelmholtzKernel):
+            fmmlib_kernel = FMMLibKernel.HELMHOLTZ
+        else:
+            raise ValueError("FMMLib supports only Laplace and Helmholtz kernels")
+
+        ifgrad = any(isinstance(kernel, AxisTargetDerivative)
+                     for kernel in target_kernels)
+        FMMLibTreeIndependentDataForWrangler.__init__(
+            self,
+            base_kernel.dim,
+            fmmlib_kernel,
+            ifgrad=ifgrad,
+        )
 
     def get_wrangler(
         self,
@@ -5570,8 +5598,7 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
         self.tree_indep = tree_indep
         self.queue = queue
 
-        tree = tree.get(queue)
-        self.tree = tree
+        self.device_tree = tree
 
         self.dtype = dtype
         self.quad_order = quad_order
@@ -5687,7 +5714,7 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
         ].source_box_extent
         table_starting_level = int(
             np.round(
-                np.log(self.tree.root_extent / self.root_table_source_box_extent)
+                np.log(tree.root_extent / self.root_table_source_box_extent)
                 / np.log(2)
             )
         )
@@ -5716,9 +5743,9 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
                 if not isinstance(self.n_tables, dict) and self.n_tables > 1:
                     if (
                         not abs(
-                            int(self.tree.root_extent / table_root_extent)
+                            int(tree.root_extent / table_root_extent)
                             * table_root_extent
-                            - self.tree.root_extent
+                            - tree.root_extent
                         )
                         < 1e-15
                     ):
@@ -5757,6 +5784,9 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
         if list1_extra_kwargs is None:
             list1_extra_kwargs = {}
 
+        self.source_extra_kwargs = source_extra_kwargs
+        self.kernel_extra_kwargs = kernel_extra_kwargs
+        self.self_extra_kwargs = self_extra_kwargs
         self.list1_extra_kwargs = list1_extra_kwargs
         self._table_layout_validation_cache = set()
         self._nearfield_device_payload_cache = OrderedDict()
@@ -5790,27 +5820,31 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
                     level,
                 )
 
+        if "traversal" not in kwargs:
+            raise TypeError("FMMLib wrangler requires traversal")
+
+        from boxtree.array_context import (
+            PyOpenCLArrayContext as BoxtreePyOpenCLArrayContext,
+        )
+
+        self._fmmlib_actx = BoxtreePyOpenCLArrayContext(queue)
+        host_traversal = self._fmmlib_actx.to_numpy(kwargs["traversal"])
+
         rotation_data = None
-        if "traversal" in kwargs:
-            # add rotation data if traversal is passed as a keyword argument
+        if tree.dimensions == 3:
             from boxtree.pyfmmlib_integration import FMMLibRotationData
 
-            rotation_data = FMMLibRotationData(self.queue, kwargs["traversal"])
-        else:
-            logger.warning(
-                "Rotation data is not utilized since traversal is "
-                "not known to FPNDFMMLibExpansionWrangler."
-            )
+            rotation_data = FMMLibRotationData(self._fmmlib_actx, host_traversal)
 
         FMMLibExpansionWrangler.__init__(
             self,
-            tree,
+            tree_indep,
+            host_traversal,
             helmholtz_k=helmholtz_k,
             dipole_vec=dipole_vec,
             dipoles_already_reordered=True,
-            fmm_level_to_nterms=inner_fmm_level_to_nterms,
+            fmm_level_to_order=inner_fmm_level_to_nterms,
             rotation_data=rotation_data,
-            ifgrad=ifgrad,
         )
 
     # }}} End constructor
@@ -5818,16 +5852,17 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
     # {{{ scale factor for fmmlib
 
     def get_scale_factor(self):
-        if self.eqn_letter == "l" and self.dim == 2:
+        eqn_letter = self.tree_indep.eqn_letter
+        if eqn_letter == "l" and self.dim == 2:
             scale_factor = -1 / (2 * np.pi)
-        elif self.eqn_letter == "h" and self.dim == 2:
+        elif eqn_letter == "h" and self.dim == 2:
             scale_factor = 1
-        elif self.eqn_letter in ["l", "h"] and self.dim == 3:
+        elif eqn_letter in ["l", "h"] and self.dim == 3:
             scale_factor = 1 / (4 * np.pi)
         else:
             raise NotImplementedError(
                 "scale factor for pyfmmlib %s for %d dimensions"
-                % (self.eqn_letter, self.dim)
+                % (eqn_letter, self.dim)
             )
 
         return scale_factor
@@ -5860,23 +5895,35 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
 
     def finalize_potentials(self, potentials):
         # return potentials
-        return FMMLibExpansionWrangler.finalize_potentials(self, potentials)
+        return FMMLibExpansionWrangler.finalize_potentials(
+            self, self._fmmlib_actx, potentials
+        )
 
     # }}} End data vector utilities
 
     # {{{ formation & coarsening of multipoles
 
     def form_multipoles(self, level_start_source_box_nrs, source_boxes, src_weights):
-        return FMMLibExpansionWrangler.form_multipoles(
-            self, level_start_source_box_nrs, source_boxes, src_weights
+        result = FMMLibExpansionWrangler.form_multipoles(
+            self,
+            self._fmmlib_actx,
+            level_start_source_box_nrs,
+            source_boxes,
+            src_weights,
         )
+        return result, None
 
     def coarsen_multipoles(
         self, level_start_source_parent_box_nrs, source_parent_boxes, mpoles
     ):
-        return FMMLibExpansionWrangler.coarsen_multipoles(
-            self, level_start_source_parent_box_nrs, source_parent_boxes, mpoles
+        result = FMMLibExpansionWrangler.coarsen_multipoles(
+            self,
+            self._fmmlib_actx,
+            level_start_source_parent_box_nrs,
+            source_parent_boxes,
+            mpoles,
         )
+        return result, None
 
     # }}} End formation & coarsening of multipoles
 
@@ -5896,6 +5943,20 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
         # do not include quadrature weights (purely function
         # expansiona coefficients)
 
+        tree = self.device_tree
+        output_is_device = isinstance(out_pot, cl.array.Array)
+
+        def to_device(array):
+            if isinstance(array, cl.array.Array):
+                return array
+            return cl.array.to_device(self.queue, np.ascontiguousarray(array))
+
+        out_pot = to_device(out_pot)
+        target_boxes = to_device(target_boxes)
+        neighbor_source_boxes_starts = to_device(neighbor_source_boxes_starts)
+        neighbor_source_boxes_lists = to_device(neighbor_source_boxes_lists)
+        mode_coefs = to_device(mode_coefs)
+
         if 0:
             print("Returns range for list1")
             out_pot[:] = np.arange(len(out_pot))
@@ -5914,9 +5975,9 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
             # this checks that the boxes at the coarsest level
             # and allows for some round-off error
             min_lev = np.min(
-                self.tree.box_levels.get(self.queue)[target_boxes.get(self.queue)]
+                tree.box_levels.get(self.queue)[target_boxes.get(self.queue)]
             )
-            largest_cell_extent = self.tree.root_extent * 0.5**min_lev
+            largest_cell_extent = tree.root_extent * 0.5**min_lev
             if not self.near_field_table[kname][0].source_box_extent >= (
                 largest_cell_extent - 1e-15
             ):
@@ -6047,26 +6108,26 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
                 "table_entry_scales": payload["table_entry_scales_dev"],
             }
         particle_local_ids = _compute_box_local_ids(
-            self.queue, self.tree, self.near_field_table[kname][0].n_q_points
+            self.queue, tree, self.near_field_table[kname][0].n_q_points
         )
 
         _validate_table_box_particle_layout_cached(
             self.queue,
-            self.tree,
+            tree,
             target_boxes,
             neighbor_source_boxes_lists,
             self.near_field_table[kname][0].n_q_points,
             self._table_layout_validation_cache,
         )
 
-        aligned_nboxes = self.tree.box_centers.shape[1]
+        aligned_nboxes = tree.box_centers.shape[1]
         source_counts_nonchild = np.zeros(aligned_nboxes, dtype=np.int32)
         target_counts_nonchild = np.zeros(aligned_nboxes, dtype=np.int32)
-        source_counts_nonchild[: len(self.tree.box_target_counts_nonchild)] = (
-            self.tree.box_target_counts_nonchild.get(self.queue)
+        source_counts_nonchild[: len(tree.box_target_counts_nonchild)] = (
+            tree.box_target_counts_nonchild.get(self.queue)
         )
-        target_counts_nonchild[: len(self.tree.box_target_counts_nonchild)] = (
-            self.tree.box_target_counts_nonchild.get(self.queue)
+        target_counts_nonchild[: len(tree.box_target_counts_nonchild)] = (
+            tree.box_target_counts_nonchild.get(self.queue)
         )
         source_counts_nonchild = cl.array.to_device(self.queue, source_counts_nonchild)
         target_counts_nonchild = cl.array.to_device(self.queue, target_counts_nonchild)
@@ -6074,19 +6135,19 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
         res, evt = near_field(
             self.queue,
             result=out_pot,
-            box_centers=self.tree.box_centers,
-            box_levels=self.tree.box_levels,
+            box_centers=tree.box_centers,
+            box_levels=tree.box_levels,
             box_source_counts_nonchild=source_counts_nonchild,
-            box_source_starts=self.tree.box_target_starts,
+            box_source_starts=tree.box_target_starts,
             box_target_counts_nonchild=target_counts_nonchild,
-            box_target_starts=self.tree.box_target_starts,
+            box_target_starts=tree.box_target_starts,
             case_indices=case_indices_dev,
             encoding_base=base,
             encoding_shift=shift,
             mode_nmlz_combined=mode_nmlz_combined,
             exterior_mode_nmlz_combined=exterior_mode_nmlz_combined,
             neighbor_source_boxes_starts=neighbor_source_boxes_starts,
-            root_extent=self.tree.root_extent,
+            root_extent=tree.root_extent,
             neighbor_source_boxes_lists=neighbor_source_boxes_lists,
             mode_coefs=mode_coefs,
             source_mode_ids=particle_local_ids,
@@ -6098,13 +6159,12 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
             **reconstruction_kwargs,
         )
 
-        if isinstance(out_pot, cl.array.Array):
+        if output_is_device:
             assert res is out_pot
             # FIXME: lazy evaluation sometimes returns incorrect results
             res.finish()
         else:
-            assert isinstance(out_pot, np.ndarray)
-            out_pot = res
+            out_pot = res.get(self.queue)
 
         # sorted_target_ids=self.tree.user_source_ids,
         # user_source_ids=self.tree.user_source_ids)
@@ -6383,21 +6443,28 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
         src_box_lists,
         mpole_exps,
     ):
-        return FMMLibExpansionWrangler.multipole_to_local(
+        result = FMMLibExpansionWrangler.multipole_to_local(
             self,
+            self._fmmlib_actx,
             level_start_target_box_nrs,
             target_boxes,
             src_box_starts,
             src_box_lists,
             mpole_exps,
         )
+        return result, None
 
     def eval_multipoles(
         self, target_boxes_by_source_level, source_boxes_by_level, mpole_exps
     ):
-        return FMMLibExpansionWrangler.eval_multipoles(
-            self, target_boxes_by_source_level, source_boxes_by_level, mpole_exps
+        result = FMMLibExpansionWrangler.eval_multipoles(
+            self,
+            self._fmmlib_actx,
+            target_boxes_by_source_level,
+            source_boxes_by_level,
+            mpole_exps,
         )
+        return result, None
 
     def form_locals(
         self,
@@ -6407,14 +6474,16 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
         lists,
         src_weights,
     ):
-        return FMMLibExpansionWrangler.form_locals(
+        result = FMMLibExpansionWrangler.form_locals(
             self,
+            self._fmmlib_actx,
             level_start_target_or_target_parent_box_nrs,
             target_or_target_parent_boxes,
             starts,
             lists,
             src_weights,
         )
+        return result, None
 
     def refine_locals(
         self,
@@ -6422,17 +6491,24 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
         target_or_target_parent_boxes,
         local_exps,
     ):
-        return FMMLibExpansionWrangler.refine_locals(
+        result = FMMLibExpansionWrangler.refine_locals(
             self,
+            self._fmmlib_actx,
             level_start_target_or_target_parent_box_nrs,
             target_or_target_parent_boxes,
             local_exps,
         )
+        return result, None
 
     def eval_locals(self, level_start_target_box_nrs, target_boxes, local_exps):
-        return FMMLibExpansionWrangler.eval_locals(
-            self, level_start_target_box_nrs, target_boxes, local_exps
+        result = FMMLibExpansionWrangler.eval_locals(
+            self,
+            self._fmmlib_actx,
+            level_start_target_box_nrs,
+            target_boxes,
+            local_exps,
         )
+        return result, None
 
     # }}} End downward pass of fmm
 
@@ -6441,9 +6517,15 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
     def eval_direct_p2p(
         self, target_boxes, source_box_starts, source_box_lists, src_weights
     ):
-        return FMMLibExpansionWrangler.eval_direct(
-            self, target_boxes, source_box_starts, source_box_lists, src_weights
+        result = FMMLibExpansionWrangler.eval_direct(
+            self,
+            self._fmmlib_actx,
+            target_boxes,
+            source_box_starts,
+            source_box_lists,
+            src_weights,
         )
+        return result, None
 
     # }}} End direct evaluation of p2p interactions
 
