@@ -476,8 +476,17 @@ def _add_convergence_rates(rows):
     h_groups = {}
     q_groups = {}
     for row in rows:
-        h_groups.setdefault((row["path"], row["q_order"]), []).append(row)
-        q_groups.setdefault((row["path"], row["n_levels"]), []).append(row)
+        fixed_orders = (
+            row["fmm_order"],
+            row["regular_quad_order"],
+            row["radial_quad_order"],
+        )
+        h_groups.setdefault(
+            (row["path"], row["q_order"], *fixed_orders), []
+        ).append(row)
+        q_groups.setdefault(
+            (row["path"], row["n_levels"], *fixed_orders), []
+        ).append(row)
 
     for group in h_groups.values():
         group.sort(key=lambda row: row["h_max"], reverse=True)

@@ -253,6 +253,7 @@ def run_benchmark(
         cache_path=cache_dir
         / (
             f"dmk-effective-density-laplace3d-q{q_order}-"
+            f"regular{regular_quad_order}-radial{radial_quad_order}-"
             f"{_root_extent_tag(root_extent)}.sqlite"
         ),
         root_extent=root_extent,

@@ -966,6 +966,11 @@ def run_benchmark(
 ) -> list[dict[str, Any]]:
     import pyopencl as cl
 
+    if repeat_count < 1:
+        raise ValueError("repeat_count must be >= 1")
+    if nlevels not in direct_levels:
+        raise ValueError("direct_levels must include nlevels")
+
     benchmark_start = time.perf_counter()
     device = _select_opencl_device(cl, backend)
     ctx = cl.Context([device])

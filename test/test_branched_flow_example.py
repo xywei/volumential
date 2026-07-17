@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 
 import numpy as np
+import pytest
 
 
 _EXAMPLE_PATH = (
@@ -24,6 +25,8 @@ _chebyshev_lobatto_nodes = _EXAMPLE._chebyshev_lobatto_nodes
 _default_config = _EXAMPLE._default_config
 _fmm_level_order = _EXAMPLE._fmm_level_order
 _lagrange_interpolation_weights = _EXAMPLE._lagrange_interpolation_weights
+_config_from_arguments = _EXAMPLE._config_from_arguments
+_parse_arguments = _EXAMPLE._parse_arguments
 _random_refractive_perturbation = _EXAMPLE._random_refractive_perturbation
 _restrict_neighbor_csr = _EXAMPLE._restrict_neighbor_csr
 _RightPreconditionedOperator = _EXAMPLE._RightPreconditionedOperator
@@ -350,3 +353,31 @@ def test_preconditioner_configuration_validation():
         assert "degree" in str(exc)
     else:
         raise AssertionError("invalid polynomial degree was accepted")
+
+
+@pytest.mark.parametrize(("changes", "message"), [
+    ({"q_order": 0}, "q_order"),
+    ({"nlevels": 0}, "nlevels"),
+    ({"root_half_extent": 0.0}, "root_half_extent"),
+    ({"wave_number": 0.0}, "wave_number"),
+    ({"core_x_min": 0.25}, "core_x_min"),
+    ({"core_y_min": 0.5}, "core_y_min"),
+    ({"transition_width": 0.0}, "transition_width"),
+    ({"gmres_tolerance": 0.0}, "gmres_tolerance"),
+    ({"gmres_maxiter": 0}, "gmres_maxiter"),
+])
+def test_solver_configuration_validation(changes, message):
+    with pytest.raises(ValueError, match=message):
+        _validate_config(replace(_default_config(smoke=True), **changes))
+
+
+def test_incident_angle_cli_override(monkeypatch):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["branched-flow", "--smoke", "--incident-angle-degrees", "17.5"],
+    )
+
+    config = _config_from_arguments(_parse_arguments())
+
+    assert config.incident_angle_degrees == 17.5

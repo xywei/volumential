@@ -714,6 +714,25 @@ def _default_config(smoke):
 
 
 def _validate_config(config):
+    if config.q_order <= 0:
+        raise ValueError("q_order must be positive")
+    if config.nlevels <= 0:
+        raise ValueError("nlevels must be positive")
+    if not config.root_half_extent > 0.0:
+        raise ValueError("root_half_extent must be positive")
+    if not config.wave_number > 0.0:
+        raise ValueError("wave_number must be positive")
+    if not config.core_x_min < config.core_x_max:
+        raise ValueError("core_x_min must be less than core_x_max")
+    if not config.core_y_min < config.core_y_max:
+        raise ValueError("core_y_min must be less than core_y_max")
+    if not config.transition_width > 0.0:
+        raise ValueError("transition_width must be positive")
+    if not config.gmres_tolerance > 0.0:
+        raise ValueError("gmres_tolerance must be positive")
+    if config.gmres_maxiter <= 0:
+        raise ValueError("gmres_maxiter must be positive")
+
     root_min = -config.root_half_extent
     root_max = config.root_half_extent
     support_bounds = (
@@ -1402,6 +1421,7 @@ def _parse_arguments():
     parser.add_argument("--fmm-order-padding", type=int)
     parser.add_argument("--fmm-backend", choices=("sumpy", "fmmlib"))
     parser.add_argument("--wave-number", type=float)
+    parser.add_argument("--incident-angle-degrees", type=float)
     parser.add_argument("--root-half-extent", type=float)
     parser.add_argument("--core-x-min", type=float)
     parser.add_argument("--core-x-max", type=float)
@@ -1451,6 +1471,7 @@ def _config_from_arguments(arguments):
         "fmm_order_padding": arguments.fmm_order_padding,
         "fmm_backend": arguments.fmm_backend,
         "wave_number": arguments.wave_number,
+        "incident_angle_degrees": arguments.incident_angle_degrees,
         "root_half_extent": arguments.root_half_extent,
         "core_x_min": arguments.core_x_min,
         "core_x_max": arguments.core_x_max,

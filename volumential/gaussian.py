@@ -184,8 +184,9 @@ def evaluate_gaussian_laplacian_power(
         coefficients = _laplacian_power_polynomial_coefficients(
             alpha=component.alpha, dim=component.dim, order=order
         )
-        polynomial = np.zeros_like(radius_sq)
-        for coefficient in reversed(coefficients):
+        coefficient_iterator = reversed(coefficients)
+        polynomial = next(coefficient_iterator)
+        for coefficient in coefficient_iterator:
             polynomial = polynomial * radius_sq + coefficient
         result += gaussian * polynomial
     return result
