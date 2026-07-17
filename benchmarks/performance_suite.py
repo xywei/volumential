@@ -3,7 +3,7 @@
 
 This wrapper standardizes the benchmark commands used for scaling, cache,
 parameter, and adaptive timing evidence. Smoke mode is intended for quick local
-or CI checks. Full mode is intended for controlled machines such as ``ipa`` and
+or CI checks. Full mode is intended for a controlled remote compute host and
 should be wrapped by the paper repository's metadata capture tool when results
 are promoted.
 """

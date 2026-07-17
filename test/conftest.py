@@ -36,7 +36,7 @@ from volumential.table_manager import NearFieldInteractionTableManager as NFTMan
 
 
 XFAIL_OPENCL_PLATFORMS = {
-    # Intel OpenCL CPU backend on ipa has been observed to core-dump on
+    # This Intel OpenCL CPU backend has been observed to core-dump on
     # volumential nearfield/FMM test paths; keep this visible as an xfail
     # until upstream/backend stability is confirmed.
     "Intel(R) OpenCL": "known Intel OpenCL backend crash (core dump) on volumential nearfield path",

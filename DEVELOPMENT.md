@@ -41,11 +41,12 @@ dependency resolution.
 
 ## Remote Setup
 
-Use the same environment recipe on remote machines used for heavier numerical
-experiments (for example `ipa`).
+Use the same environment recipe on a suitable, currently idle remote machine for
+heavier numerical experiments. Select the host through the private global
+remote-compute tracker and replace `<remote-host>` below with its SSH alias.
 
 ```bash
-ssh ipa
+ssh <remote-host>
 git clone <repo-url>
 cd volumential
 micromamba create -n volumential-dev -c conda-forge -c nodefaults \

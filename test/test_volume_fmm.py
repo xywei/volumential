@@ -7011,6 +7011,25 @@ def test_volume_fmm_list1_multi_source_superposition():
     assert np.allclose(result, np.array([66.0]))
 
 
+def test_volume_fmm_rejects_mismatched_source_field_counts():
+    from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
+    from volumential.volume_fmm import drive_volume_fmm
+
+    class _MockWrangler(ExpansionWranglerInterface):
+        dtype = np.float64
+
+    traversal = SimpleNamespace(
+        tree=SimpleNamespace(nsources=3, ntargets=3),
+    )
+    src0 = np.array([1.0, 2.0, 3.0], dtype=np.float64)
+    src1 = np.array([10.0, 20.0, 30.0], dtype=np.float64)
+    src_weights = np.empty(2, dtype=object)
+    src_weights[:] = [src0, src1]
+
+    with pytest.raises(ValueError, match="same field count"):
+        drive_volume_fmm(traversal, _MockWrangler(), src_weights, src0)
+
+
 def test_volume_fmm_reorders_src_func_with_source_permutation():
     from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
     from volumential.volume_fmm import drive_volume_fmm
