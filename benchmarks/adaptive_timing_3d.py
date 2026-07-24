@@ -60,6 +60,49 @@ def _indicator(mesh) -> np.ndarray:
     )
 
 
+def _balance_closure(tree_of_boxes, *, max_rounds: int = 10):
+    """Refine the coarse side of any 2:1-violating leaf pair until balanced.
+
+    Unlike MeshGen's public update path, this closure does not refine
+    same-level colleagues, so compact graded cases stay graded.
+    """
+    from boxtree import refine_and_coarsen_tree_of_boxes
+
+    for _ in range(max_rounds):
+        leaf_boxes = np.asarray(tree_of_boxes.leaf_boxes)
+        levels = np.asarray(tree_of_boxes.box_levels)[leaf_boxes]
+        centers = np.asarray(tree_of_boxes.box_centers)[:, leaf_boxes].T
+        sides = float(tree_of_boxes.root_extent) * np.exp2(
+            -levels.astype(np.float64)
+        )
+        refine = np.zeros(len(leaf_boxes), dtype=bool)
+        for i in range(len(leaf_boxes)):
+            touching = np.all(
+                np.abs(centers[i + 1 :] - centers[i])
+                <= 0.5 * (sides[i + 1 :] + sides[i])[:, np.newaxis] + 1.0e-14,
+                axis=1,
+            )
+            if not np.any(touching):
+                continue
+            neighbor_indices = np.nonzero(touching)[0] + i + 1
+            neighbor_levels = levels[neighbor_indices]
+            if np.any(neighbor_levels - levels[i] >= 2):
+                refine[i] = True
+            refine[neighbor_indices[levels[i] - neighbor_levels >= 2]] = True
+
+        if not np.any(refine):
+            return tree_of_boxes
+
+        refine_flags = np.zeros(tree_of_boxes.nboxes, dtype=bool)
+        refine_flags[leaf_boxes[refine]] = True
+        tree_of_boxes = refine_and_coarsen_tree_of_boxes(
+            tree_of_boxes,
+            refine_flags=refine_flags,
+        )
+
+    raise RuntimeError("2:1 balance closure did not converge")
+
+
 def _build_adaptive_geometry(
     ctx, queue, q_order: int, initial_nlevels: int, adapt_steps: int
 ):
@@ -96,6 +139,9 @@ def _build_adaptive_geometry(
             tree_of_boxes,
             refine_flags=refine_flags,
         )
+    # In 3D the innermost indicator shell can leave a transition band thinner
+    # than one box, so close the tree to 2:1 balance before any timing work.
+    mesh.boxtree._tree = _balance_closure(mesh.boxtree._tree)
     adapt_s = time.perf_counter() - start
 
     start = time.perf_counter()
