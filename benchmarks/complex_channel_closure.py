@@ -125,14 +125,18 @@ SMOKE_CASES = (
     ),
 )
 
+# The self-interaction case has interior targets close to the box edge; the
+# resulting thin Duffy fan triangles need high angular orders before the
+# absolute quadrature stabilizes (the closure mismatch itself is
+# order-independent because both paths share one rule).
 FULL_CASES = (
     ClosureCase(
         case_id="logper2d-q4-l0-4",
         dim=2,
         q_order=4,
         max_level=4,
-        regular_quad_order=12,
-        radial_quad_order=41,
+        regular_quad_order=64,
+        radial_quad_order=61,
     ),
 )
 
@@ -550,7 +554,7 @@ def run_case(
         )
 
     if with_quadcheck:
-        bumped_regular = case.regular_quad_order + 8
+        bumped_regular = case.regular_quad_order + 32
         bumped_radial = case.radial_quad_order + 20
         for table_id, kernel_func in channels.items():
             bumped_table, _ = build_channel_table(
