@@ -152,6 +152,11 @@ def _radius(coords):
     return math.sqrt(sum(c * c for c in coords))
 
 
+# At r == 0 the kernels return inf instead of raising, matching the behavior
+# of numpy-lambdified kernels; the Duffy-radial integrand guard then treats
+# the underflowed node as singular-endpoint and drops it.
+
+
 class LogPeriodicKernel:
     """g(r) = r^(-alpha) (1 + eps cos(omega log r))."""
 
@@ -162,6 +167,8 @@ class LogPeriodicKernel:
 
     def __call__(self, *coords):
         r = _radius(coords)
+        if r == 0.0:
+            return math.inf
         return r ** (-self.alpha) * (
             1.0 + self.eps * math.cos(self.omega * math.log(r))
         )
@@ -175,6 +182,8 @@ class PowerKernel:
 
     def __call__(self, *coords):
         r = _radius(coords)
+        if r == 0.0:
+            return math.inf
         return r ** (-self.alpha)
 
 
@@ -187,6 +196,8 @@ class PowerCosLogKernel:
 
     def __call__(self, *coords):
         r = _radius(coords)
+        if r == 0.0:
+            return math.inf
         return r ** (-self.alpha) * math.cos(self.omega * math.log(r))
 
 
@@ -199,6 +210,8 @@ class PowerSinLogKernel:
 
     def __call__(self, *coords):
         r = _radius(coords)
+        if r == 0.0:
+            return math.inf
         return r ** (-self.alpha) * math.sin(self.omega * math.log(r))
 
 
