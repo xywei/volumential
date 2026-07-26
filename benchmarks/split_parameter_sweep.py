@@ -34,6 +34,7 @@ FIELDS = (
     "parameter_name",
     "parameter_value",
     "split_order",
+    "power_log_beta_mode",
     "q_order",
     "nlevels",
     "fmm_order",
@@ -392,6 +393,7 @@ def _build_path(
     split: bool,
     split_order: int,
     split_term_tables=None,
+    split_auto_config=None,
 ):
     from functools import partial
 
@@ -447,6 +449,7 @@ def _build_path(
         self_extra_kwargs=self_extra_kwargs,
         helmholtz_split=split,
         helmholtz_split_order=split_order,
+        helmholtz_split_auto_config=split_auto_config,
         helmholtz_split_term_tables=split_term_tables,
     )
 
@@ -481,6 +484,7 @@ def _run_path(
     split: bool,
     split_order: int,
     split_term_tables=None,
+    split_auto_config=None,
     repeat_count: int,
 ):
     from volumential.volume_fmm import drive_volume_fmm
@@ -500,6 +504,7 @@ def _run_path(
         split=split,
         split_order=split_order,
         split_term_tables=split_term_tables,
+        split_auto_config=split_auto_config,
     )
 
     def solve():
@@ -717,6 +722,7 @@ def _prepare_rke_channels(
     q_points,
     source_values_host,
     cache_dir: Path,
+    split_auto_config=None,
 ):
     cache_path = cache_dir / (
         f"cost-rke-{kernel.lower()}-q{q_order}-p{split_order}.sqlite"
@@ -739,6 +745,7 @@ def _prepare_rke_channels(
             source_values_host=source_values_host,
             split=True,
             split_order=split_order,
+            split_auto_config=split_auto_config,
         )
 
     with _capture_table_get_timings() as warm_records:
@@ -757,6 +764,7 @@ def _prepare_rke_channels(
             source_values_host=source_values_host,
             split=True,
             split_order=split_order,
+            split_auto_config=split_auto_config,
         )
 
     cold = _summarize_table_get_timings(cold_records)
@@ -874,6 +882,7 @@ def _row_from_result(
     parameter_name: str,
     parameter: float,
     split_order: int,
+    power_log_beta_mode: str,
     q_order: int,
     nlevels: int,
     fmm_order: int,
@@ -902,6 +911,7 @@ def _row_from_result(
         "parameter_name": parameter_name,
         "parameter_value": parameter,
         "split_order": split_order,
+        "power_log_beta_mode": power_log_beta_mode,
         "q_order": q_order,
         "nlevels": nlevels,
         "fmm_order": fmm_order,
@@ -963,6 +973,7 @@ def run_benchmark(
     yukawa_lam: list[float],
     direct_levels: list[int],
     repeat_count: int,
+    power_log_beta_mode: str = "p2p",
 ) -> list[dict[str, Any]]:
     import pyopencl as cl
 
@@ -970,6 +981,12 @@ def run_benchmark(
         raise ValueError("repeat_count must be >= 1")
     if nlevels not in direct_levels:
         raise ValueError("direct_levels must include nlevels")
+    if power_log_beta_mode not in {"p2p", "table"}:
+        raise ValueError("power_log_beta_mode must be 'p2p' or 'table'")
+
+    split_auto_config = {
+        "power_log_single_table_beta_mode": power_log_beta_mode,
+    }
 
     benchmark_start = time.perf_counter()
     device = _select_opencl_device(cl, backend)
@@ -1068,6 +1085,7 @@ def run_benchmark(
                 q_points=q_points,
                 source_values_host=representative_case["source_values_host"],
                 cache_dir=cache_dir,
+                split_auto_config=split_auto_config,
             )
 
             split_results = []
@@ -1087,6 +1105,7 @@ def run_benchmark(
                     split=True,
                     split_order=split_order,
                     split_term_tables=split_term_tables,
+                    split_auto_config=split_auto_config,
                     repeat_count=repeat_count,
                 )
                 accounting = split_wrangler.get_helmholtz_split_cache_accounting(
@@ -1120,6 +1139,7 @@ def run_benchmark(
                         parameter_name=parameter_name,
                         parameter=case["parameter"],
                         split_order=split_order,
+                        power_log_beta_mode=power_log_beta_mode,
                         q_order=q_order,
                         nlevels=nlevels,
                         fmm_order=fmm_order,
@@ -1173,6 +1193,11 @@ def main() -> int:
     parser.add_argument("--nlevels", type=int)
     parser.add_argument("--fmm-order", type=int)
     parser.add_argument("--split-orders")
+    parser.add_argument(
+        "--power-log-beta-mode",
+        choices=("p2p", "table"),
+        default="p2p",
+    )
     parser.add_argument("--helmholtz-k")
     parser.add_argument("--yukawa-lambda")
     parser.add_argument(
@@ -1262,6 +1287,7 @@ def main() -> int:
         yukawa_lam=yukawa_lam,
         direct_levels=direct_levels,
         repeat_count=repeat_count,
+        power_log_beta_mode=args.power_log_beta_mode,
     )
     write_csv(args.out, rows)
     return 0

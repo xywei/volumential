@@ -4564,10 +4564,26 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
                 "helmholtz split extra terms are implemented only for 2D/3D"
             )
 
-        return [
+        power_log_keys = [
             _normalize_helmholtz_split_term_key(("power_log", 2 * n))
             for n in range(1, self.helmholtz_split_order)
         ]
+        beta_mode = str(
+            self._helmholtz_split_auto_config.get(
+                "power_log_single_table_beta_mode",
+                "p2p",
+            )
+        ).strip().lower()
+        if beta_mode == "p2p":
+            return power_log_keys
+        if beta_mode == "table":
+            return power_log_keys + [
+                _normalize_helmholtz_split_term_key(("power", 2 * n))
+                for n in range(1, self.helmholtz_split_order)
+            ]
+        raise ValueError(
+            "power_log_single_table_beta_mode must be 'table' or 'p2p'"
+        )
 
     def _helmholtz_split_term_table_request(self, term_key):
         kind, power = _normalize_helmholtz_split_term_key(term_key)

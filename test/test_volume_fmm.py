@@ -299,6 +299,29 @@ def test_autobuild_split_source_levels_uses_base_table_levels():
     assert inferred_levels == [-1]
 
 
+def test_helmholtz_split_table_beta_mode_eagerly_requires_power_tables():
+    from volumential.expansion_wrangler_fpnd import FPNDExpansionWrangler
+
+    wrangler = FPNDExpansionWrangler.__new__(FPNDExpansionWrangler)
+    wrangler.helmholtz_split_order = 3
+
+    wrangler._helmholtz_split_auto_config = {}
+    assert wrangler._helmholtz_split_required_term_keys(2) == [
+        ("power_log", 2),
+        ("power_log", 4),
+    ]
+
+    wrangler._helmholtz_split_auto_config = {
+        "power_log_single_table_beta_mode": "table",
+    }
+    assert wrangler._helmholtz_split_required_term_keys(2) == [
+        ("power_log", 2),
+        ("power_log", 4),
+        ("power", 2),
+        ("power", 4),
+    ]
+
+
 def test_helmholtz_split_cache_accounting_separates_parameter_count():
     from volumential.expansion_wrangler_fpnd import FPNDExpansionWrangler
 

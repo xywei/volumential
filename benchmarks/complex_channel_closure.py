@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import io
 import math
 import time
 from dataclasses import asdict, dataclass
@@ -74,6 +75,8 @@ BUILD_FIELDS = (
     "radial_quad_order",
     "n_jobs",
     "build_wall_s",
+    "warm_payload_load_ms",
+    "serialized_payload_bytes",
     "n_representative_entries",
     "full_entry_count",
     "representative_count",
@@ -398,6 +401,27 @@ def _build_row(
     radial_rule: str,
 ) -> dict[str, Any]:
     diagnostics = table.get_symmetry_reduction_diagnostics()
+    payload = io.BytesIO()
+    np.savez(
+        payload,
+        data=np.asarray(table.data),
+        reduced_entry_ids=np.asarray(table.reduced_entry_ids),
+    )
+    serialized = payload.getvalue()
+    load_times = []
+    loaded_data = None
+    loaded_entry_ids = None
+    for _ in range(5):
+        load_start = time.perf_counter()
+        with np.load(io.BytesIO(serialized)) as loaded:
+            loaded_data = loaded["data"]
+            loaded_entry_ids = loaded["reduced_entry_ids"]
+        load_times.append(time.perf_counter() - load_start)
+    if not np.array_equal(
+            loaded_data, np.asarray(table.data), equal_nan=True):
+        raise AssertionError("serialized table values did not round-trip exactly")
+    if not np.array_equal(loaded_entry_ids, table.reduced_entry_ids):
+        raise AssertionError("serialized entry IDs did not round-trip exactly")
     return {
         "case_id": case.case_id,
         "mode": mode,
@@ -411,6 +435,8 @@ def _build_row(
         "radial_quad_order": case.radial_quad_order,
         "n_jobs": n_jobs,
         "build_wall_s": build_wall_s,
+        "warm_payload_load_ms": 1.0e3 * float(np.median(load_times)),
+        "serialized_payload_bytes": len(serialized),
         "n_representative_entries": int(len(table.reduced_entry_ids)),
         **asdict(diagnostics),
     }
