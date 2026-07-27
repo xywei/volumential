@@ -54,14 +54,16 @@ if str(_BENCH_DIR) not in sys.path:
     sys.path.insert(0, str(_BENCH_DIR))
 
 from split_parameter_sweep import (  # noqa: E402
-    _build_config,
     _build_path,
     _capture_table_get_timings,
     _clear_sqlite_cache,
     _coords_host,
     _get_laplace_2d_table,
     _select_opencl_device,
+    _split_channel_build_config,
+    _split_smooth_quad_order,
     _summarize_table_get_timings,
+    _yukawa_reference_build_config,
 )
 
 STEP_FIELDS = (
@@ -120,6 +122,11 @@ SUMMARY_FIELDS = (
     "n_targets",
     "fmm_order",
     "split_order",
+    "direct_regular_quad_order",
+    "direct_radial_quad_order",
+    "rke_channel_regular_quad_order",
+    "rke_channel_radial_quad_order",
+    "split_smooth_quad_order",
     "alpha",
     "lambda_alpha",
     "initial_profile",
@@ -511,7 +518,8 @@ def _to_device_pair(queue, values_host, weights_dev):
 
 
 def _get_chemo_tables(
-        queue, cache_path, q_order, lambda_alpha, level, root_extent):
+        queue, cache_path, q_order, lambda_alpha, level, root_extent,
+        build_config):
     from volumential.table_manager import NearFieldInteractionTableManager
 
     tables = []
@@ -525,7 +533,7 @@ def _get_chemo_tables(
                 q_order,
                 source_box_level=int(level),
                 queue=queue,
-                build_config=_build_config(q_order),
+                build_config=build_config,
                 lam=float(lambda_alpha),
             )
             tables.append(table)
@@ -533,7 +541,7 @@ def _get_chemo_tables(
 
 
 def _get_direct_yukawa_table_timed(
-        queue, cache_path, q_order, lam, level, root_extent):
+        queue, cache_path, q_order, lam, level, root_extent, build_config):
     from volumential.table_manager import NearFieldInteractionTableManager
 
     with _capture_table_get_timings() as records:
@@ -546,7 +554,7 @@ def _get_direct_yukawa_table_timed(
                 q_order,
                 source_box_level=int(level),
                 queue=queue,
-                build_config=_build_config(q_order),
+                build_config=build_config,
                 lam=float(lam),
             )
     summary = _summarize_table_get_timings(records)
@@ -732,6 +740,16 @@ def run_case(
 
     mass = mass_factor * UNSCREENED_REFERENCE_MASS
     lambda_alpha = math.sqrt(alpha)
+    high_accuracy = mode == "full"
+    direct_build_config = _yukawa_reference_build_config(
+        q_order, high_accuracy=high_accuracy
+    )
+    rke_channel_build_config = _split_channel_build_config(
+        q_order, high_accuracy=high_accuracy
+    )
+    smooth_quad_order = _split_smooth_quad_order(
+        q_order, split_order, high_accuracy=high_accuracy
+    )
     rho = _initial_density(
         coords,
         weights_host,
@@ -760,7 +778,13 @@ def run_case(
 
     print(f"[{case_id}] building fixed-alpha chemoattractant tables", flush=True)
     chemo_tables = _get_chemo_tables(
-        queue, chemo_cache, q_order, lambda_alpha, leaf_level, root_extent
+        queue,
+        chemo_cache,
+        q_order,
+        lambda_alpha,
+        leaf_level,
+        root_extent,
+        direct_build_config,
     )
     chemo_wrangler = _build_chemo_wrangler(
         ctx, queue, traversal, chemo_tables, q_order, fmm_order, lambda_alpha
@@ -774,7 +798,12 @@ def run_case(
         print(f"[{case_id}] building RKE channel family (p={split_order})",
               flush=True)
         channel_start = time.perf_counter()
-        rke_base_table = _get_laplace_2d_table(queue, rke_cache, q_order)
+        rke_base_table = _get_laplace_2d_table(
+            queue,
+            rke_cache,
+            q_order,
+            build_config=rke_channel_build_config,
+        )
         seed_wrangler, _, _ = _build_path(
             ctx=ctx,
             queue=queue,
@@ -789,6 +818,7 @@ def run_case(
             source_values_host=rho,
             split=True,
             split_order=split_order,
+            split_smooth_quad_order=smooth_quad_order,
             split_auto_config={
                 "power_log_single_table_beta_mode": rke_beta_mode,
             },
@@ -923,7 +953,13 @@ def run_case(
             )
             _clear_sqlite_cache(direct_cache)
             table, direct_table_build_s = _get_direct_yukawa_table_timed(
-                queue, direct_cache, q_order, lam, leaf_level, root_extent
+                queue,
+                direct_cache,
+                q_order,
+                lam,
+                leaf_level,
+                root_extent,
+                direct_build_config,
             )
             direct_table_build_total_s += direct_table_build_s
             wrangler_start = time.perf_counter()
@@ -965,6 +1001,7 @@ def run_case(
                 split=True,
                 split_order=split_order,
                 split_term_tables=split_term_tables,
+                split_smooth_quad_order=smooth_quad_order,
                 split_auto_config={
                     "power_log_single_table_beta_mode": rke_beta_mode,
                 },
@@ -1205,6 +1242,19 @@ def run_case(
         "n_targets": n_targets,
         "fmm_order": fmm_order,
         "split_order": split_order,
+        "direct_regular_quad_order": direct_build_config.regular_quad_order,
+        "direct_radial_quad_order": direct_build_config.radial_quad_order,
+        "rke_channel_regular_quad_order": (
+            "" if direct_only
+            else rke_channel_build_config.regular_quad_order
+        ),
+        "rke_channel_radial_quad_order": (
+            "" if direct_only else rke_channel_build_config.radial_quad_order
+        ),
+        "split_smooth_quad_order": (
+            "" if direct_only or smooth_quad_order is None
+            else smooth_quad_order
+        ),
         "alpha": alpha,
         "lambda_alpha": lambda_alpha,
         "initial_profile": initial_profile,

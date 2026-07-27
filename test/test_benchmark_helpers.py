@@ -73,6 +73,66 @@ def test_split_benchmark_validates_direct_call_invariants(
         )
 
 
+def test_split_benchmark_full_yukawa_accuracy_policy():
+    module = _load_benchmark("split_parameter_sweep")
+
+    direct = module._yukawa_reference_build_config(4, high_accuracy=True)
+    channels = module._split_channel_build_config(4, high_accuracy=True)
+
+    assert (direct.regular_quad_order, direct.radial_quad_order) == (80, 320)
+    assert (channels.regular_quad_order, channels.radial_quad_order) == (48, 160)
+    assert module._split_smooth_quad_order(4, 1, high_accuracy=True) == 4
+    assert module._split_smooth_quad_order(4, 2, high_accuracy=True) == 8
+    assert module._split_smooth_quad_order(4, 3, high_accuracy=True) == 8
+    assert module._split_smooth_quad_order(4, 3, high_accuracy=False) == 4
+
+
+def test_split_benchmark_rejects_full_yukawa_order_plateau():
+    module = _load_benchmark("split_parameter_sweep")
+    common = {
+        "mode": "full",
+        "kernel": "Yukawa",
+        "parameter_value": 8.0,
+    }
+
+    module._validate_yukawa_order_convergence([
+        {**common, "split_order": 1, "rel_l2_error": 3.0e-6},
+        {**common, "split_order": 2, "rel_l2_error": 2.0e-11},
+        {**common, "split_order": 3, "rel_l2_error": 7.0e-12},
+    ])
+
+    with pytest.raises(RuntimeError, match="did not improve"):
+        module._validate_yukawa_order_convergence([
+            {**common, "split_order": 1, "rel_l2_error": 1.19446e-5},
+            {**common, "split_order": 2, "rel_l2_error": 1.16870e-5},
+            {**common, "split_order": 3, "rel_l2_error": 1.16778e-5},
+        ])
+
+
+@pytest.mark.full_accuracy
+def test_split_benchmark_full_yukawa_order_convergence(tmp_path):
+    module = _load_benchmark("split_parameter_sweep")
+
+    rows = module.run_benchmark(
+        mode="full",
+        backend="pocl-cpu",
+        cache_dir=tmp_path,
+        q_order=4,
+        nlevels=3,
+        fmm_order=16,
+        split_orders=[1, 2, 3],
+        helmholtz_k=[],
+        yukawa_lam=[2.0],
+        direct_levels=[3],
+        repeat_count=1,
+    )
+    errors = {int(row["split_order"]): row["rel_l2_error"] for row in rows}
+
+    assert errors[2] < 1.0e-3 * errors[1]
+    assert errors[3] < 0.5 * errors[2]
+    assert errors[3] < 1.0e-9
+
+
 def test_keller_segel_critical_profile_is_mass_normalized():
     module = _load_benchmark("keller_segel_continuation")
     axis = np.linspace(-1.0, 1.0, 33)

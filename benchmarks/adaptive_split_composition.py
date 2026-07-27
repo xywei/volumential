@@ -43,12 +43,15 @@ from adaptive_timing import (  # noqa: E402
     _validate_adaptive_diagnostics,
 )
 from split_parameter_sweep import (  # noqa: E402
-    _build_config,
     _build_path,
-    _gaussian_source_host,
+    _clear_sqlite_cache,
     _coords_host,
+    _gaussian_source_host,
     _get_laplace_2d_table,
     _select_opencl_device,
+    _split_channel_build_config,
+    _split_smooth_quad_order,
+    _yukawa_reference_build_config,
 )
 
 
@@ -61,6 +64,11 @@ FIELDS = (
     "adapt_steps",
     "parameter",
     "split_order",
+    "direct_regular_quad_order",
+    "direct_radial_quad_order",
+    "rke_channel_regular_quad_order",
+    "rke_channel_radial_quad_order",
+    "split_smooth_quad_order",
     "n_targets",
     "min_leaf_level",
     "max_leaf_level",
@@ -105,6 +113,7 @@ def _get_yukawa_2d_table_with_timings(
     level: int,
     *,
     tree_root_extent: float,
+    build_config,
 ):
     from volumential.table_manager import NearFieldInteractionTableManager
 
@@ -118,7 +127,7 @@ def _get_yukawa_2d_table_with_timings(
             source_box_level=int(level),
             force_recompute=True,
             queue=queue,
-            build_config=_build_config(q_order),
+            build_config=build_config,
             lam=float(lam),
         )
         timings = dict(table_manager.last_get_table_timings)
@@ -170,20 +179,34 @@ def run_case(
     source_values_host = _gaussian_source_host(_coords_host(queue, q_points))
     tree_root_extent = float(tree.root_extent)
     h_max_leaf = tree_root_extent * 0.5 ** leaf_diagnostics["min_leaf_level"]
+    high_accuracy = mode == "full"
+    direct_build_config = _yukawa_reference_build_config(
+        q_order, high_accuracy=high_accuracy
+    )
+    rke_channel_build_config = _split_channel_build_config(
+        q_order, high_accuracy=high_accuracy
+    )
 
     rows = []
     for split_order in split_orders:
+        smooth_quad_order = _split_smooth_quad_order(
+            q_order, split_order, high_accuracy=high_accuracy
+        )
         # One fixed channel family per retained order; built once, reused for
         # every parameter below.
         rke_cache_path = cache_dir / (
             f"composition-rke-q{q_order}-l{initial_nlevels}-a{adapt_steps}-"
             f"p{split_order}.sqlite"
         )
-        if rke_cache_path.exists():
-            rke_cache_path.unlink()
+        _clear_sqlite_cache(rke_cache_path)
 
         channel_build_start = time.perf_counter()
-        base_table = _get_laplace_2d_table(queue, rke_cache_path, q_order)
+        base_table = _get_laplace_2d_table(
+            queue,
+            rke_cache_path,
+            q_order,
+            build_config=rke_channel_build_config,
+        )
         seed_wrangler, _, _ = _build_path(
             ctx=ctx,
             queue=queue,
@@ -198,6 +221,7 @@ def run_case(
             source_values_host=source_values_host,
             split=True,
             split_order=split_order,
+            split_smooth_quad_order=smooth_quad_order,
         )
         rke_channel_build_s = time.perf_counter() - channel_build_start
         split_term_tables = dict(seed_wrangler.helmholtz_split_term_tables)
@@ -216,8 +240,7 @@ def run_case(
                 f"composition-direct-q{q_order}-l{initial_nlevels}-"
                 f"a{adapt_steps}-lam{parameter:g}.sqlite"
             )
-            if direct_cache_path.exists():
-                direct_cache_path.unlink()
+            _clear_sqlite_cache(direct_cache_path)
 
             direct_tables = []
             direct_build_s = 0.0
@@ -231,6 +254,7 @@ def run_case(
                         parameter,
                         level,
                         tree_root_extent=tree_root_extent,
+                        build_config=direct_build_config,
                     )
                 )
                 direct_tables.append(table)
@@ -271,6 +295,7 @@ def run_case(
                 split=True,
                 split_order=split_order,
                 split_term_tables=split_term_tables,
+                split_smooth_quad_order=smooth_quad_order,
             )
             rke_potential, rke_wall_s = _drive(
                 queue, traversal, rke_wrangler, weighted_sources, source_vals
@@ -302,6 +327,21 @@ def run_case(
                     "adapt_steps": adapt_steps,
                     "parameter": parameter,
                     "split_order": split_order,
+                    "direct_regular_quad_order": (
+                        direct_build_config.regular_quad_order
+                    ),
+                    "direct_radial_quad_order": (
+                        direct_build_config.radial_quad_order
+                    ),
+                    "rke_channel_regular_quad_order": (
+                        rke_channel_build_config.regular_quad_order
+                    ),
+                    "rke_channel_radial_quad_order": (
+                        rke_channel_build_config.radial_quad_order
+                    ),
+                    "split_smooth_quad_order": (
+                        "" if smooth_quad_order is None else smooth_quad_order
+                    ),
                     "n_targets": int(tree.ntargets),
                     **leaf_diagnostics,
                     **list1_diagnostics,

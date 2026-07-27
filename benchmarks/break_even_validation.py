@@ -47,6 +47,9 @@ from split_parameter_sweep import (  # noqa: E402
     _prepare_direct_tables,
     _prepare_rke_channels,
     _select_opencl_device,
+    _split_channel_build_config,
+    _split_smooth_quad_order,
+    _yukawa_reference_build_config,
 )
 
 SOLVE_FIELDS = (
@@ -66,6 +69,11 @@ SUMMARY_FIELDS = (
     "nlevels",
     "fmm_order",
     "split_order",
+    "direct_regular_quad_order",
+    "direct_radial_quad_order",
+    "rke_channel_regular_quad_order",
+    "rke_channel_radial_quad_order",
+    "split_smooth_quad_order",
     "parameter_count",
     "parameters",
     "level_count",
@@ -132,6 +140,16 @@ def run_validation(
     )
     cache_dir.mkdir(parents=True, exist_ok=True)
     source_values_host = _gaussian_source_host(_coords_host(queue, q_points))
+    high_accuracy = mode == "full"
+    direct_build_config = _yukawa_reference_build_config(
+        q_order, high_accuracy=high_accuracy
+    )
+    rke_channel_build_config = _split_channel_build_config(
+        q_order, high_accuracy=high_accuracy
+    )
+    smooth_quad_order = _split_smooth_quad_order(
+        q_order, split_order, high_accuracy=high_accuracy
+    )
 
     # cold phase: eager direct provisioning per parameter
     direct_tables = {}
@@ -145,6 +163,7 @@ def run_validation(
             parameter=parameter,
             direct_levels=direct_levels,
             active_level=nlevels,
+            build_config=direct_build_config,
         )
         direct_tables[parameter] = table
         direct_build_total_s += costs["build_s"]
@@ -167,6 +186,8 @@ def run_validation(
         q_points=q_points,
         source_values_host=source_values_host,
         cache_dir=cache_dir,
+        build_config=rke_channel_build_config,
+        split_smooth_quad_order=smooth_quad_order,
     )
     rke_build_total_s = rke_costs["build_s"]
     print(f"rke cold build (p={split_order}): {rke_build_total_s:.1f} s",
@@ -205,6 +226,7 @@ def run_validation(
             split=True,
             split_order=split_order,
             split_term_tables=split_term_tables,
+            split_smooth_quad_order=smooth_quad_order,
         )
         paths[parameter] = {
             "direct": direct_wrangler,
@@ -319,6 +341,17 @@ def run_validation(
         "nlevels": nlevels,
         "fmm_order": fmm_order,
         "split_order": split_order,
+        "direct_regular_quad_order": direct_build_config.regular_quad_order,
+        "direct_radial_quad_order": direct_build_config.radial_quad_order,
+        "rke_channel_regular_quad_order": (
+            rke_channel_build_config.regular_quad_order
+        ),
+        "rke_channel_radial_quad_order": (
+            rke_channel_build_config.radial_quad_order
+        ),
+        "split_smooth_quad_order": (
+            "" if smooth_quad_order is None else smooth_quad_order
+        ),
         "parameter_count": len(parameters),
         "parameters": ";".join(f"{p:g}" for p in parameters),
         "level_count": len(direct_levels),

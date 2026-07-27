@@ -35,6 +35,11 @@ FIELDS = (
     "parameter_value",
     "split_order",
     "power_log_beta_mode",
+    "direct_regular_quad_order",
+    "direct_radial_quad_order",
+    "rke_channel_regular_quad_order",
+    "rke_channel_radial_quad_order",
+    "split_smooth_quad_order",
     "q_order",
     "nlevels",
     "fmm_order",
@@ -258,8 +263,49 @@ def _build_config(q_order: int):
     )
 
 
+def _yukawa_reference_build_config(q_order: int, *, high_accuracy: bool):
+    if not high_accuracy:
+        return _build_config(q_order)
+
+    from volumential.nearfield_potential_table import DuffyBuildConfig
+
+    # The default scalar Duffy rule under-resolves the 2D Yukawa logarithmic
+    # singularity and can hide split-order convergence behind table noise.
+    return DuffyBuildConfig(
+        radial_rule="tanh-sinh-fast",
+        regular_quad_order=max(80, 20 * q_order),
+        radial_quad_order=max(320, 80 * q_order),
+    )
+
+
+def _split_channel_build_config(q_order: int, *, high_accuracy: bool):
+    if not high_accuracy:
+        return _build_config(q_order)
+
+    from volumential.nearfield_potential_table import DuffyBuildConfig
+
+    # Auto-built log-power channels inherit the canonical Laplace table's rule.
+    return DuffyBuildConfig(
+        radial_rule="tanh-sinh-fast",
+        regular_quad_order=max(32, 12 * q_order),
+        radial_quad_order=max(80, 40 * q_order),
+    )
+
+
+def _split_smooth_quad_order(
+        q_order: int, split_order: int, *, high_accuracy: bool):
+    if split_order <= 1:
+        return q_order
+    return (2 if high_accuracy else 1) * q_order
+
+
 def _get_laplace_2d_table(
-    queue, cache_path: Path, q_order: int, *, force_recompute: bool = False
+    queue,
+    cache_path: Path,
+    q_order: int,
+    *,
+    force_recompute: bool = False,
+    build_config=None,
 ):
     from volumential.table_manager import NearFieldInteractionTableManager
 
@@ -272,7 +318,9 @@ def _get_laplace_2d_table(
             q_order,
             force_recompute=force_recompute,
             queue=queue,
-            build_config=_build_config(q_order),
+            build_config=(
+                _build_config(q_order) if build_config is None else build_config
+            ),
         )
     return table
 
@@ -285,6 +333,7 @@ def _get_yukawa_2d_table(
     level: int,
     *,
     force_recompute: bool = False,
+    build_config=None,
 ):
     from volumential.table_manager import NearFieldInteractionTableManager
 
@@ -298,7 +347,9 @@ def _get_yukawa_2d_table(
             source_box_level=int(level),
             force_recompute=force_recompute,
             queue=queue,
-            build_config=_build_config(q_order),
+            build_config=(
+                _build_config(q_order) if build_config is None else build_config
+            ),
             lam=float(lam),
         )
     return table
@@ -312,6 +363,7 @@ def _build_helmholtz_2d_table(
     level: int,
     *,
     force_recompute: bool = False,
+    build_config=None,
 ):
     from sumpy.kernel import HelmholtzKernel
     from volumential.table_manager import NearFieldInteractionTableManager
@@ -328,7 +380,9 @@ def _build_helmholtz_2d_table(
             source_box_level=int(level),
             force_recompute=force_recompute,
             queue=queue,
-            build_config=_build_config(q_order),
+            build_config=(
+                _build_config(q_order) if build_config is None else build_config
+            ),
             sumpy_knl=kernel,
             **kernel_kwargs,
         )
@@ -394,6 +448,7 @@ def _build_path(
     split_order: int,
     split_term_tables=None,
     split_auto_config=None,
+    split_smooth_quad_order: int | None = None,
 ):
     from functools import partial
 
@@ -449,6 +504,7 @@ def _build_path(
         self_extra_kwargs=self_extra_kwargs,
         helmholtz_split=split,
         helmholtz_split_order=split_order,
+        helmholtz_split_smooth_quad_order=split_smooth_quad_order,
         helmholtz_split_auto_config=split_auto_config,
         helmholtz_split_term_tables=split_term_tables,
     )
@@ -485,6 +541,7 @@ def _run_path(
     split_order: int,
     split_term_tables=None,
     split_auto_config=None,
+    split_smooth_quad_order: int | None = None,
     repeat_count: int,
 ):
     from volumential.volume_fmm import drive_volume_fmm
@@ -505,6 +562,7 @@ def _run_path(
         split_order=split_order,
         split_term_tables=split_term_tables,
         split_auto_config=split_auto_config,
+        split_smooth_quad_order=split_smooth_quad_order,
     )
 
     def solve():
@@ -632,6 +690,7 @@ def _get_direct_table(
     q_order: int,
     parameter: float,
     level: int,
+    build_config=None,
 ):
     if kernel == "Helmholtz":
         return _build_helmholtz_2d_table(
@@ -640,6 +699,7 @@ def _get_direct_table(
             q_order,
             parameter,
             level,
+            build_config=build_config,
         )
     if kernel == "Yukawa":
         return _get_yukawa_2d_table(
@@ -648,6 +708,7 @@ def _get_direct_table(
             q_order,
             parameter,
             level,
+            build_config=build_config,
         )
     raise ValueError(f"unknown kernel: {kernel}")
 
@@ -661,6 +722,7 @@ def _prepare_direct_tables(
     parameter: float,
     direct_levels: list[int],
     active_level: int,
+    build_config=None,
 ):
     parameter_tag = f"{parameter:.17g}".replace("-", "m").replace(".", "p")
     cache_path = cache_dir / (
@@ -677,6 +739,7 @@ def _prepare_direct_tables(
                 q_order=q_order,
                 parameter=parameter,
                 level=level,
+                build_config=build_config,
             )
 
     warm_tables = {}
@@ -689,6 +752,7 @@ def _prepare_direct_tables(
                 q_order=q_order,
                 parameter=parameter,
                 level=level,
+                build_config=build_config,
             )
 
     cold = _summarize_table_get_timings(cold_records)
@@ -723,14 +787,22 @@ def _prepare_rke_channels(
     source_values_host,
     cache_dir: Path,
     split_auto_config=None,
+    build_config=None,
+    split_smooth_quad_order: int | None = None,
+    cache_path: Path | None = None,
+    clear_cache: bool = True,
 ):
-    cache_path = cache_dir / (
-        f"cost-rke-{kernel.lower()}-q{q_order}-p{split_order}.sqlite"
-    )
-    _clear_sqlite_cache(cache_path)
+    if cache_path is None:
+        cache_path = cache_dir / (
+            f"cost-rke-{kernel.lower()}-q{q_order}-p{split_order}.sqlite"
+        )
+    if clear_cache:
+        _clear_sqlite_cache(cache_path)
 
     with _capture_table_get_timings() as cold_records:
-        cold_base_table = _get_laplace_2d_table(queue, cache_path, q_order)
+        cold_base_table = _get_laplace_2d_table(
+            queue, cache_path, q_order, build_config=build_config
+        )
         _build_path(
             ctx=ctx,
             queue=queue,
@@ -746,10 +818,13 @@ def _prepare_rke_channels(
             split=True,
             split_order=split_order,
             split_auto_config=split_auto_config,
+            split_smooth_quad_order=split_smooth_quad_order,
         )
 
     with _capture_table_get_timings() as warm_records:
-        warm_base_table = _get_laplace_2d_table(queue, cache_path, q_order)
+        warm_base_table = _get_laplace_2d_table(
+            queue, cache_path, q_order, build_config=build_config
+        )
         warm_wrangler, _, _ = _build_path(
             ctx=ctx,
             queue=queue,
@@ -765,12 +840,15 @@ def _prepare_rke_channels(
             split=True,
             split_order=split_order,
             split_auto_config=split_auto_config,
+            split_smooth_quad_order=split_smooth_quad_order,
         )
 
     cold = _summarize_table_get_timings(cold_records)
     warm = _summarize_table_get_timings(warm_records)
-    if cold["build_count"] < 1 or cold["build_count"] != warm["load_count"]:
-        raise RuntimeError("RKE cold-build and warm-load channel counts differ")
+    if cold["build_count"] < 1:
+        raise RuntimeError("RKE cold pass did not build a new table")
+    if cold["build_count"] + cold["load_count"] != warm["load_count"]:
+        raise RuntimeError("RKE cold and warm channel request counts differ")
     if warm["build_count"]:
         raise RuntimeError("RKE warm pass unexpectedly rebuilt a channel table")
     return (
@@ -875,6 +953,30 @@ def _split_term_keys(accounting) -> str:
     return ";".join(f"{kind}:{power}" for kind, power in accounting.split_term_keys)
 
 
+def _validate_yukawa_order_convergence(rows: list[dict[str, Any]]) -> None:
+    errors_by_parameter: dict[float, dict[int, float]] = {}
+    for row in rows:
+        if row["mode"] != "full" or row["kernel"] != "Yukawa":
+            continue
+        errors_by_parameter.setdefault(float(row["parameter_value"]), {})[
+            int(row["split_order"])
+        ] = float(row["rel_l2_error"])
+
+    for parameter, errors in errors_by_parameter.items():
+        if 1 in errors and 2 in errors and errors[2] > 1.0e-3 * errors[1]:
+            raise RuntimeError(
+                "full 2D Yukawa RKE p=2 error did not improve by three "
+                f"orders of magnitude at lambda={parameter:g}: "
+                f"p=1 gives {errors[1]:.3e}, p=2 gives {errors[2]:.3e}"
+            )
+        if 2 in errors and 3 in errors and errors[3] > 1.1 * errors[2]:
+            raise RuntimeError(
+                "full 2D Yukawa RKE p=3 error materially degraded from p=2 at "
+                f"lambda={parameter:g}: p=2 gives {errors[2]:.3e}, "
+                f"p=3 gives {errors[3]:.3e}"
+            )
+
+
 def _row_from_result(
     *,
     mode: str,
@@ -883,6 +985,9 @@ def _row_from_result(
     parameter: float,
     split_order: int,
     power_log_beta_mode: str,
+    direct_build_config,
+    rke_channel_build_config,
+    split_smooth_quad_order: int | None,
     q_order: int,
     nlevels: int,
     fmm_order: int,
@@ -912,6 +1017,17 @@ def _row_from_result(
         "parameter_value": parameter,
         "split_order": split_order,
         "power_log_beta_mode": power_log_beta_mode,
+        "direct_regular_quad_order": direct_build_config.regular_quad_order,
+        "direct_radial_quad_order": direct_build_config.radial_quad_order,
+        "rke_channel_regular_quad_order": (
+            rke_channel_build_config.regular_quad_order
+        ),
+        "rke_channel_radial_quad_order": (
+            rke_channel_build_config.radial_quad_order
+        ),
+        "split_smooth_quad_order": (
+            "" if split_smooth_quad_order is None else split_smooth_quad_order
+        ),
         "q_order": q_order,
         "nlevels": nlevels,
         "fmm_order": fmm_order,
@@ -979,6 +1095,8 @@ def run_benchmark(
 
     if repeat_count < 1:
         raise ValueError("repeat_count must be >= 1")
+    if len(set(split_orders)) != len(split_orders):
+        raise ValueError("split_orders must be unique")
     if nlevels not in direct_levels:
         raise ValueError("direct_levels must include nlevels")
     if power_log_beta_mode not in {"p2p", "table"}:
@@ -1009,6 +1127,19 @@ def run_benchmark(
         if not parameters:
             continue
 
+        high_accuracy = mode == "full"
+        direct_build_config = (
+            _yukawa_reference_build_config(
+                q_order, high_accuracy=high_accuracy
+            )
+            if kernel == "Yukawa"
+            else _build_config(q_order)
+        )
+        rke_channel_build_config = (
+            _split_channel_build_config(q_order, high_accuracy=high_accuracy)
+            if kernel == "Yukawa"
+            else _build_config(q_order)
+        )
         parameter_cases = []
         direct_costs = {
             "build_s": 0.0,
@@ -1037,6 +1168,7 @@ def run_benchmark(
                 parameter=parameter,
                 direct_levels=direct_levels,
                 active_level=nlevels,
+                build_config=direct_build_config,
             )
             for key in direct_costs:
                 direct_costs[key] += parameter_direct_costs[key]
@@ -1070,7 +1202,13 @@ def run_benchmark(
             case["reference_timing"]["solve_total_s"] for case in parameter_cases
         )
 
-        for split_order in split_orders:
+        rke_cache_path = cache_dir / f"cost-rke-{kernel.lower()}-q{q_order}.sqlite"
+        cumulative_rke_build_s = 0.0
+        cumulative_rke_quadrature_build_s = 0.0
+        for split_index, split_order in enumerate(sorted(split_orders)):
+            smooth_quad_order = _split_smooth_quad_order(
+                q_order, split_order, high_accuracy=high_accuracy
+            )
             representative_case = parameter_cases[0]
             split_table, split_term_tables, rke_costs = _prepare_rke_channels(
                 ctx=ctx,
@@ -1086,6 +1224,18 @@ def run_benchmark(
                 source_values_host=representative_case["source_values_host"],
                 cache_dir=cache_dir,
                 split_auto_config=split_auto_config,
+                build_config=rke_channel_build_config,
+                split_smooth_quad_order=smooth_quad_order,
+                cache_path=rke_cache_path,
+                clear_cache=split_index == 0,
+            )
+            cumulative_rke_build_s += rke_costs["build_s"]
+            cumulative_rke_quadrature_build_s += rke_costs[
+                "quadrature_build_s"
+            ]
+            rke_costs["build_s"] = cumulative_rke_build_s
+            rke_costs["quadrature_build_s"] = (
+                cumulative_rke_quadrature_build_s
             )
 
             split_results = []
@@ -1106,6 +1256,7 @@ def run_benchmark(
                     split_order=split_order,
                     split_term_tables=split_term_tables,
                     split_auto_config=split_auto_config,
+                    split_smooth_quad_order=smooth_quad_order,
                     repeat_count=repeat_count,
                 )
                 accounting = split_wrangler.get_helmholtz_split_cache_accounting(
@@ -1140,6 +1291,9 @@ def run_benchmark(
                         parameter=case["parameter"],
                         split_order=split_order,
                         power_log_beta_mode=power_log_beta_mode,
+                        direct_build_config=direct_build_config,
+                        rke_channel_build_config=rke_channel_build_config,
+                        split_smooth_quad_order=smooth_quad_order,
                         q_order=q_order,
                         nlevels=nlevels,
                         fmm_order=fmm_order,
@@ -1156,6 +1310,8 @@ def run_benchmark(
                         repeat_count=repeat_count,
                     )
                 )
+
+    _validate_yukawa_order_convergence(rows)
 
     benchmark_total_s = time.perf_counter() - benchmark_start
     for row in rows:
