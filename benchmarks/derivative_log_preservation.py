@@ -352,8 +352,8 @@ def _build_tables(queue, tree, case, cache_dir, path):
         cache_dir
         / f"{case.study}-{path}-q{case.q_order}-l{case.n_levels}.sqlite"
     )
-    if cache_path.exists():
-        cache_path.unlink()
+    for suffix in ("", "-shm", "-wal"):
+        Path(f"{cache_path}{suffix}").unlink(missing_ok=True)
 
     build_config = DuffyBuildConfig(
         radial_rule="tanh-sinh-fast",

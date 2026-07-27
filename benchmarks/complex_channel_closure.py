@@ -393,11 +393,12 @@ def _mismatch_stats(reference, candidate):
     reference_finite = np.isfinite(reference)
     candidate_finite = np.isfinite(candidate)
     finite_mask = reference_finite & candidate_finite
-    if not np.any(reference_finite):
-        return 0, np.nan, np.nan, np.nan
-
-    reference_linf = float(np.max(np.abs(reference[reference_finite])))
-    if np.any(reference_finite & ~candidate_finite):
+    reference_linf = (
+        float(np.max(np.abs(reference[reference_finite])))
+        if np.any(reference_finite)
+        else np.nan
+    )
+    if np.any(~finite_mask):
         return int(np.count_nonzero(finite_mask)), np.inf, np.inf, reference_linf
     if not np.any(finite_mask):
         return 0, np.nan, np.nan, reference_linf

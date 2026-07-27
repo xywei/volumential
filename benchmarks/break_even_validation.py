@@ -124,6 +124,23 @@ def _solve_statistics(solve_rows, strategy):
     return float(np.mean(samples)), float(np.std(samples))
 
 
+def _modeled_break_even(
+    *,
+    parameter_count,
+    direct_build_s,
+    rke_build_s,
+    direct_solve_mean_s,
+    rke_solve_mean_s,
+):
+    setup_advantage = direct_build_s - rke_build_s
+    per_repeat_gap = parameter_count * (
+        rke_solve_mean_s - direct_solve_mean_s
+    )
+    if setup_advantage > 0.0 and per_repeat_gap > 0.0:
+        return setup_advantage / per_repeat_gap
+    return ""
+
+
 def run_validation(
     *,
     mode: str,
@@ -335,11 +352,13 @@ def run_validation(
 
     direct_mean, direct_std = _solve_statistics(solve_rows, "direct")
     rke_mean, rke_std = _solve_statistics(solve_rows, "rke")
-    per_repeat_gap = len(parameters) * (rke_mean - direct_mean)
-    if per_repeat_gap > 0.0:
-        modeled = (direct_build_total_s - rke_build_total_s) / per_repeat_gap
-    else:
-        modeled = ""
+    modeled = _modeled_break_even(
+        parameter_count=len(parameters),
+        direct_build_s=direct_build_total_s,
+        rke_build_s=rke_build_total_s,
+        direct_solve_mean_s=direct_mean,
+        rke_solve_mean_s=rke_mean,
+    )
 
     summary_row = {
         "mode": mode,

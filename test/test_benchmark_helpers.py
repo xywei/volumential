@@ -245,6 +245,14 @@ def test_complex_closure_exposes_nonfinite_candidate_entries():
     assert np.isinf(max_rel)
     assert reference_linf == pytest.approx(2.0)
 
+    count, max_abs, max_rel, reference_linf = module._mismatch_stats(
+        np.array([1.0, np.nan]), np.array([1.0, 2.0])
+    )
+    assert count == 1
+    assert np.isinf(max_abs)
+    assert np.isinf(max_rel)
+    assert reference_linf == pytest.approx(1.0)
+
 
 def test_complex_closure_full_roundoff_gate():
     module = _load_benchmark("complex_channel_closure")
@@ -287,6 +295,27 @@ def test_break_even_statistics_use_individual_solves():
 
     assert module._solve_statistics(rows, "direct") == pytest.approx((2.0, 1.0))
     assert module._solve_statistics(rows, "rke") == pytest.approx((12.0, 2.0))
+
+
+def test_break_even_model_requires_setup_advantage_and_solve_penalty():
+    module = _load_benchmark("break_even_validation")
+    common = {
+        "parameter_count": 3,
+        "direct_solve_mean_s": 1.0,
+        "rke_solve_mean_s": 2.0,
+    }
+
+    assert module._modeled_break_even(
+        **common, direct_build_s=20.0, rke_build_s=5.0
+    ) == pytest.approx(5.0)
+    assert module._modeled_break_even(
+        **common, direct_build_s=5.0, rke_build_s=20.0
+    ) == ""
+    assert module._modeled_break_even(
+        **{**common, "rke_solve_mean_s": 0.5},
+        direct_build_s=20.0,
+        rke_build_s=5.0,
+    ) == ""
 
 
 def test_keller_segel_vectorized_faces_match_boxwise_fluxes():
