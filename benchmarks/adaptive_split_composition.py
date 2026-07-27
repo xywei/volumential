@@ -44,6 +44,7 @@ from adaptive_timing import (  # noqa: E402
 )
 from split_parameter_sweep import (  # noqa: E402
     _build_path,
+    _capture_table_get_timings,
     _clear_sqlite_cache,
     _coords_host,
     _gaussian_source_host,
@@ -51,6 +52,7 @@ from split_parameter_sweep import (  # noqa: E402
     _select_opencl_device,
     _split_channel_build_config,
     _split_smooth_quad_order,
+    _summarize_table_get_timings,
     _yukawa_reference_build_config,
 )
 
@@ -200,30 +202,36 @@ def run_case(
         )
         _clear_sqlite_cache(rke_cache_path)
 
-        channel_build_start = time.perf_counter()
-        base_table = _get_laplace_2d_table(
-            queue,
-            rke_cache_path,
-            q_order,
-            build_config=rke_channel_build_config,
+        with _capture_table_get_timings() as base_records:
+            base_table = _get_laplace_2d_table(
+                queue,
+                rke_cache_path,
+                q_order,
+                build_config=rke_channel_build_config,
+            )
+        with _capture_table_get_timings() as channel_records:
+            seed_wrangler, _, _ = _build_path(
+                ctx=ctx,
+                queue=queue,
+                traversal=traversal,
+                q_order=q_order,
+                fmm_order=fmm_order,
+                kernel="Yukawa",
+                parameter=float(parameters[0]),
+                table=base_table,
+                source_weights=q_weights,
+                q_points=q_points,
+                source_values_host=source_values_host,
+                split=True,
+                split_order=split_order,
+                split_smooth_quad_order=smooth_quad_order,
+            )
+        rke_base_table_build_s = float(
+            _summarize_table_get_timings(base_records)["build_s"]
         )
-        seed_wrangler, _, _ = _build_path(
-            ctx=ctx,
-            queue=queue,
-            traversal=traversal,
-            q_order=q_order,
-            fmm_order=fmm_order,
-            kernel="Yukawa",
-            parameter=float(parameters[0]),
-            table=base_table,
-            source_weights=q_weights,
-            q_points=q_points,
-            source_values_host=source_values_host,
-            split=True,
-            split_order=split_order,
-            split_smooth_quad_order=smooth_quad_order,
+        rke_channel_build_s = float(
+            _summarize_table_get_timings(channel_records)["build_s"]
         )
-        rke_channel_build_s = time.perf_counter() - channel_build_start
         split_term_tables = dict(seed_wrangler.helmholtz_split_term_tables)
         rke_channel_payload_bytes = 0
         for term_tables in split_term_tables.values():
@@ -364,7 +372,7 @@ def run_case(
                     "direct_table_count": len(direct_tables),
                     "direct_table_build_s": direct_build_s,
                     "direct_table_payload_bytes": direct_payload_bytes,
-                    "rke_base_table_build_s": rke_channel_build_s,
+                    "rke_base_table_build_s": rke_base_table_build_s,
                     "rke_channel_table_count": len(split_term_tables),
                     "rke_channel_table_build_s": rke_channel_build_s,
                     "rke_channel_table_payload_bytes": (

@@ -81,6 +81,30 @@ python benchmarks/adaptive_timing.py --mode smoke --out build/benchmarks/adaptiv
 
 The benchmark runs 2D Laplace evaluations on deterministically adapted meshes and writes one cold-cache and one warm-cache row per case. Rows report mesh/adaptation setup, geometry construction, table build or load, FMM wall time, and the timing categories exposed by `drive_volume_fmm`. Full paper runs should be wrapped with the paper repository metadata tool before their CSVs are promoted to manuscript data.
 
+## Paper 1 Mechanism And Application Drivers
+
+The following evidence drivers have structured outputs or campaign-specific
+acceptance gates and are intentionally not part of `performance_suite.py`:
+
+```bash
+python benchmarks/adaptive_timing_3d.py --mode smoke
+python benchmarks/rke_field_demo_3d.py --mode smoke --force-recompute
+python benchmarks/complex_channel_closure.py --mode smoke
+python benchmarks/complex_bessel_parameterized.py --mode smoke
+python benchmarks/derivative_log_preservation.py --mode smoke
+python benchmarks/adaptive_split_composition.py --mode smoke
+python benchmarks/break_even_validation.py --mode smoke
+python benchmarks/keller_segel_continuation.py --mode smoke
+```
+
+The 3D field driver's full mode always clears its direct and RKE caches, uses
+separate higher-order direct-reference and channel-table quadrature policies,
+raises the smooth-remainder order above retained order one, and rejects a
+nonconvergent `p=1,2,3` path comparison. Its CSV records the effective orders,
+and its emitted JSON uses infrastructure-sanitized paths and host labels. Wrap
+full runs with the paper metadata tool to retain the private raw environment
+record separately.
+
 ## DMK Effective-Density Diagnostic
 
 ```bash

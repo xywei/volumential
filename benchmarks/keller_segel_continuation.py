@@ -581,10 +581,17 @@ def _plan_time_step(remaining, dt_cap, dt_floor, ladder_ratio):
     if remaining <= dt_cap + tolerance:
         return remaining, True, False
 
+    def equal_step_endpoint_plan():
+        endpoint_steps = max(2, math.ceil((remaining - tolerance) / dt_cap))
+        endpoint_dt = remaining / endpoint_steps
+        if dt_floor - tolerance <= endpoint_dt <= dt_cap + tolerance:
+            return endpoint_dt, False, True
+        return None
+
     lam = _ladder_lambda(1.0 / math.sqrt(dt_cap), ladder_ratio)
     ladder_dt = 1.0 / lam**2
     if ladder_dt < dt_floor - tolerance:
-        return None
+        return equal_step_endpoint_plan()
 
     remainder = remaining - ladder_dt
     remainder_steps = max(1, math.ceil((remainder - tolerance) / dt_cap))
@@ -594,11 +601,7 @@ def _plan_time_step(remaining, dt_cap, dt_floor, ladder_ratio):
     # A regular ladder step would strand an interval that cannot be covered by
     # steps satisfying both the CFL cap and theta floor. Use the smallest
     # equal-step endpoint plan admissible under the current cap.
-    endpoint_steps = max(2, math.ceil((remaining - tolerance) / dt_cap))
-    endpoint_dt = remaining / endpoint_steps
-    if dt_floor - tolerance <= endpoint_dt <= dt_cap + tolerance:
-        return endpoint_dt, False, True
-    return None
+    return equal_step_endpoint_plan()
 
 
 def _radial_gradient_diagnostics(coords, weights, rho, gradient_x, gradient_y):

@@ -52,6 +52,11 @@ SUMMARY_FIELDS = (
     "q_order",
     "nlevels",
     "fmm_order",
+    "direct_regular_quad_order",
+    "direct_radial_quad_order",
+    "rke_channel_regular_quad_order",
+    "rke_channel_radial_quad_order",
+    "split_smooth_quad_order",
     "root_extent",
     "n_targets",
     "n_boxes",
@@ -72,18 +77,43 @@ SUMMARY_FIELDS = (
 )
 
 
-def _build_config(q_order: int):
+def _build_config(regular_quad_order: int, radial_quad_order: int):
     from volumential.nearfield_potential_table import DuffyBuildConfig
 
     return DuffyBuildConfig(
         radial_rule="tanh-sinh-fast",
-        regular_quad_order=max(8, 4 * q_order),
-        radial_quad_order=max(21, 10 * q_order),
+        regular_quad_order=regular_quad_order,
+        radial_quad_order=radial_quad_order,
     )
 
 
+def _field_build_configs(q_order: int, *, high_accuracy: bool):
+    if high_accuracy:
+        direct = _build_config(max(16, 4 * q_order), max(45, 12 * q_order))
+        channels = _build_config(
+            max(12, 4 * q_order), max(35, 10 * q_order)
+        )
+        return direct, channels
+
+    default = _build_config(max(8, 4 * q_order), max(21, 10 * q_order))
+    return default, default
+
+
+def _field_smooth_quad_order(
+    q_order: int, split_order: int, *, high_accuracy: bool
+) -> int:
+    if high_accuracy and split_order > 1:
+        return 2 * q_order
+    return q_order
+
+
 def _get_laplace_3d_table(
-    queue, cache_path: Path, q_order: int, *, force_recompute: bool = False
+    queue,
+    cache_path: Path,
+    q_order: int,
+    *,
+    build_config,
+    force_recompute: bool = False,
 ):
     from volumential.table_manager import NearFieldInteractionTableManager
 
@@ -97,7 +127,7 @@ def _get_laplace_3d_table(
             q_order,
             force_recompute=force_recompute,
             queue=queue,
-            build_config=_build_config(q_order),
+            build_config=build_config,
         )
     return table
 
@@ -109,6 +139,7 @@ def _get_yukawa_3d_table(
     lam: float,
     level: int,
     *,
+    build_config,
     force_recompute: bool = False,
 ):
     from volumential.table_manager import NearFieldInteractionTableManager
@@ -124,7 +155,7 @@ def _get_yukawa_3d_table(
             source_box_level=int(level),
             force_recompute=force_recompute,
             queue=queue,
-            build_config=_build_config(q_order),
+            build_config=build_config,
             lam=float(lam),
         )
     return table
@@ -163,6 +194,7 @@ def _build_path(
     split: bool,
     split_order: int,
     split_term_tables=None,
+    split_smooth_quad_order=None,
 ):
     from functools import partial
 
@@ -215,6 +247,7 @@ def _build_path(
         helmholtz_split=split,
         helmholtz_split_order=split_order,
         helmholtz_split_term_tables=split_term_tables,
+        helmholtz_split_smooth_quad_order=split_smooth_quad_order,
     )
 
     return wrangler, weighted_sources, source_vals
@@ -234,6 +267,7 @@ def _run_path(
     split: bool,
     split_order: int,
     split_term_tables=None,
+    split_smooth_quad_order=None,
 ):
     from volumential.volume_fmm import drive_volume_fmm
 
@@ -250,6 +284,7 @@ def _run_path(
         split=split,
         split_order=split_order,
         split_term_tables=split_term_tables,
+        split_smooth_quad_order=split_smooth_quad_order,
     )
 
     def solve():
@@ -279,6 +314,7 @@ def _prepare_direct_table(
     q_order: int,
     lam: float,
     level: int,
+    build_config,
     force_recompute: bool,
 ):
     lam_tag = f"{lam:.17g}".replace("-", "m").replace(".", "p")
@@ -289,9 +325,13 @@ def _prepare_direct_table(
         _clear_sqlite_cache(cache_path)
 
     with _capture_table_get_timings() as cold_records:
-        _get_yukawa_3d_table(queue, cache_path, q_order, lam, level)
+        _get_yukawa_3d_table(
+            queue, cache_path, q_order, lam, level, build_config=build_config
+        )
     with _capture_table_get_timings() as warm_records:
-        table = _get_yukawa_3d_table(queue, cache_path, q_order, lam, level)
+        table = _get_yukawa_3d_table(
+            queue, cache_path, q_order, lam, level, build_config=build_config
+        )
 
     cold = _summarize_table_get_timings(cold_records)
     warm = _summarize_table_get_timings(warm_records)
@@ -316,6 +356,8 @@ def _prepare_rke_channels(
     source_weights,
     source_values_host,
     cache_dir: Path,
+    build_config,
+    split_smooth_quad_order: int,
     force_recompute: bool,
 ):
     cache_path = cache_dir / f"field-rke-yukawa3d-q{q_order}-p{split_order}.sqlite"
@@ -323,7 +365,9 @@ def _prepare_rke_channels(
         _clear_sqlite_cache(cache_path)
 
     with _capture_table_get_timings() as cold_records:
-        cold_base_table = _get_laplace_3d_table(queue, cache_path, q_order)
+        cold_base_table = _get_laplace_3d_table(
+            queue, cache_path, q_order, build_config=build_config
+        )
         _build_path(
             ctx=ctx,
             queue=queue,
@@ -336,10 +380,13 @@ def _prepare_rke_channels(
             source_values_host=source_values_host,
             split=True,
             split_order=split_order,
+            split_smooth_quad_order=split_smooth_quad_order,
         )
 
     with _capture_table_get_timings() as warm_records:
-        warm_base_table = _get_laplace_3d_table(queue, cache_path, q_order)
+        warm_base_table = _get_laplace_3d_table(
+            queue, cache_path, q_order, build_config=build_config
+        )
         warm_wrangler, _, _ = _build_path(
             ctx=ctx,
             queue=queue,
@@ -352,6 +399,7 @@ def _prepare_rke_channels(
             source_values_host=source_values_host,
             split=True,
             split_order=split_order,
+            split_smooth_quad_order=split_smooth_quad_order,
         )
 
     cold = _summarize_table_get_timings(cold_records)
@@ -397,6 +445,46 @@ def _lam_tag(lam: float) -> str:
     return f"{lam:.12g}".replace("-", "m").replace(".", "p")
 
 
+def _validate_full_order_convergence(rows: list[dict[str, Any]]) -> None:
+    parameters = sorted({float(row["parameter"]) for row in rows})
+    for parameter in parameters:
+        errors = {
+            int(row["split_order"]): float(row["split_vs_direct_weighted_rel_l2"])
+            for row in rows
+            if float(row["parameter"]) == parameter
+        }
+        if not {1, 2, 3}.issubset(errors):
+            continue
+        if not (
+            errors[2] < 1.0e-2 * errors[1]
+            and errors[3] < 0.5 * errors[2]
+            and errors[3] < 1.0e-8
+        ):
+            raise RuntimeError(
+                "full 3D Yukawa field sweep did not converge with split order "
+                f"at lambda={parameter:g}: {errors}"
+            )
+
+
+def _public_path(path: Path) -> str:
+    path = Path(path)
+    try:
+        return str(path.resolve().relative_to(Path.cwd().resolve()))
+    except ValueError:
+        return path.name
+
+
+def _public_argv(argv: list[str]) -> list[str]:
+    result = []
+    for token in argv:
+        option, separator, value = token.partition("=")
+        candidate = value if separator else token
+        if Path(candidate).is_absolute():
+            candidate = _public_path(Path(candidate))
+        result.append(option + separator + candidate if separator else candidate)
+    return result
+
+
 def run_benchmark(
     *,
     mode: str,
@@ -409,6 +497,11 @@ def run_benchmark(
     split_orders: list[int],
     force_recompute: bool,
 ) -> dict[str, Any]:
+    high_accuracy = mode == "full"
+    force_recompute = bool(force_recompute or high_accuracy)
+    direct_build_config, rke_channel_build_config = _field_build_configs(
+        q_order, high_accuracy=high_accuracy
+    )
     device = _select_opencl_device(cl, backend)
     ctx = cl.Context([device])
     queue = cl.CommandQueue(ctx)
@@ -440,6 +533,7 @@ def run_benchmark(
             q_order=q_order,
             lam=lam,
             level=nlevels,
+            build_config=direct_build_config,
             force_recompute=force_recompute,
         )
         direct_potential, direct_wall_s, _ = _run_path(
@@ -462,6 +556,9 @@ def run_benchmark(
 
     for split_order in split_orders:
         representative_lam = yukawa_lam[0]
+        split_smooth_quad_order = _field_smooth_quad_order(
+            q_order, split_order, high_accuracy=high_accuracy
+        )
         split_table, split_term_tables, rke_costs = _prepare_rke_channels(
             ctx=ctx,
             queue=queue,
@@ -473,6 +570,8 @@ def run_benchmark(
             source_weights=q_weights,
             source_values_host=source_values_host,
             cache_dir=cache_dir,
+            build_config=rke_channel_build_config,
+            split_smooth_quad_order=split_smooth_quad_order,
             force_recompute=force_recompute,
         )
 
@@ -491,6 +590,7 @@ def run_benchmark(
                 split=True,
                 split_order=split_order,
                 split_term_tables=split_term_tables,
+                split_smooth_quad_order=split_smooth_quad_order,
             )
 
             difference = split_potential - direct_potential
@@ -526,6 +626,19 @@ def run_benchmark(
                 "q_order": q_order,
                 "nlevels": nlevels,
                 "fmm_order": fmm_order,
+                "direct_regular_quad_order": (
+                    direct_build_config.regular_quad_order
+                ),
+                "direct_radial_quad_order": (
+                    direct_build_config.radial_quad_order
+                ),
+                "rke_channel_regular_quad_order": (
+                    rke_channel_build_config.regular_quad_order
+                ),
+                "rke_channel_radial_quad_order": (
+                    rke_channel_build_config.radial_quad_order
+                ),
+                "split_smooth_quad_order": split_smooth_quad_order,
                 "root_extent": 1.0,
                 "n_targets": int(tree.ntargets),
                 "n_boxes": int(mesh.n_active_cells()),
@@ -567,6 +680,9 @@ def run_benchmark(
                 }
             )
 
+    if high_accuracy:
+        _validate_full_order_convergence(rows)
+
     node_slice = nearest_axis_slice(coords.T, slice_fields, axis=2, value=0.0)
     arrays["slice_node_coords"] = node_slice["coords"]
     arrays["slice_node_indices"] = node_slice["indices"]
@@ -595,6 +711,26 @@ def run_benchmark(
                 float(lam) * leaf_side for lam in yukawa_lam
             ],
             "split_orders": [int(p) for p in split_orders],
+            "quadrature": {
+                "direct_regular_quad_order": (
+                    direct_build_config.regular_quad_order
+                ),
+                "direct_radial_quad_order": (
+                    direct_build_config.radial_quad_order
+                ),
+                "rke_channel_regular_quad_order": (
+                    rke_channel_build_config.regular_quad_order
+                ),
+                "rke_channel_radial_quad_order": (
+                    rke_channel_build_config.radial_quad_order
+                ),
+                "split_smooth_quad_order_by_retained_order": {
+                    str(split_order): _field_smooth_quad_order(
+                        q_order, split_order, high_accuracy=high_accuracy
+                    )
+                    for split_order in split_orders
+                },
+            },
         },
         "tree": {
             "n_targets": int(tree.ntargets),
@@ -611,13 +747,13 @@ def run_benchmark(
         },
         "cases": case_metadata,
         "cache": {
-            "cache_dir": str(cache_dir),
+            "cache_dir": _public_path(cache_dir),
             "force_recompute": force_recompute,
         },
         "environment": {
-            "hostname": platform.node(),
+            "hostname": "remote-compute-host",
             "python": platform.python_version(),
-            "platform": platform.platform(),
+            "platform": platform.system(),
             "opencl_device": _device_metadata(device),
         },
         "volumential": {
@@ -708,13 +844,13 @@ def main() -> int:
     )
     metadata = result["metadata"]
     metadata["command"] = {
-        "argv": sys.argv,
-        "cwd": str(Path.cwd()),
+        "argv": _public_argv(sys.argv),
+        "cwd": ".",
     }
     metadata["outputs"] = {
-        "summary_csv": str(args.out),
-        "arrays_npz": str(args.arrays_out),
-        "metadata_json": str(args.metadata_out),
+        "summary_csv": _public_path(args.out),
+        "arrays_npz": _public_path(args.arrays_out),
+        "metadata_json": _public_path(args.metadata_out),
     }
     write_csv(args.out, result["rows"])
     write_npz(args.arrays_out, **result["arrays"])

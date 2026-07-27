@@ -2790,18 +2790,25 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
                 )
 
             if self.helmholtz_split_order > 1:
+                # Power-table beta corrections are needed only after a power-log
+                # family resolves to one canonical table. Discover requirements
+                # again after auto-building the primary power-log families.
+                for _ in range(2):
+                    required_term_keys = set(
+                        self._helmholtz_split_required_term_keys(base_knl.dim)
+                    )
+                    missing_term_keys = sorted(
+                        required_term_keys - set(self.helmholtz_split_term_tables),
+                    )
+                    if not missing_term_keys:
+                        break
+                    self._autobuild_helmholtz_split_term_tables(
+                        out_knl, missing_term_keys
+                    )
+
                 required_term_keys = set(
                     self._helmholtz_split_required_term_keys(base_knl.dim)
                 )
-                missing_term_keys = sorted(
-                    required_term_keys - set(self.helmholtz_split_term_tables),
-                )
-                if missing_term_keys:
-                    self._autobuild_helmholtz_split_term_tables(
-                        out_knl,
-                        missing_term_keys,
-                    )
-
                 missing_term_keys = sorted(
                     required_term_keys - set(self.helmholtz_split_term_tables),
                 )
@@ -4577,10 +4584,15 @@ class FPNDSumpyExpansionWrangler(ExpansionWranglerInterface, SumpyExpansionWrang
         if beta_mode == "p2p":
             return power_log_keys
         if beta_mode == "table":
-            return power_log_keys + [
-                _normalize_helmholtz_split_term_key(("power", 2 * n))
-                for n in range(1, self.helmholtz_split_order)
-            ]
+            required_keys = list(power_log_keys)
+            term_tables = getattr(self, "helmholtz_split_term_tables", {})
+            for power_log_key in power_log_keys:
+                if len(term_tables.get(power_log_key, ())) == 1:
+                    _, power = power_log_key
+                    required_keys.append(
+                        _normalize_helmholtz_split_term_key(("power", power))
+                    )
+            return required_keys
         raise ValueError(
             "power_log_single_table_beta_mode must be 'table' or 'p2p'"
         )

@@ -314,11 +314,24 @@ def test_helmholtz_split_table_beta_mode_eagerly_requires_power_tables():
     wrangler._helmholtz_split_auto_config = {
         "power_log_single_table_beta_mode": "table",
     }
+    wrangler.helmholtz_split_term_tables = {
+        ("power_log", 2): [object()],
+        ("power_log", 4): [object()],
+    }
     assert wrangler._helmholtz_split_required_term_keys(2) == [
         ("power_log", 2),
         ("power_log", 4),
         ("power", 2),
         ("power", 4),
+    ]
+
+    wrangler.helmholtz_split_term_tables = {
+        ("power_log", 2): [object(), object()],
+        ("power_log", 4): [object(), object()],
+    }
+    assert wrangler._helmholtz_split_required_term_keys(2) == [
+        ("power_log", 2),
+        ("power_log", 4),
     ]
 
 
@@ -7459,16 +7472,18 @@ def test_volume_fmm_rejects_multi_source_full_sumpy_path(monkeypatch):
         )
 
 
-def test_volume_fmm_direct_eval_accepts_fmmlib_plain_arrays(monkeypatch):
+@pytest.mark.parametrize("noutputs", [1, 2])
+def test_volume_fmm_direct_eval_accepts_fmmlib_plain_arrays(monkeypatch, noutputs):
     from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
     import volumential.volume_fmm as volume_fmm
 
     class _DummyP2P:
-        def __init__(self, *args, **kwargs):
-            pass
+        def __init__(self, target_kernels, *args, **kwargs):
+            self.nresults = len(target_kernels)
 
         def __call__(self, setup_actx, targets, sources, strengths, **kwargs):
-            return (np.array([4.0, 5.0, 6.0, 7.0], dtype=np.float64),)
+            base = np.array([4.0, 5.0, 6.0, 7.0], dtype=np.float64)
+            return tuple(base + i for i in range(self.nresults))
 
     class _MockFMMLibWrangler(ExpansionWranglerInterface):
         dtype = np.float64
@@ -7477,7 +7492,7 @@ def test_volume_fmm_direct_eval_accepts_fmmlib_plain_arrays(monkeypatch):
             queue = object()
             self.queue = queue
             self.tree_indep = SimpleNamespace(
-                target_kernels=(object(),),
+                target_kernels=tuple(object() for _ in range(noutputs)),
                 exclude_self=False,
                 _setup_actx=SimpleNamespace(queue=queue),
             )
@@ -7611,7 +7626,13 @@ def test_volume_fmm_direct_eval_accepts_fmmlib_plain_arrays(monkeypatch):
         reorder_potentials=False,
     )
 
-    assert np.allclose(result, np.array([4.0, 5.0, 6.0, 7.0], dtype=np.float64))
+    expected = np.array([4.0, 5.0, 6.0, 7.0], dtype=np.float64)
+    if noutputs == 1:
+        assert np.allclose(result, expected)
+    else:
+        assert len(result) == 2
+        assert np.allclose(result[0], expected)
+        assert np.allclose(result[1], expected + 1.0)
 
 
 # {{{ make sure context getter works

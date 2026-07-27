@@ -19,6 +19,20 @@ def _load_benchmark(name):
     return module
 
 
+@pytest.mark.parametrize("name", [
+    "adaptive_split_composition",
+    "adaptive_timing_3d",
+    "break_even_validation",
+    "complex_bessel_parameterized",
+    "complex_channel_closure",
+    "derivative_log_preservation",
+    "keller_segel_continuation",
+    "rke_field_demo_3d",
+])
+def test_paper1_benchmark_module_imports(name):
+    _load_benchmark(name)
+
+
 def _accuracy_row(*, q_order, fmm_order, error):
     return {
         "path": "canonical_rescaled",
@@ -109,6 +123,70 @@ def test_split_benchmark_rejects_full_yukawa_order_plateau():
         ])
 
 
+def test_rke_field_demo_full_accuracy_policy():
+    module = _load_benchmark("rke_field_demo_3d")
+    direct, channels = module._field_build_configs(3, high_accuracy=True)
+
+    assert (direct.regular_quad_order, direct.radial_quad_order) == (16, 45)
+    assert (channels.regular_quad_order, channels.radial_quad_order) == (12, 35)
+    assert module._field_smooth_quad_order(3, 1, high_accuracy=True) == 3
+    assert module._field_smooth_quad_order(3, 2, high_accuracy=True) == 6
+
+
+def test_rke_field_demo_rejects_full_order_plateau():
+    module = _load_benchmark("rke_field_demo_3d")
+    common = {"parameter": 4.0}
+    module._validate_full_order_convergence([
+        {
+            **common,
+            "split_order": 1,
+            "split_vs_direct_weighted_rel_l2": 1.0e-3,
+        },
+        {
+            **common,
+            "split_order": 2,
+            "split_vs_direct_weighted_rel_l2": 1.0e-7,
+        },
+        {
+            **common,
+            "split_order": 3,
+            "split_vs_direct_weighted_rel_l2": 1.0e-10,
+        },
+    ])
+
+    with pytest.raises(RuntimeError, match="did not converge"):
+        module._validate_full_order_convergence([
+            {
+                **common,
+                "split_order": 1,
+                "split_vs_direct_weighted_rel_l2": 1.0e-3,
+            },
+            {
+                **common,
+                "split_order": 2,
+                "split_vs_direct_weighted_rel_l2": 9.0e-4,
+            },
+            {
+                **common,
+                "split_order": 3,
+                "split_vs_direct_weighted_rel_l2": 8.0e-4,
+            },
+        ])
+
+
+def test_rke_field_demo_metadata_paths_are_sanitized(tmp_path, monkeypatch):
+    module = _load_benchmark("rke_field_demo_3d")
+    monkeypatch.chdir(tmp_path)
+    output = tmp_path / "results" / "field.csv"
+
+    assert module._public_path(output) == "results/field.csv"
+    assert module._public_path(Path("/external/private/cache")) == "cache"
+    assert module._public_argv(["driver.py", f"--out={output}"]) == [
+        "driver.py",
+        "--out=results/field.csv",
+    ]
+
+
 @pytest.mark.full_accuracy
 def test_split_benchmark_full_yukawa_order_convergence(tmp_path):
     module = _load_benchmark("split_parameter_sweep")
@@ -176,5 +254,8 @@ def test_keller_segel_endpoint_planner_avoids_short_terminal_step():
     assert adaptive_endpoint == pytest.approx(
         (0.000775871 / 2.0, False, True)
     )
+
+    quantized_below_floor = module._plan_time_step(0.003, 0.0012, 0.001, 2.0)
+    assert quantized_below_floor == pytest.approx((0.001, False, True))
 
     assert module._plan_time_step(0.0015, 0.0012, 0.001, 2.0) is None
