@@ -81,11 +81,11 @@ jobs:
 
           build_docs
 
-  full_accuracy_collection:
+  full_accuracy:
     name: Full Accuracy Tests
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@v5
       - uses: mamba-org/setup-micromamba@v2
@@ -113,8 +113,10 @@ jobs:
             test/test_volume_fmm.py \
             test/test_benchmark_helpers.py
 
-          pytest -vv --full-accuracy \
-            test/test_benchmark_helpers.py::test_split_benchmark_full_yukawa_order_convergence
+          pytest -vv -m full_accuracy --full-accuracy \
+            test/test_duffy_full_accuracy.py \
+            test/test_volume_fmm.py \
+            test/test_benchmark_helpers.py
 
   examples:
     name: Examples

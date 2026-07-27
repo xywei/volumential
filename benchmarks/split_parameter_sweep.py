@@ -205,6 +205,10 @@ def _summarize_table_get_timings(records: list[dict[str, Any]]) -> dict[str, Any
             sum((record.get("load") or {}).get("payload_bytes", 0)
                 for record in load_records)
         ),
+        "build_cache_payload_bytes": int(
+            sum((record.get("compute") or {}).get("payload_bytes", 0)
+                for record in build_records)
+        ),
         "build_count": len(build_records),
         "load_count": len(load_records),
     }

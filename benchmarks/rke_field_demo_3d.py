@@ -479,7 +479,8 @@ def _public_argv(argv: list[str]) -> list[str]:
     for token in argv:
         option, separator, value = token.partition("=")
         candidate = value if separator else token
-        if Path(candidate).is_absolute():
+        candidate_path = Path(candidate)
+        if candidate_path.is_absolute() or ".." in candidate_path.parts:
             candidate = _public_path(Path(candidate))
         result.append(option + separator + candidate if separator else candidate)
     return result
@@ -502,6 +503,8 @@ def run_benchmark(
     direct_build_config, rke_channel_build_config = _field_build_configs(
         q_order, high_accuracy=high_accuracy
     )
+    if high_accuracy and not {1, 2, 3}.issubset(split_orders):
+        raise ValueError("full mode requires split orders 1, 2, and 3")
     device = _select_opencl_device(cl, backend)
     ctx = cl.Context([device])
     queue = cl.CommandQueue(ctx)

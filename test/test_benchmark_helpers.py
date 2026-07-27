@@ -14,8 +14,13 @@ def _load_benchmark(name):
     spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    previous_sys_path = list(sys.path)
+    sys.path.insert(0, str(path.parent))
+    try:
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+    finally:
+        sys.path[:] = previous_sys_path
     return module
 
 
@@ -133,6 +138,23 @@ def test_rke_field_demo_full_accuracy_policy():
     assert module._field_smooth_quad_order(3, 2, high_accuracy=True) == 6
 
 
+def test_rke_field_demo_full_mode_requires_convergence_orders(tmp_path):
+    module = _load_benchmark("rke_field_demo_3d")
+
+    with pytest.raises(ValueError, match="requires split orders 1, 2, and 3"):
+        module.run_benchmark(
+            mode="full",
+            backend="pocl-cpu",
+            cache_dir=tmp_path,
+            q_order=3,
+            nlevels=4,
+            fmm_order=12,
+            yukawa_lam=[4.0],
+            split_orders=[1, 2],
+            force_recompute=True,
+        )
+
+
 def test_rke_field_demo_rejects_full_order_plateau():
     module = _load_benchmark("rke_field_demo_3d")
     common = {"parameter": 4.0}
@@ -185,6 +207,31 @@ def test_rke_field_demo_metadata_paths_are_sanitized(tmp_path, monkeypatch):
         "driver.py",
         "--out=results/field.csv",
     ]
+    assert module._public_argv(["driver.py", "--out=../private/field.csv"]) == [
+        "driver.py",
+        "--out=field.csv",
+    ]
+
+
+def test_table_timing_summary_includes_built_cache_payload():
+    module = _load_benchmark("split_parameter_sweep")
+    summary = module._summarize_table_get_timings([
+        {
+            "is_recomputed": True,
+            "total_s": 3.0,
+            "compute": {"table_build_s": 2.0, "payload_bytes": 128},
+        },
+        {
+            "is_recomputed": False,
+            "total_s": 0.5,
+            "load": {"payload_bytes": 128},
+        },
+    ])
+
+    assert summary["build_s"] == pytest.approx(3.0)
+    assert summary["quadrature_build_s"] == pytest.approx(2.0)
+    assert summary["build_cache_payload_bytes"] == 128
+    assert summary["cache_payload_bytes"] == 128
 
 
 @pytest.mark.full_accuracy

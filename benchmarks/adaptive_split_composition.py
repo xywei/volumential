@@ -91,9 +91,11 @@ FIELDS = (
     "direct_table_build_s",
     "direct_table_payload_bytes",
     "rke_base_table_build_s",
+    "rke_base_table_payload_bytes",
     "rke_channel_table_count",
     "rke_channel_table_build_s",
     "rke_channel_table_payload_bytes",
+    "rke_total_table_payload_bytes",
 )
 
 
@@ -132,9 +134,9 @@ def _get_yukawa_2d_table_with_timings(
             build_config=build_config,
             lam=float(lam),
         )
-        timings = dict(table_manager.last_get_table_timings)
+    timings = dict(table_manager.last_get_table_timings)
     compute = timings.get("compute") or {}
-    build_s = float(compute.get("table_build_s", compute.get("total_s", 0.0)))
+    build_s = float(timings.get("total_s", compute.get("total_s", 0.0)))
     payload_bytes = int(compute.get("payload_bytes", 0))
     return table, build_s, payload_bytes
 
@@ -226,22 +228,17 @@ def run_case(
                 split_order=split_order,
                 split_smooth_quad_order=smooth_quad_order,
             )
-        rke_base_table_build_s = float(
-            _summarize_table_get_timings(base_records)["build_s"]
+        base_costs = _summarize_table_get_timings(base_records)
+        channel_costs = _summarize_table_get_timings(channel_records)
+        rke_base_table_build_s = float(base_costs["build_s"])
+        rke_base_table_payload_bytes = int(
+            base_costs["build_cache_payload_bytes"]
         )
-        rke_channel_build_s = float(
-            _summarize_table_get_timings(channel_records)["build_s"]
+        rke_channel_build_s = float(channel_costs["build_s"])
+        rke_channel_payload_bytes = int(
+            channel_costs["build_cache_payload_bytes"]
         )
         split_term_tables = dict(seed_wrangler.helmholtz_split_term_tables)
-        rke_channel_payload_bytes = 0
-        for term_tables in split_term_tables.values():
-            tables = (
-                term_tables if isinstance(term_tables, (list, tuple))
-                else [term_tables]
-            )
-            for term_table in tables:
-                data = np.asarray(term_table.data)
-                rke_channel_payload_bytes += int(data.nbytes)
 
         for parameter in parameters:
             direct_cache_path = cache_dir / (
@@ -373,10 +370,17 @@ def run_case(
                     "direct_table_build_s": direct_build_s,
                     "direct_table_payload_bytes": direct_payload_bytes,
                     "rke_base_table_build_s": rke_base_table_build_s,
+                    "rke_base_table_payload_bytes": (
+                        rke_base_table_payload_bytes
+                    ),
                     "rke_channel_table_count": len(split_term_tables),
                     "rke_channel_table_build_s": rke_channel_build_s,
                     "rke_channel_table_payload_bytes": (
                         rke_channel_payload_bytes
+                    ),
+                    "rke_total_table_payload_bytes": (
+                        rke_base_table_payload_bytes
+                        + rke_channel_payload_bytes
                     ),
                 }
             )
