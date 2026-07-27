@@ -106,17 +106,18 @@ jobs:
 
           python -m pip install --upgrade pip
           python -m pip install uv
-          uv pip install --system --editable ".[test]"
+          uv pip install --system --editable ".[benchmark,test]"
 
-          pytest -vv --collect-only -m full_accuracy --full-accuracy \
-            test/test_duffy_full_accuracy.py \
-            test/test_volume_fmm.py \
+          FULL_ACCURACY_TESTS=(
+            test/test_duffy_full_accuracy.py
+            test/test_volume_fmm.py
             test/test_benchmark_helpers.py
+          )
+          pytest -vv --collect-only -m full_accuracy --full-accuracy \
+            "${FULL_ACCURACY_TESTS[@]}"
 
           pytest -vv -m full_accuracy --full-accuracy \
-            test/test_duffy_full_accuracy.py \
-            test/test_volume_fmm.py \
-            test/test_benchmark_helpers.py
+            "${FULL_ACCURACY_TESTS[@]}"
 
   examples:
     name: Examples

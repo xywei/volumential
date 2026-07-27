@@ -36,48 +36,24 @@ artifact generation on a controlled remote compute host.
 from __future__ import annotations
 
 import argparse
-import csv
 import math
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
-from complex_channel_closure import (
+_BENCH_DIR = Path(__file__).resolve().parent
+if str(_BENCH_DIR) not in sys.path:
+    sys.path.insert(0, str(_BENCH_DIR))
+
+from complex_channel_closure import (  # noqa: E402
+    BUILD_FIELDS,
     _build_row,
     _full_table_data,
     _mismatch_stats,
     _write_csv,
     build_channel_table,
-)
-
-BUILD_FIELDS = (
-    "case_id",
-    "mode",
-    "dim",
-    "q_order",
-    "table_id",
-    "source_box_level",
-    "source_box_extent",
-    "radial_rule",
-    "regular_quad_order",
-    "radial_quad_order",
-    "n_jobs",
-    "build_wall_s",
-    "warm_payload_load_ms",
-    "serialized_payload_bytes",
-    "n_representative_entries",
-    "full_entry_count",
-    "representative_count",
-    "compression_ratio",
-    "orbit_size_histogram",
-    "sign_metadata_count",
-    "negative_scale_count",
-    "unreduced_payload_bytes",
-    "reconstructed_payload_bytes",
-    "metadata_payload_bytes",
-    "max_reconstruction_error",
-    "l2_reconstruction_error",
 )
 
 MISMATCH_FIELDS = (

@@ -369,7 +369,7 @@ def _build_tables(queue, tree, case, cache_dir, path):
         for kernel_type in kernel_types:
             if path == "per_level":
                 tables = []
-                for level in range(tree.nlevels + 1):
+                for level in range(tree.nlevels):
                     table, _ = tm.get_table(
                         case.dim,
                         kernel_type,

@@ -81,12 +81,12 @@ python benchmarks/adaptive_timing.py --mode smoke --out build/benchmarks/adaptiv
 
 The benchmark runs 2D Laplace evaluations on deterministically adapted meshes and writes one cold-cache and one warm-cache row per case. Rows report mesh/adaptation setup, geometry construction, table build or load, FMM wall time, and the timing categories exposed by `drive_volume_fmm`. Full paper runs should be wrapped with the paper repository metadata tool before their CSVs are promoted to manuscript data.
 
-`adaptive_split_composition.py` compares direct and RKE setup using total table-manager build time and serialized cache payload bytes on both paths. It reports the RKE base and channel payloads separately and in total so storage comparisons include every required table.
-
 ## Paper 1 Mechanism And Application Drivers
 
 The following evidence drivers have structured outputs or campaign-specific
 acceptance gates and are intentionally not part of `performance_suite.py`:
+
+`adaptive_split_composition.py` compares direct and RKE setup using total table-manager build time and serialized cache payload bytes on both paths. It reports the RKE base and channel payloads separately and in total so storage comparisons include every required table.
 
 ```bash
 python benchmarks/adaptive_timing_3d.py --mode smoke
@@ -98,6 +98,9 @@ python benchmarks/adaptive_split_composition.py --mode smoke
 python benchmarks/break_even_validation.py --mode smoke
 python benchmarks/keller_segel_continuation.py --mode smoke
 ```
+
+The complex Bessel driver additionally requires the benchmark extra:
+`python -m pip install -e ".[benchmark]"`.
 
 The 3D field driver's full mode always clears its direct and RKE caches, uses
 separate higher-order direct-reference and channel-table quadrature policies,

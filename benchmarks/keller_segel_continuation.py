@@ -330,6 +330,47 @@ class ConservativeDGTransport:
             - speed * (rho_right - rho_left)
         )
 
+    @classmethod
+    def _numerical_faces(
+        cls,
+        rho_minus,
+        rho_plus,
+        velocity_minus,
+        velocity_plus,
+        minus_neighbors,
+        plus_neighbors,
+    ):
+        has_minus = minus_neighbors >= 0
+        minus = np.maximum(minus_neighbors, 0)
+        exterior_minus_rho = np.where(
+            has_minus[:, np.newaxis], rho_plus[minus], 0.0
+        )
+        exterior_minus_velocity = np.where(
+            has_minus[:, np.newaxis], velocity_plus[minus], velocity_minus
+        )
+        numerical_minus = cls._rusanov(
+            exterior_minus_rho,
+            exterior_minus_velocity,
+            rho_minus,
+            velocity_minus,
+        )
+
+        has_plus = plus_neighbors >= 0
+        plus = np.maximum(plus_neighbors, 0)
+        exterior_plus_rho = np.where(
+            has_plus[:, np.newaxis], rho_minus[plus], 0.0
+        )
+        exterior_plus_velocity = np.where(
+            has_plus[:, np.newaxis], velocity_minus[plus], velocity_plus
+        )
+        numerical_plus = cls._rusanov(
+            rho_plus,
+            velocity_plus,
+            exterior_plus_rho,
+            exterior_plus_velocity,
+        )
+        return numerical_minus, numerical_plus
+
     def divergence(self, rho, velocity_x, velocity_y):
         rho = np.asarray(rho)
         flux_x = rho * velocity_x
@@ -341,52 +382,22 @@ class ConservativeDGTransport:
         uy_minus, uy_plus = self._y_faces(velocity_y)
         fy_minus, fy_plus = self._y_faces(flux_y)
 
-        numerical_x_minus = np.empty_like(fx_minus)
-        numerical_x_plus = np.empty_like(fx_plus)
-        numerical_y_minus = np.empty_like(fy_minus)
-        numerical_y_plus = np.empty_like(fy_plus)
-        for ibox in range(self.n_boxes):
-            left = self.left[ibox]
-            if left < 0:
-                numerical_x_minus[ibox] = self._rusanov(
-                    0.0, ux_minus[ibox], rho_x_minus[ibox], ux_minus[ibox]
-                )
-            else:
-                numerical_x_minus[ibox] = self._rusanov(
-                    rho_x_plus[left], ux_plus[left],
-                    rho_x_minus[ibox], ux_minus[ibox],
-                )
-            right = self.right[ibox]
-            if right < 0:
-                numerical_x_plus[ibox] = self._rusanov(
-                    rho_x_plus[ibox], ux_plus[ibox], 0.0, ux_plus[ibox]
-                )
-            else:
-                numerical_x_plus[ibox] = self._rusanov(
-                    rho_x_plus[ibox], ux_plus[ibox],
-                    rho_x_minus[right], ux_minus[right],
-                )
-
-            bottom = self.bottom[ibox]
-            if bottom < 0:
-                numerical_y_minus[ibox] = self._rusanov(
-                    0.0, uy_minus[ibox], rho_y_minus[ibox], uy_minus[ibox]
-                )
-            else:
-                numerical_y_minus[ibox] = self._rusanov(
-                    rho_y_plus[bottom], uy_plus[bottom],
-                    rho_y_minus[ibox], uy_minus[ibox],
-                )
-            top = self.top[ibox]
-            if top < 0:
-                numerical_y_plus[ibox] = self._rusanov(
-                    rho_y_plus[ibox], uy_plus[ibox], 0.0, uy_plus[ibox]
-                )
-            else:
-                numerical_y_plus[ibox] = self._rusanov(
-                    rho_y_plus[ibox], uy_plus[ibox],
-                    rho_y_minus[top], uy_minus[top],
-                )
+        numerical_x_minus, numerical_x_plus = self._numerical_faces(
+            rho_x_minus,
+            rho_x_plus,
+            ux_minus,
+            ux_plus,
+            self.left,
+            self.right,
+        )
+        numerical_y_minus, numerical_y_plus = self._numerical_faces(
+            rho_y_minus,
+            rho_y_plus,
+            uy_minus,
+            uy_plus,
+            self.bottom,
+            self.top,
+        )
 
         derivative_x = np.einsum(
             "ib,nbj->nij", self.diff, self._tensor(flux_x)

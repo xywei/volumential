@@ -37,7 +37,7 @@ import time
 from dataclasses import asdict, dataclass
 from multiprocessing import get_context
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import numpy as np
 
@@ -105,6 +105,16 @@ QUADCHECK_FIELDS = (
     "max_rel_difference",
     "reference_linf",
 )
+
+CLOSURE_REL_TOL = 1.0e-12
+
+
+class TableBuildCase(Protocol):
+    case_id: str
+    dim: int
+    q_order: int
+    regular_quad_order: int
+    radial_quad_order: int
 
 
 @dataclass(frozen=True)
@@ -380,11 +390,18 @@ def _full_table_data(table):
 # {{{ rows
 
 def _mismatch_stats(reference, candidate):
-    finite_mask = np.isfinite(reference) & np.isfinite(candidate)
-    if not np.any(finite_mask):
+    reference_finite = np.isfinite(reference)
+    candidate_finite = np.isfinite(candidate)
+    finite_mask = reference_finite & candidate_finite
+    if not np.any(reference_finite):
         return 0, np.nan, np.nan, np.nan
+
+    reference_linf = float(np.max(np.abs(reference[reference_finite])))
+    if np.any(reference_finite & ~candidate_finite):
+        return int(np.count_nonzero(finite_mask)), np.inf, np.inf, reference_linf
+    if not np.any(finite_mask):
+        return 0, np.nan, np.nan, reference_linf
     diff = np.abs(reference[finite_mask] - candidate[finite_mask])
-    reference_linf = float(np.max(np.abs(reference[finite_mask])))
     max_abs = float(np.max(diff))
     max_rel = float(max_abs / max(reference_linf, 1e-300))
     return int(np.count_nonzero(finite_mask)), max_abs, max_rel, reference_linf
@@ -392,7 +409,7 @@ def _mismatch_stats(reference, candidate):
 
 def _build_row(
     *,
-    case: ClosureCase,
+    case: TableBuildCase,
     mode: str,
     table_id: str,
     table,
@@ -401,6 +418,15 @@ def _build_row(
     radial_rule: str,
 ) -> dict[str, Any]:
     diagnostics = table.get_symmetry_reduction_diagnostics()
+    diagnostic_values = asdict(diagnostics)
+    expected_diagnostic_fields = set(BUILD_FIELDS[15:])
+    if set(diagnostic_values) != expected_diagnostic_fields:
+        missing = sorted(expected_diagnostic_fields - set(diagnostic_values))
+        unexpected = sorted(set(diagnostic_values) - expected_diagnostic_fields)
+        raise RuntimeError(
+            "symmetry diagnostics do not match BUILD_FIELDS: "
+            f"missing={missing}, unexpected={unexpected}"
+        )
     payload = io.BytesIO()
     np.savez(
         payload,
@@ -438,8 +464,19 @@ def _build_row(
         "warm_payload_load_ms": 1.0e3 * float(np.median(load_times)),
         "serialized_payload_bytes": len(serialized),
         "n_representative_entries": int(len(table.reduced_entry_ids)),
-        **asdict(diagnostics),
+        **diagnostic_values,
     }
+
+
+def _validate_closure_equivalence(rows) -> None:
+    if not rows:
+        raise RuntimeError("full closure benchmark produced no equivalence rows")
+    max_rel = max(float(row["max_rel_mismatch"]) for row in rows)
+    if not math.isfinite(max_rel) or max_rel > CLOSURE_REL_TOL:
+        raise RuntimeError(
+            "full closure mismatch exceeds the roundoff gate: "
+            f"{max_rel:.3e} > {CLOSURE_REL_TOL:.3e}"
+        )
 
 # }}}
 
@@ -652,15 +689,15 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    if not 0.0 < args.alpha:
-        raise SystemExit("alpha must be positive")
+    if not math.isfinite(args.alpha) or args.alpha <= 0.0:
+        raise SystemExit("alpha must be finite and positive")
 
     cases = list(SMOKE_CASES if args.mode == "smoke" else FULL_CASES)
     if args.include_3d and args.mode == "full":
         cases.append(FULL_3D_CASE)
 
     for case in cases:
-        if not args.alpha < case.dim:
+        if args.alpha >= case.dim:
             raise SystemExit(
                 f"alpha={args.alpha} must be < dim={case.dim} for integrability"
             )
@@ -693,6 +730,8 @@ def main() -> int:
     )
     _write_csv(args.out_dir / "closure_builds.csv", BUILD_FIELDS, build_rows)
     _write_csv(args.out_dir / "closure_quadcheck.csv", QUADCHECK_FIELDS, quadcheck_rows)
+    if args.mode == "full":
+        _validate_closure_equivalence(equivalence_rows)
     return 0
 
 

@@ -1206,6 +1206,8 @@ def run_benchmark(
             case["reference_timing"]["solve_total_s"] for case in parameter_cases
         )
 
+        # Keep one cache across orders so each pass measures only newly required
+        # tables; _prepare_rke_channels otherwise defaults to a per-order file.
         rke_cache_path = cache_dir / f"cost-rke-{kernel.lower()}-q{q_order}.sqlite"
         cumulative_rke_build_s = 0.0
         cumulative_rke_quadrature_build_s = 0.0

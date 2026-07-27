@@ -23,20 +23,24 @@ from typing import Any
 import numpy as np
 import pyopencl as cl
 
-from split_parameter_sweep import (
+_BENCH_DIR = Path(__file__).resolve().parent
+if str(_BENCH_DIR) not in sys.path:
+    sys.path.insert(0, str(_BENCH_DIR))
+
+from split_parameter_sweep import (  # noqa: E402
     _capture_table_get_timings,
     _clear_sqlite_cache,
     _select_opencl_device,
     _summarize_table_get_timings,
 )
-from volumential.gaussian import (
+from volumential.gaussian import (  # noqa: E402
     default_overlapping_gaussian_mixture,
     evaluate_gaussian_mixture,
     nearest_axis_slice,
     write_json_metadata,
     write_npz,
 )
-from volumential.version import VERSION_TEXT
+from volumential.version import VERSION_TEXT  # noqa: E402
 
 
 SUMMARY_FIELDS = (
@@ -517,7 +521,13 @@ def run_benchmark(
     weights = q_weights.get(queue)
     mixture = default_overlapping_gaussian_mixture(3)
     source_values_host = evaluate_gaussian_mixture(mixture, coords.T)
-    leaf_side = 1.0 / 2.0 ** (nlevels - 1)
+    leaf_level = int(tree.nlevels) - 1
+    leaf_side = float(tree.root_extent) * 2.0**-leaf_level
+    # Table caches use root extent 2 while this tree uses root extent 1, so the
+    # matching table-manager level is one greater than the tree's leaf level.
+    direct_table_level = leaf_level + 1
+    if not np.isclose(2.0 * 2.0**-direct_table_level, leaf_side):
+        raise RuntimeError("direct table level does not match the tree leaf size")
 
     rows: list[dict[str, Any]] = []
     arrays: dict[str, np.ndarray] = {
@@ -535,7 +545,7 @@ def run_benchmark(
             cache_dir=cache_dir,
             q_order=q_order,
             lam=lam,
-            level=nlevels,
+            level=direct_table_level,
             build_config=direct_build_config,
             force_recompute=force_recompute,
         )

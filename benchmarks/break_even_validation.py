@@ -31,7 +31,6 @@ import csv
 import sys
 import time
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 
@@ -113,6 +112,16 @@ def _solve_wall_s(queue, traversal, wrangler, weighted_sources, source_vals):
     )
     queue.finish()
     return potential, time.perf_counter() - start
+
+
+def _solve_statistics(solve_rows, strategy):
+    samples = [
+        row["solve_wall_s"] for row in solve_rows
+        if row["strategy"] == strategy
+    ]
+    if not samples:
+        raise ValueError(f"no solve samples recorded for strategy {strategy!r}")
+    return float(np.mean(samples)), float(np.std(samples))
 
 
 def run_validation(
@@ -324,10 +333,8 @@ def run_validation(
         interpolated = ""
         crossing_cost = ""
 
-    direct_mean = float(np.mean(per_repeat_cost["direct"]) / len(parameters))
-    rke_mean = float(np.mean(per_repeat_cost["rke"]) / len(parameters))
-    direct_std = float(np.std(per_repeat_cost["direct"]) / len(parameters))
-    rke_std = float(np.std(per_repeat_cost["rke"]) / len(parameters))
+    direct_mean, direct_std = _solve_statistics(solve_rows, "direct")
+    rke_mean, rke_std = _solve_statistics(solve_rows, "rke")
     per_repeat_gap = len(parameters) * (rke_mean - direct_mean)
     if per_repeat_gap > 0.0:
         modeled = (direct_build_total_s - rke_build_total_s) / per_repeat_gap

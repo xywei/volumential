@@ -18,7 +18,11 @@ def _load_benchmark(name):
     sys.path.insert(0, str(path.parent))
     try:
         sys.modules[spec.name] = module
-        spec.loader.exec_module(module)
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            sys.modules.pop(spec.name, None)
+            raise
     finally:
         sys.path[:] = previous_sys_path
     return module
@@ -36,6 +40,21 @@ def _load_benchmark(name):
 ])
 def test_paper1_benchmark_module_imports(name):
     _load_benchmark(name)
+
+
+def test_benchmark_loader_removes_failed_module(tmp_path, monkeypatch):
+    benchmark_dir = tmp_path / "benchmarks"
+    benchmark_dir.mkdir()
+    (benchmark_dir / "broken_import.py").write_text(
+        "raise RuntimeError('broken import')\n", encoding="ascii"
+    )
+    monkeypatch.setattr(
+        sys.modules[__name__], "_REPOSITORY_ROOT", tmp_path
+    )
+
+    with pytest.raises(RuntimeError, match="broken import"):
+        _load_benchmark("broken_import")
+    assert "broken_import" not in sys.modules
 
 
 def _accuracy_row(*, q_order, fmm_order, error):
@@ -141,6 +160,8 @@ def test_rke_field_demo_full_accuracy_policy():
 def test_rke_field_demo_full_mode_requires_convergence_orders(tmp_path):
     module = _load_benchmark("rke_field_demo_3d")
 
+    # Keep split-order validation ahead of OpenCL selection so normal CI stays
+    # a cheap argument-policy test without requiring a local platform.
     with pytest.raises(ValueError, match="requires split orders 1, 2, and 3"):
         module.run_benchmark(
             mode="full",
@@ -211,6 +232,118 @@ def test_rke_field_demo_metadata_paths_are_sanitized(tmp_path, monkeypatch):
         "driver.py",
         "--out=field.csv",
     ]
+
+
+def test_complex_closure_exposes_nonfinite_candidate_entries():
+    module = _load_benchmark("complex_channel_closure")
+    count, max_abs, max_rel, reference_linf = module._mismatch_stats(
+        np.array([1.0, 2.0]), np.array([1.0, np.nan])
+    )
+
+    assert count == 1
+    assert np.isinf(max_abs)
+    assert np.isinf(max_rel)
+    assert reference_linf == pytest.approx(2.0)
+
+
+def test_complex_closure_full_roundoff_gate():
+    module = _load_benchmark("complex_channel_closure")
+    module._validate_closure_equivalence([{"max_rel_mismatch": 1.0e-13}])
+
+    with pytest.raises(RuntimeError, match="roundoff gate"):
+        module._validate_closure_equivalence([{"max_rel_mismatch": 1.0e-9}])
+
+
+def test_complex_closure_rejects_nonfinite_alpha(monkeypatch):
+    module = _load_benchmark("complex_channel_closure")
+    monkeypatch.setattr(sys, "argv", ["complex_channel_closure.py", "--alpha=nan"])
+
+    with pytest.raises(SystemExit, match="finite and positive"):
+        module.main()
+
+
+def test_adaptive_composition_validates_diagnostic_fields():
+    module = _load_benchmark("adaptive_split_composition")
+    diagnostics = {key: 0 for key in module.LEAF_DIAGNOSTIC_FIELDS}
+    module._validate_diagnostic_fields(
+        "leaf", diagnostics, module.LEAF_DIAGNOSTIC_FIELDS
+    )
+
+    diagnostics["unexpected"] = 0
+    with pytest.raises(RuntimeError, match="unexpected"):
+        module._validate_diagnostic_fields(
+            "leaf", diagnostics, module.LEAF_DIAGNOSTIC_FIELDS
+        )
+
+
+def test_break_even_statistics_use_individual_solves():
+    module = _load_benchmark("break_even_validation")
+    rows = [
+        {"strategy": "direct", "solve_wall_s": 1.0},
+        {"strategy": "rke", "solve_wall_s": 10.0},
+        {"strategy": "direct", "solve_wall_s": 3.0},
+        {"strategy": "rke", "solve_wall_s": 14.0},
+    ]
+
+    assert module._solve_statistics(rows, "direct") == pytest.approx((2.0, 1.0))
+    assert module._solve_statistics(rows, "rke") == pytest.approx((12.0, 2.0))
+
+
+def test_keller_segel_vectorized_faces_match_boxwise_fluxes():
+    module = _load_benchmark("keller_segel_continuation")
+    transport = module.ConservativeDGTransport
+    rho_minus = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
+    rho_plus = rho_minus + 0.5
+    velocity_minus = np.array([[0.2, -0.3], [0.4, 0.1], [-0.2, 0.5]])
+    velocity_plus = velocity_minus - 0.1
+    minus_neighbors = np.array([-1, 0, 1])
+    plus_neighbors = np.array([1, 2, -1])
+
+    actual_minus, actual_plus = transport._numerical_faces(
+        rho_minus,
+        rho_plus,
+        velocity_minus,
+        velocity_plus,
+        minus_neighbors,
+        plus_neighbors,
+    )
+    expected_minus = np.empty_like(rho_minus)
+    expected_plus = np.empty_like(rho_plus)
+    for ibox in range(len(rho_minus)):
+        minus = minus_neighbors[ibox]
+        if minus < 0:
+            expected_minus[ibox] = transport._rusanov(
+                0.0,
+                velocity_minus[ibox],
+                rho_minus[ibox],
+                velocity_minus[ibox],
+            )
+        else:
+            expected_minus[ibox] = transport._rusanov(
+                rho_plus[minus],
+                velocity_plus[minus],
+                rho_minus[ibox],
+                velocity_minus[ibox],
+            )
+
+        plus = plus_neighbors[ibox]
+        if plus < 0:
+            expected_plus[ibox] = transport._rusanov(
+                rho_plus[ibox],
+                velocity_plus[ibox],
+                0.0,
+                velocity_plus[ibox],
+            )
+        else:
+            expected_plus[ibox] = transport._rusanov(
+                rho_plus[ibox],
+                velocity_plus[ibox],
+                rho_minus[plus],
+                velocity_minus[plus],
+            )
+
+    assert np.allclose(actual_minus, expected_minus)
+    assert np.allclose(actual_plus, expected_plus)
 
 
 def test_table_timing_summary_includes_built_cache_payload():

@@ -13,6 +13,7 @@ arrays per case for visualization.
 from __future__ import annotations
 
 import argparse
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -20,7 +21,11 @@ from typing import Any
 import numpy as np
 import pyopencl as cl
 
-from adaptive_timing import (
+_BENCH_DIR = Path(__file__).resolve().parent
+if str(_BENCH_DIR) not in sys.path:
+    sys.path.insert(0, str(_BENCH_DIR))
+
+from adaptive_timing import (  # noqa: E402
     FMM_TIMING_PHASES,
     REFINEMENT_THRESHOLDS,
     _build_config,
@@ -38,7 +43,7 @@ from adaptive_timing import (
     _validate_adaptive_diagnostics,
     write_csv,
 )
-from volumential.gaussian import write_npz
+from volumential.gaussian import write_npz  # noqa: E402
 
 
 SMOKE_CASES = ((2, 3, 1),)

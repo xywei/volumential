@@ -98,6 +98,20 @@ FIELDS = (
     "rke_total_table_payload_bytes",
 )
 
+LEAF_DIAGNOSTIC_FIELDS = (
+    "min_leaf_level",
+    "max_leaf_level",
+    "leaf_level_histogram_json",
+    "max_adjacent_leaf_level_difference",
+)
+
+LIST1_DIAGNOSTIC_FIELDS = (
+    "n_list1_interactions",
+    "n_cross_level_list1_interactions",
+    "cross_level_list1_fraction",
+    "list1_source_target_level_pair_histogram_json",
+)
+
 
 SMOKE_CASES = ((3, 2, 1),)
 FULL_CASES = ((3, 4, 2), (4, 4, 2), (4, 4, 3))
@@ -158,6 +172,20 @@ def _drive(queue, traversal, wrangler, weighted_sources, source_vals):
     return potential.get(queue), time.perf_counter() - start
 
 
+def _validate_diagnostic_fields(name, diagnostics, expected_fields) -> None:
+    expected = set(expected_fields)
+    actual = set(diagnostics)
+    if not expected.issubset(FIELDS):
+        raise RuntimeError(f"{name} fields are missing from the CSV schema")
+    if actual != expected:
+        missing = sorted(expected - actual)
+        unexpected = sorted(actual - expected)
+        raise RuntimeError(
+            f"{name} diagnostics do not match the CSV schema: "
+            f"missing={missing}, unexpected={unexpected}"
+        )
+
+
 def run_case(
     ctx,
     queue,
@@ -175,6 +203,12 @@ def run_case(
     )
     leaf_diagnostics = _leaf_diagnostics(mesh)
     list1_diagnostics = _list1_diagnostics(queue, tree, traversal)
+    _validate_diagnostic_fields(
+        "leaf", leaf_diagnostics, LEAF_DIAGNOSTIC_FIELDS
+    )
+    _validate_diagnostic_fields(
+        "List 1", list1_diagnostics, LIST1_DIAGNOSTIC_FIELDS
+    )
     _validate_adaptive_diagnostics(leaf_diagnostics, list1_diagnostics)
     source_levels = _populated_source_levels(queue, tree, traversal)
 
@@ -190,6 +224,57 @@ def run_case(
     rke_channel_build_config = _split_channel_build_config(
         q_order, high_accuracy=high_accuracy
     )
+
+    direct_results = {}
+    for parameter in parameters:
+        direct_cache_path = cache_dir / (
+            f"composition-direct-q{q_order}-l{initial_nlevels}-"
+            f"a{adapt_steps}-lam{parameter:g}.sqlite"
+        )
+        _clear_sqlite_cache(direct_cache_path)
+
+        direct_tables = []
+        direct_build_s = 0.0
+        direct_payload_bytes = 0
+        for level in source_levels:
+            table, build_s, payload_bytes = _get_yukawa_2d_table_with_timings(
+                queue,
+                direct_cache_path,
+                q_order,
+                parameter,
+                level,
+                tree_root_extent=tree_root_extent,
+                build_config=direct_build_config,
+            )
+            direct_tables.append(table)
+            direct_build_s += build_s
+            direct_payload_bytes += payload_bytes
+
+        direct_wrangler, weighted_sources, source_vals = _build_path(
+            ctx=ctx,
+            queue=queue,
+            traversal=traversal,
+            q_order=q_order,
+            fmm_order=fmm_order,
+            kernel="Yukawa",
+            parameter=float(parameter),
+            table=direct_tables,
+            source_weights=q_weights,
+            q_points=q_points,
+            source_values_host=source_values_host,
+            split=False,
+            split_order=1,
+        )
+        direct_potential, direct_wall_s = _drive(
+            queue, traversal, direct_wrangler, weighted_sources, source_vals
+        )
+        direct_results[parameter] = {
+            "potential": direct_potential,
+            "wall_s": direct_wall_s,
+            "table_count": len(direct_tables),
+            "build_s": direct_build_s,
+            "payload_bytes": direct_payload_bytes,
+        }
 
     rows = []
     for split_order in split_orders:
@@ -241,49 +326,8 @@ def run_case(
         split_term_tables = dict(seed_wrangler.helmholtz_split_term_tables)
 
         for parameter in parameters:
-            direct_cache_path = cache_dir / (
-                f"composition-direct-q{q_order}-l{initial_nlevels}-"
-                f"a{adapt_steps}-lam{parameter:g}.sqlite"
-            )
-            _clear_sqlite_cache(direct_cache_path)
-
-            direct_tables = []
-            direct_build_s = 0.0
-            direct_payload_bytes = 0
-            for level in source_levels:
-                table, build_s, payload_bytes = (
-                    _get_yukawa_2d_table_with_timings(
-                        queue,
-                        direct_cache_path,
-                        q_order,
-                        parameter,
-                        level,
-                        tree_root_extent=tree_root_extent,
-                        build_config=direct_build_config,
-                    )
-                )
-                direct_tables.append(table)
-                direct_build_s += build_s
-                direct_payload_bytes += payload_bytes
-
-            direct_wrangler, weighted_sources, source_vals = _build_path(
-                ctx=ctx,
-                queue=queue,
-                traversal=traversal,
-                q_order=q_order,
-                fmm_order=fmm_order,
-                kernel="Yukawa",
-                parameter=float(parameter),
-                table=direct_tables,
-                source_weights=q_weights,
-                q_points=q_points,
-                source_values_host=source_values_host,
-                split=False,
-                split_order=split_order,
-            )
-            direct_potential, direct_wall_s = _drive(
-                queue, traversal, direct_wrangler, weighted_sources, source_vals
-            )
+            direct_result = direct_results[parameter]
+            direct_potential = direct_result["potential"]
 
             rke_wrangler, weighted_sources, source_vals = _build_path(
                 ctx=ctx,
@@ -364,11 +408,13 @@ def run_case(
                         weighted_error / weighted_reference
                     ),
                     "rke_vs_direct_linf": float(np.max(np.abs(difference))),
-                    "direct_wall_s": direct_wall_s,
+                    "direct_wall_s": direct_result["wall_s"],
                     "rke_wall_s": rke_wall_s,
-                    "direct_table_count": len(direct_tables),
-                    "direct_table_build_s": direct_build_s,
-                    "direct_table_payload_bytes": direct_payload_bytes,
+                    "direct_table_count": direct_result["table_count"],
+                    "direct_table_build_s": direct_result["build_s"],
+                    "direct_table_payload_bytes": (
+                        direct_result["payload_bytes"]
+                    ),
                     "rke_base_table_build_s": rke_base_table_build_s,
                     "rke_base_table_payload_bytes": (
                         rke_base_table_payload_bytes
