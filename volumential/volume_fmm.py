@@ -916,7 +916,9 @@ def drive_volume_fmm(
         p2p = P2P(
             wrangler.tree_indep.target_kernels,
             wrangler.tree_indep.exclude_self,
-            value_dtypes=[wrangler.dtype],
+            value_dtypes=(
+                [wrangler.dtype] * len(wrangler.tree_indep.target_kernels)
+            ),
         )
 
         p2p_extra_kwargs = {}
@@ -942,7 +944,7 @@ def drive_volume_fmm(
         if wrangler.tree_indep.exclude_self:
             p2p_kwargs["target_to_source"] = target_to_source
 
-        (ref_pot,) = p2p(
+        p2p_outputs = p2p(
             wrangler.tree_indep._setup_actx,
             traversal.tree.targets,
             traversal.tree.sources,
@@ -950,10 +952,14 @@ def drive_volume_fmm(
             **p2p_kwargs,
         )
 
-        if isinstance(wrangler, FPNDSumpyExpansionWrangler):
-            potentials = obj_array_1d([ref_pot])
+        if len(p2p_outputs) == 1:
+            (ref_pot,) = p2p_outputs
+            if isinstance(wrangler, FPNDSumpyExpansionWrangler):
+                potentials = obj_array_1d([ref_pot])
+            else:
+                potentials = ref_pot
         else:
-            potentials = ref_pot
+            potentials = obj_array_1d(list(p2p_outputs))
         _debug_nan_status("global_p2p", potentials)
 
         assert traversal.from_sep_close_smaller_starts is None

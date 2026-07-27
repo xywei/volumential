@@ -71,7 +71,7 @@ The benchmark compares canonical rescaled tables, direct per-level tables, and d
 python benchmarks/split_parameter_sweep.py --mode smoke --out build/benchmarks/split-parameter-sweep.csv
 ```
 
-The benchmark sweeps 2D scalar Helmholtz wave numbers and Yukawa screening parameters. Each row compares the full implemented split evaluator against a direct fixed-parameter near-field table at the same parameter and application level. It separately records direct-table and RKE-channel setup/load costs, payload, repeated full applications, isolated coefficient and residual diagnostics, cold/warm strategy totals, and a linear break-even model. `--direct-levels` controls the levels provisioned by the direct setup strategy, while `--nlevels` is the application level; `--repeat-count` is the number of applications per parameter, and `break_even_repeat_count` uses the same per-parameter unit.
+The benchmark sweeps 2D scalar Helmholtz wave numbers and Yukawa screening parameters. Each row compares the full implemented split evaluator against a direct fixed-parameter near-field table at the same parameter and application level. Full mode prevents the split-order trend from being limited by quadrature noise: at `q=4`, Yukawa direct references use regular/radial Duffy orders 80/320, channel tables use 48/160, and retained orders above one use smooth-remainder order `2q`. The effective orders are recorded in every row, and full runs reject a nonconvergent Yukawa `p=1,2,3` sweep. The benchmark separately records direct-table and RKE-channel setup/load costs, payload, repeated full applications, isolated coefficient and residual diagnostics, cold/warm strategy totals, and a linear break-even model. `--direct-levels` controls the levels provisioned by the direct setup strategy, while `--nlevels` is the application level; `--repeat-count` is the number of applications per parameter, and `break_even_repeat_count` uses the same per-parameter unit.
 
 ## Adaptive Timing
 
@@ -80,6 +80,35 @@ python benchmarks/adaptive_timing.py --mode smoke --out build/benchmarks/adaptiv
 ```
 
 The benchmark runs 2D Laplace evaluations on deterministically adapted meshes and writes one cold-cache and one warm-cache row per case. Rows report mesh/adaptation setup, geometry construction, table build or load, FMM wall time, and the timing categories exposed by `drive_volume_fmm`. Full paper runs should be wrapped with the paper repository metadata tool before their CSVs are promoted to manuscript data.
+
+## Paper 1 Mechanism And Application Drivers
+
+The following evidence drivers have structured outputs or campaign-specific
+acceptance gates and are intentionally not part of `performance_suite.py`:
+
+`adaptive_split_composition.py` compares direct and RKE setup using total table-manager build time and serialized cache payload bytes on both paths. It reports the RKE base and channel payloads separately and in total so storage comparisons include every required table.
+
+```bash
+python benchmarks/adaptive_timing_3d.py --mode smoke
+python benchmarks/rke_field_demo_3d.py --mode smoke --force-recompute
+python benchmarks/complex_channel_closure.py --mode smoke
+python benchmarks/complex_bessel_parameterized.py --mode smoke
+python benchmarks/derivative_log_preservation.py --mode smoke
+python benchmarks/adaptive_split_composition.py --mode smoke
+python benchmarks/break_even_validation.py --mode smoke
+python benchmarks/keller_segel_continuation.py --mode smoke
+```
+
+The complex Bessel driver additionally requires the benchmark extra:
+`python -m pip install -e ".[benchmark]"`.
+
+The 3D field driver's full mode always clears its direct and RKE caches, uses
+separate higher-order direct-reference and channel-table quadrature policies,
+raises the smooth-remainder order above retained order one, and rejects a
+nonconvergent `p=1,2,3` path comparison. Its CSV records the effective orders,
+and its emitted JSON uses infrastructure-sanitized paths and host labels. Wrap
+full runs with the paper metadata tool to retain the private raw environment
+record separately.
 
 ## DMK Effective-Density Diagnostic
 

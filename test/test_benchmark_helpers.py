@@ -2,6 +2,7 @@ import importlib.util
 from pathlib import Path
 import sys
 
+import numpy as np
 import pytest
 
 
@@ -13,9 +14,47 @@ def _load_benchmark(name):
     spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    previous_sys_path = list(sys.path)
+    sys.path.insert(0, str(path.parent))
+    try:
+        sys.modules[spec.name] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            sys.modules.pop(spec.name, None)
+            raise
+    finally:
+        sys.path[:] = previous_sys_path
     return module
+
+
+@pytest.mark.parametrize("name", [
+    "adaptive_split_composition",
+    "adaptive_timing_3d",
+    "break_even_validation",
+    "complex_bessel_parameterized",
+    "complex_channel_closure",
+    "derivative_log_preservation",
+    "keller_segel_continuation",
+    "rke_field_demo_3d",
+])
+def test_paper1_benchmark_module_imports(name):
+    _load_benchmark(name)
+
+
+def test_benchmark_loader_removes_failed_module(tmp_path, monkeypatch):
+    benchmark_dir = tmp_path / "benchmarks"
+    benchmark_dir.mkdir()
+    (benchmark_dir / "broken_import.py").write_text(
+        "raise RuntimeError('broken import')\n", encoding="ascii"
+    )
+    monkeypatch.setattr(
+        sys.modules[__name__], "_REPOSITORY_ROOT", tmp_path
+    )
+
+    with pytest.raises(RuntimeError, match="broken import"):
+        _load_benchmark("broken_import")
+    assert "broken_import" not in sys.modules
 
 
 def _accuracy_row(*, q_order, fmm_order, error):
@@ -70,3 +109,362 @@ def test_split_benchmark_validates_direct_call_invariants(
             direct_levels=direct_levels,
             repeat_count=repeat_count,
         )
+
+
+def test_split_benchmark_full_yukawa_accuracy_policy():
+    module = _load_benchmark("split_parameter_sweep")
+
+    direct = module._yukawa_reference_build_config(4, high_accuracy=True)
+    channels = module._split_channel_build_config(4, high_accuracy=True)
+
+    assert (direct.regular_quad_order, direct.radial_quad_order) == (80, 320)
+    assert (channels.regular_quad_order, channels.radial_quad_order) == (48, 160)
+    assert module._split_smooth_quad_order(4, 1, high_accuracy=True) == 4
+    assert module._split_smooth_quad_order(4, 2, high_accuracy=True) == 8
+    assert module._split_smooth_quad_order(4, 3, high_accuracy=True) == 8
+    assert module._split_smooth_quad_order(4, 3, high_accuracy=False) == 4
+
+
+def test_split_benchmark_rejects_full_yukawa_order_plateau():
+    module = _load_benchmark("split_parameter_sweep")
+    common = {
+        "mode": "full",
+        "kernel": "Yukawa",
+        "parameter_value": 8.0,
+    }
+
+    module._validate_yukawa_order_convergence([
+        {**common, "split_order": 1, "rel_l2_error": 3.0e-6},
+        {**common, "split_order": 2, "rel_l2_error": 2.0e-11},
+        {**common, "split_order": 3, "rel_l2_error": 7.0e-12},
+    ])
+
+    with pytest.raises(RuntimeError, match="did not improve"):
+        module._validate_yukawa_order_convergence([
+            {**common, "split_order": 1, "rel_l2_error": 1.19446e-5},
+            {**common, "split_order": 2, "rel_l2_error": 1.16870e-5},
+            {**common, "split_order": 3, "rel_l2_error": 1.16778e-5},
+        ])
+
+
+def test_rke_field_demo_full_accuracy_policy():
+    module = _load_benchmark("rke_field_demo_3d")
+    direct, channels = module._field_build_configs(3, high_accuracy=True)
+
+    assert (direct.regular_quad_order, direct.radial_quad_order) == (16, 45)
+    assert (channels.regular_quad_order, channels.radial_quad_order) == (12, 35)
+    assert module._field_smooth_quad_order(3, 1, high_accuracy=True) == 3
+    assert module._field_smooth_quad_order(3, 2, high_accuracy=True) == 6
+
+
+def test_rke_field_demo_full_mode_requires_convergence_orders(tmp_path):
+    module = _load_benchmark("rke_field_demo_3d")
+
+    # Keep split-order validation ahead of OpenCL selection so normal CI stays
+    # a cheap argument-policy test without requiring a local platform.
+    with pytest.raises(ValueError, match="requires split orders 1, 2, and 3"):
+        module.run_benchmark(
+            mode="full",
+            backend="pocl-cpu",
+            cache_dir=tmp_path,
+            q_order=3,
+            nlevels=4,
+            fmm_order=12,
+            yukawa_lam=[4.0],
+            split_orders=[1, 2],
+            force_recompute=True,
+        )
+
+
+def test_rke_field_demo_rejects_full_order_plateau():
+    module = _load_benchmark("rke_field_demo_3d")
+    common = {"parameter": 4.0}
+    module._validate_full_order_convergence([
+        {
+            **common,
+            "split_order": 1,
+            "split_vs_direct_weighted_rel_l2": 1.0e-3,
+        },
+        {
+            **common,
+            "split_order": 2,
+            "split_vs_direct_weighted_rel_l2": 1.0e-7,
+        },
+        {
+            **common,
+            "split_order": 3,
+            "split_vs_direct_weighted_rel_l2": 1.0e-10,
+        },
+    ])
+
+    with pytest.raises(RuntimeError, match="did not converge"):
+        module._validate_full_order_convergence([
+            {
+                **common,
+                "split_order": 1,
+                "split_vs_direct_weighted_rel_l2": 1.0e-3,
+            },
+            {
+                **common,
+                "split_order": 2,
+                "split_vs_direct_weighted_rel_l2": 9.0e-4,
+            },
+            {
+                **common,
+                "split_order": 3,
+                "split_vs_direct_weighted_rel_l2": 8.0e-4,
+            },
+        ])
+
+
+def test_rke_field_demo_metadata_paths_are_sanitized(tmp_path, monkeypatch):
+    module = _load_benchmark("rke_field_demo_3d")
+    monkeypatch.chdir(tmp_path)
+    output = tmp_path / "results" / "field.csv"
+
+    assert module._public_path(output) == "results/field.csv"
+    assert module._public_path(Path("/external/private/cache")) == "cache"
+    assert module._public_argv(["driver.py", f"--out={output}"]) == [
+        "driver.py",
+        "--out=results/field.csv",
+    ]
+    assert module._public_argv(["driver.py", "--out=../private/field.csv"]) == [
+        "driver.py",
+        "--out=field.csv",
+    ]
+
+
+def test_complex_closure_exposes_nonfinite_candidate_entries():
+    module = _load_benchmark("complex_channel_closure")
+    count, max_abs, max_rel, reference_linf = module._mismatch_stats(
+        np.array([1.0, 2.0]), np.array([1.0, np.nan])
+    )
+
+    assert count == 1
+    assert np.isinf(max_abs)
+    assert np.isinf(max_rel)
+    assert reference_linf == pytest.approx(2.0)
+
+    count, max_abs, max_rel, reference_linf = module._mismatch_stats(
+        np.array([1.0, np.nan]), np.array([1.0, 2.0])
+    )
+    assert count == 1
+    assert np.isinf(max_abs)
+    assert np.isinf(max_rel)
+    assert reference_linf == pytest.approx(1.0)
+
+
+def test_complex_closure_full_roundoff_gate():
+    module = _load_benchmark("complex_channel_closure")
+    module._validate_closure_equivalence([{"max_rel_mismatch": 1.0e-13}])
+
+    with pytest.raises(RuntimeError, match="roundoff gate"):
+        module._validate_closure_equivalence([{"max_rel_mismatch": 1.0e-9}])
+
+
+def test_complex_closure_rejects_nonfinite_alpha(monkeypatch):
+    module = _load_benchmark("complex_channel_closure")
+    monkeypatch.setattr(sys, "argv", ["complex_channel_closure.py", "--alpha=nan"])
+
+    with pytest.raises(SystemExit, match="finite and positive"):
+        module.main()
+
+
+def test_adaptive_composition_validates_diagnostic_fields():
+    module = _load_benchmark("adaptive_split_composition")
+    diagnostics = {key: 0 for key in module.LEAF_DIAGNOSTIC_FIELDS}
+    module._validate_diagnostic_fields(
+        "leaf", diagnostics, module.LEAF_DIAGNOSTIC_FIELDS
+    )
+
+    diagnostics["unexpected"] = 0
+    with pytest.raises(RuntimeError, match="unexpected"):
+        module._validate_diagnostic_fields(
+            "leaf", diagnostics, module.LEAF_DIAGNOSTIC_FIELDS
+        )
+
+
+def test_break_even_statistics_use_individual_solves():
+    module = _load_benchmark("break_even_validation")
+    rows = [
+        {"strategy": "direct", "solve_wall_s": 1.0},
+        {"strategy": "rke", "solve_wall_s": 10.0},
+        {"strategy": "direct", "solve_wall_s": 3.0},
+        {"strategy": "rke", "solve_wall_s": 14.0},
+    ]
+
+    assert module._solve_statistics(rows, "direct") == pytest.approx((2.0, 1.0))
+    assert module._solve_statistics(rows, "rke") == pytest.approx((12.0, 2.0))
+
+
+def test_break_even_model_requires_setup_advantage_and_solve_penalty():
+    module = _load_benchmark("break_even_validation")
+    common = {
+        "parameter_count": 3,
+        "direct_solve_mean_s": 1.0,
+        "rke_solve_mean_s": 2.0,
+    }
+
+    assert module._modeled_break_even(
+        **common, direct_build_s=20.0, rke_build_s=5.0
+    ) == pytest.approx(5.0)
+    assert module._modeled_break_even(
+        **common, direct_build_s=5.0, rke_build_s=20.0
+    ) == ""
+    assert module._modeled_break_even(
+        **{**common, "rke_solve_mean_s": 0.5},
+        direct_build_s=20.0,
+        rke_build_s=5.0,
+    ) == ""
+
+
+def test_keller_segel_vectorized_faces_match_boxwise_fluxes():
+    module = _load_benchmark("keller_segel_continuation")
+    transport = module.ConservativeDGTransport
+    rho_minus = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
+    rho_plus = rho_minus + 0.5
+    velocity_minus = np.array([[0.2, -0.3], [0.4, 0.1], [-0.2, 0.5]])
+    velocity_plus = velocity_minus - 0.1
+    minus_neighbors = np.array([-1, 0, 1])
+    plus_neighbors = np.array([1, 2, -1])
+
+    actual_minus, actual_plus = transport._numerical_faces(
+        rho_minus,
+        rho_plus,
+        velocity_minus,
+        velocity_plus,
+        minus_neighbors,
+        plus_neighbors,
+    )
+    expected_minus = np.empty_like(rho_minus)
+    expected_plus = np.empty_like(rho_plus)
+    for ibox in range(len(rho_minus)):
+        minus = minus_neighbors[ibox]
+        if minus < 0:
+            expected_minus[ibox] = transport._rusanov(
+                0.0,
+                velocity_minus[ibox],
+                rho_minus[ibox],
+                velocity_minus[ibox],
+            )
+        else:
+            expected_minus[ibox] = transport._rusanov(
+                rho_plus[minus],
+                velocity_plus[minus],
+                rho_minus[ibox],
+                velocity_minus[ibox],
+            )
+
+        plus = plus_neighbors[ibox]
+        if plus < 0:
+            expected_plus[ibox] = transport._rusanov(
+                rho_plus[ibox],
+                velocity_plus[ibox],
+                0.0,
+                velocity_plus[ibox],
+            )
+        else:
+            expected_plus[ibox] = transport._rusanov(
+                rho_plus[ibox],
+                velocity_plus[ibox],
+                rho_minus[plus],
+                velocity_minus[plus],
+            )
+
+    assert np.allclose(actual_minus, expected_minus)
+    assert np.allclose(actual_plus, expected_plus)
+
+
+def test_table_timing_summary_includes_built_cache_payload():
+    module = _load_benchmark("split_parameter_sweep")
+    summary = module._summarize_table_get_timings([
+        {
+            "is_recomputed": True,
+            "total_s": 3.0,
+            "compute": {"table_build_s": 2.0, "payload_bytes": 128},
+        },
+        {
+            "is_recomputed": False,
+            "total_s": 0.5,
+            "load": {"payload_bytes": 128},
+        },
+    ])
+
+    assert summary["build_s"] == pytest.approx(3.0)
+    assert summary["quadrature_build_s"] == pytest.approx(2.0)
+    assert summary["build_cache_payload_bytes"] == 128
+    assert summary["cache_payload_bytes"] == 128
+
+
+@pytest.mark.full_accuracy
+def test_split_benchmark_full_yukawa_order_convergence(tmp_path):
+    module = _load_benchmark("split_parameter_sweep")
+
+    rows = module.run_benchmark(
+        mode="full",
+        backend="pocl-cpu",
+        cache_dir=tmp_path,
+        q_order=4,
+        nlevels=3,
+        fmm_order=16,
+        split_orders=[1, 2, 3],
+        helmholtz_k=[],
+        yukawa_lam=[2.0],
+        direct_levels=[3],
+        repeat_count=1,
+    )
+    errors = {int(row["split_order"]): row["rel_l2_error"] for row in rows}
+
+    assert errors[2] < 1.0e-3 * errors[1]
+    assert errors[3] < 0.5 * errors[2]
+    assert errors[3] < 1.0e-9
+
+
+def test_keller_segel_critical_profile_is_mass_normalized():
+    module = _load_benchmark("keller_segel_continuation")
+    axis = np.linspace(-1.0, 1.0, 33)
+    grid_x, grid_y = np.meshgrid(axis, axis, indexing="ij")
+    coords = np.vstack([grid_x.ravel(), grid_y.ravel()])
+    weights = np.ones(coords.shape[1])
+
+    density = module._initial_density(
+        coords,
+        weights,
+        mass=8.0 * np.pi,
+        profile="critical",
+        profile_scale=0.3,
+        cutoff_inner_radius=0.7,
+        cutoff_outer_radius=0.9,
+    )
+
+    assert np.sum(weights * density) == pytest.approx(8.0 * np.pi)
+    assert density[np.argmin(np.sum(coords**2, axis=0))] == np.max(density)
+    assert np.all(density[np.sqrt(np.sum(coords**2, axis=0)) >= 0.9] == 0.0)
+
+
+def test_keller_segel_endpoint_planner_avoids_short_terminal_step():
+    module = _load_benchmark("keller_segel_continuation")
+
+    regular = module._plan_time_step(0.008, 0.005, 0.001, 2.0)
+    assert regular == pytest.approx((1.0 / 16.0**2, False, False))
+
+    terminal = module._plan_time_step(0.004, 0.005, 0.001, 2.0)
+    assert terminal == pytest.approx((0.004, True, False))
+
+    adjusted = module._plan_time_step(0.009, 0.005, 0.003, 2.0)
+    assert adjusted == pytest.approx((0.0045, False, True))
+
+    adaptive_endpoint = module._plan_time_step(
+        0.000775871,
+        0.000397,
+        0.0003014,
+        2.0**0.125,
+    )
+    assert adaptive_endpoint == pytest.approx(
+        (0.000775871 / 2.0, False, True)
+    )
+
+    quantized_below_floor = module._plan_time_step(0.003, 0.0012, 0.001, 2.0)
+    assert quantized_below_floor == pytest.approx((0.001, False, True))
+
+    assert module._plan_time_step(0.0015, 0.0012, 0.001, 2.0) is None

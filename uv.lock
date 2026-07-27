@@ -1067,6 +1067,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+benchmark = [
+    { name = "mpmath" },
+]
 doc = [
     { name = "sphinx", version = "9.0.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "sphinx", version = "9.1.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
@@ -1094,6 +1097,7 @@ requires-dist = [
     { name = "loopy", git = "https://github.com/inducer/loopy.git" },
     { name = "meshmode", git = "https://github.com/inducer/meshmode.git" },
     { name = "modepy", git = "https://github.com/inducer/modepy.git" },
+    { name = "mpmath", marker = "extra == 'benchmark'" },
     { name = "pyfmmlib", marker = "extra == 'fmmlib'", specifier = ">=2024.1" },
     { name = "pymbolic", git = "https://github.com/inducer/pymbolic.git" },
     { name = "pyopencl" },
@@ -1105,4 +1109,4 @@ requires-dist = [
     { name = "sphinx-rtd-theme", marker = "extra == 'doc'" },
     { name = "sumpy", git = "https://github.com/inducer/sumpy.git" },
 ]
-provides-extras = ["fmmlib", "gmsh-support", "test", "doc"]
+provides-extras = ["benchmark", "fmmlib", "gmsh-support", "test", "doc"]
