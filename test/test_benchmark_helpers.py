@@ -164,8 +164,8 @@ def test_keller_segel_endpoint_planner_avoids_short_terminal_step():
     terminal = module._plan_time_step(0.004, 0.005, 0.001, 2.0)
     assert terminal == pytest.approx((0.004, True, False))
 
-    adjusted = module._plan_time_step(0.0045, 0.005, 0.001, 2.0)
-    assert adjusted == pytest.approx((0.00225, False, True))
+    adjusted = module._plan_time_step(0.009, 0.005, 0.003, 2.0)
+    assert adjusted == pytest.approx((0.0045, False, True))
 
     adaptive_endpoint = module._plan_time_step(
         0.000775871,
