@@ -115,6 +115,7 @@ def _tail_majorant(dim: int, k: complex, radius: float, n_terms: int) -> float:
     log_radius = float(np.log(radius))
     log_two_pi = float(np.log(2.0 * np.pi))
     total = 0.0
+    converged = False
     for n in range(n_terms + 1, n_terms + 400):
         if dim == 2:
             log_scale = 2.0 * n * float(np.log(k_abs / 2.0)) - 2.0 * lgamma(
@@ -141,7 +142,12 @@ def _tail_majorant(dim: int, k: complex, radius: float, n_terms: int) -> float:
             )
         total += term
         if term < 1e-30 * max(total, 1.0e-300):
+            converged = True
             break
+    if not converged:
+        # The window did not reach numerically negligible terms, so the
+        # partial sum is not a majorant; report an uncertifiable bound.
+        return float("inf")
     return total
 
 
@@ -156,6 +162,7 @@ def choose_truncation_order(
 
     Returns ``(n_terms, tail_bound)``; raises if ``max_terms`` is not
     enough."""
+    bound = float("inf")
     for n_terms in range(1, max_terms + 1):
         bound = _tail_majorant(dim, k, radius, n_terms)
         if bound <= tolerance:
@@ -181,13 +188,17 @@ def _basis_l1_norms(table) -> np.ndarray:
         [p[dim - 1] for p in table.q_points[:q]], dtype=np.float64
     )
 
-    gl_nodes, gl_weights = np.polynomial.legendre.leggauss(4 * q)
-    x = 0.5 * extent * (gl_nodes + 1.0)
-    w = 0.5 * extent * gl_weights
+    # The 1D Lagrange basis polynomial L_i has degree q - 1 and vanishes
+    # exactly at the other interpolation nodes, so |L_i| is polynomial on
+    # each subinterval between consecutive breakpoints {0, nodes, extent}.
+    # Per-segment Gauss of order q integrates each piece exactly, making
+    # the L1 norms exact up to roundoff rather than an estimate.
+    breakpoints = np.unique(
+        np.concatenate(([0.0], np.sort(axis_nodes), [extent]))
+    )
+    gl_nodes, gl_weights = np.polynomial.legendre.leggauss(q)
 
-    # 1D Lagrange basis values at quadrature points
-    vals = np.empty((q, x.size), dtype=np.float64)
-    for i in range(q):
+    def lagrange_values(i, x):
         num = np.ones_like(x)
         den = 1.0
         for j in range(q):
@@ -195,9 +206,16 @@ def _basis_l1_norms(table) -> np.ndarray:
                 continue
             num *= x - axis_nodes[j]
             den *= axis_nodes[i] - axis_nodes[j]
-        vals[i] = num / den
+        return num / den
 
-    one_d_l1 = np.array([np.sum(w * np.abs(vals[i])) for i in range(q)])
+    one_d_l1 = np.zeros(q, dtype=np.float64)
+    for left, right in zip(breakpoints[:-1], breakpoints[1:]):
+        if right <= left:
+            continue
+        x = 0.5 * (right - left) * (gl_nodes + 1.0) + left
+        w = 0.5 * (right - left) * gl_weights
+        for i in range(q):
+            one_d_l1[i] += abs(float(np.sum(w * lagrange_values(i, x))))
     norms = np.empty(q**dim, dtype=np.float64)
     for flat, multi in enumerate(iproduct(range(q), repeat=dim)):
         acc = 1.0
@@ -241,10 +259,15 @@ def _channel_kernel(dim: int, label: str):
         return "Constant", ConstantKernel(dim)
     kind, power = label.split(":", 1)
     power = int(power)
+    # Use the same kernel-type namespace as the expansion wrangler's
+    # auto-built split-term tables, so caches interoperate and the labels
+    # follow the established custom-sumpy-kernel convention (which carries
+    # no scale-reuse type: the manager records these tables as
+    # non-rescalable, exactly like direct fixed-parameter tables).
     if kind == "power":
-        return f"RKEAsmPower{power}", _RadialPowerKernel(dim, power)
+        return f"SplitPower{power}", _RadialPowerKernel(dim, power)
     if kind == "power_log":
-        return f"RKEAsmPowerLog{power}", _RadialPowerLogKernel(dim, power)
+        return f"SplitPowerLog{power}", _RadialPowerLogKernel(dim, power)
     raise ValueError(f"unknown channel label: {label}")
 
 
@@ -393,6 +416,16 @@ NearFieldInteractionTable`
 
     result = copy.deepcopy(base)
     result.dtype = result_dtype
+    # Do not inherit the Laplace channel's kernel identity: a fixed-parameter
+    # Helmholtz/Yukawa table is not scale reusable, and the base table's
+    # "log"/"inv_power" scale type would silently apply log-kernel or
+    # homogeneous rescaling. ``None`` matches what a direct fixed-parameter
+    # build records and makes scaling queries fail loudly.
+    result.kernel_type = None
+    if hasattr(result, "integral_knl"):
+        result.integral_knl = None
+    if hasattr(result, "kernel_func"):
+        result.kernel_func = None
     result._data = None
     result.set_reduced_table_data(entry_ids, values.astype(result_dtype))
     result.is_built = True

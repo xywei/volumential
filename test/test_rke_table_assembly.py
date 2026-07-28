@@ -147,8 +147,10 @@ def test_assembled_matches_direct_batched(
     # difference between the elementary-channel and direct integrands.
     assert deviation < 1.0e-6, (deviation, certificate)
     assert certificate["condition_number"] < 1.0e6
-    assert certificate["assembled_max_abs_imag"] <= (
-        1.0e-10 * max(float(np.max(np.abs(assembled_values))), 1.0e-300)
-        if kernel_type == "Yukawa"
-        else np.inf
-    )
+    if kernel_type == "Yukawa":
+        assert certificate["assembled_max_abs_imag"] <= 1.0e-10 * max(
+            float(np.max(np.abs(assembled_values))), 1.0e-300
+        )
+    # the assembled table must not inherit the base channel's scale-reuse
+    # identity (a fixed-parameter table is not scale reusable)
+    assert assembled.kernel_type is None
