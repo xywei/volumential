@@ -109,6 +109,11 @@ def _tail_majorant(dim: int, k: complex, radius: float, n_terms: int) -> float:
     from math import lgamma
 
     k_abs = float(np.abs(np.complex128(k)))
+    if k_abs == 0.0:
+        # Every omitted series term carries a positive power of k, so the
+        # tail vanishes identically (the 3D zero-parameter kernels reduce
+        # exactly to Laplace; the 2D series is rejected upstream).
+        return 0.0
     log_k_half_gamma = float(
         np.abs(np.log(0.5 * np.complex128(k)) + _EULER_GAMMA)
     )
@@ -358,11 +363,29 @@ NearFieldInteractionTable`
             "RKE table assembly supports Helmholtz and Yukawa"
         )
 
+    if float(parameter) == 0.0 and dim == 2:
+        raise ValueError(
+            "zero-parameter 2D assembly is not defined (the 2D series "
+            "coefficients contain log(k/2)); build the Laplace table directly"
+        )
+
     # Conservative bound for the near-field separation radius.  The adaptive
     # List 1 gallery contains center offsets up to 1.5 source-box extents
     # with target boxes up to twice the source size, so a source point and a
     # target point can be up to 1.5 + 1 + 0.5 = 3 extents apart per axis.
     box_extent = float(root_extent) * 0.5 ** int(source_box_level)
+    # The recombination evaluates channel integrals (which scale like
+    # extent**(power + dim)) against coefficients (which scale like
+    # k**power) as separate float64 factors, so extreme physical extents
+    # can overflow or underflow one factor even when the dimensionless
+    # product is moderate.  The table infrastructure's canonical convention
+    # is an O(1) root extent; enforce it rather than certify garbage.
+    if not 1.0e-3 <= box_extent <= 1.0e3:
+        raise ValueError(
+            f"source-box extent {box_extent:g} is outside the supported "
+            "O(1) range for certified float64 recombination; rescale the "
+            "problem to an O(1) root extent (the canonical table convention)"
+        )
     radius = 3.0 * np.sqrt(dim) * box_extent
 
     n_terms, tail_bound = choose_truncation_order(
@@ -410,7 +433,13 @@ NearFieldInteractionTable`
     values = np.zeros_like(contributions[0])
     abs_accumulation = np.zeros(values.shape, dtype=np.float64)
     peak_contribution = 0.0
-    for contribution in contributions:
+    for index, contribution in enumerate(contributions):
+        if not np.all(np.isfinite(contribution)):
+            raise RuntimeError(
+                f"channel contribution {index} is not finite; the channel "
+                "integrals or coefficients over/underflowed float64 "
+                "(rescale the problem to an O(1) root extent)"
+            )
         peak_contribution = max(
             peak_contribution, float(np.max(np.abs(contribution)))
         )
@@ -484,6 +513,12 @@ NearFieldInteractionTable`
         ),
         "peak_contribution": float(peak_contribution),
         "condition_number": float(condition),
+        # Channel quadrature error is owned by ``build_config`` (exactly as
+        # for direct builds) and is NOT part of the certified bounds below.
+        # If every channel is built with relative quadrature error at most
+        # eps_q (relative to its own max entry), the induced entry error of
+        # the assembly is at most eps_q times this amplification factor.
+        "quadrature_amplification_bound": float(max_abs_sum),
         "cancellation_entry_bound": float(cancellation_bound),
         "certified_entry_bound_total": float(entry_bound + cancellation_bound),
         "certified_entry_bound_total_relative": (
