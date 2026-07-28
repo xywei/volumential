@@ -29,7 +29,6 @@ kernel-space bound into a table-entry bound.
 from __future__ import annotations
 
 import copy
-from math import factorial
 
 import numpy as np
 
@@ -56,11 +55,13 @@ def _coefficients_2d(k: complex, n_terms: int):
     coeff_log[0] = 0.0
     coeff_power[0] = 0.0
     harmonic = 0.0
+    # series_scale(n) = (-1)^n (k^2/4)^n / (n!)^2, by the stable recurrence
+    # series_scale(n) = series_scale(n-1) * (-(k^2/4) / n^2), which avoids
+    # forming factorial(n) as an unbounded integer at high orders.
+    series_scale = np.complex128(1.0)
     for n in range(1, n_terms + 1):
         harmonic += 1.0 / n
-        series_scale = ((-1) ** n) * (k * k / 4.0) ** n / (
-            factorial(n) * factorial(n)
-        )
+        series_scale = series_scale * (-(k * k / 4.0) / (n * n))
         coeff_log[n] = -series_scale / (2.0 * np.pi)
         coeff_power[n] = series_scale * (
             (harmonic - (log_k_half + _EULER_GAMMA)) / (2.0 * np.pi) + 0.25j
@@ -69,15 +70,16 @@ def _coefficients_2d(k: complex, n_terms: int):
 
 
 def _coefficients_3d(k: complex, n_terms: int):
-    """Per-order coefficients of ``r^{n-1}`` for ``G_k - G_0`` in 3D."""
+    """Per-order coefficients of ``r^{n-1}`` for ``G_k - G_0`` in 3D,
+    computed by the stable recurrence ``c_n = c_{n-1} * (i k) / n`` to
+    avoid factorial overflow at high orders."""
     k = np.complex128(k)
-    return np.array(
-        [
-            (1j * k) ** n / (4.0 * np.pi * factorial(n))
-            for n in range(1, n_terms + 1)
-        ],
-        dtype=np.complex128,
-    )
+    coefficients = np.empty(n_terms, dtype=np.complex128)
+    value = np.complex128(1.0 / (4.0 * np.pi))
+    for n in range(1, n_terms + 1):
+        value = value * (1j * k) / n
+        coefficients[n - 1] = value
+    return coefficients
 
 # }}}
 
@@ -93,12 +95,21 @@ def _exp_clipped(x: float) -> float:
 
 
 def _log_weight_max_log(radius: float, power: int) -> float:
-    """log of max over 0 < r <= radius of r**power * |log(r)|."""
-    interior = -float(np.log(power)) - 1.0
+    """log of max over 0 < r <= radius of r**power * |log(r)|.
+
+    The stationary point of ``r**p |log r|`` on (0, 1) sits at
+    ``r* = exp(-1/p)``; it contributes only when it lies inside the
+    interval, i.e. when ``radius >= r*``.  Otherwise the function is
+    increasing on (0, radius] and the boundary value is the maximum.
+    """
     log_abs_log_radius = (
         float(np.log(abs(np.log(radius)))) if radius != 1.0 else -np.inf
     )
     boundary = power * float(np.log(radius)) + log_abs_log_radius
+    if power * float(np.log(radius)) < -1.0:
+        # radius < exp(-1/power): the interior extremum is inaccessible
+        return boundary
+    interior = -float(np.log(power)) - 1.0
     return max(interior, boundary)
 
 
@@ -146,11 +157,26 @@ def _tail_majorant(dim: int, k: complex, radius: float, n_terms: int) -> float:
                 - float(np.log(4.0 * np.pi))
             )
         total += term
+        # Per-term growth ratio of the majorant: the 2D terms scale like
+        # ((k R / 2) / (n+1))^2 up to a slowly varying factor (bounded by 2),
+        # the 3D terms like (k R) / (n+1).  Once rho < 1/2, the uncomputed
+        # remainder beyond this term is bounded by the geometric closure
+        # term * rho / (1 - rho).
+        if dim == 2:
+            rho = 2.0 * (k_abs * radius / 2.0 / (n + 1.0)) ** 2
+        else:
+            rho = k_abs * radius / (n + 1.0)
+        decaying = rho < 0.5
         # An exactly-zero computed term means the log-magnitude fell below
         # the float64 underflow threshold; in the decaying regime every
         # later term is smaller still, so this also counts as convergence
         # (covers tiny nonzero parameters whose whole tail underflows).
-        if term == 0.0 or term < 1e-30 * max(total, 1.0e-300):
+        if decaying and (
+            term == 0.0 or term < 1e-30 * max(total, 1.0e-300)
+        ):
+            # close the series with the geometric remainder bound plus a
+            # sub-underflow allowance for the exactly-zero case
+            total += term * rho / (1.0 - rho) + 1.0e-300
             converged = True
             break
     if not converged:
@@ -437,6 +463,7 @@ NearFieldInteractionTable`
     values = np.zeros_like(contributions[0])
     abs_accumulation = np.zeros(values.shape, dtype=np.float64)
     peak_contribution = 0.0
+    sum_of_channel_maxima = 0.0
     for index, contribution in enumerate(contributions):
         if not np.all(np.isfinite(contribution)):
             raise RuntimeError(
@@ -444,9 +471,9 @@ NearFieldInteractionTable`
                 "integrals or coefficients over/underflowed float64 "
                 "(rescale the problem to an O(1) root extent)"
             )
-        peak_contribution = max(
-            peak_contribution, float(np.max(np.abs(contribution)))
-        )
+        channel_max = float(np.max(np.abs(contribution)))
+        peak_contribution = max(peak_contribution, channel_max)
+        sum_of_channel_maxima += channel_max
         abs_accumulation += np.abs(contribution)
         values = values + contribution
 
@@ -479,16 +506,23 @@ NearFieldInteractionTable`
     entry_bound = tail_bound * float(np.max(basis_l1))
     max_entry = float(np.max(np.abs(values))) if values.size else 0.0
 
-    # Floating-point cancellation accounting: the assembly is an alternating
-    # series, and its accuracy degrades when intermediate contributions
-    # dwarf the result (large local parameter |k| * radius).  The rounding
-    # bound is the standard forward bound gamma_m * sum_j |x_j| with
-    # gamma_m = m*eps/(1 - m*eps), evaluated entrywise.
+    # Floating-point recombination accounting: the assembly is an
+    # alternating series, and its accuracy degrades when intermediate
+    # contributions dwarf the result (large local parameter |k| * radius).
+    # The bound covers, entrywise via sum_j |x_j|:
+    # - the summation itself: standard forward bound gamma_m,
+    # - the one rounding of each coefficient-times-channel product, and
+    # - coefficient evaluation, modeled as at most 32 ulps per coefficient
+    #   (each coefficient is produced by a short recurrence of a few
+    #   floating operations per order plus one complex log/exp, assuming a
+    #   few-ulp libm); this modeled constant is recorded in the
+    #   certificate.
     eps = float(np.finfo(np.float64).eps)
     m_terms = len(contributions)
-    gamma_m = m_terms * eps / max(1.0 - m_terms * eps, 0.5)
+    gamma_m = (m_terms + 1) * eps / max(1.0 - (m_terms + 1) * eps, 0.5)
+    coefficient_eval_ulps = 32.0
     max_abs_sum = float(np.max(abs_accumulation)) if values.size else 0.0
-    cancellation_bound = gamma_m * max_abs_sum
+    cancellation_bound = (gamma_m + coefficient_eval_ulps * eps) * max_abs_sum
     condition = max_abs_sum / max(max_entry, 1e-300)
     if condition > max_condition:
         raise RuntimeError(
@@ -521,8 +555,12 @@ NearFieldInteractionTable`
         # for direct builds) and is NOT part of the certified bounds below.
         # If every channel is built with relative quadrature error at most
         # eps_q (relative to its own max entry), the induced entry error of
-        # the assembly is at most eps_q times this amplification factor.
-        "quadrature_amplification_bound": float(max_abs_sum),
+        # the assembly is at most eps_q times this amplification factor:
+        # the sum over channels of each coefficient-weighted channel's own
+        # maximum (channel maxima need not share an entry, so this is the
+        # honest amplification, larger than the entrywise abs-sum).
+        "quadrature_amplification_bound": float(sum_of_channel_maxima),
+        "coefficient_eval_ulps_model": coefficient_eval_ulps,
         "cancellation_entry_bound": float(cancellation_bound),
         "certified_entry_bound_total": float(entry_bound + cancellation_bound),
         "certified_entry_bound_total_relative": (

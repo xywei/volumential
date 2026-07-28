@@ -49,20 +49,30 @@ def test_truncation_order_monotone_and_certifiable():
         choose_truncation_order(2, 1j * 40.0, 4.0, 1.0e-12, max_terms=10)
 
 
-def test_condition_guard_rejects_unresolved_parameters(tmp_path):
+def test_uncertifiable_tolerance_raises_value_error(tmp_path):
+    # lam * radius ~ 68 at level 0 exhausts the default series window, so
+    # the truncation selector must refuse before any channel is built.
+    with pytest.raises(ValueError):
+        choose_truncation_order(2, 1j * 8.0, 8.49, 1.0e-12)
+
+
+def test_condition_guard_rejects_ill_conditioned_assembly(tmp_path):
     queue = _get_queue_or_skip()
-    # lam * radius ~ 23 at level 0: certified float64 recombination must
-    # refuse rather than deliver a silently cancelled result.
-    with pytest.raises((RuntimeError, ValueError)):
+    # A certifiable but cancellation-heavy configuration: the tolerance is
+    # reachable within the series window, so channels assemble, and the
+    # deliberately tight max_condition must then trip the RuntimeError
+    # guard (level-3 2D at lam = 4 measures condition ~ 1.6).
+    with pytest.raises(RuntimeError, match="ill-conditioned"):
         assemble_parameterized_table(
             queue,
             tmp_path / "chan2d.sqlite",
             2,
             "Yukawa",
             2,
-            8.0,
-            source_box_level=0,
-            tolerance=1.0e-12,
+            4.0,
+            source_box_level=3,
+            tolerance=1.0e-8,
+            max_condition=1.0,
         )
 
 
