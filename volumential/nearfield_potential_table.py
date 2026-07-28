@@ -3104,7 +3104,13 @@ class NearFieldInteractionTable:
                 "tanh-sinh-fast radial rules"
             )
 
-        use_batched_builder = self._supports_batched_duffy_builder()
+        # Prefer the batched builder whenever an OpenCL queue or context is
+        # available; without either, fall through to the scalar builder
+        # rather than raising (the manager and table APIs still default the
+        # queue to None).
+        use_batched_builder = self._supports_batched_duffy_builder() and (
+            queue is not None or cl_ctx is not None
+        )
 
         if use_batched_builder:
             if queue is None:

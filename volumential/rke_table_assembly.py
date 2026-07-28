@@ -201,6 +201,11 @@ def choose_truncation_order(
         raise NotImplementedError(
             "certified truncation supports only the 2D and 3D kernel series"
         )
+    if dim == 2 and float(np.abs(np.complex128(k))) == 0.0:
+        raise ValueError(
+            "the 2D series is undefined at k = 0 (its coefficients contain "
+            "log(k/2)); build the Laplace table directly"
+        )
     bound = float("inf")
     for n_terms in range(1, max_terms + 1):
         bound = _tail_majorant(dim, k, radius, n_terms)
@@ -512,15 +517,15 @@ NearFieldInteractionTable`
     # The bound covers, entrywise via sum_j |x_j|:
     # - the summation itself: standard forward bound gamma_m,
     # - the one rounding of each coefficient-times-channel product, and
-    # - coefficient evaluation, modeled as at most 32 ulps per coefficient
-    #   (each coefficient is produced by a short recurrence of a few
-    #   floating operations per order plus one complex log/exp, assuming a
-    #   few-ulp libm); this modeled constant is recorded in the
-    #   certificate.
+    # - coefficient evaluation, modeled as 32 ulps for the seed (one
+    #   complex log/exp under a few-ulp libm) plus 8 ulps per recurrence
+    #   step: the order-n coefficient accumulates rounding from all n
+    #   updates, so the allowance grows with the retained order; the
+    #   modeled constants are recorded in the certificate.
     eps = float(np.finfo(np.float64).eps)
     m_terms = len(contributions)
     gamma_m = (m_terms + 1) * eps / max(1.0 - (m_terms + 1) * eps, 0.5)
-    coefficient_eval_ulps = 32.0
+    coefficient_eval_ulps = 32.0 + 8.0 * n_terms
     max_abs_sum = float(np.max(abs_accumulation)) if values.size else 0.0
     cancellation_bound = (gamma_m + coefficient_eval_ulps * eps) * max_abs_sum
     condition = max_abs_sum / max(max_entry, 1e-300)
@@ -560,7 +565,8 @@ NearFieldInteractionTable`
         # maximum (channel maxima need not share an entry, so this is the
         # honest amplification, larger than the entrywise abs-sum).
         "quadrature_amplification_bound": float(sum_of_channel_maxima),
-        "coefficient_eval_ulps_model": coefficient_eval_ulps,
+        "coefficient_eval_ulps_model": float(coefficient_eval_ulps),
+        "coefficient_eval_ulps_model_form": "32 + 8 * n_series_terms",
         "cancellation_entry_bound": float(cancellation_bound),
         "certified_entry_bound_total": float(entry_bound + cancellation_bound),
         "certified_entry_bound_total_relative": (
