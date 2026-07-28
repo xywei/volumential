@@ -162,6 +162,10 @@ def choose_truncation_order(
 
     Returns ``(n_terms, tail_bound)``; raises if ``max_terms`` is not
     enough."""
+    if dim not in (2, 3):
+        raise NotImplementedError(
+            "certified truncation supports only the 2D and 3D kernel series"
+        )
     bound = float("inf")
     for n_terms in range(1, max_terms + 1):
         bound = _tail_majorant(dim, k, radius, n_terms)
@@ -280,6 +284,7 @@ def _get_channel_tables(
     root_extent,
     labels,
     build_config,
+    force_recompute,
 ):
     from volumential.table_manager import NearFieldInteractionTableManager
 
@@ -291,7 +296,7 @@ def _get_channel_tables(
             kernel_type, sumpy_knl = _channel_kernel(dim, label)
             kwargs = {
                 "source_box_level": int(source_box_level),
-                "force_recompute": False,
+                "force_recompute": bool(force_recompute),
                 "queue": queue,
                 "build_config": build_config,
             }
@@ -320,6 +325,7 @@ def assemble_parameterized_table(
     max_terms: int = 60,
     max_condition: float = 1.0e6,
     build_config=None,
+    force_channel_recompute: bool = False,
 ):
     """Assemble a fixed-parameter near-field table from canonical channels.
 
@@ -328,6 +334,11 @@ def assemble_parameterized_table(
     :arg tolerance: certified absolute kernel-space truncation tolerance on
         the near-field separation region; the certificate also reports the
         induced per-entry bound.
+    :arg force_channel_recompute: rebuild the channel tables even when the
+        cache already holds them.  Cached channels are otherwise returned
+        as stored, regardless of the ``build_config`` requested on this
+        call, so pass ``True`` after tightening the quadrature
+        configuration for an existing cache.
     :returns: ``(table, certificate)`` where ``table`` is a
         :class:`~volumential.nearfield_potential_table.\
 NearFieldInteractionTable`
@@ -347,10 +358,12 @@ NearFieldInteractionTable`
             "RKE table assembly supports Helmholtz and Yukawa"
         )
 
-    # conservative bound for the near-field separation radius: List 1 cases
-    # keep per-axis center offsets within two source-box extents
+    # Conservative bound for the near-field separation radius.  The adaptive
+    # List 1 gallery contains center offsets up to 1.5 source-box extents
+    # with target boxes up to twice the source size, so a source point and a
+    # target point can be up to 1.5 + 1 + 0.5 = 3 extents apart per axis.
     box_extent = float(root_extent) * 0.5 ** int(source_box_level)
-    radius = 2.0 * np.sqrt(dim) * box_extent
+    radius = 3.0 * np.sqrt(dim) * box_extent
 
     n_terms, tail_bound = choose_truncation_order(
         dim, k, radius, tolerance, max_terms=max_terms
@@ -367,21 +380,19 @@ NearFieldInteractionTable`
         root_extent,
         labels,
         build_config,
+        force_channel_recompute,
     )
 
     base = tables["laplace"]
     entry_ids = np.asarray(base.get_reduced_entry_ids(), dtype=np.int64)
 
     def reduced(label):
-        table = tables[label]
-        ids, channel_values = table.get_reduced_table_data()
-        ids = np.asarray(ids, dtype=np.int64)
-        if not np.array_equal(ids, entry_ids):
-            raise RuntimeError(
-                f"channel {label} has mismatched symmetry-reduced entries; "
-                "all scalar radial channels must share the canonical entry set"
-            )
-        return np.asarray(channel_values)
+        # Address every channel through full entry IDs so dense-stored
+        # (legacy cache) and compact symmetry-reduced channels interoperate;
+        # the accessor raises if a channel lacks any canonical entry.
+        return np.asarray(
+            tables[label].get_entry_data_for_full_indices(entry_ids)
+        )
 
     contributions = [reduced("laplace").astype(np.complex128)]
     if dim == 2:
@@ -397,11 +408,13 @@ NearFieldInteractionTable`
             contributions.append(coeffs[n - 1] * reduced(label))
 
     values = np.zeros_like(contributions[0])
+    abs_accumulation = np.zeros(values.shape, dtype=np.float64)
     peak_contribution = 0.0
     for contribution in contributions:
         peak_contribution = max(
             peak_contribution, float(np.max(np.abs(contribution)))
         )
+        abs_accumulation += np.abs(contribution)
         values = values + contribution
 
     max_imag = float(np.max(np.abs(values.imag))) if values.size else 0.0
@@ -422,10 +435,9 @@ NearFieldInteractionTable`
     # homogeneous rescaling. ``None`` matches what a direct fixed-parameter
     # build records and makes scaling queries fail loudly.
     result.kernel_type = None
-    if hasattr(result, "integral_knl"):
-        result.integral_knl = None
-    if hasattr(result, "kernel_func"):
-        result.kernel_func = None
+    for identity_attr in ("integral_knl", "kernel_func", "kernel_type_cached"):
+        if hasattr(result, identity_attr):
+            setattr(result, identity_attr, None)
     result._data = None
     result.set_reduced_table_data(entry_ids, values.astype(result_dtype))
     result.is_built = True
@@ -436,10 +448,15 @@ NearFieldInteractionTable`
 
     # Floating-point cancellation accounting: the assembly is an alternating
     # series, and its accuracy degrades when intermediate contributions
-    # dwarf the result (large local parameter |k| * radius).
+    # dwarf the result (large local parameter |k| * radius).  The rounding
+    # bound is the standard forward bound gamma_m * sum_j |x_j| with
+    # gamma_m = m*eps/(1 - m*eps), evaluated entrywise.
     eps = float(np.finfo(np.float64).eps)
-    cancellation_bound = peak_contribution * len(contributions) * eps
-    condition = peak_contribution / max(max_entry, 1e-300)
+    m_terms = len(contributions)
+    gamma_m = m_terms * eps / max(1.0 - m_terms * eps, 0.5)
+    max_abs_sum = float(np.max(abs_accumulation)) if values.size else 0.0
+    cancellation_bound = gamma_m * max_abs_sum
+    condition = max_abs_sum / max(max_entry, 1e-300)
     if condition > max_condition:
         raise RuntimeError(
             "RKE table assembly is ill-conditioned for this parameter and "
