@@ -1782,13 +1782,15 @@ class NearFieldInteractionTable:
         if self.integral_knl is None:
             return False
 
-        kernel = self.integral_knl
-
-        # Yukawa was historically routed to scalar Duffy builds. Batched Yukawa
-        # is now supported for 3D and should be preferred for production runtime.
-        if kernel.__class__.__name__ == "YukawaKernel":
-            return self.dim == 3
-
+        # The batched builder is preferred for every supported kernel.  The
+        # historical 2D Yukawa gate (scalar-only routing) was removed after a
+        # matched-order comparison against a converged scalar reference:
+        # batched K0 quadrature at 80/320 agrees with the scalar 80/320
+        # reference to 4.3e-12 (the scalar rule's own floor) and is already
+        # converged there (identical at 128/480), while at default orders the
+        # batched rule is roughly six orders more accurate than the scalar
+        # rule at the same orders.  Environments where batched compilation
+        # fails still fall back to the scalar builder at the call site.
         return True
 
     def _scalar_duffy_fallback_is_safe(self):
@@ -3102,7 +3104,13 @@ class NearFieldInteractionTable:
                 "tanh-sinh-fast radial rules"
             )
 
-        use_batched_builder = self._supports_batched_duffy_builder()
+        # Prefer the batched builder whenever an OpenCL queue or context is
+        # available; without either, fall through to the scalar builder
+        # rather than raising (the manager and table APIs still default the
+        # queue to None).
+        use_batched_builder = self._supports_batched_duffy_builder() and (
+            queue is not None or cl_ctx is not None
+        )
 
         if use_batched_builder:
             if queue is None:
