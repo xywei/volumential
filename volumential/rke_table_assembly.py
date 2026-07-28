@@ -146,7 +146,11 @@ def _tail_majorant(dim: int, k: complex, radius: float, n_terms: int) -> float:
                 - float(np.log(4.0 * np.pi))
             )
         total += term
-        if term < 1e-30 * max(total, 1.0e-300):
+        # An exactly-zero computed term means the log-magnitude fell below
+        # the float64 underflow threshold; in the decaying regime every
+        # later term is smaller still, so this also counts as convergence
+        # (covers tiny nonzero parameters whose whole tail underflows).
+        if term == 0.0 or term < 1e-30 * max(total, 1.0e-300):
             converged = True
             break
     if not converged:
