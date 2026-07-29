@@ -5996,7 +5996,10 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
             )
 
             if (np.asarray(ier) != 0).any():
-                raise RuntimeError("formmp_imany failed with nonzero ier")
+                raise RuntimeError(
+                    f"formmp_imany failed with nonzero ier "
+                    f"on level {lev} ({nboxes} boxes)"
+                )
 
             # expn has shape (*reversed(expansion_shape), nvcount); boxtree
             # stores mpole.T per box, so expn.T has exactly the layout of
@@ -6670,21 +6673,30 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
         return True
 
     @memoize_method
-    def _l2p_matrix(self, lev):
-        """Build the dense L2P evaluation matrix for level *lev*.
+    def _l2p_matrix(self, lev, ref_ibox):
+        """Build the dense L2P evaluation matrix for level *lev*, using
+        the target offsets of box *ref_ibox* as the reference layout.
+
+        *ref_ibox* must be the same box whose offsets
+        :meth:`_l2p_level_layout_ok` verified (i.e. the first nonempty box
+        among the traversal's target boxes of the level), so the matrix is
+        never built from an unverified reference. Memoized on
+        ``(lev, ref_ibox)``; for a fixed traversal the reference box is
+        stable, so the memoization stays effective across calls.
 
         Returns an array of shape ``(ntargets_per_box, ncoefs)`` whose
         column *j* is the potential of the *j*-th unit coefficient vector,
         evaluated (via the same scalar ``taeval`` routine boxtree uses) at
-        the reference target offsets of the level's first nonempty target
-        box. Rows are matched to the C-order raveling of boxtree's
-        per-box expansion view, so at runtime
+        the reference target offsets. Rows are matched to the C-order
+        raveling of boxtree's per-box expansion view, so at runtime
 
             pot = exps_view[boxes].reshape(nboxes, ncoefs) @ M.T
         """
-        start, stop = self.tree.level_start_box_nrs[lev:lev + 2]
-        _, ref_offsets = self._l2p_reference_offsets(lev, range(start, stop))
-        assert ref_offsets is not None
+        pslice = self._get_target_slice(ref_ibox)
+        ref_offsets = (
+            self._get_targets(pslice)
+            - self.tree.box_centers[:, ref_ibox].reshape(-1, 1)
+        )
 
         taeval = self.tree_indep.get_expn_eval_routine("ta")
         rscale = self.level_to_rscale(lev)
@@ -6714,6 +6726,14 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
     ):
         """Per-box scalar L2P for one level; identical math to the loop in
         :meth:`boxtree.pyfmmlib_integration.FMMLibExpansionWrangler.eval_locals`.
+
+        .. note::
+
+            This mirrors boxtree's ``eval_locals`` per-box loop combined
+            with the non-grad branch of its ``add_potgrad_onto_output``
+            (i.e. ``output[tgt_pslice] += pot``). If boxtree's
+            implementation changes, this method must be updated to match,
+            or the agreement tests will surface the drift.
         """
         taeval = self.tree_indep.get_expn_eval_routine("ta")
         rscale = self.level_to_rscale(lev)
@@ -6760,7 +6780,7 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
             if len(boxes_ne) == 0:
                 continue
 
-            _, ref_offsets = self._l2p_reference_offsets(lev, boxes_ne)
+            ref_ibox, ref_offsets = self._l2p_reference_offsets(lev, boxes_ne)
 
             if not self._l2p_level_layout_ok(
                 lev, boxes_ne, counts_ne, ref_offsets
@@ -6775,7 +6795,7 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
                 )
                 continue
 
-            mat = self._l2p_matrix(lev)
+            mat = self._l2p_matrix(lev, ref_ibox)
 
             nboxes = len(boxes_ne)
             exps = local_exps_view[boxes_ne - level_start_ibox].reshape(
@@ -6783,10 +6803,17 @@ class FPNDFMMLibExpansionWrangler(ExpansionWranglerInterface, FMMLibExpansionWra
             )
             pots = exps @ mat.T
 
+            # The layout check guarantees every box on this level has
+            # exactly nref targets, and the target slices of distinct
+            # boxes are disjoint, so a single fancy-indexed accumulate
+            # (no duplicate indices) replaces the per-box loop safely.
+            nref = ref_offsets.shape[1]
             box_target_starts = self.box_target_starts()
-            for i in range(nboxes):
-                pstart = box_target_starts[boxes_ne[i]]
-                output[pstart:pstart + counts_ne[i]] += pots[i]
+            flat_idx = (
+                box_target_starts[boxes_ne][:, None]
+                + np.arange(nref)[None, :]
+            ).ravel()
+            output[flat_idx] += pots.ravel()
 
         return output
 

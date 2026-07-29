@@ -64,7 +64,7 @@ def _make_pocl_context():
     pytest.skip("pocl (Portable Computing Language) platform not available")
 
 
-def _build_wrangler(ctx, queue, *, kernel_type, q_order, nlevels,
+def _build_wrangler(ctx, queue, *, dim, kernel_type, q_order, nlevels,
                     fmm_order, graded=False, helmholtz_k=2.0):
     from sumpy.kernel import HelmholtzKernel, LaplaceKernel
 
@@ -73,8 +73,8 @@ def _build_wrangler(ctx, queue, *, kernel_type, q_order, nlevels,
         FPNDFMMLibTreeIndependentDataForWrangler,
     )
 
-    dim = 3
-    mesh = mg.MeshGen3D(q_order, nlevels, -0.5, 0.5, queue=queue)
+    mesh_cls = {2: mg.MeshGen2D, 3: mg.MeshGen3D}[dim]
+    mesh = mesh_cls(q_order, nlevels, -0.5, 0.5, queue=queue)
 
     if graded:
         # Refine the cells nearest to a corner to obtain a graded
@@ -129,7 +129,7 @@ def _build_wrangler(ctx, queue, *, kernel_type, q_order, nlevels,
     # smooth source density on the quadrature nodes (in tree order)
     coords = np.array([coords_i.get(queue) for coords_i in q_points])
     density = np.exp(-16 * np.sum(coords**2, axis=0)) * (
-        1 + coords[0] - 2 * coords[1] * coords[2]
+        1 + coords[0] - 2 * coords[-2] * coords[-1]
     )
     weights = density * q_weights.get(queue)
     weights = wrangler.reorder_sources(weights)
@@ -150,14 +150,15 @@ def _synthesize_local_expansions(wrangler, seed=17):
 # }}}
 
 
+@pytest.mark.parametrize("dim", [2, 3])
 @pytest.mark.parametrize("kernel_type", ["laplace", "helmholtz"])
 @pytest.mark.parametrize("graded", [False, True])
-def test_batched_form_multipoles_agrees_with_boxtree(kernel_type, graded):
+def test_batched_form_multipoles_agrees_with_boxtree(dim, kernel_type, graded):
     ctx = _make_pocl_context()
     queue = cl.CommandQueue(ctx)
 
     wrangler, weights = _build_wrangler(
-        ctx, queue, kernel_type=kernel_type,
+        ctx, queue, dim=dim, kernel_type=kernel_type,
         q_order=4, nlevels=3, fmm_order=8, graded=graded,
     )
 
@@ -176,8 +177,8 @@ def test_batched_form_multipoles_agrees_with_boxtree(kernel_type, graded):
     assert ref_scale > 0
     rel_err = np.abs(mpoles_new - mpoles_ref).max() / ref_scale
     logger.info(
-        "form_multipoles (%s, graded=%s): max rel diff %.3e",
-        kernel_type, graded, rel_err,
+        "form_multipoles (%dd, %s, graded=%s): max rel diff %.3e",
+        dim, kernel_type, graded, rel_err,
     )
     assert rel_err <= 1e-14
 
@@ -188,7 +189,7 @@ def test_form_multipoles_fallback_path(monkeypatch):
     queue = cl.CommandQueue(ctx)
 
     wrangler, weights = _build_wrangler(
-        ctx, queue, kernel_type="laplace",
+        ctx, queue, dim=3, kernel_type="laplace",
         q_order=3, nlevels=2, fmm_order=6,
     )
 
@@ -207,14 +208,15 @@ def test_form_multipoles_fallback_path(monkeypatch):
     assert np.abs(mpoles_batched - mpoles_fallback).max() / ref_scale <= 1e-14
 
 
+@pytest.mark.parametrize("dim", [2, 3])
 @pytest.mark.parametrize("kernel_type", ["laplace", "helmholtz"])
 @pytest.mark.parametrize("graded", [False, True])
-def test_gemm_eval_locals_agrees_with_boxtree(kernel_type, graded):
+def test_gemm_eval_locals_agrees_with_boxtree(dim, kernel_type, graded):
     ctx = _make_pocl_context()
     queue = cl.CommandQueue(ctx)
 
     wrangler, _weights = _build_wrangler(
-        ctx, queue, kernel_type=kernel_type,
+        ctx, queue, dim=dim, kernel_type=kernel_type,
         q_order=4, nlevels=3, fmm_order=8, graded=graded,
     )
 
@@ -234,8 +236,8 @@ def test_gemm_eval_locals_agrees_with_boxtree(kernel_type, graded):
     assert ref_norm > 0
     rel_err = np.linalg.norm(pot_new - pot_ref) / ref_norm
     logger.info(
-        "eval_locals (%s, graded=%s): rel l2 diff %.3e",
-        kernel_type, graded, rel_err,
+        "eval_locals (%dd, %s, graded=%s): rel l2 diff %.3e",
+        dim, kernel_type, graded, rel_err,
     )
     assert rel_err <= 1e-12
 
@@ -247,7 +249,7 @@ def test_eval_locals_fallback_path(monkeypatch):
     queue = cl.CommandQueue(ctx)
 
     wrangler, _weights = _build_wrangler(
-        ctx, queue, kernel_type="laplace",
+        ctx, queue, dim=3, kernel_type="laplace",
         q_order=3, nlevels=2, fmm_order=6,
     )
 
