@@ -47,6 +47,10 @@ extensions = [
     "sphinx.ext.githubpages",
 ]
 
+intersphinx_mapping = {
+    "sumpy": ("https://documen.tician.de/sumpy", None),
+}
+
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ["_templates"]
 
