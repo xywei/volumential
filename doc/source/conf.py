@@ -48,11 +48,7 @@ extensions = [
 ]
 
 intersphinx_mapping = {
-    "python": ("https://docs.python.org/3", None),
-    "numpy": ("https://numpy.org/doc/stable", None),
     "sumpy": ("https://documen.tician.de/sumpy", None),
-    "boxtree": ("https://documen.tician.de/boxtree", None),
-    "pyopencl": ("https://documen.tician.de/pyopencl", None),
 }
 
 # Add any paths that contain templates here, relative to this directory.
