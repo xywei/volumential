@@ -675,6 +675,21 @@ def run_sweep(
         _require_usable_order_pair(policy, "direct policy")
         for policy in direct_policies
     ]
+    if len(direct_policies) != 2:
+        raise ValueError(
+            "exactly two direct policies (loose;tight) are required"
+        )
+    loose_policy, tight_policy = direct_policies
+    if any(
+        tight_order < loose_order
+        for loose_order, tight_order in zip(
+            loose_policy, tight_policy, strict=True
+        )
+    ) or tight_policy == loose_policy:
+        raise ValueError(
+            "tight direct policy must be componentwise >= the loose policy "
+            "and strictly larger in at least one component"
+        )
     classical_channel_orders = _require_usable_order_pair(
         classical_channel_orders, "classical channel policy"
     )

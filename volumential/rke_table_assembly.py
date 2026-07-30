@@ -1873,7 +1873,7 @@ def assemble_windowed_parameterized_table(
         defaults to 61 in both dimensions.
     :returns: ``(table, certificate)`` with ``table`` a
         :class:`~volumential.nearfield_potential_table.\
-    NearFieldInteractionTable`
+NearFieldInteractionTable`
         (complex128 for Helmholtz, float64 for Yukawa) whose kernel identity
         is nulled exactly like the classical assembler's, and
         ``certificate`` a dict of the assembly provenance.

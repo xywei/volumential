@@ -660,6 +660,10 @@ def test_windowed_sweep_channel_cold_status_uses_cache_disposition(
     assert recovered["channel_build_was_cold"] is True
     assert warm["channel_build_was_cold"] is False
 
+    for bad in (None, "unknown"):
+        with pytest.raises(RuntimeError, match="cache disposition"):
+            prepare([bad, "hit"])
+
 
 @pytest.mark.parametrize(("root_extent", "window_theta"), [
     (0.0, 16.0),
@@ -735,6 +739,30 @@ def test_windowed_sweep_programmatic_integer_validation_precedes_side_effects(
     kwargs.update(update)
 
     with pytest.raises(ValueError, match="must be an integer"):
+        module.run_sweep(**kwargs)
+    assert not cache_dir.exists()
+
+
+@pytest.mark.parametrize("direct_policies", [
+    [(2, 7)],
+    [(2, 7), (3, 8), (4, 9)],
+    [(2, 7), (2, 7)],
+    [(3, 8), (2, 9)],
+])
+def test_windowed_sweep_programmatic_direct_policy_contract_precedes_side_effects(
+    tmp_path, monkeypatch, direct_policies
+):
+    module = _load_benchmark("windowed_rke_sweep")
+    cache_dir = tmp_path / "cache"
+    monkeypatch.setattr(
+        module,
+        "_make_queue",
+        lambda: pytest.fail("queue creation must not be attempted"),
+    )
+    kwargs = _windowed_sweep_run_kwargs(cache_dir)
+    kwargs["direct_policies"] = direct_policies
+
+    with pytest.raises(ValueError, match="direct polic"):
         module.run_sweep(**kwargs)
     assert not cache_dir.exists()
 
