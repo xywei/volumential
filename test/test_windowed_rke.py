@@ -448,6 +448,74 @@ def test_germ_cancellation_implementation_remainder(dim, kernel_type):
         1e-3, float(np.max(moderate))
     )
 
+
+@pytest.mark.parametrize("dim", [2, 3])
+@pytest.mark.parametrize("kernel_type", ["Yukawa", "Helmholtz"])
+def test_windowed_remainder_defines_origin_limit(dim, kernel_type):
+    import mpmath as mp
+
+    source_box_level = 3 if dim == 2 else 2
+    box_extent = _box_extent(source_box_level)
+    window_scale = (box_extent / WINDOW_THETA) ** 2
+    parameter = 4.0
+    zeta = parameter**2 if kernel_type == "Yukawa" else -(parameter**2)
+    remainder = windowed_remainder_profile(
+        dim,
+        zeta,
+        _kernel_radial(dim, kernel_type, parameter),
+        window_scale,
+        6,
+    )
+
+    old_dps = mp.mp.dps
+    mp.mp.dps = 100
+    try:
+        r = mp.sqrt(window_scale) * mp.mpf("1e-40")
+        x = r * r / (4 * window_scale)
+        if kernel_type == "Yukawa":
+            kernel = (
+                mp.besselk(0, parameter * r) / (2 * mp.pi)
+                if dim == 2
+                else mp.exp(-parameter * r) / (4 * mp.pi * r)
+            )
+        else:
+            kernel = (
+                0.25j * mp.hankel1(0, parameter * r)
+                if dim == 2
+                else mp.exp(1j * parameter * r) / (4 * mp.pi * r)
+            )
+
+        if dim == 2:
+            value = mp.e1(x)
+            profiles = [mp.mpf("0.5") * value]
+            for m in range(1, 6):
+                value = (mp.exp(-x) - x * value) / m
+                profiles.append(mp.mpf("0.5") * value)
+            prefactor = 1 / (2 * mp.pi)
+        else:
+            value = mp.sqrt(mp.pi) * mp.erfc(mp.sqrt(x)) / mp.sqrt(x)
+            scale = 1 / (2 * mp.sqrt(mp.pi * window_scale))
+            profiles = [scale * value]
+            for m in range(1, 6):
+                value = (mp.exp(-x) - x * value) / (m - mp.mpf("0.5"))
+                profiles.append(scale * value)
+            prefactor = 1 / (4 * mp.pi)
+
+        coefficient = mp.mpc(1)
+        channel_sum = mp.mpc(0)
+        for m, profile in enumerate(profiles):
+            channel_sum += coefficient * profile
+            coefficient *= -mp.mpc(zeta * window_scale) / (m + 1)
+        expected = complex(kernel - prefactor * channel_sum)
+    finally:
+        mp.mp.dps = old_dps
+
+    at_origin = remainder(0.0)
+    values = remainder(np.array([0.0, 1.0e-7 * box_extent]))
+    assert np.isfinite(at_origin)
+    assert values[0] == pytest.approx(at_origin)
+    assert at_origin == pytest.approx(expected, rel=2.0e-12, abs=2.0e-12)
+
 # }}}
 
 

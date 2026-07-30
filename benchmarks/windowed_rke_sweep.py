@@ -651,6 +651,8 @@ def run_sweep(
     _require_finite_positive(root_extent, "root_extent")
     _require_finite_positive(window_theta, "window_theta")
     dims = [_require_integer(dim, "dim") for dim in dims]
+    if not dims:
+        raise ValueError("at least one dimension is required")
     if any(dim not in (2, 3) for dim in dims):
         raise ValueError("dim entries must be 2 or 3")
     if q_order_override is not None:

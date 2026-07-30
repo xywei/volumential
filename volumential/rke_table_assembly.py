@@ -836,6 +836,9 @@ def windowed_remainder_profile(dim, zeta, kernel_radial, window_scale, p_star):
     exactly the smooth part the windowed assembler integrates, so tests can
     certify the coefficient/prefactor/sign conventions queue-free by probing
     ``R`` directly (boundedness and germ cancellation as ``r -> 0``).
+    At ``r = 0`` the callable returns the analytic removable limit for the
+    decaying Yukawa / outgoing Helmholtz branch instead of evaluating the two
+    singular terms separately.
 
     :returns: a vectorized callable ``R(r)`` (complex-valued).
     """
@@ -849,11 +852,41 @@ def windowed_remainder_profile(dim, zeta, kernel_radial, window_scale, p_star):
         for m in range(p_star)
     ]
 
-    def remainder_radial(r):
-        channel_sum = coefficients[0] * profiles[0](r)
+    # Select the decaying Yukawa / outgoing Helmholtz square root.  On the
+    # negative real axis the latter is the lower-half-plane limit, -i*k.
+    decay = np.sqrt(np.complex128(zeta))
+    if decay.real < 0.0 or (decay.real == 0.0 and decay.imag > 0.0):
+        decay = -decay
+    if dim == 2:
+        origin_value = (
+            -np.log(decay * np.sqrt(window_scale)) - 0.5 * _EULER_GAMMA
+        ) / (2.0 * np.pi)
         for m in range(1, p_star):
-            channel_sum = channel_sum + coefficients[m] * profiles[m](r)
-        return kernel_radial(r) - prefactor * channel_sum
+            origin_value -= prefactor * coefficients[m] / (2.0 * m)
+    else:
+        origin_value = (
+            -decay + 1.0 / np.sqrt(np.pi * window_scale)
+        ) / (4.0 * np.pi)
+        for m in range(1, p_star):
+            profile_at_origin = 1.0 / (
+                2.0 * np.sqrt(np.pi * window_scale) * (m - 0.5)
+            )
+            origin_value -= (
+                prefactor * coefficients[m] * profile_at_origin
+            )
+
+    def remainder_radial(r):
+        r_array = np.asarray(r)
+        at_origin = r_array == 0
+        safe_r = np.where(at_origin, 1.0, r_array)
+        channel_sum = coefficients[0] * profiles[0](safe_r)
+        for m in range(1, p_star):
+            channel_sum = channel_sum + coefficients[m] * profiles[m](safe_r)
+        result = kernel_radial(safe_r) - prefactor * channel_sum
+        result = np.where(at_origin, origin_value, result)
+        if np.isscalar(r) or r_array.ndim == 0:
+            return np.asarray(result).item()
+        return result
 
     return remainder_radial
 

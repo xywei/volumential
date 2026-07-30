@@ -765,6 +765,24 @@ def test_windowed_sweep_programmatic_integer_validation_precedes_side_effects(
     assert not cache_dir.exists()
 
 
+def test_windowed_sweep_rejects_empty_dimensions_before_side_effects(
+    tmp_path, monkeypatch
+):
+    module = _load_benchmark("windowed_rke_sweep")
+    cache_dir = tmp_path / "cache"
+    monkeypatch.setattr(
+        module,
+        "_make_queue",
+        lambda: pytest.fail("queue creation must not be attempted"),
+    )
+    kwargs = _windowed_sweep_run_kwargs(cache_dir)
+    kwargs["dims"] = []
+
+    with pytest.raises(ValueError, match="at least one dimension"):
+        module.run_sweep(**kwargs)
+    assert not cache_dir.exists()
+
+
 @pytest.mark.parametrize("direct_policies", [
     [(2, 7)],
     [(2, 7), (3, 8), (4, 9)],
