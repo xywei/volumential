@@ -573,8 +573,12 @@ def _direct_reference_table(
     [
         (2, "Yukawa", 3, 4.0, 3),
         (2, "Helmholtz", 3, 4.0, 3),
-        (3, "Yukawa", 2, 2.0, 2),
-        (3, "Helmholtz", 2, 2.0, 2),
+        pytest.param(
+            3, "Yukawa", 2, 2.0, 2, marks=pytest.mark.full_accuracy
+        ),
+        pytest.param(
+            3, "Helmholtz", 2, 2.0, 2, marks=pytest.mark.full_accuracy
+        ),
     ],
 )
 def test_windowed_matches_direct_batched(
@@ -706,6 +710,7 @@ def high_theta_direct_refs(tmp_path_factory):
 
 
 @pytest.mark.parametrize("kernel_type", ["Yukawa", "Helmholtz"])
+@pytest.mark.full_accuracy
 def test_high_theta_parity(
     tmp_path, channel_cache, high_theta_direct_refs, kernel_type
 ):
