@@ -1582,6 +1582,26 @@ def test_invalid_window_scales_and_declarations(tmp_path, invalid):
     assert not Path(str(cache) + ".windowed").exists()
 
 
+@pytest.mark.parametrize("invalid", [0.0, -1.0, np.nan, np.inf])
+def test_invalid_window_condition_thresholds(tmp_path, invalid):
+    from pathlib import Path
+
+    cache = tmp_path / "condition-guards.sqlite"
+
+    def zero_kernel(r):
+        return np.zeros_like(np.asarray(r, dtype=np.float64))
+
+    with pytest.raises(ValueError, match="max_condition must be finite and positive"):
+        _assemble_windowed_for_zeta(
+            cache, 2, 1, 1.0, zero_kernel, max_condition=invalid
+        )
+    with pytest.raises(ValueError, match="max_condition must be finite and positive"):
+        assemble_windowed_parameterized_table(
+            cache, 2, "Yukawa", 1, 1.0, max_condition=invalid
+        )
+    assert not Path(str(cache) + ".windowed").exists()
+
+
 def test_windowed_declaration_guards(tmp_path):
     cache = tmp_path / "guards.sqlite"
 

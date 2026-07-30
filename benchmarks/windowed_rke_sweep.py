@@ -1156,7 +1156,10 @@ def main() -> int:
         parser.error(str(exc))
 
     smoke = args.mode == "smoke"
-    dims = _parse_csv_ints(args.dim or ("2" if smoke else "2,3"))
+    try:
+        dims = _parse_csv_ints(args.dim or ("2" if smoke else "2,3"))
+    except ValueError as exc:
+        parser.error(str(exc))
     if any(dim not in (2, 3) for dim in dims):
         parser.error("--dim entries must be 2 or 3")
     kernel_map = {"helmholtz": "Helmholtz", "yukawa": "Yukawa"}
@@ -1171,12 +1174,15 @@ def main() -> int:
     if not kernels:
         parser.error("at least one kernel is required")
 
-    p_stars = _parse_csv_ints(args.p_star)
+    try:
+        p_stars = _parse_csv_ints(args.p_star)
+        smooth_orders = _parse_csv_ints(
+            args.smooth_orders or ("16" if smoke else "8,16,24,32")
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
     if any(p < 1 for p in p_stars):
         parser.error("--p-star entries must be >= 1")
-    smooth_orders = _parse_csv_ints(
-        args.smooth_orders or ("16" if smoke else "8,16,24,32")
-    )
     if any(order < 1 for order in smooth_orders):
         parser.error("--smooth-orders entries must be >= 1")
     if args.q_order is not None and args.q_order < 1:
@@ -1270,6 +1276,12 @@ def main() -> int:
         1 for row in rows if row["classical_status"] == "failed"
     )
     no_reference = sum(1 for row in rows if not row["direct_reference_policy"])
+    direct_failed = sum(
+        1
+        for row in rows
+        if row["direct_loose_status"].startswith("failed:")
+        or row["direct_tight_status"].startswith("failed:")
+    )
     usable = sum(
         1
         for row in rows
@@ -1279,12 +1291,12 @@ def main() -> int:
         f"[done] rows={len(rows)} usable={usable} "
         f"windowed_refused={refused} windowed_failed={windowed_failed} "
         f"classical_failed={classical_failed} "
-        f"no_direct_reference={no_reference} "
+        f"direct_failed={direct_failed} no_direct_reference={no_reference} "
         f"csv={csv_path} json={json_path} "
         f"total_s={run_info['total_seconds']:.1f}",
         flush=True,
     )
-    if windowed_failed or classical_failed or not usable:
+    if windowed_failed or classical_failed or direct_failed or not usable:
         print(
             "[error] sweep has unexpected assembly failures or no row with "
             "both a windowed 'ok' assembly and a usable direct reference",

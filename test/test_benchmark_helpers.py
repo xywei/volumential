@@ -529,6 +529,28 @@ def test_windowed_sweep_rejects_nonpositive_or_nonfinite_cli_values(
     assert exc_info.value.code == 2
 
 
+@pytest.mark.parametrize(("option", "value"), [
+    ("--dim", "x"),
+    ("--p-star", "x"),
+    ("--smooth-orders", "x"),
+])
+def test_windowed_sweep_reports_malformed_csv_as_cli_error(
+    option, value, monkeypatch, capsys
+):
+    module = _load_benchmark("windowed_rke_sweep")
+    monkeypatch.setattr(sys, "argv", ["windowed_rke_sweep.py", option, value])
+    monkeypatch.setattr(
+        module,
+        "run_sweep",
+        lambda **kwargs: pytest.fail("run_sweep must not be called"),
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        module.main()
+    assert exc_info.value.code == 2
+    assert "error:" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize("raw", [
     "24,61;24,61",
     "24,61;23,160",
@@ -778,6 +800,8 @@ def test_windowed_sweep_main_fails_if_any_assembly_failed(
     usable = {
         "windowed_status": "ok",
         "classical_status": "ok",
+        "direct_loose_status": "ok",
+        "direct_tight_status": "ok",
         "direct_reference_policy": "tight",
     }
     failed = {**usable, failed_column: "failed"}
@@ -798,6 +822,41 @@ def test_windowed_sweep_main_fails_if_any_assembly_failed(
     ])
 
     assert module.main() == 1
+
+
+@pytest.mark.parametrize(("loose_status", "tight_status", "expected"), [
+    ("failed: RuntimeError: loose", "ok", 1),
+    ("ok", "failed: RuntimeError: tight", 1),
+    ("ok", "skipped: --skip-3d-tight", 0),
+])
+def test_windowed_sweep_main_fails_on_unexpected_direct_build_failure(
+    tmp_path, monkeypatch, loose_status, tight_status, expected
+):
+    module = _load_benchmark("windowed_rke_sweep")
+    row = {
+        "windowed_status": "ok",
+        "classical_status": "ok",
+        "direct_loose_status": loose_status,
+        "direct_tight_status": tight_status,
+        "direct_reference_policy": "tight" if tight_status == "ok" else "loose",
+    }
+    monkeypatch.setattr(
+        module,
+        "run_sweep",
+        lambda **kwargs: (
+            [row],
+            {"total_seconds": 0.0, "channel_prep": {}, "mus_by_dim": {}},
+        ),
+    )
+    monkeypatch.setattr(sys, "argv", [
+        "windowed_rke_sweep.py",
+        "--out-dir",
+        str(tmp_path / "out"),
+        "--cache-dir",
+        str(tmp_path / "cache"),
+    ])
+
+    assert module.main() == expected
 
 
 def _windowed_sweep_classical_kwargs(tmp_path):

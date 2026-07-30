@@ -1667,6 +1667,7 @@ def _assemble_windowed_for_zeta(
             "smooth_quad_order", smooth_quad_order, minimum=1
         )
     window_theta = _require_finite_positive("window_theta", window_theta)
+    max_condition = _require_finite_positive("max_condition", max_condition)
     zeta = complex(zeta)
     chan_regular_order, chan_radial_order = _resolve_channel_orders(
         dim, chan_regular_order, chan_radial_order
@@ -1771,10 +1772,10 @@ def _assemble_windowed_for_zeta(
     condition = (sum(per_channel_peak) + remainder_peak) / max(
         max_entry, 1e-300
     )
-    if condition > float(max_condition):
+    if condition > max_condition:
         raise RKEWindowConditioningError(
             "ill-conditioned windowed assembly (condition "
-            f"{condition:.3e} > {float(max_condition):.1e}); the parameter "
+            f"{condition:.3e} > {max_condition:.1e}); the parameter "
             "lies outside the conditioning contract of the declared window"
         )
 
