@@ -783,6 +783,33 @@ def test_windowed_sweep_rejects_empty_dimensions_before_side_effects(
     assert not cache_dir.exists()
 
 
+@pytest.mark.parametrize(("update", "match"), [
+    ({"mode": "invalid"}, "mode must"),
+    ({"kernels": []}, "at least one kernel"),
+    ({"kernels": ["Laplace"]}, "unknown kernel"),
+    ({"p_stars": []}, "at least one p_star"),
+    ({"smooth_orders": []}, "at least one smooth_order"),
+    ({"mus": []}, "at least one mu"),
+    ({"chan_orders": []}, "at least one channel policy"),
+])
+def test_windowed_sweep_rejects_empty_or_unknown_axes_before_side_effects(
+    tmp_path, monkeypatch, update, match
+):
+    module = _load_benchmark("windowed_rke_sweep")
+    cache_dir = tmp_path / "cache"
+    monkeypatch.setattr(
+        module,
+        "_make_queue",
+        lambda: pytest.fail("queue creation must not be attempted"),
+    )
+    kwargs = _windowed_sweep_run_kwargs(cache_dir)
+    kwargs.update(update)
+
+    with pytest.raises(ValueError, match=match):
+        module.run_sweep(**kwargs)
+    assert not cache_dir.exists()
+
+
 @pytest.mark.parametrize("direct_policies", [
     [(2, 7)],
     [(2, 7), (3, 8), (4, 9)],

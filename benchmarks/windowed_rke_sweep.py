@@ -648,6 +648,8 @@ def run_sweep(
     cache_dir: Path,
     skip_3d_tight: bool,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if mode not in ("smoke", "full"):
+        raise ValueError("mode must be 'smoke' or 'full'")
     _require_finite_positive(root_extent, "root_extent")
     _require_finite_positive(window_theta, "window_theta")
     dims = [_require_integer(dim, "dim") for dim in dims]
@@ -655,6 +657,14 @@ def run_sweep(
         raise ValueError("at least one dimension is required")
     if any(dim not in (2, 3) for dim in dims):
         raise ValueError("dim entries must be 2 or 3")
+    kernels = list(kernels)
+    if not kernels:
+        raise ValueError("at least one kernel is required")
+    unknown_kernels = [
+        kernel for kernel in kernels if kernel not in PARAMETER_NAMES
+    ]
+    if unknown_kernels:
+        raise ValueError(f"unknown kernel: {unknown_kernels[0]}")
     if q_order_override is not None:
         q_order_override = _require_integer(
             q_order_override, "q_order_override", minimum=1
@@ -666,11 +676,18 @@ def run_sweep(
     p_stars = [
         _require_integer(p_star, "p_star", minimum=1) for p_star in p_stars
     ]
+    if not p_stars:
+        raise ValueError("at least one p_star is required")
     smooth_orders = [
         _require_integer(order, "smooth_order", minimum=1)
         for order in smooth_orders
     ]
+    if not smooth_orders:
+        raise ValueError("at least one smooth_order is required")
     if mus is not None:
+        mus = list(mus)
+        if not mus:
+            raise ValueError("at least one mu is required when mus is provided")
         for mu in mus:
             _require_finite_positive(mu, "mu")
     direct_policies = [
@@ -700,6 +717,11 @@ def run_sweep(
             _require_usable_order_pair(policy, "channel policy")
             for policy in chan_orders
         ]
+        if not chan_orders:
+            raise ValueError(
+                "at least one channel policy is required when chan_orders "
+                "is provided"
+            )
 
     from volumential.rke_table_assembly import _resolve_channel_orders
 
