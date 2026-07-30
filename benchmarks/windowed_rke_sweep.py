@@ -18,8 +18,11 @@ cross-deviations:
 Deviations are reported against the tight direct policy as both relative
 max-entry and relative L2 over the symmetry-reduced entries.  Windowed
 channel families are built (or reused) once per ``(dim, q_order, level,
-window_theta)`` from a shared cache, so the one-off channel build cost and
-the marginal per-parameter assembly cost are recorded separately.
+window_theta, channel quadrature orders)`` from a per-family cache, so the
+one-off channel build cost and the marginal per-parameter assembly cost are
+recorded separately.  The windowed channel quadrature orders are themselves
+sweepable via ``--chan-orders``; the classical and direct reference builds do
+not depend on them and are computed once per ``(dim, kernel, parameter)``.
 
 Smoke mode is intended for CI/local validation.  Full mode is intended for
 metadata-wrapped runs on a controlled remote compute host.
@@ -132,6 +135,24 @@ def _parse_direct_policies(raw: str) -> list[tuple[int, int]]:
             "exactly two direct policies (loose;tight) are required"
         )
     return policies
+
+
+def _parse_order_pairs(raw: str) -> list[tuple[int, int]]:
+    """Parse ``'regular,radial;regular,radial;...'`` into a list of pairs."""
+    pairs: list[tuple[int, int]] = []
+    for chunk in raw.split(";"):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        parts = [int(part.strip()) for part in chunk.split(",")]
+        if len(parts) != 2:
+            raise ValueError(
+                "each channel-order policy must be a 'regular,radial' pair"
+            )
+        pairs.append((parts[0], parts[1]))
+    if not pairs:
+        raise ValueError("expected at least one 'regular,radial' pair")
+    return pairs
 
 
 def _parse_order_pair(raw: str) -> tuple[int, int]:
@@ -446,6 +467,7 @@ def run_sweep(
     mus: list[float],
     direct_policies: list[tuple[int, int]],
     classical_channel_orders: tuple[int, int],
+    chan_orders: list[tuple[int, int]] | None,
     cache_dir: Path,
     skip_3d_tight: bool,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -470,11 +492,14 @@ def run_sweep(
             else DEFAULT_SOURCE_LEVEL[dim]
         )
         box_extent = float(root_extent) * 0.5**int(source_level)
-        chan_regular_order, chan_radial_order = _resolve_channel_orders(
-            dim, None, None
-        )
+        if chan_orders is None:
+            dim_chan_orders = [_resolve_channel_orders(dim, None, None)]
+        else:
+            dim_chan_orders = [
+                _resolve_channel_orders(dim, regular, radial)
+                for regular, radial in chan_orders
+            ]
 
-        windowed_cache = cache_dir / f"windowed-channels-d{dim}-q{q_order}.db"
         classical_cache = (
             cache_dir / f"classical-channels-d{dim}-q{q_order}.sqlite"
         )
@@ -482,38 +507,68 @@ def run_sweep(
         print(
             f"[config] dim={dim} q_order={q_order} level={source_level} "
             f"box_extent={box_extent:g} window_theta={window_theta:g} "
-            f"chan_orders={chan_regular_order}/{chan_radial_order}",
+            "chan_orders="
+            + ";".join(
+                f"{regular}/{radial}" for regular, radial in dim_chan_orders
+            ),
             flush=True,
         )
-        channels = _prepare_windowed_channels(
-            cache_path=windowed_cache,
-            dim=dim,
-            q_order=q_order,
-            source_box_level=source_level,
-            root_extent=root_extent,
-            window_theta=window_theta,
-            max_p_star=max(p_stars),
-            chan_regular_order=chan_regular_order,
-            chan_radial_order=chan_radial_order,
-        )
-        print(
-            f"[channels] dim={dim} "
-            f"cold={channels['channel_build_was_cold']} "
-            f"build_s={channels['channel_build_seconds']:.2f} "
-            f"n_reduced_entries={channels['n_reduced_entries']}",
-            flush=True,
-        )
-        channel_prep_records[f"dim{dim}"] = {
-            "q_order": q_order,
-            "source_box_level": source_level,
-            "chan_regular_order": chan_regular_order,
-            "chan_radial_order": chan_radial_order,
-            "channel_build_seconds": channels["channel_build_seconds"],
-            "channel_build_was_cold": channels["channel_build_was_cold"],
-            "n_reduced_entries": channels["n_reduced_entries"],
-        }
-        entry_ids = channels["entry_ids"]
-        n_entries = channels["n_reduced_entries"]
+
+        # The windowed channel families depend only on (dim, q_order, level,
+        # root_extent, window_theta, chan orders) -- not on the kernel or the
+        # parameter -- so build each requested channel-order family once here.
+        channel_families: list[dict[str, Any]] = []
+        for chan_regular_order, chan_radial_order in dim_chan_orders:
+            windowed_cache = cache_dir / (
+                f"windowed-channels-d{dim}-q{q_order}"
+                f"-c{chan_regular_order}x{chan_radial_order}.db"
+            )
+            channels = _prepare_windowed_channels(
+                cache_path=windowed_cache,
+                dim=dim,
+                q_order=q_order,
+                source_box_level=source_level,
+                root_extent=root_extent,
+                window_theta=window_theta,
+                max_p_star=max(p_stars),
+                chan_regular_order=chan_regular_order,
+                chan_radial_order=chan_radial_order,
+            )
+            print(
+                f"[channels] dim={dim} "
+                f"chan_orders={chan_regular_order}/{chan_radial_order} "
+                f"cold={channels['channel_build_was_cold']} "
+                f"build_s={channels['channel_build_seconds']:.2f} "
+                f"n_reduced_entries={channels['n_reduced_entries']}",
+                flush=True,
+            )
+            channel_prep_records[
+                f"dim{dim}_c{chan_regular_order}x{chan_radial_order}"
+            ] = {
+                "q_order": q_order,
+                "source_box_level": source_level,
+                "chan_regular_order": chan_regular_order,
+                "chan_radial_order": chan_radial_order,
+                "channel_build_seconds": channels["channel_build_seconds"],
+                "channel_build_was_cold": channels["channel_build_was_cold"],
+                "n_reduced_entries": channels["n_reduced_entries"],
+            }
+            channels["cache_path"] = windowed_cache
+            channels["chan_regular_order"] = chan_regular_order
+            channels["chan_radial_order"] = chan_radial_order
+            channel_families.append(channels)
+
+        # The reduced-entry index set is a property of (dim, q_order, level)
+        # alone, so all families must agree; the direct and classical
+        # references are then sampled once on that shared index set.
+        entry_ids = channel_families[0]["entry_ids"]
+        n_entries = channel_families[0]["n_reduced_entries"]
+        for family in channel_families[1:]:
+            if not np.array_equal(family["entry_ids"], entry_ids):
+                raise RuntimeError(
+                    "windowed channel families disagree on the reduced entry "
+                    "index set across channel-order pairs"
+                )
 
         for kernel in kernels:
             for mu in mus:
@@ -613,133 +668,148 @@ def run_sweep(
                     flush=True,
                 )
 
-                for p_star in sorted(p_stars):
-                    for smooth_order in sorted(smooth_orders):
-                        windowed = _run_windowed(
-                            cache_path=windowed_cache,
-                            dim=dim,
-                            kernel=kernel,
-                            q_order=q_order,
-                            parameter=mu,
-                            source_box_level=source_level,
-                            root_extent=root_extent,
-                            window_theta=window_theta,
-                            p_star=p_star,
-                            smooth_quad_order=smooth_order,
-                            chan_regular_order=chan_regular_order,
-                            chan_radial_order=chan_radial_order,
-                            entry_ids=entry_ids,
-                            n_reduced_entries=n_entries,
-                        )
-                        if (
-                            windowed["values"] is not None
-                            and reference_values is not None
-                        ):
-                            windowed_rel_max, windowed_rel_l2 = (
-                                _relative_deviations(
-                                    windowed["values"], reference_values
-                                )
+                for family in channel_families:
+                    windowed_cache = family["cache_path"]
+                    chan_regular_order = family["chan_regular_order"]
+                    chan_radial_order = family["chan_radial_order"]
+                    chan_tag = f"c{chan_regular_order}x{chan_radial_order}"
+
+                    for p_star in sorted(p_stars):
+                        for smooth_order in sorted(smooth_orders):
+                            windowed = _run_windowed(
+                                cache_path=windowed_cache,
+                                dim=dim,
+                                kernel=kernel,
+                                q_order=q_order,
+                                parameter=mu,
+                                source_box_level=source_level,
+                                root_extent=root_extent,
+                                window_theta=window_theta,
+                                p_star=p_star,
+                                smooth_quad_order=smooth_order,
+                                chan_regular_order=chan_regular_order,
+                                chan_radial_order=chan_radial_order,
+                                entry_ids=entry_ids,
+                                n_reduced_entries=n_entries,
                             )
-                        else:
-                            windowed_rel_max, windowed_rel_l2 = "", ""
+                            if (
+                                windowed["values"] is not None
+                                and reference_values is not None
+                            ):
+                                windowed_rel_max, windowed_rel_l2 = (
+                                    _relative_deviations(
+                                        windowed["values"], reference_values
+                                    )
+                                )
+                            else:
+                                windowed_rel_max, windowed_rel_l2 = "", ""
 
-                        print(
-                            f"  [row] p_star={p_star} "
-                            f"smooth={smooth_order} "
-                            f"windowed={windowed['windowed_status']} "
-                            f"assemble_s="
-                            f"{windowed['windowed_assemble_seconds']:.2f}"
-                            + (
-                                f" rel_max={windowed_rel_max:.3e}"
-                                if windowed_rel_max != ""
-                                else ""
-                            ),
-                            flush=True,
-                        )
+                            print(
+                                f"  [row] chan={chan_regular_order}/"
+                                f"{chan_radial_order} "
+                                f"p_star={p_star} "
+                                f"smooth={smooth_order} "
+                                f"windowed={windowed['windowed_status']} "
+                                f"assemble_s="
+                                f"{windowed['windowed_assemble_seconds']:.2f}"
+                                + (
+                                    f" rel_max={windowed_rel_max:.3e}"
+                                    if windowed_rel_max != ""
+                                    else ""
+                                ),
+                                flush=True,
+                            )
 
-                        row = {key: "" for key in FIELDS}
-                        row.update(
-                            {
-                                "case_id": (
-                                    f"{kernel.lower()}{dim}d-mu{mu:g}"
-                                    f"-p{p_star}-s{smooth_order}"
-                                ),
-                                "mode": mode,
-                                "dim": dim,
-                                "kernel": kernel,
-                                "parameter_name": PARAMETER_NAMES[kernel],
-                                "parameter_value": mu,
-                                "theta": theta,
-                                "window_theta": window_theta,
-                                "q_order": q_order,
-                                "source_box_level": source_level,
-                                "root_extent": root_extent,
-                                "box_extent": box_extent,
-                                "n_reduced_entries": n_entries,
-                                "p_star": p_star,
-                                "smooth_quad_order_requested": smooth_order,
-                                "chan_regular_order": chan_regular_order,
-                                "chan_radial_order": chan_radial_order,
-                                "channel_build_was_cold": channels[
-                                    "channel_build_was_cold"
-                                ],
-                                "channel_build_seconds": channels[
-                                    "channel_build_seconds"
-                                ],
-                                "classical_tolerance": CLASSICAL_TOLERANCE,
-                                "classical_channel_regular_order": (
-                                    classical_channel_orders[0]
-                                ),
-                                "classical_channel_radial_order": (
-                                    classical_channel_orders[1]
-                                ),
-                                "direct_loose_regular_order": (
-                                    direct_policies[0][0]
-                                ),
-                                "direct_loose_radial_order": (
-                                    direct_policies[0][1]
-                                ),
-                                "direct_loose_status": loose["status"],
-                                "direct_loose_build_seconds": loose[
-                                    "build_seconds"
-                                ],
-                                "direct_tight_regular_order": (
-                                    direct_policies[1][0]
-                                ),
-                                "direct_tight_radial_order": (
-                                    direct_policies[1][1]
-                                ),
-                                "direct_tight_status": tight["status"],
-                                "direct_tight_build_seconds": tight[
-                                    "build_seconds"
-                                ],
-                                "direct_policy_rel_max_entry_floor": (
-                                    floor_rel_max
-                                ),
-                                "direct_reference_policy": reference_policy,
-                                "windowed_vs_direct_rel_max_entry": (
-                                    windowed_rel_max
-                                ),
-                                "windowed_vs_direct_rel_l2": windowed_rel_l2,
-                                "classical_vs_direct_rel_max_entry": (
-                                    classical_rel_max
-                                ),
-                                "classical_vs_direct_rel_l2": (
-                                    classical_rel_l2
-                                ),
-                            }
-                        )
-                        for key, value in windowed.items():
-                            if key != "values" and key in FIELDS:
-                                row[key] = value
-                        if "smooth_quad_order_used" in windowed:
-                            row["smooth_quad_order_used"] = windowed[
-                                "smooth_quad_order_used"
-                            ]
-                        for key, value in classical.items():
-                            if key != "values" and key in FIELDS:
-                                row[key] = value
-                        rows.append(row)
+                            row = {key: "" for key in FIELDS}
+                            row.update(
+                                {
+                                    "case_id": (
+                                        f"{kernel.lower()}{dim}d-mu{mu:g}"
+                                        f"-{chan_tag}"
+                                        f"-p{p_star}-s{smooth_order}"
+                                    ),
+                                    "mode": mode,
+                                    "dim": dim,
+                                    "kernel": kernel,
+                                    "parameter_name": PARAMETER_NAMES[kernel],
+                                    "parameter_value": mu,
+                                    "theta": theta,
+                                    "window_theta": window_theta,
+                                    "q_order": q_order,
+                                    "source_box_level": source_level,
+                                    "root_extent": root_extent,
+                                    "box_extent": box_extent,
+                                    "n_reduced_entries": n_entries,
+                                    "p_star": p_star,
+                                    "smooth_quad_order_requested": (
+                                        smooth_order
+                                    ),
+                                    "chan_regular_order": chan_regular_order,
+                                    "chan_radial_order": chan_radial_order,
+                                    "channel_build_was_cold": family[
+                                        "channel_build_was_cold"
+                                    ],
+                                    "channel_build_seconds": family[
+                                        "channel_build_seconds"
+                                    ],
+                                    "classical_tolerance": CLASSICAL_TOLERANCE,
+                                    "classical_channel_regular_order": (
+                                        classical_channel_orders[0]
+                                    ),
+                                    "classical_channel_radial_order": (
+                                        classical_channel_orders[1]
+                                    ),
+                                    "direct_loose_regular_order": (
+                                        direct_policies[0][0]
+                                    ),
+                                    "direct_loose_radial_order": (
+                                        direct_policies[0][1]
+                                    ),
+                                    "direct_loose_status": loose["status"],
+                                    "direct_loose_build_seconds": loose[
+                                        "build_seconds"
+                                    ],
+                                    "direct_tight_regular_order": (
+                                        direct_policies[1][0]
+                                    ),
+                                    "direct_tight_radial_order": (
+                                        direct_policies[1][1]
+                                    ),
+                                    "direct_tight_status": tight["status"],
+                                    "direct_tight_build_seconds": tight[
+                                        "build_seconds"
+                                    ],
+                                    "direct_policy_rel_max_entry_floor": (
+                                        floor_rel_max
+                                    ),
+                                    "direct_reference_policy": (
+                                        reference_policy
+                                    ),
+                                    "windowed_vs_direct_rel_max_entry": (
+                                        windowed_rel_max
+                                    ),
+                                    "windowed_vs_direct_rel_l2": (
+                                        windowed_rel_l2
+                                    ),
+                                    "classical_vs_direct_rel_max_entry": (
+                                        classical_rel_max
+                                    ),
+                                    "classical_vs_direct_rel_l2": (
+                                        classical_rel_l2
+                                    ),
+                                }
+                            )
+                            for key, value in windowed.items():
+                                if key != "values" and key in FIELDS:
+                                    row[key] = value
+                            if "smooth_quad_order_used" in windowed:
+                                row["smooth_quad_order_used"] = windowed[
+                                    "smooth_quad_order_used"
+                                ]
+                            for key, value in classical.items():
+                                if key != "values" and key in FIELDS:
+                                    row[key] = value
+                            rows.append(row)
 
     total_seconds = time.perf_counter() - sweep_start
     for row in rows:
@@ -811,6 +881,13 @@ def main() -> int:
         help="'regular,radial' Duffy orders for classical channel builds",
     )
     parser.add_argument(
+        "--chan-orders",
+        help="semicolon-separated 'regular,radial' Duffy orders for the "
+        "windowed channel builds, e.g. '48,61;64,121'; each pair is swept "
+        "as its own family with its own channel cache.  Default: the single "
+        "per-dimension tested pair (2D: 48,61; 3D: 20,61)",
+    )
+    parser.add_argument(
         "--cache-dir",
         type=Path,
         default=Path("build/benchmarks/windowed-rke-cache"),
@@ -857,6 +934,11 @@ def main() -> int:
         parser.error("--mus entries must be positive")
     direct_policies = _parse_direct_policies(args.direct_policies)
     classical_channel_orders = _parse_order_pair(args.classical_channel_orders)
+    # Both smoke and full default to the single tested per-dimension pair;
+    # a channel-order sweep is always requested explicitly.
+    chan_orders = (
+        _parse_order_pairs(args.chan_orders) if args.chan_orders else None
+    )
 
     rows, run_info = run_sweep(
         mode=args.mode,
@@ -871,6 +953,7 @@ def main() -> int:
         mus=mus,
         direct_policies=direct_policies,
         classical_channel_orders=classical_channel_orders,
+        chan_orders=chan_orders,
         cache_dir=args.cache_dir,
         skip_3d_tight=args.skip_3d_tight,
     )
@@ -893,6 +976,11 @@ def main() -> int:
         "mus": mus,
         "direct_policies": [list(policy) for policy in direct_policies],
         "classical_channel_orders": list(classical_channel_orders),
+        "chan_orders": (
+            [list(pair) for pair in chan_orders]
+            if chan_orders is not None
+            else None
+        ),
         "classical_tolerance": CLASSICAL_TOLERANCE,
         "cache_dir": str(args.cache_dir),
         "skip_3d_tight": args.skip_3d_tight,
