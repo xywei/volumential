@@ -1084,6 +1084,185 @@ def test_windowed_reality_guard(tmp_path):
 # }}}
 
 
+# {{{ T11: channel quadrature order legality and the entry-magnitude bound
+
+# orders the tanh-sinh-fast radial builder does not honour: 3 and below hit
+# its silent ``max(3, order)`` clamp, and 3-6 produce rules whose weights
+# miss unity by more than 1e-8 (order 3: 3.3e-5, order 6: 6.1e-8)
+@pytest.mark.parametrize("bad_radial", [-5, 0, 1, 2, 3, 5, 6])
+def test_illegal_channel_radial_order_refused(tmp_path, bad_radial):
+    from volumential.rke_table_assembly import get_windowed_channel_table
+
+    cache = tmp_path / "orders.sqlite"
+    with pytest.raises(ValueError, match="chan_radial_order"):
+        get_windowed_channel_table(
+            cache,
+            3,
+            2,
+            0,
+            source_box_level=3,
+            root_extent=ROOT_EXTENT,
+            window_theta=WINDOW_THETA,
+            chan_regular_order=6,
+            chan_radial_order=bad_radial,
+        )
+
+    # the public assembly entry point refuses before any build too
+    with pytest.raises(ValueError, match="chan_radial_order"):
+        assemble_windowed_parameterized_table(
+            cache,
+            2,
+            "Yukawa",
+            3,
+            4.0,
+            source_box_level=3,
+            window_theta=WINDOW_THETA,
+            chan_regular_order=6,
+            chan_radial_order=bad_radial,
+        )
+
+
+@pytest.mark.parametrize("bad_regular", [-4, 0, 1])
+def test_illegal_channel_regular_order_refused(tmp_path, bad_regular):
+    from volumential.rke_table_assembly import get_windowed_channel_table
+
+    cache = tmp_path / "orders.sqlite"
+    with pytest.raises(ValueError, match="chan_regular_order"):
+        get_windowed_channel_table(
+            cache,
+            3,
+            2,
+            0,
+            source_box_level=3,
+            root_extent=ROOT_EXTENT,
+            window_theta=WINDOW_THETA,
+            chan_regular_order=bad_regular,
+            chan_radial_order=15,
+        )
+
+
+def test_legal_channel_orders_pass_validation():
+    from volumential.rke_table_assembly import _resolve_channel_orders
+
+    # every order this test module, the module defaults, and the published
+    # 2D/3D sweeps use must validate (validation is a legality gate, not an
+    # accuracy gate)
+    for radial in (12, 15, 25, 45, 61, 101, 121, 141, 161, 201):
+        assert _resolve_channel_orders(3, 6, radial) == (6, radial)
+    for regular in (2, 6, 14, 20, 28, 36, 48):
+        assert _resolve_channel_orders(2, regular, 61) == (regular, 61)
+
+
+def test_channel_entry_bound_rejects_poisoned_table(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    import volumential.rke_table_assembly as rta
+
+    cache = tmp_path / "poison.sqlite"
+    kwargs = {
+        "source_box_level": 3,
+        "root_extent": ROOT_EXTENT,
+        "window_theta": WINDOW_THETA,
+        "chan_regular_order": 6,
+        "chan_radial_order": 15,
+    }
+    window_scale = (_box_extent(3) / WINDOW_THETA) ** 2
+    good = rta.get_windowed_channel_table(cache, 2, 3, 0, **kwargs)
+    values = np.asarray(good.get_reduced_table_data()[1])
+
+    # the analytic bound is a real bound, not a fudge: the honest table sits
+    # comfortably under it
+    bound = rta._channel_entry_magnitude_bound(good, 0, window_scale)
+    assert np.max(np.abs(values)) < bound
+
+    # an entry astronomically above the chi_0 mass scale is provably wrong
+    poisoned = values.copy()
+    poisoned[0] = 1.0e101
+    with pytest.raises(RuntimeError, match="analytic bound"):
+        rta._check_channel_table_values(good, poisoned, 0, window_scale)
+
+    non_finite = values.copy()
+    non_finite[0] = np.nan
+    with pytest.raises(RuntimeError, match="non-finite"):
+        rta._check_channel_table_values(good, non_finite, 0, window_scale)
+
+    # a cache poisoned on disk is discarded and rebuilt, never trusted
+    cache_dir = Path(str(cache) + ".windowed")
+    (cache_file,) = sorted(cache_dir.glob("*.npz"))
+    with np.load(cache_file, allow_pickle=False) as payload:
+        stored = {name: payload[name] for name in payload.files}
+    stored["values"] = poisoned
+    with open(cache_file, "wb") as stream:
+        np.savez(stream, **stored)
+    healed = rta.get_windowed_channel_table(cache, 2, 3, 0, **kwargs)
+    assert np.array_equal(
+        values, np.asarray(healed.get_reduced_table_data()[1])
+    )
+
+    # and a builder that returns garbage fails the build instead of caching
+    # a poisoned table that every downstream certificate field would rate as
+    # perfectly conditioned
+    real_builder = rta._duffy_channel_entry_values
+
+    def poisoned_builder(table, profile, regular_order, radial_order):
+        entry_ids, entry_values = real_builder(
+            table, profile, regular_order, radial_order
+        )
+        entry_values = np.asarray(entry_values).copy()
+        entry_values[0] = 1.0e101
+        return entry_ids, entry_values
+
+    monkeypatch.setattr(rta, "_duffy_channel_entry_values", poisoned_builder)
+    fresh = tmp_path / "poison-build.sqlite"
+    with pytest.raises(RuntimeError, match="analytic bound"):
+        rta.get_windowed_channel_table(fresh, 2, 3, 0, **kwargs)
+    assert not list(Path(str(fresh) + ".windowed").glob("*.npz"))
+
+
+def test_3d_channel_order_convergence(tmp_path):
+    # Radial orders whose smallest tanh-sinh-fast node sits on the float64
+    # floor 5.551115e-17 (orders 10, 12, 36, 101, 201, ...) place a Duffy
+    # node closer to the target than one ulp of the target coordinate.
+    # Differencing absolute box coordinates absorbed such a node onto the
+    # target, and the 3D germ's small-argument clip then reported
+    # sqrt(pi/1e-300) ~ 1.8e150 instead of a pole, poisoning chi_0 by ~1e101.
+    # Order 12 reproduces that geometry at negligible cost.
+    from volumential.rke_table_assembly import get_windowed_channel_table
+
+    cache = tmp_path / "conv.sqlite"
+
+    def entries(regular, radial):
+        table = get_windowed_channel_table(
+            cache,
+            3,
+            2,
+            0,
+            source_box_level=3,
+            root_extent=ROOT_EXTENT,
+            window_theta=WINDOW_THETA,
+            chan_regular_order=regular,
+            chan_radial_order=radial,
+        )
+        return np.asarray(table.get_reduced_table_data()[1])
+
+    reference = entries(14, 45)
+    scale = float(np.max(np.abs(reference)))
+    # chi_0 carries the full channel mass 4 pi t_w on the self case
+    assert abs(scale / (4.0 * np.pi * (_box_extent(3) / WINDOW_THETA) ** 2)
+               - 1.0) < 0.05
+
+    deviations = [
+        float(np.max(np.abs(entries(regular, radial) - reference))) / scale
+        for regular, radial in ((6, 12), (8, 20), (10, 25))
+    ]
+    # the floor-node order is merely coarse, not catastrophic
+    assert deviations[0] < 1.0e-2, deviations
+    # and refining the pair improves monotonically
+    assert deviations[2] < deviations[1] < deviations[0], deviations
+
+# }}}
+
+
 if __name__ == "__main__":
     import sys
 

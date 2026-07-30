@@ -836,6 +836,24 @@ def _axis_basis_values(table, coords, xi, bary_weights):
     ]
 
 
+def _channel_profile_values(radial_profile, radius):
+    """Channel profile values on a Duffy node block, with any node that
+    rounds onto the singular point (``r == 0``) contributing zero.
+
+    The Duffy Jacobian vanishes faster than the germ diverges (2D:
+    ``rho log(1/rho)``, 3D: ``rho^2 / rho``), so the limit contribution of a
+    target-coincident node is exactly zero — whereas
+    :func:`windowed_channel_profile` would report the huge finite value its
+    small-``x`` clip produces there (``sqrt(pi/1e-300)`` in 3D).
+    """
+    positive = radius > 0.0
+    if positive.all():
+        return radial_profile(radius)
+    return np.where(
+        positive, radial_profile(np.where(positive, radius, 1.0)), 0.0
+    )
+
+
 def _duffy_channel_entry_values(
     table, radial_profile, regular_order, radial_order,
 ):
@@ -895,6 +913,13 @@ def _duffy_channel_entry_values(
                 dtype=np.float64,
             )
             singular = np.clip(target, 0.0, extent)
+            # source-to-target displacement is accumulated from the *offset*
+            # of the Duffy origin, never by differencing absolute box
+            # coordinates: for a self-interaction target the offset is
+            # exactly zero, and a node closer to the target than one ulp of
+            # the coordinate would otherwise be absorbed into it and report
+            # r = 0 (see _channel_profile_values)
+            base_offset = singular - target
             entry_acc = np.zeros(len(members), dtype=np.float64)
             for corner_index in range(4):
                 edge1 = corners[corner_index] - singular
@@ -907,11 +932,13 @@ def _duffy_channel_entry_values(
                     continue
                 u = np.outer(cos_sq, rho_nodes)
                 v = np.outer(sin_sq, rho_nodes)
-                xx = singular[0] + u * edge1[0] + v * edge2[0]
-                yy = singular[1] + u * edge1[1] + v * edge2[1]
-                radius = np.hypot(xx - target[0], yy - target[1])
+                dx = base_offset[0] + u * edge1[0] + v * edge2[0]
+                dy = base_offset[1] + u * edge1[1] + v * edge2[1]
+                xx = target[0] + dx
+                yy = target[1] + dy
+                radius = np.hypot(dx, dy)
                 common = (
-                    radial_profile(radius)
+                    _channel_profile_values(radial_profile, radius)
                     * (det * duffy_factor)
                     * weight_grid
                 )
@@ -950,6 +977,10 @@ def _duffy_channel_entry_values(
             dtype=np.float64,
         )
         singular = np.clip(target, 0.0, extent)
+        # see the 2D branch: displacements are built from the Duffy origin's
+        # offset, so a node nearer the target than one coordinate ulp still
+        # carries its true (tiny) radius instead of being absorbed to r = 0
+        base_offset = singular - target
         entry_acc = np.zeros(len(members), dtype=np.float64)
         for signs in iproduct((-1.0, 1.0), repeat=dim):
             lengths = np.array(
@@ -968,19 +999,19 @@ def _duffy_channel_entry_values(
                 u_by_axis[perm[0]] = u_first
                 u_by_axis[perm[1]] = u_second
                 u_by_axis[perm[2]] = u_third
-                coords = [
-                    singular[axis] + signs[axis] * lengths[axis]
+                offsets = [
+                    base_offset[axis] + signs[axis] * lengths[axis]
                     * u_by_axis[axis]
                     for axis in range(dim)
                 ]
+                coords = [
+                    target[axis] + offsets[axis] for axis in range(dim)
+                ]
                 radius = np.sqrt(
-                    sum(
-                        (coords[axis] - target[axis]) ** 2
-                        for axis in range(dim)
-                    )
+                    sum(offsets[axis] ** 2 for axis in range(dim))
                 )
                 common = (
-                    radial_profile(radius)
+                    _channel_profile_values(radial_profile, radius)
                     * (box_scale * jacobian_core)
                     * weight_grid
                 )
@@ -1016,7 +1047,151 @@ def _resolve_channel_orders(dim, chan_regular_order, chan_radial_order):
         chan_regular_order = 48 if int(dim) == 2 else 20
     if chan_radial_order is None:
         chan_radial_order = 61
-    return int(chan_regular_order), int(chan_radial_order)
+    chan_regular_order = int(chan_regular_order)
+    chan_radial_order = int(chan_radial_order)
+    _validate_channel_orders(chan_regular_order, chan_radial_order)
+    return chan_regular_order, chan_radial_order
+
+
+# Duffy radial weights integrate the constant ``1`` over ``[0, 1]``, so the
+# deviation of their sum from unity is a direct, order-independent measure of
+# whether the requested order produced a usable rule.  Measured deviations of
+# the ``tanh-sinh-fast`` set: order 3 (the builder's silent clamp target)
+# 3.3e-5, order 5 4.1e-7, order 7 9.9e-9, order 15 1.2e-13, order 45 and
+# above at roundoff.  The tolerance below therefore admits every order from 7
+# up and rejects exactly the degenerate low end.
+_CHANNEL_RADIAL_WEIGHT_TOL = 1.0e-8
+
+
+def _validate_channel_orders(chan_regular_order, chan_radial_order):
+    """Refuse channel quadrature orders the underlying node builders do not
+    honour, instead of letting them degrade silently.
+
+    Neither builder reports a bad request: ``scipy.special.p_roots`` accepts
+    any positive order, and the ``tanh-sinh-fast`` radial rule passes its
+    order through ``max(3, order)``, so 0, 1, 2 (or a negative order) all
+    quietly become the same 7-node rule.  The radial order is validated by
+    measurement against :data:`_CHANNEL_RADIAL_WEIGHT_TOL` rather than by a
+    hard-coded list, so the rule — not this function — remains the
+    authority on which orders are usable.
+    """
+    import volumential.singular_integral_2d as squad
+
+    regular = int(chan_regular_order)
+    radial = int(chan_radial_order)
+    if regular < 2:
+        raise ValueError(
+            f"chan_regular_order {regular} is not a usable Gauss-Legendre "
+            "order for the channel Duffy rule (need at least 2)"
+        )
+    if radial < 3:
+        raise ValueError(
+            f"chan_radial_order {radial} is below the tanh-sinh-fast node "
+            "builder's silent max(3, order) clamp, so the requested order "
+            "would be ignored; pass an order the rule actually honours"
+        )
+    rho_nodes, rho_weights = squad._duffy_radial_nodes_weights(
+        "tanh-sinh-fast", radial, 50
+    )
+    weight_defect = abs(float(np.sum(rho_weights)) - 1.0)
+    if (
+        rho_nodes.size < 8
+        or not np.all((rho_nodes > 0.0) & (rho_nodes < 1.0))
+        or not np.all(np.isfinite(rho_weights))
+        or weight_defect > _CHANNEL_RADIAL_WEIGHT_TOL
+    ):
+        raise ValueError(
+            f"chan_radial_order {radial} yields a degenerate tanh-sinh-fast "
+            f"rule ({rho_nodes.size} nodes, weight sum off unity by "
+            f"{weight_defect:.3e} > {_CHANNEL_RADIAL_WEIGHT_TOL:.1e}); "
+            "raise the radial order"
+        )
+
+
+def _channel_source_mode_sup(table):
+    """Sup norm over the source box of the tensor-product source modes,
+    ``max_i sup_y |phi_i(y)|``, bounded axis-wise (the tensor product of the
+    per-axis sups dominates the sup of the product)."""
+    from volumential.lagrange import (
+        barycentric_lagrange_weights,
+        evaluate_lagrange_basis_1d,
+    )
+
+    dim = int(table.dim)
+    q = int(table.quad_order)
+    if q == 1:
+        return 1.0
+    xi = np.asarray(
+        [p[dim - 1] for p in table.q_points[:q]], dtype=np.float64
+    )
+    bary_weights = barycentric_lagrange_weights(xi)
+    sample = np.linspace(0.0, float(table.source_box_extent), 1024)
+    axis_sup = max(
+        float(
+            np.max(
+                np.abs(
+                    evaluate_lagrange_basis_1d(
+                        xi, k, sample, weights=bary_weights
+                    )
+                )
+            )
+        )
+        for k in range(q)
+    )
+    return axis_sup**dim
+
+
+def _channel_entry_magnitude_bound(table, m, window_scale, safety=8.0):
+    """Analytic upper bound on ``|chi_m|`` table entries.
+
+    A table entry is ``int_box chi_m(|x_t - y|) phi_i(y) dy``, so
+
+    ``|entry| <= sup|phi_i| * int_{R^dim} chi_m(|z|) dz``
+
+    and the total channel mass is elementary,
+
+    ``int_{R^dim} chi_m = c_dim t_w^{m+1} / (m+1)``, ``c_2 = 2 pi``,
+    ``c_3 = 4 pi``
+
+    (the ``m = 0`` cases are the Ewald identities ``int E_1(r^2/4t_w)/2 =
+    2 pi t_w`` and ``int erfc(r/2 sqrt(t_w))/r = 4 pi t_w``; the recurrence
+    carries the identity to every ``m``).  The bound is tight: without
+    ``safety`` a built 3D ``q = 2`` table sits within a factor of three of
+    it at every ``m``, so even the generous factor leaves a check that no
+    quadrature error can trip but a blown-up build cannot survive.
+    """
+    dim = int(table.dim)
+    mass_constant = 2.0 * np.pi if dim == 2 else 4.0 * np.pi
+    channel_mass = (
+        mass_constant * float(window_scale) ** (int(m) + 1) / (int(m) + 1)
+    )
+    return float(safety) * _channel_source_mode_sup(table) * channel_mass
+
+
+def _check_channel_table_values(table, values, m, window_scale):
+    """Reject a channel table whose entries are not finite or exceed the
+    analytic bound of :func:`_channel_entry_magnitude_bound`.
+
+    Cheap (one pass over the reduced entries) and unconditional, so no build
+    path — fresh, cached, or rebuilt — can hand back a poisoned
+    channel table that the downstream condition estimate would rate as
+    perfectly conditioned (a single blown-up channel dominates both the peak
+    sum and the assembled maximum, so their ratio stays at 1).
+    """
+    values = np.asarray(values, dtype=np.float64)
+    bound = _channel_entry_magnitude_bound(table, m, window_scale)
+    if not np.all(np.isfinite(values)):
+        raise RuntimeError(
+            f"windowed channel table m = {int(m)} has non-finite entries"
+        )
+    peak = float(np.max(np.abs(values))) if values.size else 0.0
+    if peak > bound:
+        raise RuntimeError(
+            f"windowed channel table m = {int(m)} has entries of magnitude "
+            f"{peak:.6e}, above the analytic bound {bound:.6e} for window "
+            f"scale t_w = {float(window_scale):.6e}; the channel quadrature "
+            "did not resolve the germ"
+        )
 
 
 def _windowed_channel_cache_file(
@@ -1077,14 +1252,21 @@ def get_windowed_channel_table(
 
     ``chan_regular_order`` / ``chan_radial_order`` default (via ``None``) to
     the tested per-dimension orders of :func:`_resolve_channel_orders`
-    (48/61 in 2D, 20/61 in 3D).
+    (48/61 in 2D, 20/61 in 3D); orders the underlying node builders would
+    silently ignore are refused by :func:`_validate_channel_orders`.
+
+    Every table handed back — freshly built or loaded from cache — passes
+    :func:`_check_channel_table_values`, so a channel that violates the
+    analytic entry bound can never reach the recombination (where a single
+    blown-up channel would dominate both the peak sum and the assembled
+    maximum, leaving the reported condition number at a reassuring 1.0).
     """
     chan_regular_order, chan_radial_order = _resolve_channel_orders(
         dim, chan_regular_order, chan_radial_order
     )
-    _require_o1_box_extent(
-        float(root_extent) * 0.5 ** int(source_box_level)
-    )
+    box_extent = float(root_extent) * 0.5 ** int(source_box_level)
+    _require_o1_box_extent(box_extent)
+    window_scale = (box_extent / float(window_theta)) ** 2
     table = _windowed_channel_skeleton(
         dim, q_order, source_box_level, root_extent, window_theta, m
     )
@@ -1126,16 +1308,23 @@ def get_windowed_channel_table(
             if stored_key == key and np.array_equal(
                 stored_ids, expected_entry_ids
             ):
-                table.set_reduced_table_data(
-                    expected_entry_ids, stored_values
-                )
-                table.is_built = True
-                return table
+                # a cache written before the entry bound was enforced (or by
+                # any other build that produced garbage) is treated exactly
+                # like a torn file: discard and rebuild, so a poisoned .npz
+                # cannot outlive the defect that produced it
+                try:
+                    _check_channel_table_values(
+                        table, stored_values, m, window_scale
+                    )
+                except RuntimeError:
+                    pass
+                else:
+                    table.set_reduced_table_data(
+                        expected_entry_ids, stored_values
+                    )
+                    table.is_built = True
+                    return table
 
-    window_scale = (
-        float(root_extent) * 0.5 ** int(source_box_level)
-        / float(window_theta)
-    ) ** 2
     entry_ids, entry_values = _duffy_channel_entry_values(
         table,
         windowed_channel_profile(dim, m, window_scale),
@@ -1146,6 +1335,11 @@ def get_windowed_channel_table(
     # same table object as ``expected_entry_ids``, so an equality check here
     # could never fire; the meaningful validation is the load-path one above
     # (cached IDs against freshly computed ones).
+
+    # Refuse (and never cache) a channel table that violates the analytic
+    # entry bound: a poisoned channel is invisible to every downstream
+    # certificate field, so it has to die here.
+    _check_channel_table_values(table, entry_values, m, window_scale)
 
     # Publish atomically (write-then-rename) so a crash or a concurrent
     # writer can never leave a torn final file behind.
