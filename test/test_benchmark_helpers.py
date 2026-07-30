@@ -420,6 +420,83 @@ def test_split_benchmark_full_yukawa_order_convergence(tmp_path):
     assert errors[3] < 1.0e-9
 
 
+def test_windowed_sweep_classifies_genuine_classical_refusals(tmp_path):
+    """Pin both classical refusal kinds end to end.
+
+    ``classical_refusal`` names the two certified refusal modes apart in the
+    sweep CSV, and downstream analysis distinguishes them by name, so a
+    silent reclassification (an exception type or message reworded in the
+    assembler) has to fail here rather than quietly relabel rows.
+    """
+    module = _load_benchmark("windowed_rke_sweep")
+
+    from volumential.rke_table_assembly import assemble_parameterized_table
+
+    # lam * radius ~ 68 at level 0 exhausts the default series window, so the
+    # truncation selector refuses before any channel is built (no queue).
+    with pytest.raises(ValueError) as uncertifiable:
+        assemble_parameterized_table(
+            None,
+            tmp_path / "uncertifiable.sqlite",
+            2,
+            "Yukawa",
+            2,
+            8.0,
+            source_box_level=0,
+            tolerance=1.0e-12,
+        )
+    assert module._classify_classical_refusal(uncertifiable.value) == (
+        "uncertifiable"
+    )
+
+    import pyopencl as cl
+
+    try:
+        ctx = cl.create_some_context(interactive=False)
+    except Exception as exc:
+        pytest.skip(f"no OpenCL context available: {exc}")
+
+    # certifiable but cancellation-heavy: the channels assemble and the
+    # deliberately tight max_condition then trips the conditioning guard
+    with pytest.raises(RuntimeError) as ill_conditioned:
+        assemble_parameterized_table(
+            cl.CommandQueue(ctx),
+            tmp_path / "ill-conditioned.sqlite",
+            2,
+            "Yukawa",
+            2,
+            4.0,
+            source_box_level=3,
+            tolerance=1.0e-8,
+            max_condition=1.0,
+        )
+    assert module._classify_classical_refusal(ill_conditioned.value) == (
+        "ill-conditioned"
+    )
+
+
+def test_windowed_sweep_refusal_classifier_message_fallback():
+    """Unmarked exceptions still classify off the stable message fragments."""
+    module = _load_benchmark("windowed_rke_sweep")
+
+    assert module._classify_classical_refusal(
+        ValueError("cannot certify tolerance 1e-11 within 60 series terms")
+    ) == "uncertifiable"
+    # the conditioning message also says "certified float64 recombination",
+    # so the uncertifiable probe must not match it
+    assert module._classify_classical_refusal(
+        RuntimeError(
+            "RKE table assembly is ill-conditioned for this parameter and "
+            "box size (condition 1.0e+07 > 1.0e+06); the local parameter |k| "
+            "times the separation radius (68.00) is too large for certified "
+            "float64 recombination."
+        )
+    ) == "ill-conditioned"
+    assert module._classify_classical_refusal(
+        NotImplementedError("RKE table assembly supports 2D and 3D")
+    ) == "NotImplementedError"
+
+
 def test_keller_segel_critical_profile_is_mass_normalized():
     module = _load_benchmark("keller_segel_continuation")
     axis = np.linspace(-1.0, 1.0, 33)

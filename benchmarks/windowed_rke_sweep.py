@@ -10,7 +10,11 @@ cross-deviations:
 (b) classical series RKE assembly (:func:`assemble_parameterized_table`) at a
     matching certified tolerance, recording the refusal kind when the
     classical certificate cannot be issued (uncertifiable truncation or
-    ill-conditioned recombination);
+    ill-conditioned recombination).  Its canonical channels are materialized
+    by an untimed warm-up call, so ``classical_assemble_seconds`` is the
+    marginal recombination cost and is directly comparable to
+    ``windowed_assemble_seconds``; the one-off construction is reported
+    separately as ``classical_channel_build_seconds``;
 (c) direct fixed-parameter builds through the table manager at two Duffy
     quadrature policies, whose mutual disagreement estimates the reference
     floor below which assembled-vs-direct deviations are quadrature noise.
@@ -76,6 +80,8 @@ FIELDS = (
     "classical_n_series_terms",
     "classical_channel_count",
     "classical_condition_number",
+    "classical_build_was_cold",
+    "classical_channel_build_seconds",
     "classical_assemble_seconds",
     "classical_payload_bytes",
     "classical_channel_regular_order",
@@ -101,6 +107,34 @@ PARAMETER_NAMES = {"Helmholtz": "k", "Yukawa": "lambda"}
 DEFAULT_Q_ORDER = {2: 3, 3: 2}
 DEFAULT_SOURCE_LEVEL = {2: 3, 3: 2}
 CLASSICAL_TOLERANCE = 1.0e-11
+
+# What the windowed assembler covers is the dimensionless local parameter
+# theta = mu * b, not mu itself, and the default source-box extent b differs
+# per dimension (2D: 0.25, 3D: 0.5).  Declaring the default ladders as
+# fractions of the declared window Theta and converting with mu = theta / b
+# therefore keeps every default row inside the coverage disk in both
+# dimensions -- a fixed mu ladder reaching theta = Theta in 2D overshoots to
+# theta = 2 Theta in 3D and is refused outright.  At the default geometry
+# (Theta = 16, root extent 2) these reproduce the historical fixed ladders
+# exactly: smoke '4,64' and full '1,2,4,8,16,24,32,48,64' in 2D.
+DEFAULT_SMOKE_THETA_FRACTIONS = (1.0 / 16.0, 1.0)
+DEFAULT_FULL_THETA_FRACTIONS = (
+    1.0 / 64.0, 1.0 / 32.0, 1.0 / 16.0, 1.0 / 8.0, 1.0 / 4.0,
+    3.0 / 8.0, 1.0 / 2.0, 3.0 / 4.0, 1.0,
+)
+
+
+def _default_mus(mode: str, window_theta: float, box_extent: float):
+    """Default parameter ladder for one dimension's box extent."""
+    fractions = (
+        DEFAULT_SMOKE_THETA_FRACTIONS
+        if mode == "smoke"
+        else DEFAULT_FULL_THETA_FRACTIONS
+    )
+    return [
+        fraction * float(window_theta) / float(box_extent)
+        for fraction in fractions
+    ]
 
 
 def _parse_csv_ints(raw: str) -> list[int]:
@@ -312,8 +346,21 @@ def _run_windowed(
 
 
 def _classify_classical_refusal(exc: BaseException) -> str:
-    message = str(exc)
-    if "cannot certify" in message:
+    """Refusal kind of a classical assembly failure.
+
+    The assembler names its two certified refusal modes structurally, via the
+    ``refusal_kind`` attribute of :class:`~volumential.rke_table_assembly.\
+RKETruncationError` / :class:`~volumential.rke_table_assembly.\
+RKEConditioningError`, so a message rewording can no longer silently
+    reclassify a row.  Message matching survives only as a fallback for
+    exceptions raised without that marker, and keys on the stable part of
+    each message ("certify", "ill-conditioned") rather than the full text.
+    """
+    kind = getattr(exc, "refusal_kind", None)
+    if isinstance(kind, str) and kind:
+        return kind
+    message = str(exc).lower()
+    if "certify" in message:
         return "uncertifiable"
     if "ill-conditioned" in message:
         return "ill-conditioned"
@@ -333,7 +380,21 @@ def _run_classical(
     channel_orders: tuple[int, int],
     entry_ids,
     n_reduced_entries: int,
+    warm_channel_counts: dict[Any, int],
 ) -> dict[str, Any]:
+    """Classical assembly with the one-time channel build kept out of the
+    timed region.
+
+    ``assemble_parameterized_table`` builds whatever canonical channels the
+    requested truncation order needs on first use, so a single timed call
+    conflates that one-off construction with the marginal per-parameter
+    recombination and is not comparable to ``windowed_assemble_seconds``
+    (whose channel family is prepared separately).  An untimed warm-up call
+    materializes the channels first; the timed call that follows is then
+    marginal, exactly like the windowed one.  The warm-up cost is reported as
+    ``classical_channel_build_seconds`` and ``classical_build_was_cold``
+    records whether it actually had to extend the channel family.
+    """
     from volumential.nearfield_potential_table import DuffyBuildConfig
     from volumential.rke_table_assembly import assemble_parameterized_table
 
@@ -342,9 +403,9 @@ def _run_classical(
         regular_quad_order=channel_orders[0],
         radial_quad_order=channel_orders[1],
     )
-    start = time.perf_counter()
-    try:
-        table, certificate = assemble_parameterized_table(
+
+    def assemble():
+        return assemble_parameterized_table(
             queue,
             cache_path,
             dim,
@@ -356,7 +417,26 @@ def _run_classical(
             tolerance=CLASSICAL_TOLERANCE,
             build_config=build_config,
         )
+
+    # The channel family depends on the geometry and the Duffy orders only,
+    # never on the kernel or the parameter; the parameter enters solely
+    # through how many of those channels the truncation order asks for.
+    warm_key = (
+        str(cache_path),
+        int(dim),
+        int(q_order),
+        int(source_box_level),
+        float(root_extent),
+        tuple(channel_orders),
+    )
+    already_built = warm_channel_counts.get(warm_key, 0)
+
+    start = time.perf_counter()
+    try:
+        _, warm_certificate = assemble()
     except (ValueError, RuntimeError, NotImplementedError) as exc:
+        # A refusal is a property of the parameter, not of the timing split:
+        # classify and report it exactly as a single timed call would have.
         return {
             "classical_status": "refused",
             "classical_refusal": _classify_classical_refusal(exc),
@@ -364,6 +444,13 @@ def _run_classical(
             "classical_assemble_seconds": time.perf_counter() - start,
             "values": None,
         }
+    build_seconds = time.perf_counter() - start
+    warm_channel_count = int(warm_certificate["channel_count"])
+    was_cold = warm_channel_count > already_built
+    warm_channel_counts[warm_key] = max(already_built, warm_channel_count)
+
+    start = time.perf_counter()
+    table, certificate = assemble()
     assemble_seconds = time.perf_counter() - start
     values = np.asarray(table.get_entry_data_for_full_indices(entry_ids))
     channel_count = int(certificate["channel_count"])
@@ -374,6 +461,8 @@ def _run_classical(
         "classical_n_series_terms": certificate["n_series_terms"],
         "classical_channel_count": channel_count,
         "classical_condition_number": certificate["condition_number"],
+        "classical_build_was_cold": was_cold,
+        "classical_channel_build_seconds": build_seconds,
         "classical_assemble_seconds": assemble_seconds,
         # channel_count real float64 channel tables over the reduced entries
         "classical_payload_bytes": int(
@@ -464,7 +553,7 @@ def run_sweep(
     window_theta: float,
     p_stars: list[int],
     smooth_orders: list[int],
-    mus: list[float],
+    mus: list[float] | None,
     direct_policies: list[tuple[int, int]],
     classical_channel_orders: tuple[int, int],
     chan_orders: list[tuple[int, int]] | None,
@@ -479,6 +568,10 @@ def run_sweep(
 
     rows: list[dict[str, Any]] = []
     channel_prep_records: dict[str, Any] = {}
+    mus_by_dim: dict[int, list[float]] = {}
+    # Highest classical channel count already materialized per channel-cache
+    # key, so ``_run_classical`` can report whether its warm-up was cold.
+    warm_channel_counts: dict[Any, int] = {}
 
     for dim in sorted(dims):
         q_order = (
@@ -492,6 +585,14 @@ def run_sweep(
             else DEFAULT_SOURCE_LEVEL[dim]
         )
         box_extent = float(root_extent) * 0.5**int(source_level)
+        # theta = mu * b is what the declared window covers, so the default
+        # ladder is resolved against this dimension's own box extent.
+        dim_mus = sorted(
+            mus
+            if mus is not None
+            else _default_mus(mode, window_theta, box_extent)
+        )
+        mus_by_dim[dim] = dim_mus
         if chan_orders is None:
             dim_chan_orders = [_resolve_channel_orders(dim, None, None)]
         else:
@@ -510,7 +611,9 @@ def run_sweep(
             "chan_orders="
             + ";".join(
                 f"{regular}/{radial}" for regular, radial in dim_chan_orders
-            ),
+            )
+            + " mus="
+            + ",".join(f"{mu:g}" for mu in dim_mus),
             flush=True,
         )
 
@@ -571,7 +674,7 @@ def run_sweep(
                 )
 
         for kernel in kernels:
-            for mu in mus:
+            for mu in dim_mus:
                 theta = float(mu) * box_extent
                 mu_tag = f"{mu:g}".replace("-", "m").replace(".", "p")
 
@@ -641,6 +744,7 @@ def run_sweep(
                     channel_orders=classical_channel_orders,
                     entry_ids=entry_ids,
                     n_reduced_entries=n_entries,
+                    warm_channel_counts=warm_channel_counts,
                 )
                 if (
                     classical["values"] is not None
@@ -802,10 +906,6 @@ def run_sweep(
                             for key, value in windowed.items():
                                 if key != "values" and key in FIELDS:
                                     row[key] = value
-                            if "smooth_quad_order_used" in windowed:
-                                row["smooth_quad_order_used"] = windowed[
-                                    "smooth_quad_order_used"
-                                ]
                             for key, value in classical.items():
                                 if key != "values" and key in FIELDS:
                                     row[key] = value
@@ -816,6 +916,7 @@ def run_sweep(
         row["benchmark_total_seconds"] = total_seconds
     return rows, {
         "channel_prep": channel_prep_records,
+        "mus_by_dim": {str(dim): values for dim, values in mus_by_dim.items()},
         "total_seconds": total_seconds,
     }
 
@@ -866,8 +967,12 @@ def main() -> int:
     )
     parser.add_argument(
         "--mus",
-        help="comma-separated parameter values; defaults: smoke '4,64', "
-        "full '1,2,4,8,16,24,32,48,64'",
+        help="comma-separated parameter values, applied to every dimension; "
+        "the default ladder is resolved per dimension from the window "
+        "declaration as mu = fraction * window_theta / box_extent, which at "
+        "the default geometry gives smoke '4,64' and full "
+        "'1,2,4,8,16,24,32,48,64' in 2D (and half of each in 3D, whose box "
+        "extent is twice as large)",
     )
     parser.add_argument(
         "--direct-policies",
@@ -927,10 +1032,10 @@ def main() -> int:
     smooth_orders = _parse_csv_ints(
         args.smooth_orders or ("16" if smoke else "8,16,24,32")
     )
-    mus = sorted(
-        _parse_csv_floats(args.mus or ("4,64" if smoke else "1,2,4,8,16,24,32,48,64"))
-    )
-    if any(mu <= 0 for mu in mus):
+    # ``None`` defers the ladder to run_sweep, which resolves it against each
+    # dimension's own box extent.
+    mus = sorted(_parse_csv_floats(args.mus)) if args.mus else None
+    if mus is not None and any(mu <= 0 for mu in mus):
         parser.error("--mus entries must be positive")
     direct_policies = _parse_direct_policies(args.direct_policies)
     classical_channel_orders = _parse_order_pair(args.classical_channel_orders)
@@ -993,11 +1098,31 @@ def main() -> int:
         json.dump(config, outfile, indent=2, sort_keys=True)
         outfile.write("\n")
 
+    # A sweep whose windowed assemblies were all refused, or whose direct
+    # reference builds all failed, produces a CSV with no usable comparison
+    # in it; that must not be indistinguishable from success (this driver is
+    # also a CI smoke check).
+    refused = sum(1 for row in rows if row["windowed_status"] != "ok")
+    no_reference = sum(1 for row in rows if not row["direct_reference_policy"])
+    usable = sum(
+        1
+        for row in rows
+        if row["windowed_status"] == "ok" and row["direct_reference_policy"]
+    )
     print(
-        f"[done] rows={len(rows)} csv={csv_path} json={json_path} "
+        f"[done] rows={len(rows)} usable={usable} "
+        f"windowed_refused={refused} no_direct_reference={no_reference} "
+        f"csv={csv_path} json={json_path} "
         f"total_s={run_info['total_seconds']:.1f}",
         flush=True,
     )
+    if not usable:
+        print(
+            "[error] no row produced both a windowed 'ok' assembly and a "
+            "usable direct reference",
+            flush=True,
+        )
+        return 1
     return 0
 
 

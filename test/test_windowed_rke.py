@@ -132,13 +132,13 @@ def _scalar_direct_entries(
 ):
     """Independent scalar-DuffyRadial reference entries for a radial kernel
     (real and imaginary parts separately when complex)."""
-    values = np.empty(len(entry_ids), dtype=np.complex128)
     parts = ("real", "imag") if complex_valued else ("real",)
     part_values = {}
+    # only ``kernel_func`` differs between the parts, so one skeleton serves
+    table = _windowed_channel_skeleton(
+        dim, q_order, source_box_level, ROOT_EXTENT, WINDOW_THETA, 0
+    )
     for part in parts:
-        table = _windowed_channel_skeleton(
-            dim, q_order, source_box_level, ROOT_EXTENT, WINDOW_THETA, 0
-        )
 
         def kernel_func(x, y=None, z=None, _part=part):
             coords = [c for c in (x, y, z) if c is not None][:dim]
@@ -241,6 +241,9 @@ def test_vectorized_channel_builder_matches_scalar_duffy():
         table.kernel_func = _windowed_channel_kernel_func(
             dim, m, window_scale
         )
+        # the picks are fixed positions in the reduced list; a shrunk entry
+        # count must fail as an assertion here, not as an opaque IndexError
+        assert len(entry_ids) > max(picks), (dim, q_order, len(entry_ids))
         for pick in picks:
             _, reference = table.compute_table_entry_duffy_radial(
                 int(entry_ids[pick]),
@@ -382,6 +385,17 @@ def test_tensor_gauss_points_match_meshgen(dim, q_order):
         NearFieldInteractionTable,
     )
 
+    # Only environment unavailability may skip: a missing meshgen module or
+    # no OpenCL platform to run it on.  A q-point, API or geometry failure in
+    # the constructor is precisely what this test exists to catch and must
+    # not be swallowed into a green skip.
+    try:
+        import pyopencl as cl
+    except ImportError:
+        unavailable: tuple[type[BaseException], ...] = (ImportError,)
+    else:
+        unavailable = (ImportError, cl.Error)
+
     try:
         real_table = NearFieldInteractionTable(
             quad_order=q_order,
@@ -393,7 +407,7 @@ def test_tensor_gauss_points_match_meshgen(dim, q_order):
             dtype=np.float64,
             progress_bar=False,
         )
-    except Exception as exc:
+    except unavailable as exc:
         pytest.skip(f"no mesh-generator table construction available: {exc}")
     assert (
         np.max(np.abs(np.asarray(real_table.q_points) - points))
@@ -698,7 +712,6 @@ def test_smooth_order_convergence(channel_cache):
     # non-increasing within noise, and converged (plateaued) by order 32
     for coarse, fine in zip(deviations[:-1], deviations[1:]):
         assert fine <= 1.25 * coarse + 1e-9, deviations
-    assert deviations[-1] <= 1.25 * deviations[-2] + 1e-9, deviations
     assert deviations[-1] < 1e-6, deviations
 
 # }}}
@@ -943,8 +956,24 @@ def test_channel_cache_self_heals(tmp_path):
     assert np.array_equal(np.asarray(ids), np.asarray(ids_healed))
     assert np.array_equal(np.asarray(values), np.asarray(values_healed))
 
+    # the heal must have rewritten the same deterministic cache key, or the
+    # next corruption step would poison an orphan file and assert nothing
+    assert sorted(cache_dir.glob("*.npz")) == cache_files
+
     # arbitrary garbage (stale format) likewise self-heals
     cache_files[0].write_bytes(b"not a zip file")
+    healed = get_windowed_channel_table(cache, 2, 3, 0, **kwargs)
+    assert np.array_equal(
+        np.asarray(values), np.asarray(healed.get_reduced_table_data()[1])
+    )
+
+    # a loadable file whose key and entry IDs check out but whose value array
+    # has the wrong shape must also rebuild: accepting it would raise out of
+    # ``set_reduced_table_data`` and wedge every later call on the bad file
+    with np.load(cache_files[0], allow_pickle=False) as payload:
+        arrays = {name: payload[name] for name in payload.files}
+    arrays["values"] = np.asarray(arrays["values"])[:-1]
+    np.savez(cache_files[0], **arrays)
     healed = get_windowed_channel_table(cache, 2, 3, 0, **kwargs)
     assert np.array_equal(
         np.asarray(values), np.asarray(healed.get_reduced_table_data()[1])

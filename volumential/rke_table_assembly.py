@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import logging
 import os
 import uuid
 from pathlib import Path
@@ -67,6 +68,8 @@ from pathlib import Path
 import numpy as np
 
 __all__ = [
+    "RKEConditioningError",
+    "RKETruncationError",
     "assemble_parameterized_table",
     "assemble_windowed_parameterized_table",
     "choose_truncation_order",
@@ -76,7 +79,31 @@ __all__ = [
 ]
 
 
+logger = logging.getLogger(__name__)
+
 _EULER_GAMMA = np.euler_gamma
+
+
+# {{{ refusal taxonomy
+
+# The two certified refusal modes of the classical assembly are named on the
+# exception itself, so callers (the sweep driver and its figures) classify
+# them structurally instead of by matching free-form message text.  Both keep
+# their historical base classes, so ``except (ValueError, RuntimeError)`` and
+# message-matching callers are unaffected.
+
+class RKETruncationError(ValueError):
+    """The series tail majorant never falls below the requested tolerance."""
+
+    refusal_kind = "uncertifiable"
+
+
+class RKEConditioningError(RuntimeError):
+    """Float64 recombination of the assembly is not certifiably conditioned."""
+
+    refusal_kind = "ill-conditioned"
+
+# }}}
 
 
 # {{{ series coefficients
@@ -233,8 +260,8 @@ def choose_truncation_order(
 ):
     """Smallest series order whose tail majorant is below ``tolerance``.
 
-    Returns ``(n_terms, tail_bound)``; raises if ``max_terms`` is not
-    enough."""
+    Returns ``(n_terms, tail_bound)``; raises :class:`RKETruncationError` if
+    ``max_terms`` is not enough."""
     if dim not in (2, 3):
         raise NotImplementedError(
             "certified truncation supports only the 2D and 3D kernel series"
@@ -249,7 +276,7 @@ def choose_truncation_order(
         bound = _tail_majorant(dim, k, radius, n_terms)
         if bound <= tolerance:
             return n_terms, bound
-    raise ValueError(
+    raise RKETruncationError(
         f"cannot certify tolerance {tolerance:g} within {max_terms} series "
         f"terms (last tail bound {bound:g}); increase max_terms or relax "
         "the tolerance"
@@ -568,7 +595,7 @@ NearFieldInteractionTable`
     cancellation_bound = (gamma_m + coefficient_eval_ulps * eps) * max_abs_sum
     condition = max_abs_sum / max(max_entry, 1e-300)
     if condition > max_condition:
-        raise RuntimeError(
+        raise RKEConditioningError(
             "RKE table assembly is ill-conditioned for this parameter and "
             f"box size (condition {condition:.3e} > {max_condition:.1e}); "
             "the local parameter |k| times the separation radius "
@@ -775,6 +802,14 @@ def _windowed_channel_skeleton(
     source-box extent the table manager would use for this level."""
     from volumential.nearfield_potential_table import NearFieldInteractionTable
 
+    # A source box is a descendant of the root, exactly as the canonical
+    # request path requires (``TableDiscretization.from_args``); a negative
+    # level would otherwise describe a box larger than the root that no
+    # table-manager query could ever retrieve.
+    if int(source_box_level) < 0:
+        raise ValueError(
+            f"source_box_level must be >= 0, got {int(source_box_level)}"
+        )
     box_extent = float(root_extent) * 0.5 ** int(source_box_level)
     window_scale = (box_extent / float(window_theta)) ** 2
     table = NearFieldInteractionTable(
@@ -893,7 +928,7 @@ def _duffy_channel_entry_values(
     )
 
     if dim == 2:
-        th_nodes, th_weights = sps.p_roots(int(regular_order))
+        th_nodes, th_weights = sps.roots_legendre(int(regular_order))
         theta = 0.25 * np.pi * (th_nodes + 1.0)
         w_theta = 0.25 * np.pi * th_weights
         cos_sq = np.cos(theta) ** 2
@@ -1248,7 +1283,8 @@ def get_windowed_channel_table(
     chan_regular_order, chan_radial_order)``; a load validates the full key
     and the symmetry-reduced entry IDs before accepting cached data, and any
     unreadable or stale cache file (e.g. a torn write from an interrupted
-    process) is silently rebuilt and atomically replaced.
+    process) is rebuilt and atomically replaced, with the discard reason
+    logged as a warning on this module's logger.
 
     ``chan_regular_order`` / ``chan_radial_order`` default (via ``None``) to
     the tested per-dimension orders of :func:`_resolve_channel_orders`
@@ -1302,8 +1338,14 @@ def get_windowed_channel_table(
                 stored_values = np.asarray(
                     payload["values"], dtype=np.float64
                 )
-        except Exception:
-            pass
+        except Exception as exc:
+            # never silent: a permanently unreadable cache file otherwise
+            # looks exactly like a cache hit while paying a full rebuild on
+            # every call
+            logger.warning(
+                "discarding unreadable windowed channel cache %s: %s: %s",
+                cache_file, type(exc).__name__, exc,
+            )
         else:
             if stored_key == key and np.array_equal(
                 stored_ids, expected_entry_ids
@@ -1311,13 +1353,25 @@ def get_windowed_channel_table(
                 # a cache written before the entry bound was enforced (or by
                 # any other build that produced garbage) is treated exactly
                 # like a torn file: discard and rebuild, so a poisoned .npz
-                # cannot outlive the defect that produced it
+                # cannot outlive the defect that produced it.  The shape check
+                # comes first: ``set_reduced_table_data`` would raise on a
+                # mismatched value array instead of falling through to the
+                # rebuild, wedging every later call on the bad file.
                 try:
+                    if stored_values.shape != expected_entry_ids.shape:
+                        raise RuntimeError(
+                            f"stored value array of shape "
+                            f"{stored_values.shape} does not match the "
+                            f"{expected_entry_ids.shape} reduced entries"
+                        )
                     _check_channel_table_values(
                         table, stored_values, m, window_scale
                     )
-                except RuntimeError:
-                    pass
+                except RuntimeError as exc:
+                    logger.warning(
+                        "rebuilding windowed channel cache %s: %s",
+                        cache_file, exc,
+                    )
                 else:
                     table.set_reduced_table_data(
                         expected_entry_ids, stored_values
