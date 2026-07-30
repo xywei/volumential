@@ -1,10 +1,9 @@
 import importlib.util
-from pathlib import Path
 import sys
+from pathlib import Path
 
 import numpy as np
 import pytest
-
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
@@ -495,6 +494,461 @@ def test_windowed_sweep_refusal_classifier_message_fallback():
     assert module._classify_classical_refusal(
         NotImplementedError("RKE table assembly supports 2D and 3D")
     ) == "NotImplementedError"
+
+
+@pytest.mark.parametrize(("option", "value"), [
+    ("--root-extent", "0"),
+    ("--root-extent", "-1"),
+    ("--root-extent", "nan"),
+    ("--root-extent", "inf"),
+    ("--root-extent", "-inf"),
+    ("--window-theta", "0"),
+    ("--window-theta", "-1"),
+    ("--window-theta", "nan"),
+    ("--window-theta", "inf"),
+    ("--window-theta", "-inf"),
+    ("--mus", "0"),
+    ("--mus", "-1"),
+    ("--mus", "nan"),
+    ("--mus", "inf"),
+    ("--mus", "-inf"),
+])
+def test_windowed_sweep_rejects_nonpositive_or_nonfinite_cli_values(
+    option, value, monkeypatch
+):
+    module = _load_benchmark("windowed_rke_sweep")
+    monkeypatch.setattr(sys, "argv", ["windowed_rke_sweep.py", option, value])
+    monkeypatch.setattr(
+        module,
+        "run_sweep",
+        lambda **kwargs: pytest.fail("run_sweep must not be called"),
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        module.main()
+    assert exc_info.value.code == 2
+
+
+@pytest.mark.parametrize("raw", [
+    "24,61;24,61",
+    "24,61;23,160",
+    "24,61;48,60",
+])
+def test_windowed_sweep_rejects_invalid_direct_policies(raw):
+    module = _load_benchmark("windowed_rke_sweep")
+
+    with pytest.raises(ValueError):
+        module._parse_direct_policies(raw)
+
+    assert module._parse_direct_policies("24,61;48,61") == [
+        (24, 61),
+        (48, 61),
+    ]
+
+
+@pytest.mark.parametrize("regular_order", [0, 1])
+def test_windowed_sweep_rejects_unusable_regular_orders(regular_order):
+    module = _load_benchmark("windowed_rke_sweep")
+    invalid_inputs = [
+        (module._parse_direct_policies, f"{regular_order},7;2,8"),
+        (module._parse_order_pair, f"{regular_order},7"),
+        (module._parse_order_pairs, f"{regular_order},7;2,8"),
+    ]
+
+    for parser, raw in invalid_inputs:
+        with pytest.raises(ValueError, match="regular order must be >= 2"):
+            parser(raw)
+
+
+@pytest.mark.parametrize("radial_order", range(1, 7))
+def test_windowed_sweep_rejects_unusable_radial_orders(radial_order):
+    module = _load_benchmark("windowed_rke_sweep")
+    invalid_inputs = [
+        (module._parse_direct_policies, f"2,{radial_order};3,7"),
+        (module._parse_order_pair, f"2,{radial_order}"),
+        (module._parse_order_pairs, f"2,{radial_order};3,7"),
+    ]
+
+    for parser, raw in invalid_inputs:
+        with pytest.raises(ValueError, match="radial order must be >= 7"):
+            parser(raw)
+
+
+def test_windowed_sweep_accepts_usable_channel_orders():
+    module = _load_benchmark("windowed_rke_sweep")
+
+    assert module._parse_order_pair("24,61") == (24, 61)
+    assert module._parse_order_pairs("48,61;64,121") == [
+        (48, 61),
+        (64, 121),
+    ]
+
+
+def test_windowed_sweep_float_identity_distinguishes_adjacent_values():
+    module = _load_benchmark("windowed_rke_sweep")
+    value = 1.0
+    adjacent = np.nextafter(value, np.inf)
+
+    assert f"{value:g}" == f"{adjacent:g}"
+    assert value.hex() in module._parameter_identity_token(value)
+    assert module._parameter_identity_token(value) != (
+        module._parameter_identity_token(adjacent)
+    )
+    assert module._parameter_identity_token(value) == (
+        module._parameter_identity_token(value)
+    )
+
+
+def test_windowed_sweep_classical_cache_identity_includes_geometry_and_policy(
+    tmp_path,
+):
+    module = _load_benchmark("windowed_rke_sweep")
+    adjacent_extent = np.nextafter(2.0, np.inf)
+
+    baseline = module._classical_cache_path(tmp_path, 2, 3, 2.0, (24, 61))
+    same = module._classical_cache_path(tmp_path, 2, 3, 2.0, (24, 61))
+    changed_extent = module._classical_cache_path(
+        tmp_path, 2, 3, adjacent_extent, (24, 61)
+    )
+    changed_policy = module._classical_cache_path(
+        tmp_path, 2, 3, 2.0, (25, 61)
+    )
+
+    assert baseline == same
+    assert module._exact_float_token(2.0) in baseline.name
+    assert "c24x61" in baseline.name
+    assert len({baseline, changed_extent, changed_policy}) == 3
+
+
+def test_windowed_sweep_channel_cold_status_uses_cache_disposition(
+    tmp_path, monkeypatch
+):
+    module = _load_benchmark("windowed_rke_sweep")
+    import volumential.rke_table_assembly as rke
+
+    class FakeChannel:
+        def __init__(self, disposition):
+            self._windowed_cache_disposition = disposition
+
+        def get_reduced_entry_ids(self):
+            return np.array([0], dtype=np.int64)
+
+    def prepare(dispositions):
+        dispositions = iter(dispositions)
+
+        def get_channel(*args, **kwargs):
+            return FakeChannel(next(dispositions))
+
+        monkeypatch.setattr(rke, "get_windowed_channel_table", get_channel)
+        return module._prepare_windowed_channels(
+            cache_path=tmp_path / "channels.sqlite",
+            dim=2,
+            q_order=1,
+            source_box_level=0,
+            root_extent=2.0,
+            window_theta=16.0,
+            max_p_star=2,
+            chan_regular_order=2,
+            chan_radial_order=7,
+        )
+
+    # The first disposition represents an existing checksum-corrupt cache
+    # that the core loader recovered by rebuilding.
+    recovered = prepare(["rebuilt", "hit"])
+    warm = prepare(["hit", "hit"])
+
+    assert recovered["channel_build_was_cold"] is True
+    assert warm["channel_build_was_cold"] is False
+
+
+@pytest.mark.parametrize(("root_extent", "window_theta"), [
+    (0.0, 16.0),
+    (np.nan, 16.0),
+    (2.0, 0.0),
+    (2.0, np.inf),
+])
+def test_windowed_sweep_programmatic_geometry_validation_precedes_side_effects(
+    tmp_path, monkeypatch, root_extent, window_theta
+):
+    module = _load_benchmark("windowed_rke_sweep")
+    cache_dir = tmp_path / "cache"
+    monkeypatch.setattr(
+        module,
+        "_make_queue",
+        lambda: pytest.fail("queue creation must not be attempted"),
+    )
+    kwargs = _windowed_sweep_run_kwargs(cache_dir)
+    kwargs.update(root_extent=root_extent, window_theta=window_theta)
+
+    with pytest.raises(ValueError, match="finite and positive"):
+        module.run_sweep(**kwargs)
+    assert not cache_dir.exists()
+
+
+def _windowed_sweep_run_kwargs(cache_dir):
+    return {
+        "mode": "smoke",
+        "dims": [2],
+        "kernels": ["Yukawa"],
+        "q_order_override": 1,
+        "source_level_override": 0,
+        "root_extent": 2.0,
+        "window_theta": 16.0,
+        "p_stars": [1],
+        "smooth_orders": [2],
+        "mus": [1.0],
+        "direct_policies": [(2, 7), (3, 8)],
+        "classical_channel_orders": (2, 7),
+        "chan_orders": [(2, 7)],
+        "cache_dir": cache_dir,
+        "skip_3d_tight": False,
+    }
+
+
+@pytest.mark.parametrize("update", [
+    {"q_order_override": 1.5},
+    {"q_order_override": True},
+    {"source_level_override": 0.5},
+    {"source_level_override": False},
+    {"smooth_orders": [1.5]},
+    {"smooth_orders": [True]},
+    {"p_stars": [1.5]},
+    {"p_stars": [True]},
+    {"direct_policies": [(2.5, 7), (3, 8)]},
+    {"direct_policies": [(True, 7), (3, 8)]},
+    {"classical_channel_orders": (2, 7.5)},
+    {"classical_channel_orders": (2, True)},
+    {"chan_orders": [(2.5, 7)]},
+    {"chan_orders": [(2, False)]},
+])
+def test_windowed_sweep_programmatic_integer_validation_precedes_side_effects(
+    tmp_path, monkeypatch, update
+):
+    module = _load_benchmark("windowed_rke_sweep")
+    cache_dir = tmp_path / "cache"
+    monkeypatch.setattr(
+        module,
+        "_make_queue",
+        lambda: pytest.fail("queue creation must not be attempted"),
+    )
+    kwargs = _windowed_sweep_run_kwargs(cache_dir)
+    kwargs.update(update)
+
+    with pytest.raises(ValueError, match="must be an integer"):
+        module.run_sweep(**kwargs)
+    assert not cache_dir.exists()
+
+
+@pytest.mark.parametrize("failed_column", [
+    "windowed_status",
+    "classical_status",
+])
+def test_windowed_sweep_main_fails_if_any_assembly_failed(
+    tmp_path, monkeypatch, failed_column
+):
+    module = _load_benchmark("windowed_rke_sweep")
+    usable = {
+        "windowed_status": "ok",
+        "classical_status": "ok",
+        "direct_reference_policy": "tight",
+    }
+    failed = {**usable, failed_column: "failed"}
+    monkeypatch.setattr(
+        module,
+        "run_sweep",
+        lambda **kwargs: (
+            [usable, failed],
+            {"total_seconds": 0.0, "channel_prep": {}, "mus_by_dim": {}},
+        ),
+    )
+    monkeypatch.setattr(sys, "argv", [
+        "windowed_rke_sweep.py",
+        "--out-dir",
+        str(tmp_path / "out"),
+        "--cache-dir",
+        str(tmp_path / "cache"),
+    ])
+
+    assert module.main() == 1
+
+
+def _windowed_sweep_classical_kwargs(tmp_path):
+    return {
+        "queue": None,
+        "cache_path": tmp_path / "classical.sqlite",
+        "dim": 2,
+        "kernel": "Yukawa",
+        "q_order": 2,
+        "parameter": 1.0,
+        "source_box_level": 3,
+        "root_extent": 2.0,
+        "channel_orders": (24, 61),
+        "entry_ids": np.array([0], dtype=np.int64),
+        "n_reduced_entries": 1,
+    }
+
+
+def _set_windowed_sweep_clock(module, monkeypatch, values):
+    values = iter(values)
+
+    class Clock:
+        @staticmethod
+        def perf_counter():
+            return next(values)
+
+    monkeypatch.setattr(module, "time", Clock())
+
+
+def _windowed_sweep_windowed_kwargs(tmp_path):
+    return {
+        "cache_path": tmp_path / "windowed.sqlite",
+        "dim": 2,
+        "kernel": "Yukawa",
+        "q_order": 1,
+        "parameter": 1.0,
+        "source_box_level": 0,
+        "root_extent": 2.0,
+        "window_theta": 16.0,
+        "p_star": 1,
+        "smooth_quad_order": 2,
+        "chan_regular_order": 2,
+        "chan_radial_order": 7,
+        "entry_ids": np.array([0], dtype=np.int64),
+        "n_reduced_entries": 1,
+    }
+
+
+@pytest.mark.parametrize(("error_name", "expected_status"), [
+    ("RKEWindowCoverageError", "refused"),
+    ("RKEWindowConditioningError", "refused"),
+    ("ValueError", "failed"),
+    ("RuntimeError", "failed"),
+    ("NotImplementedError", "failed"),
+])
+def test_windowed_sweep_windowed_errors_use_structured_refusal_taxonomy(
+    tmp_path, monkeypatch, error_name, expected_status
+):
+    module = _load_benchmark("windowed_rke_sweep")
+    import volumential.rke_table_assembly as rke
+
+    error_types = {
+        "RKEWindowCoverageError": rke.RKEWindowCoverageError,
+        "RKEWindowConditioningError": rke.RKEWindowConditioningError,
+        "ValueError": ValueError,
+        "RuntimeError": RuntimeError,
+        "NotImplementedError": NotImplementedError,
+    }
+
+    def assemble(*args, **kwargs):
+        raise error_types[error_name]("probe failure")
+
+    monkeypatch.setattr(rke, "assemble_windowed_parameterized_table", assemble)
+    _set_windowed_sweep_clock(module, monkeypatch, [3.0, 4.5])
+
+    result = module._run_windowed(
+        **_windowed_sweep_windowed_kwargs(tmp_path)
+    )
+
+    assert result["windowed_status"] == expected_status
+    assert error_name in result["windowed_refusal"]
+    assert result["windowed_assemble_seconds"] == pytest.approx(1.5)
+    assert result["values"] is None
+
+
+def test_windowed_sweep_classical_timing_schema_is_truthful(
+    tmp_path, monkeypatch
+):
+    module = _load_benchmark("windowed_rke_sweep")
+    import volumential.rke_table_assembly as rke
+
+    class FakeTable:
+        def get_entry_data_for_full_indices(self, entry_ids):
+            assert np.array_equal(entry_ids, np.array([0]))
+            return np.array([2.0])
+
+    calls = []
+
+    def assemble(*args, **kwargs):
+        calls.append((args, kwargs))
+        return FakeTable(), {
+            "n_series_terms": 2,
+            "channel_count": 6,
+            "condition_number": 1.5,
+        }
+
+    monkeypatch.setattr(rke, "assemble_parameterized_table", assemble)
+    _set_windowed_sweep_clock(
+        module, monkeypatch, [1.0, 3.5, 10.0, 11.25]
+    )
+
+    result = module._run_classical(
+        **_windowed_sweep_classical_kwargs(tmp_path)
+    )
+
+    assert len(calls) == 2
+    assert result["classical_status"] == "ok"
+    assert result["classical_warmup_seconds"] == pytest.approx(2.5)
+    assert result["classical_assemble_seconds"] == pytest.approx(1.25)
+    assert np.array_equal(result["values"], np.array([2.0]))
+    assert "classical_build_was_cold" not in module.FIELDS
+    assert "classical_channel_build_seconds" not in module.FIELDS
+
+
+@pytest.mark.parametrize(("error_type", "refusal_kind"), [
+    ("RKETruncationError", "uncertifiable"),
+    ("RKEConditioningError", "ill-conditioned"),
+])
+def test_windowed_sweep_classical_structured_refusal_uses_warmup_time(
+    tmp_path, monkeypatch, error_type, refusal_kind
+):
+    module = _load_benchmark("windowed_rke_sweep")
+    import volumential.rke_table_assembly as rke
+
+    def assemble(*args, **kwargs):
+        raise getattr(rke, error_type)("numerical refusal")
+
+    monkeypatch.setattr(rke, "assemble_parameterized_table", assemble)
+    _set_windowed_sweep_clock(module, monkeypatch, [4.0, 6.5])
+
+    result = module._run_classical(
+        **_windowed_sweep_classical_kwargs(tmp_path)
+    )
+
+    assert result["classical_status"] == "refused"
+    assert result["classical_refusal"] == refusal_kind
+    assert error_type in result["classical_refusal_detail"]
+    assert result["classical_warmup_seconds"] == pytest.approx(2.5)
+    assert result["classical_assemble_seconds"] == ""
+    assert result["values"] is None
+
+
+@pytest.mark.parametrize("error", [
+    ValueError("bad configuration"),
+    RuntimeError("cache mismatch"),
+    NotImplementedError("unsupported infrastructure"),
+])
+def test_windowed_sweep_classical_unexpected_errors_are_failures(
+    tmp_path, monkeypatch, error
+):
+    module = _load_benchmark("windowed_rke_sweep")
+    import volumential.rke_table_assembly as rke
+
+    def assemble(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(rke, "assemble_parameterized_table", assemble)
+    _set_windowed_sweep_clock(module, monkeypatch, [8.0, 9.0])
+
+    result = module._run_classical(
+        **_windowed_sweep_classical_kwargs(tmp_path)
+    )
+
+    assert result["classical_status"] == "failed"
+    assert result["classical_refusal"] == ""
+    assert type(error).__name__ in result["classical_refusal_detail"]
+    assert result["classical_warmup_seconds"] == pytest.approx(1.0)
+    assert result["classical_assemble_seconds"] == ""
+    assert result["values"] is None
 
 
 def test_keller_segel_critical_profile_is_mass_normalized():

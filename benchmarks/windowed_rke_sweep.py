@@ -10,11 +10,11 @@ cross-deviations:
 (b) classical series RKE assembly (:func:`assemble_parameterized_table`) at a
     matching certified tolerance, recording the refusal kind when the
     classical certificate cannot be issued (uncertifiable truncation or
-    ill-conditioned recombination).  Its canonical channels are materialized
-    by an untimed warm-up call, so ``classical_assemble_seconds`` is the
-    marginal recombination cost and is directly comparable to
-    ``windowed_assemble_seconds``; the one-off construction is reported
-    separately as ``classical_channel_build_seconds``;
+    ill-conditioned recombination).  A separately timed warm-up call prepares
+    any missing canonical channels.  ``classical_warmup_seconds`` records that
+    complete first attempt, including cache loading, possible channel builds,
+    and recombination; ``classical_assemble_seconds`` records a second
+    warm-cache end-to-end assembly, including channel loading;
 (c) direct fixed-parameter builds through the table manager at two Duffy
     quadrature policies, whose mutual disagreement estimates the reference
     floor below which assembled-vs-direct deviations are quadrature noise.
@@ -22,7 +22,8 @@ cross-deviations:
 Deviations are reported against the tight direct policy as both relative
 max-entry and relative L2 over the symmetry-reduced entries.  Windowed
 channel families are built (or reused) once per ``(dim, q_order, level,
-window_theta, channel quadrature orders)`` from a per-family cache, so the
+root_extent, window_theta, channel quadrature orders)`` from a per-family
+cache, so the
 one-off channel build cost and the marginal per-parameter assembly cost are
 recorded separately.  The windowed channel quadrature orders are themselves
 sweepable via ``--chan-orders``; the classical and direct reference builds do
@@ -37,12 +38,12 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import operator
 import time
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-
 
 FIELDS = (
     "case_id",
@@ -80,8 +81,7 @@ FIELDS = (
     "classical_n_series_terms",
     "classical_channel_count",
     "classical_condition_number",
-    "classical_build_was_cold",
-    "classical_channel_build_seconds",
+    "classical_warmup_seconds",
     "classical_assemble_seconds",
     "classical_payload_bytes",
     "classical_channel_regular_order",
@@ -137,6 +137,62 @@ def _default_mus(mode: str, window_theta: float, box_extent: float):
     ]
 
 
+def _exact_float_token(value: float) -> str:
+    """Filename-safe token preserving the exact binary64 value."""
+    return float(value).hex()
+
+
+def _parameter_identity_token(value: float) -> str:
+    """Readable parameter prefix plus an exact collision-free identity."""
+    return f"{float(value):g}-{_exact_float_token(value)}"
+
+
+def _classical_cache_path(
+    cache_dir: Path,
+    dim: int,
+    q_order: int,
+    root_extent: float,
+    channel_orders: tuple[int, int],
+) -> Path:
+    """Classical cache identity including file-wide geometry and policy."""
+    root_token = _exact_float_token(root_extent)
+    regular_order, radial_order = channel_orders
+    return cache_dir / (
+        f"classical-channels-d{int(dim)}-q{int(q_order)}"
+        f"-r{root_token}-c{int(regular_order)}x{int(radial_order)}.sqlite"
+    )
+
+
+def _require_finite_positive(value: float, name: str) -> None:
+    if not np.isfinite(value) or value <= 0:
+        raise ValueError(f"{name} must be finite and positive")
+
+
+def _require_integer(value, name: str, *, minimum=None) -> int:
+    if isinstance(value, (bool, np.bool_)):
+        raise ValueError(f"{name} must be an integer")
+    try:
+        result = operator.index(value)
+    except TypeError as exc:
+        raise ValueError(f"{name} must be an integer") from exc
+    result = int(result)
+    if minimum is not None and result < minimum:
+        raise ValueError(f"{name} must be >= {minimum}")
+    return result
+
+
+def _require_usable_order_pair(
+    pair: tuple[int, int], name: str
+) -> tuple[int, int]:
+    regular_order = _require_integer(pair[0], f"{name} regular order")
+    radial_order = _require_integer(pair[1], f"{name} radial order")
+    if regular_order < 2:
+        raise ValueError(f"{name} regular order must be >= 2")
+    if radial_order < 7:
+        raise ValueError(f"{name} radial order must be >= 7")
+    return regular_order, radial_order
+
+
 def _parse_csv_ints(raw: str) -> list[int]:
     values = [int(part.strip()) for part in raw.split(",") if part.strip()]
     if not values:
@@ -168,6 +224,23 @@ def _parse_direct_policies(raw: str) -> list[tuple[int, int]]:
         raise ValueError(
             "exactly two direct policies (loose;tight) are required"
         )
+    policies = [
+        _require_usable_order_pair(policy, "direct policy")
+        for policy in policies
+    ]
+    loose, tight = policies
+    if any(
+        tight_order < loose_order
+        for loose_order, tight_order in zip(loose, tight, strict=True)
+    ):
+        raise ValueError(
+            "tight direct policy must be componentwise >= the loose policy"
+        )
+    if tight == loose:
+        raise ValueError(
+            "tight direct policy must be strictly larger in at least one "
+            "component"
+        )
     return policies
 
 
@@ -183,7 +256,11 @@ def _parse_order_pairs(raw: str) -> list[tuple[int, int]]:
             raise ValueError(
                 "each channel-order policy must be a 'regular,radial' pair"
             )
-        pairs.append((parts[0], parts[1]))
+        pairs.append(
+            _require_usable_order_pair(
+                (parts[0], parts[1]), "channel policy"
+            )
+        )
     if not pairs:
         raise ValueError("expected at least one 'regular,radial' pair")
     return pairs
@@ -193,7 +270,9 @@ def _parse_order_pair(raw: str) -> tuple[int, int]:
     parts = [int(part.strip()) for part in raw.split(",")]
     if len(parts) != 2:
         raise ValueError("expected a 'regular,radial' integer pair")
-    return parts[0], parts[1]
+    return _require_usable_order_pair(
+        (parts[0], parts[1]), "classical channel policy"
+    )
 
 
 def _clear_sqlite_cache(path: Path) -> None:
@@ -234,27 +313,9 @@ def _prepare_windowed_channels(
     chan_radial_order: int,
 ) -> dict[str, Any]:
     """Build (or reload) the windowed channel family once and time it."""
-    from volumential.rke_table_assembly import (
-        _windowed_channel_cache_file,
-        get_windowed_channel_table,
-    )
+    from volumential.rke_table_assembly import get_windowed_channel_table
 
     was_cold = False
-    for m in range(max_p_star):
-        cache_file, _ = _windowed_channel_cache_file(
-            cache_path,
-            dim,
-            q_order,
-            source_box_level,
-            root_extent,
-            window_theta,
-            m,
-            chan_regular_order,
-            chan_radial_order,
-        )
-        if not cache_file.is_file():
-            was_cold = True
-
     start = time.perf_counter()
     base_channel = None
     for m in range(max_p_star):
@@ -269,6 +330,17 @@ def _prepare_windowed_channels(
             chan_regular_order=chan_regular_order,
             chan_radial_order=chan_radial_order,
         )
+        disposition = getattr(
+            channel,
+            "_windowed_cache_disposition",
+            getattr(channel, "_cache_disposition", None),
+        )
+        if disposition not in ("hit", "rebuilt"):
+            raise RuntimeError(
+                "windowed channel table did not report a valid private "
+                "cache disposition"
+            )
+        was_cold = was_cold or disposition == "rebuilt"
         if m == 0:
             base_channel = channel
     build_seconds = time.perf_counter() - start
@@ -300,6 +372,8 @@ def _run_windowed(
     n_reduced_entries: int,
 ) -> dict[str, Any]:
     from volumential.rke_table_assembly import (
+        RKEWindowConditioningError,
+        RKEWindowCoverageError,
         assemble_windowed_parameterized_table,
     )
 
@@ -319,9 +393,16 @@ def _run_windowed(
             chan_regular_order=chan_regular_order,
             chan_radial_order=chan_radial_order,
         )
-    except (ValueError, RuntimeError) as exc:
+    except (RKEWindowCoverageError, RKEWindowConditioningError) as exc:
         return {
             "windowed_status": "refused",
+            "windowed_refusal": f"{type(exc).__name__}: {exc}",
+            "windowed_assemble_seconds": time.perf_counter() - start,
+            "values": None,
+        }
+    except (ValueError, RuntimeError, NotImplementedError) as exc:
+        return {
+            "windowed_status": "failed",
             "windowed_refusal": f"{type(exc).__name__}: {exc}",
             "windowed_assemble_seconds": time.perf_counter() - start,
             "values": None,
@@ -380,23 +461,20 @@ def _run_classical(
     channel_orders: tuple[int, int],
     entry_ids,
     n_reduced_entries: int,
-    warm_channel_counts: dict[Any, int],
 ) -> dict[str, Any]:
-    """Classical assembly with the one-time channel build kept out of the
-    timed region.
+    """Classical assembly with a separate warm-up and warm-cache timing.
 
-    ``assemble_parameterized_table`` builds whatever canonical channels the
-    requested truncation order needs on first use, so a single timed call
-    conflates that one-off construction with the marginal per-parameter
-    recombination and is not comparable to ``windowed_assemble_seconds``
-    (whose channel family is prepared separately).  An untimed warm-up call
-    materializes the channels first; the timed call that follows is then
-    marginal, exactly like the windowed one.  The warm-up cost is reported as
-    ``classical_channel_build_seconds`` and ``classical_build_was_cold``
-    records whether it actually had to extend the channel family.
+    The first call may load or build canonical channels and performs a full
+    recombination, so its elapsed time is reported only as
+    ``classical_warmup_seconds``.  The second call measures the repeatable
+    warm-cache path, including channel deserialization and recombination.
     """
     from volumential.nearfield_potential_table import DuffyBuildConfig
-    from volumential.rke_table_assembly import assemble_parameterized_table
+    from volumential.rke_table_assembly import (
+        RKEConditioningError,
+        RKETruncationError,
+        assemble_parameterized_table,
+    )
 
     build_config = DuffyBuildConfig(
         radial_rule="tanh-sinh-fast",
@@ -418,39 +496,50 @@ def _run_classical(
             build_config=build_config,
         )
 
-    # The channel family depends on the geometry and the Duffy orders only,
-    # never on the kernel or the parameter; the parameter enters solely
-    # through how many of those channels the truncation order asks for.
-    warm_key = (
-        str(cache_path),
-        int(dim),
-        int(q_order),
-        int(source_box_level),
-        float(root_extent),
-        tuple(channel_orders),
-    )
-    already_built = warm_channel_counts.get(warm_key, 0)
+    start = time.perf_counter()
+    try:
+        assemble()
+    except (RKETruncationError, RKEConditioningError) as exc:
+        return {
+            "classical_status": "refused",
+            "classical_refusal": exc.refusal_kind,
+            "classical_refusal_detail": f"{type(exc).__name__}: {exc}",
+            "classical_warmup_seconds": time.perf_counter() - start,
+            "classical_assemble_seconds": "",
+            "values": None,
+        }
+    except (ValueError, RuntimeError, NotImplementedError) as exc:
+        return {
+            "classical_status": "failed",
+            "classical_refusal": "",
+            "classical_refusal_detail": f"{type(exc).__name__}: {exc}",
+            "classical_warmup_seconds": time.perf_counter() - start,
+            "classical_assemble_seconds": "",
+            "values": None,
+        }
+    warmup_seconds = time.perf_counter() - start
 
     start = time.perf_counter()
     try:
-        _, warm_certificate = assemble()
-    except (ValueError, RuntimeError, NotImplementedError) as exc:
-        # A refusal is a property of the parameter, not of the timing split:
-        # classify and report it exactly as a single timed call would have.
+        table, certificate = assemble()
+    except (RKETruncationError, RKEConditioningError) as exc:
         return {
             "classical_status": "refused",
-            "classical_refusal": _classify_classical_refusal(exc),
+            "classical_refusal": exc.refusal_kind,
             "classical_refusal_detail": f"{type(exc).__name__}: {exc}",
-            "classical_assemble_seconds": time.perf_counter() - start,
+            "classical_warmup_seconds": warmup_seconds,
+            "classical_assemble_seconds": "",
             "values": None,
         }
-    build_seconds = time.perf_counter() - start
-    warm_channel_count = int(warm_certificate["channel_count"])
-    was_cold = warm_channel_count > already_built
-    warm_channel_counts[warm_key] = max(already_built, warm_channel_count)
-
-    start = time.perf_counter()
-    table, certificate = assemble()
+    except (ValueError, RuntimeError, NotImplementedError) as exc:
+        return {
+            "classical_status": "failed",
+            "classical_refusal": "",
+            "classical_refusal_detail": f"{type(exc).__name__}: {exc}",
+            "classical_warmup_seconds": warmup_seconds,
+            "classical_assemble_seconds": "",
+            "values": None,
+        }
     assemble_seconds = time.perf_counter() - start
     values = np.asarray(table.get_entry_data_for_full_indices(entry_ids))
     channel_count = int(certificate["channel_count"])
@@ -461,8 +550,7 @@ def _run_classical(
         "classical_n_series_terms": certificate["n_series_terms"],
         "classical_channel_count": channel_count,
         "classical_condition_number": certificate["condition_number"],
-        "classical_build_was_cold": was_cold,
-        "classical_channel_build_seconds": build_seconds,
+        "classical_warmup_seconds": warmup_seconds,
         "classical_assemble_seconds": assemble_seconds,
         # channel_count real float64 channel tables over the reduced entries
         "classical_payload_bytes": int(
@@ -560,6 +648,42 @@ def run_sweep(
     cache_dir: Path,
     skip_3d_tight: bool,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    _require_finite_positive(root_extent, "root_extent")
+    _require_finite_positive(window_theta, "window_theta")
+    dims = [_require_integer(dim, "dim") for dim in dims]
+    if any(dim not in (2, 3) for dim in dims):
+        raise ValueError("dim entries must be 2 or 3")
+    if q_order_override is not None:
+        q_order_override = _require_integer(
+            q_order_override, "q_order_override", minimum=1
+        )
+    if source_level_override is not None:
+        source_level_override = _require_integer(
+            source_level_override, "source_level_override", minimum=0
+        )
+    p_stars = [
+        _require_integer(p_star, "p_star", minimum=1) for p_star in p_stars
+    ]
+    smooth_orders = [
+        _require_integer(order, "smooth_order", minimum=1)
+        for order in smooth_orders
+    ]
+    if mus is not None:
+        for mu in mus:
+            _require_finite_positive(mu, "mu")
+    direct_policies = [
+        _require_usable_order_pair(policy, "direct policy")
+        for policy in direct_policies
+    ]
+    classical_channel_orders = _require_usable_order_pair(
+        classical_channel_orders, "classical channel policy"
+    )
+    if chan_orders is not None:
+        chan_orders = [
+            _require_usable_order_pair(policy, "channel policy")
+            for policy in chan_orders
+        ]
+
     from volumential.rke_table_assembly import _resolve_channel_orders
 
     sweep_start = time.perf_counter()
@@ -569,9 +693,6 @@ def run_sweep(
     rows: list[dict[str, Any]] = []
     channel_prep_records: dict[str, Any] = {}
     mus_by_dim: dict[int, list[float]] = {}
-    # Highest classical channel count already materialized per channel-cache
-    # key, so ``_run_classical`` can report whether its warm-up was cold.
-    warm_channel_counts: dict[Any, int] = {}
 
     for dim in sorted(dims):
         q_order = (
@@ -601,8 +722,12 @@ def run_sweep(
                 for regular, radial in chan_orders
             ]
 
-        classical_cache = (
-            cache_dir / f"classical-channels-d{dim}-q{q_order}.sqlite"
+        classical_cache = _classical_cache_path(
+            cache_dir,
+            dim,
+            q_order,
+            root_extent,
+            classical_channel_orders,
         )
 
         print(
@@ -676,7 +801,7 @@ def run_sweep(
         for kernel in kernels:
             for mu in dim_mus:
                 theta = float(mu) * box_extent
-                mu_tag = f"{mu:g}".replace("-", "m").replace(".", "p")
+                mu_tag = _parameter_identity_token(mu)
 
                 policy_results = []
                 for policy_index, (regular, radial) in enumerate(
@@ -744,7 +869,6 @@ def run_sweep(
                     channel_orders=classical_channel_orders,
                     entry_ids=entry_ids,
                     n_reduced_entries=n_entries,
-                    warm_channel_counts=warm_channel_counts,
                 )
                 if (
                     classical["values"] is not None
@@ -828,7 +952,7 @@ def run_sweep(
                             row.update(
                                 {
                                     "case_id": (
-                                        f"{kernel.lower()}{dim}d-mu{mu:g}"
+                                        f"{kernel.lower()}{dim}d-mu{mu_tag}"
                                         f"-{chan_tag}"
                                         f"-p{p_star}-s{smooth_order}"
                                     ),
@@ -1010,6 +1134,12 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    try:
+        _require_finite_positive(args.root_extent, "--root-extent")
+        _require_finite_positive(args.window_theta, "--window-theta")
+    except ValueError as exc:
+        parser.error(str(exc))
+
     smoke = args.mode == "smoke"
     dims = _parse_csv_ints(args.dim or ("2" if smoke else "2,3"))
     if any(dim not in (2, 3) for dim in dims):
@@ -1032,18 +1162,33 @@ def main() -> int:
     smooth_orders = _parse_csv_ints(
         args.smooth_orders or ("16" if smoke else "8,16,24,32")
     )
+    if any(order < 1 for order in smooth_orders):
+        parser.error("--smooth-orders entries must be >= 1")
+    if args.q_order is not None and args.q_order < 1:
+        parser.error("--q-order must be >= 1")
+    if args.source_level is not None and args.source_level < 0:
+        parser.error("--source-level must be >= 0")
     # ``None`` defers the ladder to run_sweep, which resolves it against each
     # dimension's own box extent.
-    mus = sorted(_parse_csv_floats(args.mus)) if args.mus else None
-    if mus is not None and any(mu <= 0 for mu in mus):
-        parser.error("--mus entries must be positive")
-    direct_policies = _parse_direct_policies(args.direct_policies)
-    classical_channel_orders = _parse_order_pair(args.classical_channel_orders)
+    try:
+        mus = sorted(_parse_csv_floats(args.mus)) if args.mus else None
+        if mus is not None:
+            for mu in mus:
+                _require_finite_positive(mu, "--mus entries")
+        direct_policies = _parse_direct_policies(args.direct_policies)
+        classical_channel_orders = _parse_order_pair(
+            args.classical_channel_orders
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
     # Both smoke and full default to the single tested per-dimension pair;
     # a channel-order sweep is always requested explicitly.
-    chan_orders = (
-        _parse_order_pairs(args.chan_orders) if args.chan_orders else None
-    )
+    try:
+        chan_orders = (
+            _parse_order_pairs(args.chan_orders) if args.chan_orders else None
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
 
     rows, run_info = run_sweep(
         mode=args.mode,
@@ -1102,7 +1247,13 @@ def main() -> int:
     # reference builds all failed, produces a CSV with no usable comparison
     # in it; that must not be indistinguishable from success (this driver is
     # also a CI smoke check).
-    refused = sum(1 for row in rows if row["windowed_status"] != "ok")
+    refused = sum(1 for row in rows if row["windowed_status"] == "refused")
+    windowed_failed = sum(
+        1 for row in rows if row["windowed_status"] == "failed"
+    )
+    classical_failed = sum(
+        1 for row in rows if row["classical_status"] == "failed"
+    )
     no_reference = sum(1 for row in rows if not row["direct_reference_policy"])
     usable = sum(
         1
@@ -1111,15 +1262,17 @@ def main() -> int:
     )
     print(
         f"[done] rows={len(rows)} usable={usable} "
-        f"windowed_refused={refused} no_direct_reference={no_reference} "
+        f"windowed_refused={refused} windowed_failed={windowed_failed} "
+        f"classical_failed={classical_failed} "
+        f"no_direct_reference={no_reference} "
         f"csv={csv_path} json={json_path} "
         f"total_s={run_info['total_seconds']:.1f}",
         flush=True,
     )
-    if not usable:
+    if windowed_failed or classical_failed or not usable:
         print(
-            "[error] no row produced both a windowed 'ok' assembly and a "
-            "usable direct reference",
+            "[error] sweep has unexpected assembly failures or no row with "
+            "both a windowed 'ok' assembly and a usable direct reference",
             flush=True,
         )
         return 1

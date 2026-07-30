@@ -38,15 +38,19 @@ the classical table count but replaces the polynomially growing channels
 with ``x = r^2 / (4 t_w)`` and window scale ``t_w = (b / Theta)^2`` for
 source-box extent ``b`` and the single design declaration ``Theta``
 (``window_theta``).  The channels carry the kernels' full singular germs but
-die off beyond ``r ~ b / Theta``, so the recombination coefficient paired
-with channel ``m`` is bounded by ``|zeta t_w|^m / m! = (theta/Theta)^{2m}/m!``
-for every covered squared-frequency parameter ``zeta`` (``zeta = lam^2`` for
-Yukawa, ``zeta = -k^2`` for Helmholtz, complex ``zeta`` for damped waves) —
-nothing large ever cancels, which is the entire point of the window.
+die off beyond ``r ~ b / Theta``.  Internally, tables store the normalized
+channels ``psi_m = chi_m / t_w^m`` and pair them with coefficients
+``(-zeta t_w)^m / m!``.  Their magnitude is bounded by
+``|zeta t_w|^m / m! = (theta/Theta)^{2m}/m!`` for every covered
+squared-frequency parameter ``zeta`` (``zeta = lam^2`` for Yukawa,
+``zeta = -k^2`` for Helmholtz, complex ``zeta`` for damped waves), so neither
+factor carries the opposing ``t_w^m`` scaling that overflows or underflows
+before their product does.
 
-The online part is the smooth remainder ``R = G - sum_{m<p_star} c_m chi_m``
-evaluated pointwise from the kernel and the closed channel forms and
-integrated against the source modes by a tensor-product Gauss-Legendre rule.
+The online part is the smooth remainder
+``R = G - sum_{m<p_star} ((-zeta t_w)^m/m!) psi_m``, evaluated pointwise from
+the kernel and the closed channel forms and integrated against the source
+modes by a tensor-product Gauss-Legendre rule.
 Because ``R`` is defined as the exact difference, the assembly has no series
 truncation anywhere: the certificate's ``truncation_tail_bound`` is
 structurally ``0.0``, and the only error terms are the two already-owned
@@ -61,6 +65,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import logging
+import operator
 import os
 import uuid
 from pathlib import Path
@@ -70,6 +75,8 @@ import numpy as np
 __all__ = [
     "RKEConditioningError",
     "RKETruncationError",
+    "RKEWindowConditioningError",
+    "RKEWindowCoverageError",
     "assemble_parameterized_table",
     "assemble_windowed_parameterized_table",
     "choose_truncation_order",
@@ -82,6 +89,42 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 _EULER_GAMMA = np.euler_gamma
+_WINDOWED_CHANNEL_CACHE_SCHEMA = 2
+_WINDOWED_CHANNEL_NORMALIZATION = "psi=chi/t_w**m"
+
+
+def _require_integer(name, value, *, minimum=None):
+    if isinstance(value, (bool, np.bool_)):
+        raise ValueError(f"{name} must be an integer")
+    try:
+        result = operator.index(value)
+    except TypeError as exc:
+        raise ValueError(f"{name} must be an integer") from exc
+    result = int(result)
+    if minimum is not None and result < minimum:
+        raise ValueError(f"{name} must be >= {minimum}, got {result}")
+    return result
+
+
+def _require_finite_positive(name, value):
+    result = float(value)
+    if not np.isfinite(result) or result <= 0.0:
+        raise ValueError(f"{name} must be finite and positive")
+    return result
+
+
+def _require_dimension(dim):
+    dim = _require_integer("dim", dim)
+    if dim not in (2, 3):
+        raise NotImplementedError("RKE assembly supports only 2D and 3D")
+    return dim
+
+
+def _require_dim_q_order(dim, q_order):
+    return (
+        _require_dimension(dim),
+        _require_integer("q_order", q_order, minimum=1),
+    )
 
 
 # {{{ refusal taxonomy
@@ -100,6 +143,18 @@ class RKETruncationError(ValueError):
 
 class RKEConditioningError(RuntimeError):
     """Float64 recombination of the assembly is not certifiably conditioned."""
+
+    refusal_kind = "ill-conditioned"
+
+
+class RKEWindowCoverageError(ValueError):
+    """The squared-frequency parameter lies outside the declared window."""
+
+    refusal_kind = "outside-window"
+
+
+class RKEWindowConditioningError(RuntimeError):
+    """Windowed recombination is not certifiably conditioned."""
 
     refusal_kind = "ill-conditioned"
 
@@ -182,6 +237,7 @@ def _tail_majorant(dim: int, k: complex, radius: float, n_terms: int) -> float:
     """Upper bound for the absolute sum of omitted series terms
     (orders ``n > n_terms``) on ``0 < r <= radius``, computed in log space
     to survive very large orders."""
+    dim = _require_dimension(dim)
     from math import lgamma
 
     k_abs = float(np.abs(np.complex128(k)))
@@ -262,10 +318,8 @@ def choose_truncation_order(
 
     Returns ``(n_terms, tail_bound)``; raises :class:`RKETruncationError` if
     ``max_terms`` is not enough."""
-    if dim not in (2, 3):
-        raise NotImplementedError(
-            "certified truncation supports only the 2D and 3D kernel series"
-        )
+    dim = _require_dimension(dim)
+    max_terms = _require_integer("max_terms", max_terms, minimum=1)
     if dim == 2 and float(np.abs(np.complex128(k))) == 0.0:
         raise ValueError(
             "the 2D series is undefined at k = 0 (its coefficients contain "
@@ -340,6 +394,7 @@ def _basis_l1_norms(table) -> np.ndarray:
 
 def _channel_specs(dim: int, n_terms: int):
     """(term label, kernel factory kwargs) for every needed channel."""
+    dim = _require_dimension(dim)
     specs = [("laplace", None)]
     if dim == 2:
         specs.append(("constant", 0))
@@ -356,6 +411,7 @@ def _channel_specs(dim: int, n_terms: int):
 
 
 def _channel_kernel(dim: int, label: str):
+    dim = _require_dimension(dim)
     from volumential.expansion_wrangler_fpnd import (
         _RadialPowerKernel,
         _RadialPowerLogKernel,
@@ -391,6 +447,10 @@ def _get_channel_tables(
     build_config,
     force_recompute,
 ):
+    dim, q_order = _require_dim_q_order(dim, q_order)
+    source_box_level = _require_integer(
+        "source_box_level", source_box_level, minimum=0
+    )
     from volumential.table_manager import NearFieldInteractionTableManager
 
     tables = {}
@@ -400,7 +460,7 @@ def _get_channel_tables(
         for label in labels:
             kernel_type, sumpy_knl = _channel_kernel(dim, label)
             kwargs = {
-                "source_box_level": int(source_box_level),
+                "source_box_level": source_box_level,
                 "force_recompute": bool(force_recompute),
                 "queue": queue,
                 "build_config": build_config,
@@ -450,8 +510,10 @@ NearFieldInteractionTable`
         equivalent to a direct fixed-parameter build up to the certified
         bound, and ``certificate`` is a dict of the assembly provenance.
     """
-    if dim not in (2, 3):
-        raise NotImplementedError("RKE table assembly supports 2D and 3D")
+    dim, q_order = _require_dim_q_order(dim, q_order)
+    source_box_level = _require_integer(
+        "source_box_level", source_box_level, minimum=0
+    )
     if kernel_type == "Helmholtz":
         k = np.complex128(float(parameter))
         result_dtype = np.complex128
@@ -473,7 +535,7 @@ NearFieldInteractionTable`
     # List 1 gallery contains center offsets up to 1.5 source-box extents
     # with target boxes up to twice the source size, so a source point and a
     # target point can be up to 1.5 + 1 + 0.5 = 3 extents apart per axis.
-    box_extent = float(root_extent) * 0.5 ** int(source_box_level)
+    box_extent = float(root_extent) * 0.5**source_box_level
     # The recombination evaluates channel integrals (which scale like
     # extent**(power + dim)) against coefficients (which scale like
     # k**power) as separate float64 factors, so extreme physical extents
@@ -646,38 +708,15 @@ NearFieldInteractionTable`
 
 # {{{ windowed channels
 
-def windowed_channel_profile(dim, m, window_scale):
-    """Radial profile ``chi_m(r)`` of the windowed channel of order ``m``.
-
-    Evaluated by the stable downward recurrences
-
-    - 2D: ``y_0(x) = E_1(x)``, ``y_m = (exp(-x) - x y_{m-1}) / m``,
-      ``chi_m = (1/2) t_w^m y_m``
-    - 3D: ``z_0(x) = sqrt(pi) erfc(sqrt(x)) / sqrt(x)``,
-      ``z_m = (exp(-x) - x z_{m-1}) / (m - 1/2)``,
-      ``chi_m = t_w^{m-1/2} z_m / (2 sqrt(pi))``
-
-    with ``x = r^2 / (4 t_w)`` and ``t_w = window_scale``; equivalently
-    ``chi_m = (1/2)(r^2/4)^m Gamma(-m, x)`` in 2D and
-    ``chi_m = (r^2/4)^{m-1/2} Gamma(1/2-m, x) / (2 sqrt(pi))`` in 3D.
-    ``chi_0`` in 3D is exactly the Ewald short-range kernel
-    ``erfc(r / (2 sqrt(t_w))) / r``.
-
-    :returns: a vectorized callable ``chi(r)`` accepting scalars or arrays.
-    """
+def _windowed_channel_profile_impl(dim, m, window_scale, *, normalized):
+    dim = _require_dimension(dim)
     import scipy.special as sps
 
-    if dim not in (2, 3):
-        raise NotImplementedError("windowed channels support 2D and 3D")
-    m = int(m)
-    if m < 0:
-        raise ValueError("channel order m must be nonnegative")
-    t_w = float(window_scale)
-    if not t_w > 0.0:
-        raise ValueError("window_scale must be positive")
+    m = _require_integer("m", m, minimum=0)
+    t_w = _require_finite_positive("window_scale", window_scale)
 
     if dim == 2:
-        scale = 0.5 * t_w**m
+        scale = 0.5 if normalized else 0.5 * t_w**m
 
         def profile(r):
             r_arr = np.asarray(r, dtype=np.float64)
@@ -693,7 +732,10 @@ def windowed_channel_profile(dim, m, window_scale):
             return value
 
     else:
-        scale = t_w ** (m - 0.5) / (2.0 * np.sqrt(np.pi))
+        if normalized:
+            scale = t_w**-0.5 / (2.0 * np.sqrt(np.pi))
+        else:
+            scale = t_w ** (m - 0.5) / (2.0 * np.sqrt(np.pi))
 
         def profile(r):
             r_arr = np.asarray(r, dtype=np.float64)
@@ -712,11 +754,44 @@ def windowed_channel_profile(dim, m, window_scale):
     return profile
 
 
-def _windowed_channel_kernel_func(dim, m, window_scale):
+def windowed_channel_profile(dim, m, window_scale):
+    """Radial profile ``chi_m(r)`` of the physical windowed channel.
+
+    Evaluated by the recurrences
+
+    - 2D: ``y_0(x) = E_1(x)``, ``y_m = (exp(-x) - x y_{m-1}) / m``,
+      ``chi_m = (1/2) t_w^m y_m``
+    - 3D: ``z_0(x) = sqrt(pi) erfc(sqrt(x)) / sqrt(x)``,
+      ``z_m = (exp(-x) - x z_{m-1}) / (m - 1/2)``,
+      ``chi_m = t_w^{m-1/2} z_m / (2 sqrt(pi))``
+
+    with ``x = r^2 / (4 t_w)`` and ``t_w = window_scale``; equivalently
+    ``chi_m = (1/2)(r^2/4)^m Gamma(-m, x)`` in 2D and
+    ``chi_m = (r^2/4)^{m-1/2} Gamma(1/2-m, x) / (2 sqrt(pi))`` in 3D.
+    ``chi_0`` in 3D is exactly the Ewald short-range kernel
+    ``erfc(r / (2 sqrt(t_w))) / r``.
+
+    :returns: a vectorized callable ``chi(r)`` accepting scalars or arrays.
+    """
+    return _windowed_channel_profile_impl(
+        dim, m, window_scale, normalized=False
+    )
+
+
+def _normalized_windowed_channel_profile(dim, m, window_scale):
+    """Numerically balanced channel ``psi_m = chi_m / t_w**m``."""
+    return _windowed_channel_profile_impl(
+        dim, m, window_scale, normalized=True
+    )
+
+
+def _windowed_channel_kernel_func(dim, m, window_scale, *, normalized=False):
     """Coordinate-space wrapper with the scalar Duffy path's
-    ``kernel_func(x, y[, z])`` signature around
-    :func:`windowed_channel_profile`."""
-    profile = windowed_channel_profile(dim, m, window_scale)
+    ``kernel_func(x, y[, z])`` signature around a windowed profile."""
+    if normalized:
+        profile = _normalized_windowed_channel_profile(dim, m, window_scale)
+    else:
+        profile = windowed_channel_profile(dim, m, window_scale)
 
     def kernel_func(x, y=None, z=None):
         coords = [c for c in (x, y, z) if c is not None][:dim]
@@ -739,38 +814,39 @@ def _require_o1_box_extent(box_extent):
         )
 
 
-def _windowed_coefficients(zeta, p_star):
-    """Normalized channel coefficients ``c_m = (-zeta)^m / m!`` for
-    ``m < p_star``."""
-    coefficients = np.empty(int(p_star), dtype=np.complex128)
+def _windowed_coefficients(scaled_zeta, p_star):
+    """Balanced coefficients ``(-scaled_zeta)^m / m!``."""
+    coefficients = np.empty(p_star, dtype=np.complex128)
     value = np.complex128(1.0)
-    for m in range(int(p_star)):
+    for m in range(p_star):
         coefficients[m] = value
-        value = value * (-complex(zeta)) / (m + 1)
+        value = value * (-complex(scaled_zeta)) / (m + 1)
     return coefficients
 
 
 def windowed_remainder_profile(dim, zeta, kernel_radial, window_scale, p_star):
     """Radial profile of the exact windowed remainder
 
-    ``R(r) = G(r) - pref * sum_{m < p_star} ((-zeta)^m / m!) chi_m(r)``
+    ``R(r) = G(r) - pref * sum_{m < p_star}
+    ((-zeta*t_w)^m / m!) psi_m(r)``
 
-    with ``pref = 1/(2 pi)`` in 2D and ``1/(4 pi)`` in 3D and ``chi_m`` from
-    :func:`windowed_channel_profile`.  This is exactly the smooth part the
-    windowed assembler integrates (the assembler calls this function), so
-    tests can certify the coefficient/prefactor/sign conventions of the
-    implementation queue-free by probing ``R`` directly (boundedness and
-    germ cancellation as ``r -> 0``).
+    with ``psi_m = chi_m / t_w**m``, ``pref = 1/(2 pi)`` in 2D, and
+    ``pref = 1/(4 pi)`` in 3D.  This is algebraically identical to the
+    physical-channel sum while keeping both factors representable.  It is
+    exactly the smooth part the windowed assembler integrates, so tests can
+    certify the coefficient/prefactor/sign conventions queue-free by probing
+    ``R`` directly (boundedness and germ cancellation as ``r -> 0``).
 
     :returns: a vectorized callable ``R(r)`` (complex-valued).
     """
-    p_star = int(p_star)
-    if p_star < 1:
-        raise ValueError("p_star must be at least 1")
-    prefactor = 1.0 / (2.0 * np.pi) if int(dim) == 2 else 1.0 / (4.0 * np.pi)
-    coefficients = _windowed_coefficients(zeta, p_star)
+    dim = _require_dimension(dim)
+    p_star = _require_integer("p_star", p_star, minimum=1)
+    window_scale = _require_finite_positive("window_scale", window_scale)
+    prefactor = 1.0 / (2.0 * np.pi) if dim == 2 else 1.0 / (4.0 * np.pi)
+    coefficients = _windowed_coefficients(zeta * window_scale, p_star)
     profiles = [
-        windowed_channel_profile(dim, m, window_scale) for m in range(p_star)
+        _normalized_windowed_channel_profile(dim, m, window_scale)
+        for m in range(p_star)
     ]
 
     def remainder_radial(r):
@@ -787,9 +863,10 @@ def _tensor_product_gauss_points(q_order, dim, extent):
     lexicographic ordering the table constructor produces from the mesh
     generator (queue-free equivalent of ``mg.make_uniform_cubic_grid`` at
     level 1 followed by the constructor's mapping and dictionary sort)."""
-    nodes = np.polynomial.legendre.leggauss(int(q_order))[0]
+    dim, q_order = _require_dim_q_order(dim, q_order)
+    nodes = np.polynomial.legendre.leggauss(q_order)[0]
     axis_points = 0.5 * float(extent) * (nodes + 1.0)
-    grids = np.meshgrid(*([axis_points] * int(dim)), indexing="ij")
+    grids = np.meshgrid(*([axis_points] * dim), indexing="ij")
     return np.ascontiguousarray(
         np.stack([g.reshape(-1) for g in grids], axis=-1)
     )
@@ -800,22 +877,23 @@ def _windowed_channel_skeleton(
 ):
     """Channel table shell (geometry and symmetry metadata, no data) at the
     source-box extent the table manager would use for this level."""
+    dim, q_order = _require_dim_q_order(dim, q_order)
+    source_box_level = _require_integer(
+        "source_box_level", source_box_level, minimum=0
+    )
+    m = _require_integer("m", m, minimum=0)
+    window_theta = _require_finite_positive("window_theta", window_theta)
+
     from volumential.nearfield_potential_table import NearFieldInteractionTable
 
-    # A source box is a descendant of the root, exactly as the canonical
-    # request path requires (``TableDiscretization.from_args``); a negative
-    # level would otherwise describe a box larger than the root that no
-    # table-manager query could ever retrieve.
-    if int(source_box_level) < 0:
-        raise ValueError(
-            f"source_box_level must be >= 0, got {int(source_box_level)}"
-        )
-    box_extent = float(root_extent) * 0.5 ** int(source_box_level)
-    window_scale = (box_extent / float(window_theta)) ** 2
+    box_extent = float(root_extent) * 0.5**source_box_level
+    window_scale = (box_extent / window_theta) ** 2
     table = NearFieldInteractionTable(
-        quad_order=int(q_order),
-        dim=int(dim),
-        kernel_func=_windowed_channel_kernel_func(dim, m, window_scale),
+        quad_order=q_order,
+        dim=dim,
+        kernel_func=_windowed_channel_kernel_func(
+            dim, m, window_scale, normalized=True
+        ),
         kernel_type=None,
         sumpy_kernel=None,
         source_box_extent=box_extent,
@@ -825,7 +903,7 @@ def _windowed_channel_skeleton(
             q_order, dim, box_extent
         ),
     )
-    table.source_box_level = int(source_box_level)
+    table.source_box_level = source_box_level
     return table
 
 
@@ -902,6 +980,12 @@ def _duffy_channel_entry_values(
     tensor Gauss-Legendre tail), so it agrees with the scalar builder to
     roundoff while evaluating the radial profile on whole node blocks.
     """
+    regular_order = _require_integer(
+        "chan_regular_order", regular_order, minimum=1
+    )
+    radial_order = _require_integer(
+        "chan_radial_order", radial_order, minimum=1
+    )
     import scipy.special as sps
 
     import volumential.singular_integral_2d as squad
@@ -924,11 +1008,11 @@ def _duffy_channel_entry_values(
     values = np.zeros(len(entry_ids), dtype=np.float64)
 
     rho_nodes, rho_weights = squad._duffy_radial_nodes_weights(
-        "tanh-sinh-fast", int(radial_order), 50
+        "tanh-sinh-fast", radial_order, 50
     )
 
     if dim == 2:
-        th_nodes, th_weights = sps.roots_legendre(int(regular_order))
+        th_nodes, th_weights = sps.roots_legendre(regular_order)
         theta = 0.25 * np.pi * (th_nodes + 1.0)
         w_theta = 0.25 * np.pi * th_weights
         cos_sq = np.cos(theta) ** 2
@@ -989,10 +1073,11 @@ def _duffy_channel_entry_values(
                 values[position] = entry_acc[member_index]
         return entry_ids, values
 
-    from itertools import permutations, product as iproduct
+    from itertools import permutations
+    from itertools import product as iproduct
 
     regular_nodes, regular_weights = squad._duffy_regular_nodes_weights(
-        dim - 1, int(regular_order)
+        dim - 1, regular_order
     )
     regular_nodes = np.asarray(regular_nodes, dtype=np.float64)
     regular_weights = np.asarray(regular_weights, dtype=np.float64)
@@ -1078,14 +1163,12 @@ def _resolve_channel_orders(dim, chan_regular_order, chan_radial_order):
     on channel entries.  The 3D cone geometry is mild (order 14 already sits
     below 1e-7 relative drift), so order 20 is kept there.
     """
+    dim = _require_dimension(dim)
     if chan_regular_order is None:
-        chan_regular_order = 48 if int(dim) == 2 else 20
+        chan_regular_order = 48 if dim == 2 else 20
     if chan_radial_order is None:
         chan_radial_order = 61
-    chan_regular_order = int(chan_regular_order)
-    chan_radial_order = int(chan_radial_order)
-    _validate_channel_orders(chan_regular_order, chan_radial_order)
-    return chan_regular_order, chan_radial_order
+    return _validate_channel_orders(chan_regular_order, chan_radial_order)
 
 
 # Duffy radial weights integrate the constant ``1`` over ``[0, 1]``, so the
@@ -1112,8 +1195,8 @@ def _validate_channel_orders(chan_regular_order, chan_radial_order):
     """
     import volumential.singular_integral_2d as squad
 
-    regular = int(chan_regular_order)
-    radial = int(chan_radial_order)
+    regular = _require_integer("chan_regular_order", chan_regular_order)
+    radial = _require_integer("chan_radial_order", chan_radial_order)
     if regular < 2:
         raise ValueError(
             f"chan_regular_order {regular} is not a usable Gauss-Legendre "
@@ -1141,6 +1224,7 @@ def _validate_channel_orders(chan_regular_order, chan_radial_order):
             f"{weight_defect:.3e} > {_CHANNEL_RADIAL_WEIGHT_TOL:.1e}); "
             "raise the radial order"
         )
+    return regular, radial
 
 
 def _channel_source_mode_sup(table):
@@ -1177,16 +1261,16 @@ def _channel_source_mode_sup(table):
 
 
 def _channel_entry_magnitude_bound(table, m, window_scale, safety=8.0):
-    """Analytic upper bound on ``|chi_m|`` table entries.
+    """Analytic upper bound on normalized ``|psi_m|`` table entries.
 
-    A table entry is ``int_box chi_m(|x_t - y|) phi_i(y) dy``, so
+    A table entry is ``int_box psi_m(|x_t - y|) phi_i(y) dy``, so
 
-    ``|entry| <= sup|phi_i| * int_{R^dim} chi_m(|z|) dz``
+    ``|entry| <= sup|phi_i| * int_{R^dim} psi_m(|z|) dz``
 
     and the total channel mass is elementary,
 
-    ``int_{R^dim} chi_m = c_dim t_w^{m+1} / (m+1)``, ``c_2 = 2 pi``,
-    ``c_3 = 4 pi``
+    ``int_{R^dim} psi_m = c_dim t_w / (m+1)``, ``c_2 = 2 pi``,
+    ``c_3 = 4 pi``, because ``psi_m = chi_m/t_w^m``.
 
     (the ``m = 0`` cases are the Ewald identities ``int E_1(r^2/4t_w)/2 =
     2 pi t_w`` and ``int erfc(r/2 sqrt(t_w))/r = 4 pi t_w``; the recurrence
@@ -1197,9 +1281,7 @@ def _channel_entry_magnitude_bound(table, m, window_scale, safety=8.0):
     """
     dim = int(table.dim)
     mass_constant = 2.0 * np.pi if dim == 2 else 4.0 * np.pi
-    channel_mass = (
-        mass_constant * float(window_scale) ** (int(m) + 1) / (int(m) + 1)
-    )
+    channel_mass = mass_constant * float(window_scale) / (int(m) + 1)
     return float(safety) * _channel_source_mode_sup(table) * channel_mass
 
 
@@ -1240,24 +1322,50 @@ def _windowed_channel_cache_file(
     chan_regular_order,
     chan_radial_order,
 ):
+    dim, q_order = _require_dim_q_order(dim, q_order)
+    source_box_level = _require_integer(
+        "source_box_level", source_box_level, minimum=0
+    )
+    m = _require_integer("m", m, minimum=0)
+    chan_regular_order = _require_integer(
+        "chan_regular_order", chan_regular_order
+    )
+    chan_radial_order = _require_integer(
+        "chan_radial_order", chan_radial_order
+    )
     key = (
-        ("dim", int(dim)),
-        ("q_order", int(q_order)),
-        ("source_box_level", int(source_box_level)),
+        ("cache_schema", _WINDOWED_CHANNEL_CACHE_SCHEMA),
+        ("normalization", _WINDOWED_CHANNEL_NORMALIZATION),
+        ("dim", dim),
+        ("q_order", q_order),
+        ("source_box_level", source_box_level),
         ("root_extent", repr(float(root_extent))),
         ("window_theta", repr(float(window_theta))),
-        ("m", int(m)),
-        ("chan_regular_order", int(chan_regular_order)),
-        ("chan_radial_order", int(chan_radial_order)),
+        ("m", m),
+        ("chan_regular_order", chan_regular_order),
+        ("chan_radial_order", chan_radial_order),
         ("radial_rule", "tanh-sinh-fast"),
     )
     digest = hashlib.sha1(repr(key).encode()).hexdigest()[:16]
     directory = Path(str(cache_path) + ".windowed")
     filename = (
-        f"channel-d{int(dim)}-q{int(q_order)}-l{int(source_box_level)}"
-        f"-m{int(m)}-{digest}.npz"
+        f"channel-d{dim}-q{q_order}-l{source_box_level}"
+        f"-m{m}-{digest}.npz"
     )
     return directory / filename, dict(key)
+
+
+def _windowed_channel_payload_checksum(entry_ids, values):
+    digest = hashlib.sha256()
+    for label, array, dtype in (
+        (b"entry_ids\0", entry_ids, "<i8"),
+        (b"values\0", values, "<f8"),
+    ):
+        array = np.ascontiguousarray(array, dtype=dtype)
+        digest.update(label)
+        digest.update(np.asarray(array.shape, dtype="<i8").tobytes())
+        digest.update(array.tobytes())
+    return digest.hexdigest()
 
 
 def get_windowed_channel_table(
@@ -1273,18 +1381,18 @@ def get_windowed_channel_table(
     chan_radial_order=None,
     force_recompute=False,
 ):
-    """Build or load the windowed channel table ``chi_m``.
+    """Build or load the normalized windowed channel table ``psi_m``.
 
     The channel family depends on the declaration ``window_theta`` (and the
     table geometry) only — never on any swept kernel parameter — and the
     cache key preserves that invariant.  Channel data is stored per channel
     in ``.npz`` files under ``str(cache_path) + ".windowed/"`` keyed by
-    ``(dim, q_order, source_box_level, root_extent, window_theta, m,
-    chan_regular_order, chan_radial_order)``; a load validates the full key
-    and the symmetry-reduced entry IDs before accepting cached data, and any
-    unreadable or stale cache file (e.g. a torn write from an interrupted
-    process) is rebuilt and atomically replaced, with the discard reason
-    logged as a warning on this module's logger.
+    ``(schema, normalization, dim, q_order, source_box_level, root_extent,
+    window_theta, m, chan_regular_order, chan_radial_order)``.  A load
+    validates the full key, symmetry-reduced entry IDs, and a checksum over
+    the IDs and values before accepting cached data.  Any unreadable, stale,
+    or corrupted file is rebuilt and atomically replaced, with the discard
+    reason logged as a warning on this module's logger.
 
     ``chan_regular_order`` / ``chan_radial_order`` default (via ``None``) to
     the tested per-dimension orders of :func:`_resolve_channel_orders`
@@ -1296,13 +1404,22 @@ def get_windowed_channel_table(
     analytic entry bound can never reach the recombination (where a single
     blown-up channel would dominate both the peak sum and the assembled
     maximum, leaving the reported condition number at a reassuring 1.0).
+    The private ``_windowed_cache_disposition`` attribute is ``"hit"`` only
+    after a fully validated load and ``"rebuilt"`` after fresh or recovery
+    construction.
     """
+    dim, q_order = _require_dim_q_order(dim, q_order)
+    source_box_level = _require_integer(
+        "source_box_level", source_box_level, minimum=0
+    )
+    m = _require_integer("m", m, minimum=0)
+    window_theta = _require_finite_positive("window_theta", window_theta)
     chan_regular_order, chan_radial_order = _resolve_channel_orders(
         dim, chan_regular_order, chan_radial_order
     )
-    box_extent = float(root_extent) * 0.5 ** int(source_box_level)
+    box_extent = float(root_extent) * 0.5**source_box_level
     _require_o1_box_extent(box_extent)
-    window_scale = (box_extent / float(window_theta)) ** 2
+    window_scale = (box_extent / window_theta) ** 2
     table = _windowed_channel_skeleton(
         dim, q_order, source_box_level, root_extent, window_theta, m
     )
@@ -1338,6 +1455,7 @@ def get_windowed_channel_table(
                 stored_values = np.asarray(
                     payload["values"], dtype=np.float64
                 )
+                stored_checksum = str(payload["payload_checksum"].item())
         except Exception as exc:
             # never silent: a permanently unreadable cache file otherwise
             # looks exactly like a cache hit while paying a full rebuild on
@@ -1347,41 +1465,45 @@ def get_windowed_channel_table(
                 cache_file, type(exc).__name__, exc,
             )
         else:
-            if stored_key == key and np.array_equal(
-                stored_ids, expected_entry_ids
-            ):
-                # a cache written before the entry bound was enforced (or by
-                # any other build that produced garbage) is treated exactly
-                # like a torn file: discard and rebuild, so a poisoned .npz
-                # cannot outlive the defect that produced it.  The shape check
-                # comes first: ``set_reduced_table_data`` would raise on a
-                # mismatched value array instead of falling through to the
-                # rebuild, wedging every later call on the bad file.
-                try:
-                    if stored_values.shape != expected_entry_ids.shape:
-                        raise RuntimeError(
-                            f"stored value array of shape "
-                            f"{stored_values.shape} does not match the "
-                            f"{expected_entry_ids.shape} reduced entries"
-                        )
-                    _check_channel_table_values(
-                        table, stored_values, m, window_scale
+            # A cache written before the schema, checksum, or entry bound was
+            # enforced is treated exactly like a torn file.  Shape checks come
+            # before the table setter so malformed data cannot wedge later
+            # calls on a permanently loadable bad file.
+            try:
+                if stored_key != key:
+                    raise RuntimeError("stored cache key does not match")
+                if not np.array_equal(stored_ids, expected_entry_ids):
+                    raise RuntimeError("stored entry IDs do not match")
+                if stored_values.shape != expected_entry_ids.shape:
+                    raise RuntimeError(
+                        f"stored value array of shape {stored_values.shape} "
+                        f"does not match the {expected_entry_ids.shape} "
+                        "reduced entries"
                     )
-                except RuntimeError as exc:
-                    logger.warning(
-                        "rebuilding windowed channel cache %s: %s",
-                        cache_file, exc,
-                    )
-                else:
-                    table.set_reduced_table_data(
-                        expected_entry_ids, stored_values
-                    )
-                    table.is_built = True
-                    return table
+                computed_checksum = _windowed_channel_payload_checksum(
+                    stored_ids, stored_values
+                )
+                if stored_checksum != computed_checksum:
+                    raise RuntimeError("stored payload checksum does not match")
+                _check_channel_table_values(
+                    table, stored_values, m, window_scale
+                )
+            except RuntimeError as exc:
+                logger.warning(
+                    "rebuilding windowed channel cache %s: %s",
+                    cache_file, exc,
+                )
+            else:
+                table.set_reduced_table_data(
+                    expected_entry_ids, stored_values
+                )
+                table.is_built = True
+                table._windowed_cache_disposition = "hit"
+                return table
 
     entry_ids, entry_values = _duffy_channel_entry_values(
         table,
-        windowed_channel_profile(dim, m, window_scale),
+        _normalized_windowed_channel_profile(dim, m, window_scale),
         chan_regular_order,
         chan_radial_order,
     )
@@ -1407,6 +1529,9 @@ def get_windowed_channel_table(
                 stream,
                 entry_ids=entry_ids,
                 values=entry_values,
+                payload_checksum=np.asarray(
+                    _windowed_channel_payload_checksum(entry_ids, entry_values)
+                ),
                 **{
                     f"key_{name}": np.asarray(value)
                     for name, value in key.items()
@@ -1417,6 +1542,7 @@ def get_windowed_channel_table(
         tmp_file.unlink(missing_ok=True)
     table.set_reduced_table_data(entry_ids, entry_values)
     table.is_built = True
+    table._windowed_cache_disposition = "rebuilt"
     return table
 
 
@@ -1428,6 +1554,9 @@ def _smooth_remainder_entry_values(
     ``smooth_quad_order`` points per axis on the source box, mirroring the
     case/target/mode geometry of ``compute_table_entry_duffy_radial``.
     Handles complex-valued ``R``."""
+    n_nodes = _require_integer(
+        "smooth_quad_order", smooth_quad_order, minimum=1
+    )
     from volumential.lagrange import (
         barycentric_lagrange_weights,
         evaluate_lagrange_basis_1d,
@@ -1436,7 +1565,6 @@ def _smooth_remainder_entry_values(
     dim = int(table.dim)
     q = int(table.quad_order)
     extent = float(table.source_box_extent)
-    n_nodes = int(smooth_quad_order)
 
     gl_nodes, gl_weights = np.polynomial.legendre.leggauss(n_nodes)
     axis_nodes = 0.5 * extent * (gl_nodes + 1.0)
@@ -1529,19 +1657,24 @@ def _assemble_windowed_for_zeta(
     and kernel radial profile; :func:`assemble_windowed_parameterized_table`
     wraps this with the standard Helmholtz/Yukawa identifications, and tests
     exercise complex ``zeta`` (damped waves) directly."""
-    if dim not in (2, 3):
-        raise NotImplementedError("windowed RKE assembly supports 2D and 3D")
-    p_star = int(p_star)
-    if p_star < 1:
-        raise ValueError("p_star must be at least 1")
+    dim, q_order = _require_dim_q_order(dim, q_order)
+    source_box_level = _require_integer(
+        "source_box_level", source_box_level, minimum=0
+    )
+    p_star = _require_integer("p_star", p_star, minimum=1)
+    if smooth_quad_order is not None:
+        smooth_quad_order = _require_integer(
+            "smooth_quad_order", smooth_quad_order, minimum=1
+        )
+    window_theta = _require_finite_positive("window_theta", window_theta)
     zeta = complex(zeta)
     chan_regular_order, chan_radial_order = _resolve_channel_orders(
         dim, chan_regular_order, chan_radial_order
     )
 
-    box_extent = float(root_extent) * 0.5 ** int(source_box_level)
+    box_extent = float(root_extent) * 0.5**source_box_level
     _require_o1_box_extent(box_extent)
-    window_scale = (box_extent / float(window_theta)) ** 2
+    window_scale = (box_extent / window_theta) ** 2
     theta_abs = float(np.sqrt(abs(zeta)) * box_extent)
 
     # KB coverage contract: the declaration certifies the closed disk
@@ -1549,10 +1682,10 @@ def _assemble_windowed_for_zeta(
     # coefficients (theta/Theta)^{2m}/m! grow and the conditioning contract
     # no longer holds, so refuse rather than certify an uncovered point
     # (the real-parameter wrapper's theta guard is the same condition).
-    if theta_abs > float(window_theta) * (1.0 + 1.0e-12):
-        raise ValueError(
+    if theta_abs > window_theta * (1.0 + 1.0e-12):
+        raise RKEWindowCoverageError(
             f"local parameter |zeta|**0.5 * b = {theta_abs:g} exceeds the "
-            f"declared window Theta = {float(window_theta):g}; the "
+            f"declared window Theta = {window_theta:g}; the "
             "requested parameter is outside the declared coverage disk "
             "|zeta| <= (Theta/b)**2"
         )
@@ -1569,17 +1702,16 @@ def _assemble_windowed_for_zeta(
         # default Theta = 16.
         smooth_quad_order = max(
             16,
-            2 * int(q_order),
+            2 * q_order,
             int(np.ceil(theta_abs / 2.0)) + 16,
-            int(np.ceil(1.25 * float(window_theta))) + 8,
+            int(np.ceil(1.25 * window_theta)) + 8,
         )
-    smooth_quad_order = int(smooth_quad_order)
     # Gauss rules of the table's own order reproduce the self-interaction
     # target points, and any two odd-order Gauss rules share the interval
     # midpoint; either collision would sample the remainder at r = 0
     # (where the kernel diverges), so nudge the order clear of both.
-    if smooth_quad_order == int(q_order) or (
-        smooth_quad_order % 2 == 1 and int(q_order) % 2 == 1
+    if smooth_quad_order == q_order or (
+        smooth_quad_order % 2 == 1 and q_order % 2 == 1
     ):
         smooth_quad_order += 1
 
@@ -1602,7 +1734,7 @@ def _assemble_windowed_for_zeta(
     entry_ids = np.asarray(base.get_reduced_entry_ids(), dtype=np.int64)
 
     prefactor = 1.0 / (2.0 * np.pi) if dim == 2 else 1.0 / (4.0 * np.pi)
-    coefficients = _windowed_coefficients(zeta, p_star)
+    coefficients = _windowed_coefficients(zeta * window_scale, p_star)
     remainder_radial = windowed_remainder_profile(
         dim, zeta, kernel_radial, window_scale, p_star
     )
@@ -1640,7 +1772,7 @@ def _assemble_windowed_for_zeta(
         max_entry, 1e-300
     )
     if condition > float(max_condition):
-        raise RuntimeError(
+        raise RKEWindowConditioningError(
             "ill-conditioned windowed assembly (condition "
             f"{condition:.3e} > {float(max_condition):.1e}); the parameter "
             "lies outside the conditioning contract of the declared window"
@@ -1679,10 +1811,10 @@ def _assemble_windowed_for_zeta(
         "zeta_real": float(zeta.real),
         "zeta_imag": float(zeta.imag),
         "theta": theta_abs,
-        "dim": int(dim),
-        "q_order": int(q_order),
-        "source_box_level": int(source_box_level),
-        "window_theta": float(window_theta),
+        "dim": dim,
+        "q_order": q_order,
+        "source_box_level": source_box_level,
+        "window_theta": window_theta,
         "window_scale_t_w": float(window_scale),
         "p_star": p_star,
         "smooth_quad_order": smooth_quad_order,
@@ -1741,23 +1873,26 @@ def assemble_windowed_parameterized_table(
         defaults to 61 in both dimensions.
     :returns: ``(table, certificate)`` with ``table`` a
         :class:`~volumential.nearfield_potential_table.\
-NearFieldInteractionTable`
+    NearFieldInteractionTable`
         (complex128 for Helmholtz, float64 for Yukawa) whose kernel identity
         is nulled exactly like the classical assembler's, and
         ``certificate`` a dict of the assembly provenance.
     """
-    if dim not in (2, 3):
-        raise NotImplementedError("windowed RKE assembly supports 2D and 3D")
+    dim, q_order = _require_dim_q_order(dim, q_order)
+    source_box_level = _require_integer(
+        "source_box_level", source_box_level, minimum=0
+    )
+    window_theta = _require_finite_positive("window_theta", window_theta)
     parameter = float(parameter)
     if not parameter > 0.0:
         raise ValueError("windowed assembly requires a positive parameter")
 
-    box_extent = float(root_extent) * 0.5 ** int(source_box_level)
+    box_extent = float(root_extent) * 0.5**source_box_level
     theta = parameter * box_extent
-    if theta > float(window_theta) * (1.0 + 1.0e-12):
-        raise ValueError(
+    if theta > window_theta * (1.0 + 1.0e-12):
+        raise RKEWindowCoverageError(
             f"local parameter theta = {theta:g} exceeds the declared window "
-            f"Theta = {float(window_theta):g}; the requested parameter is "
+            f"Theta = {window_theta:g}; the requested parameter is "
             "outside the declaration"
         )
 

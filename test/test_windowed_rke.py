@@ -35,7 +35,6 @@ from volumential.rke_table_assembly import (
     windowed_remainder_profile,
 )
 
-
 WINDOW_THETA = 16.0
 ROOT_EXTENT = 2.0
 
@@ -168,6 +167,39 @@ def _scalar_direct_entries(
     return values
 
 
+def _tensor_gauss_direct_q1_entries(table, entry_ids, kernel_radial, order):
+    """Independent direct quadrature for nonsingular q=1 table entries."""
+    assert int(table.quad_order) == 1
+    extent = float(table.source_box_extent)
+    nodes, weights = np.polynomial.legendre.leggauss(order)
+    axis_nodes = 0.5 * extent * (nodes + 1.0)
+    axis_weights = 0.5 * extent * weights
+    grids = np.meshgrid(axis_nodes, axis_nodes, axis_nodes, indexing="ij")
+    weight_tensor = (
+        axis_weights[:, np.newaxis, np.newaxis]
+        * axis_weights[np.newaxis, :, np.newaxis]
+        * axis_weights[np.newaxis, np.newaxis, :]
+    )
+
+    values = []
+    for entry_id in entry_ids:
+        case_index = int(entry_id // table.n_pairs)
+        pair_id = int(entry_id % table.n_pairs)
+        source_mode = pair_id // table.n_q_points
+        target_index = pair_id % table.n_q_points
+        assert source_mode == 0
+        target = np.asarray(
+            table.find_target_point(target_index, case_index)
+        )
+        assert np.max(np.abs(target.imag)) == 0.0
+        target = target.real
+        radius = np.sqrt(
+            sum((grids[axis] - target[axis]) ** 2 for axis in range(3))
+        )
+        values.append(np.sum(kernel_radial(radius) * weight_tensor))
+    return np.asarray(values)
+
+
 def _spot_entry_ids(entry_ids, values, n_top=6, n_spread=6):
     """A deterministic subset: the largest-magnitude entries plus an even
     spread across the reduced list."""
@@ -218,6 +250,79 @@ def test_channel_profiles_match_mpmath(dim):
                 ), (dim, m, radius)
     finally:
         mp.mp.dps = old_dps
+
+
+@pytest.mark.parametrize("dim", [2, 3])
+@pytest.mark.parametrize("zeta_sign", [-1, 1])
+def test_high_order_small_extent_remainder_matches_mpmath(dim, zeta_sign):
+    import mpmath as mp
+
+    box_extent = 1.0e-3
+    window_scale = (box_extent / WINDOW_THETA) ** 2
+    zeta = zeta_sign * (WINDOW_THETA / box_extent) ** 2
+    radii = box_extent * np.array([0.05, 0.1, 0.25])
+
+    def zero_kernel(r):
+        return np.zeros_like(np.asarray(r, dtype=np.float64))
+
+    remainder = windowed_remainder_profile(
+        dim, zeta, zero_kernel, window_scale, 60
+    )
+    values = np.asarray(remainder(radii), dtype=np.complex128)
+    assert np.all(np.isfinite(values))
+
+    old_dps = mp.mp.dps
+    mp.mp.dps = 80
+    try:
+        t_w = mp.mpf(window_scale)
+        scaled_zeta = mp.mpf(zeta_sign)
+        prefactor = 1 / (2 * mp.pi) if dim == 2 else 1 / (4 * mp.pi)
+        reference = []
+        for radius in radii:
+            x = mp.mpf(radius) ** 2 / (4 * t_w)
+            coefficient = mp.mpf(1)
+            channel_sum = mp.mpc(0)
+            for m in range(60):
+                if dim == 2:
+                    profile = mp.mpf("0.5") * x**m * mp.gammainc(
+                        -m, x, mp.inf
+                    )
+                else:
+                    profile = (
+                        t_w ** mp.mpf("-0.5")
+                        * x ** (mp.mpf(m) - mp.mpf("0.5"))
+                        * mp.gammainc(mp.mpf("0.5") - m, x, mp.inf)
+                        / (2 * mp.sqrt(mp.pi))
+                    )
+                channel_sum += coefficient * profile
+                coefficient *= -scaled_zeta / (m + 1)
+            reference.append(complex(-prefactor * channel_sum))
+    finally:
+        mp.mp.dps = old_dps
+
+    np.testing.assert_allclose(
+        values, np.asarray(reference), rtol=2.0e-11, atol=1.0e-12
+    )
+
+
+def test_high_order_small_extent_assembly_stays_finite(tmp_path):
+    table, certificate = assemble_windowed_parameterized_table(
+        tmp_path / "p60.sqlite",
+        2,
+        "Yukawa",
+        1,
+        1.6e4,
+        root_extent=1.0e-3,
+        window_theta=WINDOW_THETA,
+        p_star=60,
+        smooth_quad_order=8,
+        chan_regular_order=2,
+        chan_radial_order=7,
+    )
+    values = np.asarray(table.get_reduced_table_data()[1])
+    assert np.all(np.isfinite(values))
+    assert np.all(np.isfinite(certificate["per_channel_peak"]))
+    assert certificate["coefficient_bound"] == pytest.approx(1.0)
 
 
 def test_vectorized_channel_builder_matches_scalar_duffy():
@@ -658,6 +763,158 @@ def test_high_theta_parity(
             tolerance=1.0e-11,
         )
 
+
+@pytest.mark.parametrize("kernel_type", ["Yukawa", "Helmholtz"])
+def test_3d_design_edge_table_parity_and_refinement(tmp_path, kernel_type):
+    dim, q_order, level, parameter = 3, 1, 3, 64.0  # theta = 16
+    cache = tmp_path / "3d-design-edge.sqlite"
+    tables = {}
+    certificates = {}
+    for name, smooth_order in (("coarse", 10), ("fine", 24)):
+        tables[name], certificates[name] = assemble_windowed_parameterized_table(
+            cache,
+            dim,
+            kernel_type,
+            q_order,
+            parameter,
+            source_box_level=level,
+            window_theta=WINDOW_THETA,
+            p_star=4,
+            smooth_quad_order=smooth_order,
+            chan_regular_order=8,
+            chan_radial_order=25,
+        )
+
+    fine = tables["fine"]
+    extent = float(fine.source_box_extent)
+    candidates = []
+    for entry_id in np.asarray(fine.get_reduced_entry_ids()):
+        case_index = int(entry_id // fine.n_pairs)
+        pair_id = int(entry_id % fine.n_pairs)
+        target_index = pair_id % fine.n_q_points
+        target = np.asarray(
+            fine.find_target_point(target_index, case_index)
+        ).real
+        outside = np.maximum(np.maximum(-target, target - extent), 0.0)
+        distance = float(np.linalg.norm(outside))
+        # Four window widths from the box still exercise a visible channel
+        # correction while avoiding a singular direct-reference integral.
+        if 0.2 * extent <= distance <= 0.5 * extent:
+            candidates.append((distance, int(entry_id)))
+    assert len(candidates) >= 3
+    spot_ids = np.asarray(
+        [entry_id for _, entry_id in sorted(candidates)[:3]], dtype=np.int64
+    )
+
+    kernel_radial = _kernel_radial(dim, kernel_type, parameter)
+    reference_mid = _tensor_gauss_direct_q1_entries(
+        fine, spot_ids, kernel_radial, 28
+    )
+    reference = _tensor_gauss_direct_q1_entries(
+        fine, spot_ids, kernel_radial, 40
+    )
+    if kernel_type == "Yukawa":
+        reference_mid = reference_mid.real
+        reference = reference.real
+    scale = max(float(np.max(np.abs(reference))), 1e-300)
+    direct_floor = float(np.max(np.abs(reference_mid - reference)) / scale)
+    deviations = {
+        name: float(
+            np.max(
+                np.abs(
+                    np.asarray(table.get_entry_data_for_full_indices(spot_ids))
+                    - reference
+                )
+            )
+            / scale
+        )
+        for name, table in tables.items()
+    }
+
+    assert direct_floor < 1.0e-9, direct_floor
+    assert deviations["fine"] < 2.0e-6, deviations
+    assert deviations["fine"] <= 0.2 * deviations["coarse"], deviations
+    assert certificates["fine"]["theta"] == pytest.approx(WINDOW_THETA)
+    assert certificates["fine"]["condition_number"] < 10.0
+
+
+@pytest.mark.full_accuracy
+def test_3d_design_edge_singular_nonconstant_mode(tmp_path):
+    from volumential.rke_table_assembly import get_windowed_channel_table
+
+    dim, q_order, level, parameter = 3, 2, 3, 64.0  # theta = 16
+    cache = tmp_path / "3d-design-edge-singular.sqlite"
+    table, certificate = assemble_windowed_parameterized_table(
+        cache,
+        dim,
+        "Yukawa",
+        q_order,
+        parameter,
+        source_box_level=level,
+        window_theta=WINDOW_THETA,
+        p_star=2,
+        smooth_quad_order=24,
+        chan_regular_order=6,
+        chan_radial_order=15,
+    )
+
+    extent = float(table.source_box_extent)
+    self_cases = []
+    for case_index in range(table.n_cases):
+        target = np.asarray(table.find_target_point(0, case_index)).real
+        if np.all((target > 0.0) & (target < extent)):
+            self_cases.append(case_index)
+    assert len(self_cases) == 1
+
+    source_mode = 1
+    target_index = 0
+    mode_axes = np.asarray(table._get_all_mode_axes())[source_mode]
+    assert tuple(mode_axes) != (0, 0, 0)
+    entry_id = (
+        self_cases[0] * table.n_pairs
+        + source_mode * table.n_q_points
+        + target_index
+    )
+    entry_ids = np.asarray([entry_id], dtype=np.int64)
+    assembled = np.asarray(
+        table.reconstruct_full_table_from_symmetry()[entry_ids]
+    )
+
+    # The normalized m=1 channel must itself carry a finite, nonzero value at
+    # this singular self entry, rather than passing through only the m=0 germ.
+    channel_m1 = get_windowed_channel_table(
+        cache,
+        dim,
+        q_order,
+        1,
+        source_box_level=level,
+        window_theta=WINDOW_THETA,
+        chan_regular_order=6,
+        chan_radial_order=15,
+    )
+    channel_value = np.asarray(
+        channel_m1.reconstruct_full_table_from_symmetry()[entry_ids]
+    )
+    assert channel_m1._windowed_cache_disposition == "hit"
+    assert np.all(np.isfinite(channel_value))
+    assert np.max(np.abs(channel_value)) > 0.0
+
+    reference = _scalar_direct_entries(
+        dim,
+        q_order,
+        level,
+        entry_ids,
+        _kernel_radial(dim, "Yukawa", parameter),
+        deg_theta=6,
+        radial_quad_order=15,
+    ).real
+    scale = max(float(np.max(np.abs(reference))), 1e-300)
+    deviation = float(np.max(np.abs(assembled - reference)) / scale)
+    assert deviation < 5.0e-3, (deviation, assembled, reference)
+    assert certificate["theta"] == pytest.approx(WINDOW_THETA)
+    assert certificate["condition_number"] < 10.0
+
+
 # }}}
 
 
@@ -926,6 +1183,89 @@ def test_default_channel_orders(channel_cache):
 
 # {{{ T9: channel cache self-heals after torn or corrupted writes
 
+@pytest.mark.parametrize("dim", [2, 3])
+def test_high_order_normalized_channel_cache(tmp_path, dim):
+    from pathlib import Path
+
+    import volumential.rke_table_assembly as rta
+
+    cache = tmp_path / "normalized.sqlite"
+    table = rta.get_windowed_channel_table(
+        cache,
+        dim,
+        1,
+        59,
+        root_extent=1.0e-3,
+        window_theta=WINDOW_THETA,
+        chan_regular_order=2,
+        chan_radial_order=7,
+    )
+    entry_ids, values = table.get_reduced_table_data()
+    entry_ids = np.asarray(entry_ids)
+    values = np.asarray(values)
+    assert np.all(np.isfinite(values))
+    assert np.max(np.abs(values)) > 0.0
+    assert table._windowed_cache_disposition == "rebuilt"
+
+    cache_dir = Path(str(cache) + ".windowed")
+    (cache_file,) = sorted(cache_dir.glob("*.npz"))
+    with np.load(cache_file, allow_pickle=False) as payload:
+        assert payload["key_cache_schema"].item() == 2
+        assert payload["key_normalization"].item() == "psi=chi/t_w**m"
+        assert payload["payload_checksum"].item() == (
+            rta._windowed_channel_payload_checksum(entry_ids, values)
+        )
+
+    reloaded = rta.get_windowed_channel_table(
+        cache,
+        dim,
+        1,
+        59,
+        root_extent=1.0e-3,
+        window_theta=WINDOW_THETA,
+        chan_regular_order=2,
+        chan_radial_order=7,
+    )
+    assert np.array_equal(
+        values, np.asarray(reloaded.get_reduced_table_data()[1])
+    )
+    assert reloaded._windowed_cache_disposition == "hit"
+
+
+def test_channel_cache_disposition(tmp_path):
+    from pathlib import Path
+
+    from volumential.rke_table_assembly import get_windowed_channel_table
+
+    cache = tmp_path / "disposition.sqlite"
+    kwargs = {
+        "chan_regular_order": 2,
+        "chan_radial_order": 7,
+    }
+    rebuilt = get_windowed_channel_table(cache, 2, 1, 0, **kwargs)
+    values = np.asarray(rebuilt.get_reduced_table_data()[1])
+    assert rebuilt._windowed_cache_disposition == "rebuilt"
+
+    hit = get_windowed_channel_table(cache, 2, 1, 0, **kwargs)
+    assert hit._windowed_cache_disposition == "hit"
+    assert np.array_equal(values, np.asarray(hit.get_reduced_table_data()[1]))
+
+    cache_dir = Path(str(cache) + ".windowed")
+    (cache_file,) = sorted(cache_dir.glob("*.npz"))
+    with np.load(cache_file, allow_pickle=False) as payload:
+        arrays = {name: payload[name] for name in payload.files}
+    arrays["payload_checksum"] = np.asarray("0" * 64)
+    np.savez(cache_file, **arrays)
+
+    recovered = get_windowed_channel_table(cache, 2, 1, 0, **kwargs)
+    assert recovered._windowed_cache_disposition == "rebuilt"
+    assert np.array_equal(
+        values, np.asarray(recovered.get_reduced_table_data()[1])
+    )
+    reloaded = get_windowed_channel_table(cache, 2, 1, 0, **kwargs)
+    assert reloaded._windowed_cache_disposition == "hit"
+
+
 def test_channel_cache_self_heals(tmp_path):
     from pathlib import Path
 
@@ -945,12 +1285,13 @@ def test_channel_cache_self_heals(tmp_path):
     cache_dir = Path(str(cache) + ".windowed")
     cache_files = sorted(cache_dir.glob("*.npz"))
     assert len(cache_files) == 1
+    cache_file = cache_files[0]
     assert not list(cache_dir.glob("*.tmp-*"))
 
     # a torn write (interrupted np.savez / concurrent process) must rebuild,
     # not raise zipfile.BadZipFile forever
-    payload = cache_files[0].read_bytes()
-    cache_files[0].write_bytes(payload[: len(payload) // 2])
+    payload = cache_file.read_bytes()
+    cache_file.write_bytes(payload[: len(payload) // 2])
     healed = get_windowed_channel_table(cache, 2, 3, 0, **kwargs)
     ids_healed, values_healed = healed.get_reduced_table_data()
     assert np.array_equal(np.asarray(ids), np.asarray(ids_healed))
@@ -958,26 +1299,69 @@ def test_channel_cache_self_heals(tmp_path):
 
     # the heal must have rewritten the same deterministic cache key, or the
     # next corruption step would poison an orphan file and assert nothing
-    assert sorted(cache_dir.glob("*.npz")) == cache_files
+    refreshed_files = sorted(cache_dir.glob("*.npz"))
+    assert refreshed_files == cache_files
+    cache_files = refreshed_files
+    cache_file = cache_files[0]
 
     # arbitrary garbage (stale format) likewise self-heals
-    cache_files[0].write_bytes(b"not a zip file")
+    cache_file.write_bytes(b"not a zip file")
     healed = get_windowed_channel_table(cache, 2, 3, 0, **kwargs)
     assert np.array_equal(
         np.asarray(values), np.asarray(healed.get_reduced_table_data()[1])
     )
+    refreshed_files = sorted(cache_dir.glob("*.npz"))
+    assert refreshed_files == cache_files
+    cache_files = refreshed_files
+    cache_file = cache_files[0]
 
     # a loadable file whose key and entry IDs check out but whose value array
     # has the wrong shape must also rebuild: accepting it would raise out of
     # ``set_reduced_table_data`` and wedge every later call on the bad file
-    with np.load(cache_files[0], allow_pickle=False) as payload:
+    with np.load(cache_file, allow_pickle=False) as payload:
         arrays = {name: payload[name] for name in payload.files}
     arrays["values"] = np.asarray(arrays["values"])[:-1]
-    np.savez(cache_files[0], **arrays)
+    np.savez(cache_file, **arrays)
     healed = get_windowed_channel_table(cache, 2, 3, 0, **kwargs)
     assert np.array_equal(
         np.asarray(values), np.asarray(healed.get_reduced_table_data()[1])
     )
+    refreshed_files = sorted(cache_dir.glob("*.npz"))
+    assert refreshed_files == cache_files
+    cache_files = refreshed_files
+    cache_file = cache_files[0]
+
+    # A physical-channel or otherwise stale normalization identity must never
+    # alias the normalized psi_m cache, even if placed at the active path.
+    with np.load(cache_file, allow_pickle=False) as payload:
+        arrays = {name: payload[name] for name in payload.files}
+    arrays["key_normalization"] = np.asarray("physical-chi")
+    np.savez(cache_file, **arrays)
+    healed = get_windowed_channel_table(cache, 2, 3, 0, **kwargs)
+    assert np.array_equal(
+        np.asarray(values), np.asarray(healed.get_reduced_table_data()[1])
+    )
+    refreshed_files = sorted(cache_dir.glob("*.npz"))
+    assert refreshed_files == cache_files
+    cache_files = refreshed_files
+    cache_file = cache_files[0]
+
+    # Finite, in-bound corruption is invisible to the analytic magnitude
+    # check, so the payload checksum must force a rebuild.
+    with np.load(cache_file, allow_pickle=False) as payload:
+        arrays = {name: payload[name] for name in payload.files}
+    corrupted = np.asarray(arrays["values"]).copy()
+    corrupted[0] = np.nextafter(corrupted[0], np.inf)
+    arrays["values"] = corrupted
+    np.savez(cache_file, **arrays)
+    healed = get_windowed_channel_table(cache, 2, 3, 0, **kwargs)
+    assert np.array_equal(
+        np.asarray(values), np.asarray(healed.get_reduced_table_data()[1])
+    )
+    refreshed_files = sorted(cache_dir.glob("*.npz"))
+    assert refreshed_files == cache_files
+    cache_files = refreshed_files
+    cache_file = cache_files[0]
 
     # and the rebuilt file is a valid cache again (no rebuild artifacts)
     reloaded = get_windowed_channel_table(cache, 2, 3, 0, **kwargs)
@@ -990,6 +1374,213 @@ def test_channel_cache_self_heals(tmp_path):
 
 
 # {{{ T10: declaration and guard paths
+
+def test_bool_rejection_and_max_terms_guard():
+    import volumential.rke_table_assembly as rta
+
+    for bad_bool in (True, np.bool_(False)):
+        with pytest.raises(ValueError, match="value must be an integer"):
+            rta._require_integer("value", bad_bool)
+
+    with pytest.raises(ValueError, match="q_order must be an integer"):
+        _tensor_product_gauss_points(True, 2, 1.0)
+    with pytest.raises(ValueError, match="max_terms must be an integer"):
+        rta.choose_truncation_order(3, 0.0, 1.0, 1.0e-12, max_terms=True)
+    with pytest.raises(ValueError, match="max_terms must be >= 1"):
+        rta.choose_truncation_order(3, 0.0, 1.0, 1.0e-12, max_terms=0)
+
+    n_terms, bound = rta.choose_truncation_order(
+        3, 0.0, 1.0, 1.0e-12, max_terms=np.int64(1)
+    )
+    assert n_terms == 1
+    assert bound == 0.0
+
+
+def test_windowed_integer_parameters_require_index(tmp_path):
+    import volumential.rke_table_assembly as rta
+
+    cache = tmp_path / "integer-guards.sqlite"
+
+    def zero_kernel(r):
+        return np.zeros_like(np.asarray(r, dtype=np.float64))
+
+    with pytest.raises(ValueError, match="dim must be an integer"):
+        rta.choose_truncation_order(np.float64(2.0), 1j, 1.0, 1.0e-6)
+    with pytest.raises(ValueError, match="dim must be an integer"):
+        assemble_parameterized_table(None, cache, 2.0, "Yukawa", 1, 1.0)
+    with pytest.raises(ValueError, match="dim must be an integer"):
+        windowed_channel_profile(2.0, 0, 1.0)
+    with pytest.raises(ValueError, match="dim must be an integer"):
+        _tensor_product_gauss_points(1, 2.0, 1.0)
+    with pytest.raises(ValueError, match="dim must be an integer"):
+        _windowed_channel_skeleton(2.0, 1, 0, ROOT_EXTENT, WINDOW_THETA, 0)
+    with pytest.raises(ValueError, match="dim must be an integer"):
+        rta._windowed_channel_cache_file(
+            cache, 2.0, 1, 0, ROOT_EXTENT, WINDOW_THETA, 0, 2, 7
+        )
+    with pytest.raises(ValueError, match="dim must be an integer"):
+        rta.get_windowed_channel_table(cache, 2.0, 1, 0)
+    with pytest.raises(ValueError, match="dim must be an integer"):
+        _assemble_windowed_for_zeta(cache, 2.0, 1, 1.0, zero_kernel)
+    with pytest.raises(ValueError, match="dim must be an integer"):
+        assemble_windowed_parameterized_table(
+            cache, 2.0, "Yukawa", 1, 1.0
+        )
+    with pytest.raises(ValueError, match="dim must be an integer"):
+        rta._resolve_channel_orders(2.0, 2, 7)
+    with pytest.raises(NotImplementedError, match="only 2D and 3D"):
+        _tensor_product_gauss_points(1, 4, 1.0)
+
+    with pytest.raises(ValueError, match="q_order must be an integer"):
+        assemble_parameterized_table(None, cache, 2, "Yukawa", 1.5, 1.0)
+    with pytest.raises(ValueError, match="q_order must be an integer"):
+        _tensor_product_gauss_points(1.5, 2, 1.0)
+    with pytest.raises(ValueError, match="q_order must be an integer"):
+        _windowed_channel_skeleton(2, 1.5, 0, ROOT_EXTENT, WINDOW_THETA, 0)
+    with pytest.raises(ValueError, match="q_order must be an integer"):
+        rta._windowed_channel_cache_file(
+            cache, 2, 1.5, 0, ROOT_EXTENT, WINDOW_THETA, 0, 2, 7
+        )
+    with pytest.raises(ValueError, match="q_order must be an integer"):
+        rta.get_windowed_channel_table(cache, 2, 1.5, 0)
+    with pytest.raises(ValueError, match="q_order must be an integer"):
+        _assemble_windowed_for_zeta(cache, 2, 1.5, 1.0, zero_kernel)
+    with pytest.raises(ValueError, match="q_order must be an integer"):
+        assemble_windowed_parameterized_table(
+            cache, 2, "Yukawa", 1.5, 1.0
+        )
+    with pytest.raises(ValueError, match="q_order must be >= 1"):
+        _tensor_product_gauss_points(0, 2, 1.0)
+    with pytest.raises(ValueError, match="q_order must be >= 1"):
+        rta.get_windowed_channel_table(cache, 2, 0, 0)
+
+    with pytest.raises(ValueError, match="source_box_level must be an integer"):
+        assemble_parameterized_table(
+            None, cache, 2, "Yukawa", 1, 1.0, source_box_level=0.5
+        )
+    with pytest.raises(ValueError, match="source_box_level must be an integer"):
+        _windowed_channel_skeleton(2, 1, 0.5, ROOT_EXTENT, WINDOW_THETA, 0)
+    with pytest.raises(ValueError, match="source_box_level must be an integer"):
+        rta.get_windowed_channel_table(
+            cache, 2, 1, 0, source_box_level=np.float64(0.0)
+        )
+    with pytest.raises(ValueError, match="source_box_level must be an integer"):
+        _assemble_windowed_for_zeta(
+            cache, 2, 1, 1.0, zero_kernel, source_box_level=0.5
+        )
+    with pytest.raises(ValueError, match="source_box_level must be an integer"):
+        assemble_windowed_parameterized_table(
+            cache, 2, "Yukawa", 1, 1.0, source_box_level=0.5
+        )
+    with pytest.raises(ValueError, match="source_box_level must be >= 0"):
+        _windowed_channel_skeleton(2, 1, -1, ROOT_EXTENT, WINDOW_THETA, 0)
+
+    with pytest.raises(ValueError, match="m must be an integer"):
+        windowed_channel_profile(2, 0.5, 1.0)
+    with pytest.raises(ValueError, match="m must be an integer"):
+        _windowed_channel_skeleton(2, 1, 0, ROOT_EXTENT, WINDOW_THETA, 0.5)
+    with pytest.raises(ValueError, match="m must be an integer"):
+        rta.get_windowed_channel_table(cache, 2, 1, 0.5)
+
+    with pytest.raises(ValueError, match="p_star must be an integer"):
+        windowed_remainder_profile(2, 1.0, zero_kernel, 1.0, 1.5)
+    with pytest.raises(ValueError, match="p_star must be an integer"):
+        _assemble_windowed_for_zeta(
+            cache, 2, 1, 1.0, zero_kernel, p_star=1.5
+        )
+    with pytest.raises(ValueError, match="p_star must be an integer"):
+        assemble_windowed_parameterized_table(
+            cache, 2, "Yukawa", 1, 1.0, p_star=1.5
+        )
+
+    with pytest.raises(ValueError, match="smooth_quad_order must be an integer"):
+        rta._smooth_remainder_entry_values(None, None, None, 8.5)
+    with pytest.raises(ValueError, match="smooth_quad_order must be an integer"):
+        _assemble_windowed_for_zeta(
+            cache, 2, 1, 1.0, zero_kernel, smooth_quad_order=8.5
+        )
+    with pytest.raises(ValueError, match="smooth_quad_order must be an integer"):
+        assemble_windowed_parameterized_table(
+            cache, 2, "Yukawa", 1, 1.0, smooth_quad_order=8.5
+        )
+
+    with pytest.raises(ValueError, match="chan_regular_order must be an integer"):
+        rta._resolve_channel_orders(2, 6.5, 15)
+    with pytest.raises(ValueError, match="chan_radial_order must be an integer"):
+        rta._resolve_channel_orders(2, 6, 15.5)
+    with pytest.raises(ValueError, match="chan_regular_order must be an integer"):
+        _duffy_channel_entry_values(None, None, 6.5, 15)
+    with pytest.raises(ValueError, match="chan_radial_order must be an integer"):
+        _duffy_channel_entry_values(None, None, 6, 15.5)
+    with pytest.raises(ValueError, match="chan_regular_order must be an integer"):
+        rta.get_windowed_channel_table(
+            cache, 2, 1, 0, chan_regular_order=6.5, chan_radial_order=15
+        )
+
+    assert rta._require_integer("value", np.int64(3), minimum=0) == 3
+    profile = windowed_channel_profile(np.int64(2), np.int64(0), 1.0)
+    assert np.isfinite(profile(1.0))
+    table = _windowed_channel_skeleton(
+        np.int64(2),
+        np.int64(1),
+        np.int64(0),
+        ROOT_EXTENT,
+        WINDOW_THETA,
+        np.int64(0),
+    )
+    assert table.source_box_level == 0
+    points = _tensor_product_gauss_points(
+        np.int64(1), np.int64(2), 1.0
+    )
+    assert points.shape == (1, 2)
+    _, cache_key = rta._windowed_channel_cache_file(
+        cache,
+        np.int64(2),
+        np.int64(1),
+        np.int64(0),
+        ROOT_EXTENT,
+        WINDOW_THETA,
+        np.int64(0),
+        np.int64(2),
+        np.int64(7),
+    )
+    assert cache_key["dim"] == 2
+    assert cache_key["q_order"] == 1
+    assert rta._resolve_channel_orders(
+        2, np.int64(6), np.int64(15)
+    ) == (6, 15)
+    assert not (tmp_path / "integer-guards.sqlite.windowed").exists()
+
+
+@pytest.mark.parametrize("invalid", [0.0, -1.0, np.nan, np.inf])
+def test_invalid_window_scales_and_declarations(tmp_path, invalid):
+    from pathlib import Path
+
+    import volumential.rke_table_assembly as rta
+
+    cache = tmp_path / "window-guards.sqlite"
+
+    def zero_kernel(r):
+        return np.zeros_like(np.asarray(r, dtype=np.float64))
+
+    with pytest.raises(ValueError, match="window_scale must be finite and positive"):
+        windowed_channel_profile(2, 0, invalid)
+    with pytest.raises(ValueError, match="window_scale must be finite and positive"):
+        windowed_remainder_profile(2, 1.0, zero_kernel, invalid, 1)
+    with pytest.raises(ValueError, match="window_theta must be finite and positive"):
+        _windowed_channel_skeleton(2, 1, 0, ROOT_EXTENT, invalid, 0)
+    with pytest.raises(ValueError, match="window_theta must be finite and positive"):
+        rta.get_windowed_channel_table(cache, 2, 1, 0, window_theta=invalid)
+    with pytest.raises(ValueError, match="window_theta must be finite and positive"):
+        _assemble_windowed_for_zeta(
+            cache, 2, 1, 1.0, zero_kernel, window_theta=invalid
+        )
+    with pytest.raises(ValueError, match="window_theta must be finite and positive"):
+        assemble_windowed_parameterized_table(
+            cache, 2, "Yukawa", 1, 1.0, window_theta=invalid
+        )
+    assert not Path(str(cache) + ".windowed").exists()
+
 
 def test_windowed_declaration_guards(tmp_path):
     cache = tmp_path / "guards.sqlite"
