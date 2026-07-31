@@ -784,10 +784,11 @@ def test_windowed_sweep_rejects_empty_dimensions_before_side_effects(
 
 
 @pytest.mark.parametrize(("source_level", "match"), [
+    (11, "outside the supported O\\(1\\) range"),
     (1074, "mu must be finite and positive"),
     (1075, "box_extent must be finite and positive"),
 ])
-def test_windowed_sweep_rejects_underflowed_geometry_before_side_effects(
+def test_windowed_sweep_rejects_unsupported_geometry_before_side_effects(
     tmp_path, monkeypatch, source_level, match
 ):
     module = _load_benchmark("windowed_rke_sweep")
@@ -803,6 +804,53 @@ def test_windowed_sweep_rejects_underflowed_geometry_before_side_effects(
     with pytest.raises(ValueError, match=match):
         module.run_sweep(**kwargs)
     assert not cache_dir.exists()
+
+
+def test_windowed_sweep_direct_rejects_nonfinite_reference(
+    tmp_path, monkeypatch
+):
+    module = _load_benchmark("windowed_rke_sweep")
+    import volumential.table_manager as table_manager
+
+    class FakeTable:
+        def get_entry_data_for_full_indices(self, entry_ids):
+            assert np.array_equal(entry_ids, np.array([0]))
+            return np.array([np.nan])
+
+    class FakeManager:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            pass
+
+        def get_table(self, *args, **kwargs):
+            return FakeTable(), {}
+
+    monkeypatch.setattr(
+        table_manager, "NearFieldInteractionTableManager", FakeManager
+    )
+
+    result = module._build_direct_table(
+        queue=None,
+        cache_path=tmp_path / "direct.sqlite",
+        dim=2,
+        kernel="Yukawa",
+        q_order=1,
+        parameter=1.0,
+        source_box_level=0,
+        root_extent=2.0,
+        regular_order=2,
+        radial_order=7,
+        entry_ids=np.array([0]),
+    )
+
+    assert result["status"].startswith("failed: RuntimeError:")
+    assert "non-finite" in result["status"]
+    assert result["values"] is None
 
 
 @pytest.mark.parametrize(("update", "match"), [

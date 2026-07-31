@@ -619,6 +619,9 @@ def _build_direct_table(
                 build_config=build_config,
                 **get_kwargs,
             )
+        values = np.asarray(table.get_entry_data_for_full_indices(entry_ids))
+        if not np.all(np.isfinite(values)):
+            raise RuntimeError("direct reference table contains non-finite values")
     except Exception as exc:
         return {
             "status": f"failed: {type(exc).__name__}: {exc}",
@@ -626,7 +629,6 @@ def _build_direct_table(
             "values": None,
         }
     build_seconds = time.perf_counter() - start
-    values = np.asarray(table.get_entry_data_for_full_indices(entry_ids))
     return {"status": "ok", "build_seconds": build_seconds, "values": values}
 
 
@@ -723,6 +725,11 @@ def run_sweep(
                 "is provided"
             )
 
+    from volumential.rke_table_assembly import (
+        _require_o1_box_extent,
+        _resolve_channel_orders,
+    )
+
     dimension_configs: dict[int, tuple[int, int, float, list[float]]] = {}
     mus_by_dim: dict[int, list[float]] = {}
     for dim in sorted(dims):
@@ -738,6 +745,7 @@ def run_sweep(
         )
         box_extent = float(root_extent) * 0.5**source_level
         _require_finite_positive(box_extent, "box_extent")
+        _require_o1_box_extent(box_extent)
         dim_mus = sorted(
             mus
             if mus is not None
@@ -749,8 +757,6 @@ def run_sweep(
             q_order, source_level, box_extent, dim_mus
         )
         mus_by_dim[dim] = dim_mus
-
-    from volumential.rke_table_assembly import _resolve_channel_orders
 
     sweep_start = time.perf_counter()
     cache_dir.mkdir(parents=True, exist_ok=True)

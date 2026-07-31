@@ -1705,6 +1705,11 @@ def test_invalid_window_condition_thresholds(tmp_path, invalid):
         assemble_windowed_parameterized_table(
             cache, 2, "Yukawa", 1, 1.0, max_condition=invalid
         )
+    with pytest.raises(ValueError, match="max_condition must be finite and positive"):
+        assemble_parameterized_table(
+            None, cache, 2, "Yukawa", 1, 1.0, max_condition=invalid
+        )
+    assert not cache.exists()
     assert not Path(str(cache) + ".windowed").exists()
 
 
@@ -1720,6 +1725,29 @@ def test_zero_zeta_is_rejected_before_channel_side_effects(tmp_path):
         windowed_remainder_profile(2, 0.0, zero_kernel, 1.0, 1)
     with pytest.raises(ValueError, match="zeta must be nonzero"):
         _assemble_windowed_for_zeta(cache, 2, 1, 0.0, zero_kernel)
+    assert not Path(str(cache) + ".windowed").exists()
+
+
+@pytest.mark.parametrize("invalid", [
+    complex(np.nan, 0.0),
+    complex(0.0, np.nan),
+    complex(np.inf, 0.0),
+    complex(0.0, -np.inf),
+])
+def test_nonfinite_zeta_is_rejected_before_channel_side_effects(
+    tmp_path, invalid
+):
+    from pathlib import Path
+
+    cache = tmp_path / "nonfinite-zeta-guard.sqlite"
+
+    def zero_kernel(r):
+        return np.zeros_like(np.asarray(r, dtype=np.float64))
+
+    with pytest.raises(ValueError, match="zeta must be finite"):
+        windowed_remainder_profile(2, invalid, zero_kernel, 1.0, 1)
+    with pytest.raises(ValueError, match="zeta must be finite"):
+        _assemble_windowed_for_zeta(cache, 2, 1, invalid, zero_kernel)
     assert not Path(str(cache) + ".windowed").exists()
 
 

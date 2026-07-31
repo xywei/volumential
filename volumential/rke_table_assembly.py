@@ -514,6 +514,7 @@ NearFieldInteractionTable`
     source_box_level = _require_integer(
         "source_box_level", source_box_level, minimum=0
     )
+    max_condition = _require_finite_positive("max_condition", max_condition)
     if kernel_type == "Helmholtz":
         k = np.complex128(float(parameter))
         result_dtype = np.complex128
@@ -886,6 +887,8 @@ def windowed_remainder_profile(dim, zeta, kernel_radial, window_scale, p_star):
     p_star = _require_integer("p_star", p_star, minimum=1)
     window_scale = _require_finite_positive("window_scale", window_scale)
     zeta = complex(zeta)
+    if not np.isfinite(zeta.real) or not np.isfinite(zeta.imag):
+        raise ValueError("zeta must be finite")
     if zeta == 0.0:
         raise ValueError("zeta must be nonzero")
     prefactor = 1.0 / (2.0 * np.pi) if dim == 2 else 1.0 / (4.0 * np.pi)
@@ -1747,6 +1750,8 @@ def _assemble_windowed_for_zeta(
     window_theta = _require_finite_positive("window_theta", window_theta)
     max_condition = _require_finite_positive("max_condition", max_condition)
     zeta = complex(zeta)
+    if not np.isfinite(zeta.real) or not np.isfinite(zeta.imag):
+        raise ValueError("zeta must be finite")
     if zeta == 0.0:
         raise ValueError("zeta must be nonzero")
     chan_regular_order, chan_radial_order = _resolve_channel_orders(
