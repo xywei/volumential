@@ -168,6 +168,11 @@ def _require_finite_positive(value: float, name: str) -> None:
         raise ValueError(f"{name} must be finite and positive")
 
 
+def _require_unique(values, name: str) -> None:
+    if len(set(values)) != len(values):
+        raise ValueError(f"{name} must be unique")
+
+
 def _require_integer(value, name: str, *, minimum=None) -> int:
     if isinstance(value, (bool, np.bool_)):
         raise ValueError(f"{name} must be an integer")
@@ -263,8 +268,7 @@ def _parse_order_pairs(raw: str) -> list[tuple[int, int]]:
         )
     if not pairs:
         raise ValueError("expected at least one 'regular,radial' pair")
-    if len(set(pairs)) != len(pairs):
-        raise ValueError("channel-order policies must be unique")
+    _require_unique(pairs, "channel-order policies")
     return pairs
 
 
@@ -661,6 +665,7 @@ def run_sweep(
         raise ValueError("at least one dimension is required")
     if any(dim not in (2, 3) for dim in dims):
         raise ValueError("dim entries must be 2 or 3")
+    _require_unique(dims, "dimension entries")
     kernels = list(kernels)
     if not kernels:
         raise ValueError("at least one kernel is required")
@@ -669,6 +674,7 @@ def run_sweep(
     ]
     if unknown_kernels:
         raise ValueError(f"unknown kernel: {unknown_kernels[0]}")
+    _require_unique(kernels, "kernel entries")
     if q_order_override is not None:
         q_order_override = _require_integer(
             q_order_override, "q_order_override", minimum=1
@@ -682,18 +688,21 @@ def run_sweep(
     ]
     if not p_stars:
         raise ValueError("at least one p_star is required")
+    _require_unique(p_stars, "p_star entries")
     smooth_orders = [
         _require_integer(order, "smooth_order", minimum=1)
         for order in smooth_orders
     ]
     if not smooth_orders:
         raise ValueError("at least one smooth_order is required")
+    _require_unique(smooth_orders, "smooth_order entries")
     if mus is not None:
         mus = list(mus)
         if not mus:
             raise ValueError("at least one mu is required when mus is provided")
         for mu in mus:
             _require_finite_positive(mu, "mu")
+        _require_unique(mus, "mu entries")
     direct_policies = [
         _require_usable_order_pair(policy, "direct policy")
         for policy in direct_policies
@@ -726,8 +735,7 @@ def run_sweep(
                 "at least one channel policy is required when chan_orders "
                 "is provided"
             )
-        if len(set(chan_orders)) != len(chan_orders):
-            raise ValueError("channel-order policies must be unique")
+        _require_unique(chan_orders, "channel-order policies")
 
     from volumential.rke_table_assembly import (
         _require_o1_box_extent,

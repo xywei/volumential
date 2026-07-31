@@ -888,6 +888,11 @@ def test_windowed_sweep_direct_rejects_nonfinite_reference(
     ({"smooth_orders": []}, "at least one smooth_order"),
     ({"mus": []}, "at least one mu"),
     ({"chan_orders": []}, "at least one channel policy"),
+    ({"dims": [2, 2]}, "must be unique"),
+    ({"kernels": ["Yukawa", "Yukawa"]}, "must be unique"),
+    ({"p_stars": [1, 1]}, "must be unique"),
+    ({"smooth_orders": [2, 2]}, "must be unique"),
+    ({"mus": [1.0, 1.0]}, "must be unique"),
     ({"chan_orders": [(2, 7), (2, 7)]}, "must be unique"),
 ])
 def test_windowed_sweep_rejects_empty_or_unknown_axes_before_side_effects(
