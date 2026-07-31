@@ -551,6 +551,31 @@ def test_windowed_sweep_reports_malformed_csv_as_cli_error(
     assert "error:" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize(("option", "value"), [
+    ("--dim", "2,2"),
+    ("--kernels", "yukawa,yukawa"),
+    ("--p-star", "4,4"),
+    ("--smooth-orders", "8,8"),
+    ("--mus", "1,1"),
+    ("--chan-orders", "2,7;2,7"),
+])
+def test_windowed_sweep_reports_duplicate_axes_as_cli_errors(
+    option, value, monkeypatch, capsys
+):
+    module = _load_benchmark("windowed_rke_sweep")
+    monkeypatch.setattr(sys, "argv", ["windowed_rke_sweep.py", option, value])
+    monkeypatch.setattr(
+        module,
+        "run_sweep",
+        lambda **kwargs: pytest.fail("run_sweep must not be called"),
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        module.main()
+    assert exc_info.value.code == 2
+    assert "error:" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize("raw", [
     "24,61;24,61",
     "24,61;23,160",
@@ -829,6 +854,28 @@ def test_windowed_sweep_rejects_underflowed_window_scale_before_side_effects(
     )
 
     with pytest.raises(ValueError, match="window_scale must be finite and positive"):
+        module.run_sweep(**kwargs)
+    assert not cache_dir.exists()
+
+
+def test_windowed_sweep_normalizes_mus_before_uniqueness_check(
+    tmp_path, monkeypatch
+):
+    module = _load_benchmark("windowed_rke_sweep")
+    cache_dir = tmp_path / "cache"
+    lower = np.longdouble(1.0)
+    adjacent = np.nextafter(lower, np.longdouble(2.0))
+    assert lower != adjacent
+    assert float(lower) == float(adjacent)
+    monkeypatch.setattr(
+        module,
+        "_make_queue",
+        lambda: pytest.fail("queue creation must not be attempted"),
+    )
+    kwargs = _windowed_sweep_run_kwargs(cache_dir)
+    kwargs["mus"] = [lower, adjacent]
+
+    with pytest.raises(ValueError, match="mu entries must be unique"):
         module.run_sweep(**kwargs)
     assert not cache_dir.exists()
 

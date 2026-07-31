@@ -697,7 +697,7 @@ def run_sweep(
         raise ValueError("at least one smooth_order is required")
     _require_unique(smooth_orders, "smooth_order entries")
     if mus is not None:
-        mus = list(mus)
+        mus = [float(mu) for mu in mus]
         if not mus:
             raise ValueError("at least one mu is required when mus is provided")
         for mu in mus:
@@ -1263,6 +1263,16 @@ def main() -> int:
         chan_orders = (
             _parse_order_pairs(args.chan_orders) if args.chan_orders else None
         )
+    except ValueError as exc:
+        parser.error(str(exc))
+
+    try:
+        _require_unique(dims, "--dim entries")
+        _require_unique(kernels, "--kernels entries")
+        _require_unique(p_stars, "--p-star entries")
+        _require_unique(smooth_orders, "--smooth-orders entries")
+        if mus is not None:
+            _require_unique(mus, "--mus entries")
     except ValueError as exc:
         parser.error(str(exc))
 
