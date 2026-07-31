@@ -1708,6 +1708,21 @@ def test_invalid_window_condition_thresholds(tmp_path, invalid):
     assert not Path(str(cache) + ".windowed").exists()
 
 
+def test_zero_zeta_is_rejected_before_channel_side_effects(tmp_path):
+    from pathlib import Path
+
+    cache = tmp_path / "zero-zeta-guard.sqlite"
+
+    def zero_kernel(r):
+        return np.zeros_like(np.asarray(r, dtype=np.float64))
+
+    with pytest.raises(ValueError, match="zeta must be nonzero"):
+        windowed_remainder_profile(2, 0.0, zero_kernel, 1.0, 1)
+    with pytest.raises(ValueError, match="zeta must be nonzero"):
+        _assemble_windowed_for_zeta(cache, 2, 1, 0.0, zero_kernel)
+    assert not Path(str(cache) + ".windowed").exists()
+
+
 def test_windowed_declaration_guards(tmp_path):
     cache = tmp_path / "guards.sqlite"
 

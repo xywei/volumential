@@ -877,13 +877,17 @@ def windowed_remainder_profile(dim, zeta, kernel_radial, window_scale, p_star):
     ``R`` directly (boundedness and germ cancellation as ``r -> 0``).
     At ``r = 0`` the callable returns the analytic removable limit for the
     decaying Yukawa / outgoing Helmholtz branch instead of evaluating the two
-    singular terms separately.
+    singular terms separately.  ``zeta = 0`` is rejected because this API does
+    not define a zero-frequency kernel normalization or its origin limit.
 
     :returns: a vectorized callable ``R(r)`` (complex-valued).
     """
     dim = _require_dimension(dim)
     p_star = _require_integer("p_star", p_star, minimum=1)
     window_scale = _require_finite_positive("window_scale", window_scale)
+    zeta = complex(zeta)
+    if zeta == 0.0:
+        raise ValueError("zeta must be nonzero")
     prefactor = 1.0 / (2.0 * np.pi) if dim == 2 else 1.0 / (4.0 * np.pi)
     coefficients = _windowed_coefficients(zeta * window_scale, p_star)
     profiles = [
@@ -1728,7 +1732,9 @@ def _assemble_windowed_for_zeta(
     """Windowed assembly at an explicit squared-frequency parameter ``zeta``
     and kernel radial profile; :func:`assemble_windowed_parameterized_table`
     wraps this with the standard Helmholtz/Yukawa identifications, and tests
-    exercise complex ``zeta`` (damped waves) directly."""
+    exercise complex ``zeta`` (damped waves) directly.  ``zeta`` must be
+    nonzero because the explicit entry point does not define a zero-frequency
+    kernel normalization or its origin limit."""
     dim, q_order = _require_dim_q_order(dim, q_order)
     source_box_level = _require_integer(
         "source_box_level", source_box_level, minimum=0
@@ -1741,6 +1747,8 @@ def _assemble_windowed_for_zeta(
     window_theta = _require_finite_positive("window_theta", window_theta)
     max_condition = _require_finite_positive("max_condition", max_condition)
     zeta = complex(zeta)
+    if zeta == 0.0:
+        raise ValueError("zeta must be nonzero")
     chan_regular_order, chan_radial_order = _resolve_channel_orders(
         dim, chan_regular_order, chan_radial_order
     )

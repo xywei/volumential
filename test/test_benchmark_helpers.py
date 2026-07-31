@@ -783,6 +783,28 @@ def test_windowed_sweep_rejects_empty_dimensions_before_side_effects(
     assert not cache_dir.exists()
 
 
+@pytest.mark.parametrize(("source_level", "match"), [
+    (1074, "mu must be finite and positive"),
+    (1075, "box_extent must be finite and positive"),
+])
+def test_windowed_sweep_rejects_underflowed_geometry_before_side_effects(
+    tmp_path, monkeypatch, source_level, match
+):
+    module = _load_benchmark("windowed_rke_sweep")
+    cache_dir = tmp_path / "cache"
+    monkeypatch.setattr(
+        module,
+        "_make_queue",
+        lambda: pytest.fail("queue creation must not be attempted"),
+    )
+    kwargs = _windowed_sweep_run_kwargs(cache_dir)
+    kwargs.update(source_level_override=source_level, mus=None)
+
+    with pytest.raises(ValueError, match=match):
+        module.run_sweep(**kwargs)
+    assert not cache_dir.exists()
+
+
 @pytest.mark.parametrize(("update", "match"), [
     ({"mode": "invalid"}, "mode must"),
     ({"kernels": []}, "at least one kernel"),

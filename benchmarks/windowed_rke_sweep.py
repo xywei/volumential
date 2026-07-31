@@ -723,16 +723,8 @@ def run_sweep(
                 "is provided"
             )
 
-    from volumential.rke_table_assembly import _resolve_channel_orders
-
-    sweep_start = time.perf_counter()
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    queue = _make_queue()
-
-    rows: list[dict[str, Any]] = []
-    channel_prep_records: dict[str, Any] = {}
+    dimension_configs: dict[int, tuple[int, int, float, list[float]]] = {}
     mus_by_dim: dict[int, list[float]] = {}
-
     for dim in sorted(dims):
         q_order = (
             q_order_override
@@ -744,15 +736,31 @@ def run_sweep(
             if source_level_override is not None
             else DEFAULT_SOURCE_LEVEL[dim]
         )
-        box_extent = float(root_extent) * 0.5**int(source_level)
-        # theta = mu * b is what the declared window covers, so the default
-        # ladder is resolved against this dimension's own box extent.
+        box_extent = float(root_extent) * 0.5**source_level
+        _require_finite_positive(box_extent, "box_extent")
         dim_mus = sorted(
             mus
             if mus is not None
             else _default_mus(mode, window_theta, box_extent)
         )
+        for mu in dim_mus:
+            _require_finite_positive(mu, "mu")
+        dimension_configs[dim] = (
+            q_order, source_level, box_extent, dim_mus
+        )
         mus_by_dim[dim] = dim_mus
+
+    from volumential.rke_table_assembly import _resolve_channel_orders
+
+    sweep_start = time.perf_counter()
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    queue = _make_queue()
+
+    rows: list[dict[str, Any]] = []
+    channel_prep_records: dict[str, Any] = {}
+
+    for dim in sorted(dims):
+        q_order, source_level, box_extent, dim_mus = dimension_configs[dim]
         if chan_orders is None:
             dim_chan_orders = [_resolve_channel_orders(dim, None, None)]
         else:
