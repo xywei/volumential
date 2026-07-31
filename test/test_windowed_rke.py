@@ -252,6 +252,39 @@ def test_channel_profiles_match_mpmath(dim):
         mp.mp.dps = old_dps
 
 
+@pytest.mark.parametrize(("dim", "m", "x"), [
+    (2, 20, 60.0),
+    (3, 20, 60.0),
+    (2, 60, 240.0),
+    (3, 60, 240.0),
+    (3, 200, 240.0),
+])
+def test_high_order_channel_profiles_remain_positive_and_stable(dim, m, x):
+    import mpmath as mp
+
+    radius = 2.0 * np.sqrt(x)
+    actual = windowed_channel_profile(dim, m, 1.0)(radius)
+
+    old_dps = mp.mp.dps
+    mp.mp.dps = 100
+    try:
+        x_mp = mp.mpf(str(x))
+        if dim == 2:
+            expected = mp.mpf("0.5") * x_mp**m * mp.gammainc(
+                -m, x_mp, mp.inf
+            )
+        else:
+            expected = x_mp ** (m - mp.mpf("0.5")) * mp.gammainc(
+                mp.mpf("0.5") - m, x_mp, mp.inf
+            ) / (2 * mp.sqrt(mp.pi))
+        expected = float(expected)
+    finally:
+        mp.mp.dps = old_dps
+
+    assert actual > 0.0
+    assert actual == pytest.approx(expected, rel=2.0e-12, abs=0.0)
+
+
 @pytest.mark.parametrize("dim", [2, 3])
 @pytest.mark.parametrize("zeta_sign", [-1, 1])
 def test_high_order_small_extent_remainder_matches_mpmath(dim, zeta_sign):

@@ -708,6 +708,34 @@ NearFieldInteractionTable`
 
 # {{{ windowed channels
 
+def _generalized_exponential_integral_cf(order, x):
+    """Evaluate ``E_order(x)`` for ``x > 1`` by a stable continued fraction."""
+    order = float(order)
+    x = np.asarray(x, dtype=np.float64)
+    tiny = 1.0e-300
+    b = x + order
+    c = np.full_like(x, 1.0 / tiny)
+    d = 1.0 / b
+    value = d.copy()
+
+    for iteration in range(1, 257):
+        numerator = -iteration * (iteration + order - 1.0)
+        b = b + 2.0
+        d = b + numerator * d
+        d = np.where(np.abs(d) < tiny, tiny, d)
+        c = b + numerator / c
+        c = np.where(np.abs(c) < tiny, tiny, c)
+        d = 1.0 / d
+        update = d * c
+        value = value * update
+        if np.all(np.abs(update - 1.0) <= 8.0 * np.finfo(float).eps):
+            return np.exp(-x) * value
+
+    raise RuntimeError(
+        "generalized exponential-integral continued fraction did not converge"
+    )
+
+
 def _windowed_channel_profile_impl(dim, m, window_scale, *, normalized):
     dim = _require_dimension(dim)
     import scipy.special as sps
@@ -721,11 +749,7 @@ def _windowed_channel_profile_impl(dim, m, window_scale, *, normalized):
         def profile(r):
             r_arr = np.asarray(r, dtype=np.float64)
             x = np.maximum(r_arr * r_arr / (4.0 * t_w), 1.0e-300)
-            value = sps.exp1(x)
-            if m > 0:
-                ex = np.exp(-x)
-                for order in range(1, m + 1):
-                    value = (ex - x * value) / order
+            value = sps.expn(m + 1, x)
             value = scale * value
             if np.isscalar(r) or r_arr.ndim == 0:
                 return float(value)
@@ -740,12 +764,24 @@ def _windowed_channel_profile_impl(dim, m, window_scale, *, normalized):
         def profile(r):
             r_arr = np.asarray(r, dtype=np.float64)
             x = np.maximum(r_arr * r_arr / (4.0 * t_w), 1.0e-300)
-            sqrt_x = np.sqrt(x)
-            value = np.sqrt(np.pi) * sps.erfc(sqrt_x) / sqrt_x
-            if m > 0:
-                ex = np.exp(-x)
+            if m == 0:
+                sqrt_x = np.sqrt(x)
+                value = np.sqrt(np.pi) * sps.erfc(sqrt_x) / sqrt_x
+            else:
+                large_x = x > 1.0
+                recurrence_x = np.where(large_x, 0.0, x)
+                sqrt_x = np.sqrt(np.maximum(recurrence_x, 1.0e-300))
+                value = np.sqrt(np.pi) * sps.erfc(sqrt_x) / sqrt_x
+                ex = np.exp(-recurrence_x)
                 for order in range(1, m + 1):
-                    value = (ex - x * value) / (order - 0.5)
+                    value = (
+                        ex - recurrence_x * value
+                    ) / (order - 0.5)
+                if np.any(large_x):
+                    value = np.asarray(value)
+                    value[large_x] = _generalized_exponential_integral_cf(
+                        m + 0.5, x[large_x]
+                    )
             value = scale * value
             if np.isscalar(r) or r_arr.ndim == 0:
                 return float(value)
@@ -757,7 +793,7 @@ def _windowed_channel_profile_impl(dim, m, window_scale, *, normalized):
 def windowed_channel_profile(dim, m, window_scale):
     """Radial profile ``chi_m(r)`` of the physical windowed channel.
 
-    Evaluated by the recurrences
+    Defined by the generalized exponential-integral recurrences
 
     - 2D: ``y_0(x) = E_1(x)``, ``y_m = (exp(-x) - x y_{m-1}) / m``,
       ``chi_m = (1/2) t_w^m y_m``
@@ -770,6 +806,9 @@ def windowed_channel_profile(dim, m, window_scale):
     ``chi_m = (r^2/4)^{m-1/2} Gamma(1/2-m, x) / (2 sqrt(pi))`` in 3D.
     ``chi_0`` in 3D is exactly the Ewald short-range kernel
     ``erfc(r / (2 sqrt(t_w))) / r``.
+    Evaluation uses SciPy's stable integer-order ``expn`` in 2D and a direct
+    continued fraction for the large-``x`` half-integer integral in 3D,
+    avoiding cancellation in the displayed upward recurrences.
 
     :returns: a vectorized callable ``chi(r)`` accepting scalars or arrays.
     """
