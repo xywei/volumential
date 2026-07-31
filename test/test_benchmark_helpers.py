@@ -604,6 +604,10 @@ def test_windowed_sweep_accepts_usable_channel_orders():
         (48, 61),
         (64, 121),
     ]
+    with pytest.raises(
+        ValueError, match="channel-order policies must be unique"
+    ):
+        module._parse_order_pairs("48,61;48,61")
 
 
 def test_windowed_sweep_float_identity_distinguishes_adjacent_values():
@@ -806,7 +810,7 @@ def test_windowed_sweep_rejects_unsupported_geometry_before_side_effects(
     assert not cache_dir.exists()
 
 
-def test_windowed_sweep_rejects_overflowed_default_mu_before_side_effects(
+def test_windowed_sweep_rejects_underflowed_window_scale_before_side_effects(
     tmp_path, monkeypatch
 ):
     module = _load_benchmark("windowed_rke_sweep")
@@ -818,13 +822,13 @@ def test_windowed_sweep_rejects_overflowed_default_mu_before_side_effects(
     )
     kwargs = _windowed_sweep_run_kwargs(cache_dir)
     kwargs.update(
-        root_extent=1.0e-3,
+        root_extent=2.0,
         window_theta=1.0e308,
         source_level_override=0,
-        mus=None,
+        mus=[1.0],
     )
 
-    with pytest.raises(ValueError, match="mu must be finite and positive"):
+    with pytest.raises(ValueError, match="window_scale must be finite and positive"):
         module.run_sweep(**kwargs)
     assert not cache_dir.exists()
 
@@ -884,6 +888,7 @@ def test_windowed_sweep_direct_rejects_nonfinite_reference(
     ({"smooth_orders": []}, "at least one smooth_order"),
     ({"mus": []}, "at least one mu"),
     ({"chan_orders": []}, "at least one channel policy"),
+    ({"chan_orders": [(2, 7), (2, 7)]}, "must be unique"),
 ])
 def test_windowed_sweep_rejects_empty_or_unknown_axes_before_side_effects(
     tmp_path, monkeypatch, update, match

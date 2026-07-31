@@ -263,6 +263,8 @@ def _parse_order_pairs(raw: str) -> list[tuple[int, int]]:
         )
     if not pairs:
         raise ValueError("expected at least one 'regular,radial' pair")
+    if len(set(pairs)) != len(pairs):
+        raise ValueError("channel-order policies must be unique")
     return pairs
 
 
@@ -724,6 +726,8 @@ def run_sweep(
                 "at least one channel policy is required when chan_orders "
                 "is provided"
             )
+        if len(set(chan_orders)) != len(chan_orders):
+            raise ValueError("channel-order policies must be unique")
 
     from volumential.rke_table_assembly import (
         _require_o1_box_extent,
@@ -746,6 +750,11 @@ def run_sweep(
         box_extent = float(root_extent) * 0.5**source_level
         _require_finite_positive(box_extent, "box_extent")
         _require_o1_box_extent(box_extent)
+        with np.errstate(over="ignore", under="ignore", divide="ignore"):
+            window_scale = float(
+                np.square(np.float64(box_extent) / np.float64(window_theta))
+            )
+        _require_finite_positive(window_scale, "window_scale")
         dim_mus = sorted(
             mus
             if mus is not None
