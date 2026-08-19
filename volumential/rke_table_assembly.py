@@ -72,14 +72,18 @@ from pathlib import Path
 
 import numpy as np
 
+import volumential.opcounters as opcounters
+
 __all__ = [
     "RKEConditioningError",
     "RKETruncationError",
     "RKEWindowConditioningError",
     "RKEWindowCoverageError",
     "assemble_parameterized_table",
+    "assemble_windowed_damped_table",
     "assemble_windowed_parameterized_table",
     "choose_truncation_order",
+    "damped_kernel_radial",
     "get_windowed_channel_table",
     "windowed_channel_profile",
     "windowed_remainder_profile",
@@ -750,6 +754,8 @@ def _windowed_channel_profile_impl(dim, m, window_scale, *, normalized):
         def profile(r):
             r_arr = np.asarray(r, dtype=np.float64)
             x = np.maximum(r_arr * r_arr / (4.0 * t_w), 1.0e-300)
+            opcounters.add(opcounters.PROFILE_NODES, "psi_m", x.size)
+            opcounters.add(opcounters.SPECIAL_EVALS, "expn", x.size)
             value = sps.expn(m + 1, x)
             value = scale * value
             if np.isscalar(r) or r_arr.ndim == 0:
@@ -765,11 +771,20 @@ def _windowed_channel_profile_impl(dim, m, window_scale, *, normalized):
         def profile(r):
             r_arr = np.asarray(r, dtype=np.float64)
             x = np.maximum(r_arr * r_arr / (4.0 * t_w), 1.0e-300)
+            opcounters.add(opcounters.PROFILE_NODES, "psi_m", x.size)
             if m == 0:
+                opcounters.add(opcounters.SPECIAL_EVALS, "erfc", x.size)
                 sqrt_x = np.sqrt(x)
                 value = np.sqrt(np.pi) * sps.erfc(sqrt_x) / sqrt_x
             else:
                 large_x = x > 1.0
+                opcounters.add(opcounters.SPECIAL_EVALS, "erfc", x.size)
+                opcounters.add(opcounters.SPECIAL_EVALS, "exp", x.size)
+                opcounters.add(
+                    opcounters.SPECIAL_EVALS,
+                    "expn_cf",
+                    int(np.count_nonzero(large_x)),
+                )
                 recurrence_x = np.where(large_x, 0.0, x)
                 sqrt_x = np.sqrt(np.maximum(recurrence_x, 1.0e-300))
                 value = np.sqrt(np.pi) * sps.erfc(sqrt_x) / sqrt_x
@@ -854,6 +869,18 @@ def _require_o1_box_extent(box_extent):
         )
 
 
+def _selected_decay_root(zeta):
+    """The module's square-root branch contract for squared frequencies:
+    the decaying root on the Yukawa ray (``Re > 0``) and the outgoing
+    lower-half-plane limit on the negative (Helmholtz) ray (``-i k``).
+    This is a pointwise branch selection, shared by the remainder profile
+    and the damped-kernel entry point so they can never disagree."""
+    decay = np.complex128(np.sqrt(np.complex128(zeta)))
+    if decay.real < 0.0 or (decay.real == 0.0 and decay.imag > 0.0):
+        decay = -decay
+    return decay
+
+
 def _windowed_coefficients(scaled_zeta, p_star):
     """Balanced coefficients ``(-scaled_zeta)^m / m!``."""
     coefficients = np.empty(p_star, dtype=np.complex128)
@@ -900,9 +927,7 @@ def windowed_remainder_profile(dim, zeta, kernel_radial, window_scale, p_star):
 
     # Select the decaying Yukawa / outgoing Helmholtz square root.  On the
     # negative real axis the latter is the lower-half-plane limit, -i*k.
-    decay = np.sqrt(np.complex128(zeta))
-    if decay.real < 0.0 or (decay.real == 0.0 and decay.imag > 0.0):
-        decay = -decay
+    decay = _selected_decay_root(zeta)
     if dim == 2:
         origin_value = (
             -np.log(decay * np.sqrt(window_scale)) - 0.5 * _EULER_GAMMA
@@ -1135,6 +1160,9 @@ def _duffy_channel_entry_values(
                 xx = target[0] + dx
                 yy = target[1] + dy
                 radius = np.hypot(dx, dy)
+                opcounters.add(
+                    opcounters.SINGULAR_NODES, "duffy_radial", radius.size
+                )
                 common = (
                     _channel_profile_values(radial_profile, radius)
                     * (det * duffy_factor)
@@ -1208,6 +1236,9 @@ def _duffy_channel_entry_values(
                 ]
                 radius = np.sqrt(
                     sum(offsets[axis] ** 2 for axis in range(dim))
+                )
+                opcounters.add(
+                    opcounters.SINGULAR_NODES, "duffy_radial", radius.size
                 )
                 common = (
                     _channel_profile_values(radial_profile, radius)
@@ -1586,6 +1617,9 @@ def get_windowed_channel_table(
         chan_regular_order,
         chan_radial_order,
     )
+    opcounters.add(
+        opcounters.TABLE_ENTRIES, "windowed_channel", int(entry_values.size)
+    )
     # ``entry_ids`` comes from the same memoized invariant-entry info on the
     # same table object as ``expected_entry_ids``, so an equality check here
     # could never fire; the meaningful validation is the load-path one above
@@ -1695,6 +1729,7 @@ def _smooth_remainder_entry_values(
         radius = np.sqrt(
             sum((grids[axis] - target[axis]) ** 2 for axis in range(dim))
         )
+        opcounters.add(opcounters.SMOOTH_NODES, "tensor_gauss", radius.size)
         weighted_remainder = (
             np.asarray(remainder_radial(radius)) * weight_tensor
         )
@@ -1847,6 +1882,17 @@ def _assemble_windowed_for_zeta(
         values = values + contribution
     if not np.all(np.isfinite(values)):
         raise RuntimeError("windowed assembly produced non-finite entries")
+    # Recombination cost: the remainder entry seeds the accumulator and each
+    # of the p_star channels contributes one complex fused multiply-add per
+    # entry; the coefficients come from a p_star-step recurrence.
+    opcounters.add(
+        opcounters.RECOMBINATION_FLOPS,
+        "channel_fma",
+        p_star * int(entry_ids.size),
+    )
+    opcounters.add(
+        opcounters.RECOMBINATION_FLOPS, "coefficient_recurrence", p_star
+    )
 
     remainder_peak = (
         float(np.max(np.abs(remainder_values)))
@@ -1990,12 +2036,17 @@ NearFieldInteractionTable`
         if dim == 2:
 
             def kernel_radial(r):
-                return sps.k0(parameter * np.asarray(r)) / (2.0 * np.pi)
+                r = np.asarray(r)
+                opcounters.add(opcounters.KERNEL_EVALS, "k0", r.size)
+                opcounters.add(opcounters.SPECIAL_EVALS, "k0", r.size)
+                return sps.k0(parameter * r) / (2.0 * np.pi)
 
         else:
 
             def kernel_radial(r):
                 r = np.asarray(r)
+                opcounters.add(opcounters.KERNEL_EVALS, "exp", r.size)
+                opcounters.add(opcounters.SPECIAL_EVALS, "exp", r.size)
                 return np.exp(-parameter * r) / (4.0 * np.pi * r)
 
     elif kernel_type == "Helmholtz":
@@ -2004,12 +2055,17 @@ NearFieldInteractionTable`
         if dim == 2:
 
             def kernel_radial(r):
-                return 0.25j * sps.hankel1(0, parameter * np.asarray(r))
+                r = np.asarray(r)
+                opcounters.add(opcounters.KERNEL_EVALS, "hankel1", r.size)
+                opcounters.add(opcounters.SPECIAL_EVALS, "hankel1", r.size)
+                return 0.25j * sps.hankel1(0, parameter * r)
 
         else:
 
             def kernel_radial(r):
                 r = np.asarray(r)
+                opcounters.add(opcounters.KERNEL_EVALS, "exp", r.size)
+                opcounters.add(opcounters.SPECIAL_EVALS, "exp", r.size)
                 return np.exp(1j * parameter * r) / (4.0 * np.pi * r)
 
     else:
@@ -2037,6 +2093,116 @@ NearFieldInteractionTable`
     certificate["kernel_type"] = kernel_type
     certificate["parameter"] = parameter
     certificate["theta"] = theta
+    return table, certificate
+
+
+def damped_kernel_radial(dim, zeta):
+    """Radial kernel profile for a complex squared frequency ``zeta``,
+    with the module's square-root branch contract.
+
+    The selected root ``mu = sqrt(zeta)`` is the decaying branch
+    (``Re mu > 0``), continued to the outgoing lower-half-plane limit
+    ``mu = -i k`` on the negative real axis, exactly as in
+    :func:`windowed_remainder_profile` (both call the same selector).  The
+    kernel is
+
+    - 2D: ``K_0(mu r) / (2 pi)``, which on the negative ray equals the
+      outgoing Helmholtz kernel ``(i/4) H_0^(1)(k r)`` through the exact
+      continuation ``K_0(-i z) = (i pi / 2) H_0^(1)(z)``;
+    - 3D: ``exp(-mu r) / (4 pi r)``.
+
+    ``zeta`` must be finite and nonzero (this API does not define a
+    zero-frequency kernel normalization).
+
+    :returns: a vectorized complex-valued callable ``g(r)``.
+    """
+    dim = _require_dimension(dim)
+    import scipy.special as sps
+
+    zeta = complex(zeta)
+    if not np.isfinite(zeta.real) or not np.isfinite(zeta.imag):
+        raise ValueError("zeta must be finite")
+    if zeta == 0.0:
+        raise ValueError("zeta must be nonzero")
+    decay = _selected_decay_root(zeta)
+
+    if dim == 2:
+
+        def kernel_radial(r):
+            r = np.asarray(r)
+            opcounters.add(opcounters.KERNEL_EVALS, "kv0_complex", r.size)
+            opcounters.add(opcounters.SPECIAL_EVALS, "kv0_complex", r.size)
+            return sps.kv(
+                0, decay * np.asarray(r, dtype=np.complex128)
+            ) / (2.0 * np.pi)
+
+    else:
+
+        def kernel_radial(r):
+            r = np.asarray(r)
+            opcounters.add(opcounters.KERNEL_EVALS, "exp_complex", r.size)
+            opcounters.add(opcounters.SPECIAL_EVALS, "exp_complex", r.size)
+            return np.exp(-decay * r) / (4.0 * np.pi * r)
+
+    return kernel_radial
+
+
+def assemble_windowed_damped_table(
+    cache_path,
+    dim: int,
+    q_order: int,
+    zeta,
+    *,
+    source_box_level: int = 0,
+    root_extent: float = 2.0,
+    window_theta: float = 16.0,
+    p_star: int = 6,
+    smooth_quad_order=None,
+    max_condition: float = 1.0e6,
+    chan_regular_order: int | None = None,
+    chan_radial_order: int | None = None,
+    force_channel_recompute: bool = False,
+):
+    """Assemble a fixed-parameter table at a damped complex frequency.
+
+    ``zeta`` is the complex squared frequency; the supported coverage is the
+    punctured closed disk ``0 < |zeta| <= (Theta / b)**2`` (``b`` the
+    source-box extent), uniformly over the phase — the conditioning
+    certificate depends on ``|zeta|`` only.  The kernel profile is
+    :func:`damped_kernel_radial`, so the branch convention is pointwise
+    consistent with the windowed remainder: the Yukawa ray (``zeta > 0``)
+    reproduces :func:`assemble_windowed_parameterized_table` with
+    ``kernel_type="Yukawa"`` and the negative ray (``zeta < 0``) the
+    outgoing Helmholtz assembly, both through the identical channel family
+    (the channels are real and depend only on the declaration ``Theta``).
+    ``zeta = 0`` is rejected.
+
+    :returns: ``(table, certificate)`` with a complex128 table; the
+        certificate additionally records ``zeta_phase_fraction``
+        (``arg(zeta) / pi`` in ``(-1, 1]``).
+    """
+    kernel_radial = damped_kernel_radial(dim, zeta)
+    table, certificate = _assemble_windowed_for_zeta(
+        cache_path,
+        dim,
+        q_order,
+        complex(zeta),
+        kernel_radial,
+        source_box_level=source_box_level,
+        root_extent=root_extent,
+        window_theta=window_theta,
+        p_star=p_star,
+        smooth_quad_order=smooth_quad_order,
+        max_condition=max_condition,
+        chan_regular_order=chan_regular_order,
+        chan_radial_order=chan_radial_order,
+        force_channel_recompute=force_channel_recompute,
+        result_dtype=np.complex128,
+    )
+    certificate["kernel_type"] = "Damped"
+    certificate["zeta_phase_fraction"] = float(
+        np.angle(complex(zeta)) / np.pi
+    )
     return table, certificate
 
 # }}}
