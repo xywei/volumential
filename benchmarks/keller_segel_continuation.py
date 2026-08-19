@@ -69,6 +69,7 @@ from split_parameter_sweep import (  # noqa: E402
 STEP_FIELDS = (
     "case_id",
     "mode",
+    "strategy",
     "direct_only",
     "step",
     "time",
@@ -106,11 +107,22 @@ STEP_FIELDS = (
     "cumulative_direct_strategy_s",
     "cumulative_rke_strategy_s",
     "strategy_cost_gap_direct_minus_rke_s",
+    # windowed-continuation (E4) step columns; empty for other strategies
+    "binding_constraint",
+    "checkpoint_landed",
+    "windowed_status",
+    "windowed_condition_number",
+    "windowed_assemble_s",
+    "windowed_register_s",
+    "windowed_table_load_s",
+    "windowed_wrangler_build_s",
+    "windowed_solve_s",
 )
 
 SUMMARY_FIELDS = (
     "case_id",
     "mode",
+    "strategy",
     "direct_only",
     "mass_factor",
     "mass",
@@ -183,11 +195,38 @@ SUMMARY_FIELDS = (
     "radial_gradient_outward_rel_l2",
     "radial_gradient_preflight_pass",
     "strategy_cost_definition",
+    # windowed-continuation (E4) summary columns; empty for other strategies
+    "window_theta",
+    "windowed_p_star",
+    "min_theta_seen",
+    "dt_min",
+    "dt_max_seen",
+    "lambda_quantization",
+    "binding_constraint_histogram_json",
+    "theta_floor_bound_steps",
+    "go_no_go_binding_verdict",
+    "windowed_channel_build_s",
+    "windowed_assemble_total_s",
+    "windowed_register_total_s",
+    "windowed_table_load_total_s",
+    "windowed_wrangler_build_total_s",
+    "windowed_solve_total_s",
+    "windowed_strategy_total_s",
+    "windowed_mean_provisioning_s_per_step",
+    "n_windowed_refused",
+    "n_windowed_failed",
+    "checkpoint_times_json",
+    "checkpoint_agreement_json",
+    "max_checkpoint_rel_l2",
+    "baseline_case_id",
 )
 
 UNSCREENED_REFERENCE_MASS = 8.0 * math.pi
 DEFAULT_LAMBDA_LADDER_RATIO = 2.0 ** 0.125
 RADIAL_PREFLIGHT_MAX_REL_L2 = 5.0e-3
+DEFAULT_WINDOW_THETA = 16.0
+DEFAULT_WINDOWED_P_STAR = 6
+STRATEGIES = ("paired", "direct", "windowed")
 
 
 # {{{ initial data and local differentiation
@@ -571,6 +610,124 @@ def _get_direct_yukawa_table_timed(
     summary = _summarize_table_get_timings(records)
     return table, float(summary["build_s"])
 
+
+def _prepare_windowed_channel_family(
+        cache_path, q_order, level, root_extent, window_theta, p_star):
+    """One-time build (or reload) of the parameter-independent windowed
+    channel family; every continuation lambda reuses these tables."""
+    from volumential.rke_table_assembly import get_windowed_channel_table
+
+    start = time.perf_counter()
+    for m in range(p_star):
+        get_windowed_channel_table(
+            cache_path,
+            2,
+            q_order,
+            m,
+            source_box_level=int(level),
+            root_extent=float(root_extent),
+            window_theta=float(window_theta),
+        )
+    return time.perf_counter() - start
+
+
+def _provision_windowed_yukawa_table(
+        queue, family_cache_path, registered_cache_path, q_order, lam, level,
+        root_extent, window_theta, p_star):
+    """Offline-assemble the fixed-``lam`` table from the windowed channel
+    family, register it under the standard table-manager slot, and load it
+    back through the ordinary ``get_table`` path (pure cache hit), so the
+    solve consumes it exactly like a direct-built table.
+
+    Returns ``(table_or_None, info)`` where ``info['status']`` follows the
+    ``ok`` / ``refused`` / ``failed`` taxonomy (``refused`` is the windowed
+    certificate declining the parameter; anything unexpected is
+    ``failed``).
+    """
+    from volumential.rke_table_assembly import (
+        RKEWindowConditioningError,
+        RKEWindowCoverageError,
+        assemble_windowed_parameterized_table,
+    )
+    from volumential.table_manager import NearFieldInteractionTableManager
+
+    info: dict[str, Any] = {
+        "status": "ok",
+        "detail": "",
+        "assemble_s": 0.0,
+        "register_s": 0.0,
+        "load_s": 0.0,
+        "condition_number": "",
+    }
+    start = time.perf_counter()
+    try:
+        table, certificate = assemble_windowed_parameterized_table(
+            family_cache_path,
+            2,
+            "Yukawa",
+            q_order,
+            float(lam),
+            source_box_level=int(level),
+            root_extent=float(root_extent),
+            window_theta=float(window_theta),
+            p_star=int(p_star),
+        )
+    except (RKEWindowCoverageError, RKEWindowConditioningError) as exc:
+        info["status"] = "refused"
+        info["detail"] = f"{type(exc).__name__}: {exc}"
+        info["assemble_s"] = time.perf_counter() - start
+        return None, info
+    except (ValueError, RuntimeError, NotImplementedError) as exc:
+        info["status"] = "failed"
+        info["detail"] = f"{type(exc).__name__}: {exc}"
+        info["assemble_s"] = time.perf_counter() - start
+        return None, info
+    info["assemble_s"] = time.perf_counter() - start
+    info["condition_number"] = float(certificate["condition_number"])
+
+    register_start = time.perf_counter()
+    with NearFieldInteractionTableManager(
+        str(registered_cache_path), root_extent=float(root_extent),
+        queue=queue,
+    ) as table_manager:
+        table_manager.register_external_table(
+            2,
+            "Yukawa",
+            q_order,
+            table,
+            source_box_level=int(level),
+            provenance={
+                "kind": "windowed_rke_assembly",
+                "window_theta": float(window_theta),
+                "p_star": int(p_star),
+                "condition_number": float(certificate["condition_number"]),
+            },
+            lam=float(lam),
+        )
+    info["register_s"] = time.perf_counter() - register_start
+
+    load_start = time.perf_counter()
+    with NearFieldInteractionTableManager(
+        str(registered_cache_path), root_extent=float(root_extent),
+        queue=queue,
+    ) as table_manager:
+        loaded_table, is_recomputed = table_manager.get_table(
+            2,
+            "Yukawa",
+            q_order,
+            source_box_level=int(level),
+            queue=queue,
+            lam=float(lam),
+        )
+    if is_recomputed:
+        info["status"] = "failed"
+        info["detail"] = (
+            "registered windowed table did not load as a pure cache hit"
+        )
+        return None, info
+    info["load_s"] = time.perf_counter() - load_start
+    return loaded_table, info
+
 # }}}
 
 
@@ -735,7 +892,31 @@ def run_case(
     rke_beta_mode: str,
     direct_only: bool,
     save_fields: Path | None,
+    strategy: str = "paired",
+    window_theta: float = DEFAULT_WINDOW_THETA,
+    windowed_p_star: int = DEFAULT_WINDOWED_P_STAR,
+    checkpoint_times: list[float] | None = None,
 ):
+    if strategy not in STRATEGIES:
+        raise ValueError(f"unknown strategy: {strategy}")
+    if direct_only and strategy == "paired":
+        strategy = "direct"
+    # "direct_only" keeps its historical CSV meaning: no online-RKE shadow
+    # runs alongside the state-advancing solve.
+    direct_only = strategy != "paired"
+    windowed = strategy == "windowed"
+
+    if checkpoint_times is None:
+        checkpoint_times = [t_end]
+    checkpoint_times = sorted(float(value) for value in checkpoint_times)
+    if not checkpoint_times or any(
+        value <= 0.0 or value > t_end * (1.0 + 1e-12)
+        for value in checkpoint_times
+    ):
+        raise ValueError("checkpoint times must lie in (0, t_end]")
+    if abs(checkpoint_times[-1] - t_end) > 1e-12 * t_end:
+        checkpoint_times.append(t_end)
+
     q_points, q_weights, tree, traversal = _build_ks_geometry(
         ctx, queue, q_order, nlevels, root_extent
     )
@@ -781,13 +962,23 @@ def run_case(
     )
 
     # dt floor from the resolved-parameter regime: theta = lam * h <= theta_max
-    dt_theta_floor = (leaf_extent / theta_max) ** 2
+    # (direct/paired strategies).  The windowed strategy replaces this with
+    # the certificate bound theta = lam * h <= Theta, i.e. an unquantized
+    # lambda with a far smaller dt floor.
+    if windowed:
+        dt_theta_floor = (leaf_extent / window_theta) ** 2
+    else:
+        dt_theta_floor = (leaf_extent / theta_max) ** 2
     node_gap = transport.minimum_node_gap
 
     cache_dir.mkdir(parents=True, exist_ok=True)
     chemo_cache = cache_dir / f"ks-chemo-{case_id}.sqlite"
     rke_cache = cache_dir / f"ks-rke-{case_id}.sqlite"
-    for path in (chemo_cache, rke_cache):
+    windowed_family_cache = cache_dir / f"ks-windowed-channels-{case_id}.sqlite"
+    windowed_registered_cache = (
+        cache_dir / f"ks-windowed-registered-{case_id}.sqlite"
+    )
+    for path in (chemo_cache, rke_cache, windowed_registered_cache):
         _clear_sqlite_cache(path)
 
     print(f"[{case_id}] building fixed-alpha chemoattractant tables", flush=True)
@@ -803,6 +994,22 @@ def run_case(
     chemo_wrangler = _build_chemo_wrangler(
         ctx, queue, traversal, chemo_tables, q_order, fmm_order, lambda_alpha
     )
+
+    windowed_channel_build_s = 0.0
+    if windowed:
+        print(
+            f"[{case_id}] building windowed channel family "
+            f"(Theta={window_theta:g}, p*={windowed_p_star})",
+            flush=True,
+        )
+        windowed_channel_build_s = _prepare_windowed_channel_family(
+            windowed_family_cache,
+            q_order,
+            leaf_level,
+            root_extent,
+            window_theta,
+            windowed_p_star,
+        )
 
     rke_base_table = None
     split_term_tables = None
@@ -866,6 +1073,23 @@ def run_case(
     step_rows = []
     field_snapshots = {"step0": rho.copy()}
 
+    min_theta_seen = math.inf
+    dt_min_seen = math.inf
+    dt_max_seen = 0.0
+    binding_histogram: dict[str, int] = {}
+    windowed_totals = {
+        "assemble_s": 0.0,
+        "register_s": 0.0,
+        "load_s": 0.0,
+        "wrangler_build_s": 0.0,
+        "solve_s": 0.0,
+    }
+    n_windowed_refused = 0
+    n_windowed_failed = 0
+    windowed_strategy_total_s = windowed_channel_build_s
+    checkpoint_index = 0
+    checkpoint_fields: list[tuple[float, np.ndarray]] = []
+
     t = 0.0
     stop_reason = "t_end"
     step = 0
@@ -901,7 +1125,13 @@ def run_case(
         u_max = float(np.max(np.hypot(dcdx, dcdy)))
         dt_cfl = cfl * node_gap / max(u_max, 1e-12)
         if dt_cfl < dt_theta_floor:
-            stop_reason = "theta_regime_exit"
+            stop_reason = (
+                "windowed_theta_floor_exit" if windowed
+                else "theta_regime_exit"
+            )
+            binding_histogram["theta_floor"] = (
+                binding_histogram.get("theta_floor", 0) + 1
+            )
             print(
                 f"[{case_id}] step {step}: CFL dt {dt_cfl:.3e} below theta "
                 f"floor {dt_theta_floor:.3e}; stopping (reported, not "
@@ -910,25 +1140,68 @@ def run_case(
             )
             break
 
-        step_plan = _plan_time_step(
-            t_end - t,
-            min(dt_cfl, dt_max),
-            dt_theta_floor,
-            ladder_ratio,
-        )
-        if step_plan is None:
-            stop_reason = "endpoint_plan_exit"
-            print(
-                f"[{case_id}] step {step}: no step in "
-                f"[{dt_theta_floor:.3e}, {min(dt_cfl, dt_max):.3e}] can "
-                f"reach t_end={t_end:.6g}; stopping",
-                flush=True,
+        next_checkpoint = checkpoint_times[checkpoint_index]
+        remaining = next_checkpoint - t
+        binding_constraint = ""
+        if windowed:
+            # Unquantized lambda: every admissible dt is allowed; the only
+            # parameter-side bound is the windowed certificate theta <= Theta,
+            # i.e. dt >= (h / Theta)^2, checked above and re-checked below.
+            dt_cap = min(dt_cfl, dt_max)
+            endpoint_adjusted = False
+            if remaining <= dt_cap * (1.0 + 1.0e-12):
+                dt = remaining
+                terminal_step = True
+                binding_constraint = "checkpoint"
+            elif remaining - dt_cap < dt_theta_floor:
+                # Never strand a remainder below the certificate floor.
+                dt = 0.5 * remaining
+                terminal_step = False
+                binding_constraint = "checkpoint_split"
+                endpoint_adjusted = True
+            else:
+                dt = dt_cap
+                terminal_step = False
+                binding_constraint = (
+                    "cfl" if dt_cfl <= dt_max else "dt_max"
+                )
+            if dt < dt_theta_floor * (1.0 - 1.0e-12):
+                stop_reason = "windowed_theta_floor_exit"
+                binding_constraint = "theta_floor"
+                binding_histogram["theta_floor"] = (
+                    binding_histogram.get("theta_floor", 0) + 1
+                )
+                print(
+                    f"[{case_id}] step {step}: dt {dt:.3e} below the "
+                    f"windowed certificate floor {dt_theta_floor:.3e} "
+                    f"(Theta={window_theta:g}); stopping",
+                    flush=True,
+                )
+                break
+            binding_histogram[binding_constraint] = (
+                binding_histogram.get(binding_constraint, 0) + 1
             )
-            break
-        dt, terminal_step, endpoint_adjusted = step_plan
+        else:
+            step_plan = _plan_time_step(
+                remaining,
+                min(dt_cfl, dt_max),
+                dt_theta_floor,
+                ladder_ratio,
+            )
+            if step_plan is None:
+                stop_reason = "endpoint_plan_exit"
+                print(
+                    f"[{case_id}] step {step}: no step in "
+                    f"[{dt_theta_floor:.3e}, {min(dt_cfl, dt_max):.3e}] can "
+                    f"reach the next checkpoint {next_checkpoint:.6g}; "
+                    "stopping",
+                    flush=True,
+                )
+                break
+            dt, terminal_step, endpoint_adjusted = step_plan
         lam = 1.0 / math.sqrt(dt)
         theta = lam * leaf_extent
-        if theta > theta_max * (1.0 + 1.0e-14):
+        if not windowed and theta > theta_max * (1.0 + 1.0e-14):
             stop_reason = (
                 "terminal_theta_regime_exit" if terminal_step
                 else "theta_regime_exit"
@@ -939,7 +1212,19 @@ def run_case(
                 flush=True,
             )
             break
+        if windowed and theta > window_theta * (1.0 + 1.0e-12):
+            stop_reason = "windowed_theta_floor_exit"
+            print(
+                f"[{case_id}] step {step}: lambda={lam:.6g} gives "
+                f"theta={theta:.3f} above the declaration "
+                f"Theta={window_theta:g}; stopping",
+                flush=True,
+            )
+            break
         max_theta_seen = max(max_theta_seen, theta)
+        min_theta_seen = min(min_theta_seen, theta)
+        dt_min_seen = min(dt_min_seen, dt)
+        dt_max_seen = max(dt_max_seen, dt)
         new_lambda = lam not in lambdas_seen
         lambdas_seen.add(lam)
 
@@ -957,10 +1242,71 @@ def run_case(
         ) / mass_initial
         rhs = transported / dt
 
+        # windowed strategy (E4): per-step offline assembly at the exact
+        # (unquantized) lambda, consumed through the standard table-manager
+        # path; the state advances through this table.
+        windowed_info = None
+        windowed_wrangler = None
+        windowed_wrangler_build_s = 0.0
+        if windowed:
+            windowed_table, windowed_info = _provision_windowed_yukawa_table(
+                queue,
+                windowed_family_cache,
+                windowed_registered_cache,
+                q_order,
+                lam,
+                leaf_level,
+                root_extent,
+                window_theta,
+                windowed_p_star,
+            )
+            if windowed_info["status"] != "ok":
+                if windowed_info["status"] == "refused":
+                    n_windowed_refused += 1
+                    stop_reason = "windowed_certificate_refusal"
+                else:
+                    n_windowed_failed += 1
+                    stop_reason = "windowed_provisioning_failed"
+                admissible = False
+                windowed_strategy_total_s += (
+                    windowed_info["assemble_s"]
+                    + windowed_info["register_s"]
+                    + windowed_info["load_s"]
+                )
+                print(
+                    f"[{case_id}] step {step}: windowed table provisioning "
+                    f"{windowed_info['status']} at lambda={lam:.6g} "
+                    f"(theta={theta:.3f}): {windowed_info['detail']}; "
+                    "stopping",
+                    flush=True,
+                )
+                break
+            windowed_totals["assemble_s"] += windowed_info["assemble_s"]
+            windowed_totals["register_s"] += windowed_info["register_s"]
+            windowed_totals["load_s"] += windowed_info["load_s"]
+            wrangler_start = time.perf_counter()
+            windowed_wrangler, _, _ = _build_path(
+                ctx=ctx,
+                queue=queue,
+                traversal=traversal,
+                q_order=q_order,
+                fmm_order=fmm_order,
+                kernel="Yukawa",
+                parameter=lam,
+                table=windowed_table,
+                source_weights=q_weights,
+                q_points=q_points,
+                source_values_host=rho,
+                split=False,
+                split_order=split_order,
+            )
+            windowed_wrangler_build_s = time.perf_counter() - wrangler_start
+            windowed_totals["wrangler_build_s"] += windowed_wrangler_build_s
+
         # direct strategy: per-lambda table (built once per ladder value)
         direct_table_build_s = 0.0
         direct_wrangler_build_s = 0.0
-        if lam not in direct_wranglers:
+        if not windowed and lam not in direct_wranglers:
             lam_tag = f"{lam:.17g}".replace(".", "p").replace("-", "m")
             direct_cache = cache_dir / (
                 f"ks-direct-{case_id}-lam{lam_tag}.sqlite"
@@ -1025,7 +1371,17 @@ def run_case(
         strategy_order = "direct-only"
         rho_rke = None
         rke_solve_s = 0.0
-        if direct_only:
+        windowed_solve_s = 0.0
+        if windowed:
+            strategy_order = "windowed"
+            (rho_windowed,), windowed_solve_s = _drive(
+                queue, traversal, windowed_wrangler, weighted, source_vals
+            )
+            windowed_totals["solve_s"] += windowed_solve_s
+            # downstream state advance and diagnostics read rho_direct
+            rho_direct = rho_windowed
+            direct_solve_s = 0.0
+        elif direct_only:
             (rho_direct,), direct_solve_s = _drive(
                 queue, traversal, direct_wranglers[lam], weighted, source_vals
             )
@@ -1058,10 +1414,16 @@ def run_case(
             )
         max_mismatch = max(max_mismatch, mismatch)
 
-        # advance with the direct solution
+        # advance the state (the windowed solution when the windowed
+        # strategy is active, the direct solution otherwise)
         rho = rho_direct
-        t = t_end if terminal_step else t + dt
+        landed_checkpoint = terminal_step
+        t = next_checkpoint if terminal_step else t + dt
         step += 1
+        if landed_checkpoint:
+            checkpoint_fields.append((t, rho.copy()))
+            field_snapshots[f"checkpoint{checkpoint_index}"] = rho.copy()
+            checkpoint_index += 1
 
         direct_step_s = (
             direct_table_build_s + direct_wrangler_build_s + direct_solve_s
@@ -1069,6 +1431,14 @@ def run_case(
         rke_step_s = rke_wrangler_build_s + rke_solve_s
         direct_strategy_total_s += direct_step_s
         rke_strategy_total_s += rke_step_s
+        if windowed:
+            windowed_strategy_total_s += (
+                windowed_info["assemble_s"]
+                + windowed_info["register_s"]
+                + windowed_info["load_s"]
+                + windowed_wrangler_build_s
+                + windowed_solve_s
+            )
         cost_gap = direct_strategy_total_s - rke_strategy_total_s
         if not direct_only and cost_gap * previous_cost_gap < 0.0:
             direction = (
@@ -1125,6 +1495,7 @@ def run_case(
             {
                 "case_id": case_id,
                 "mode": mode,
+                "strategy": strategy,
                 "direct_only": int(direct_only),
                 "step": step,
                 "time": t,
@@ -1144,9 +1515,13 @@ def run_case(
                 "new_lambda": int(new_lambda),
                 "strategy_order": strategy_order,
                 "chemo_solve_s": chemo_solve_s,
-                "direct_table_build_s": direct_table_build_s,
-                "direct_wrangler_build_s": direct_wrangler_build_s,
-                "direct_solve_s": direct_solve_s,
+                "direct_table_build_s": (
+                    "" if windowed else direct_table_build_s
+                ),
+                "direct_wrangler_build_s": (
+                    "" if windowed else direct_wrangler_build_s
+                ),
+                "direct_solve_s": "" if windowed else direct_solve_s,
                 "rke_wrangler_build_s": (
                     "" if direct_only else rke_wrangler_build_s
                 ),
@@ -1154,12 +1529,37 @@ def run_case(
                 "rke_vs_direct_weighted_rel_l2": (
                     "" if direct_only else mismatch
                 ),
-                "cumulative_direct_strategy_s": direct_strategy_total_s,
+                "cumulative_direct_strategy_s": (
+                    "" if windowed else direct_strategy_total_s
+                ),
                 "cumulative_rke_strategy_s": (
                     "" if direct_only else rke_strategy_total_s
                 ),
                 "strategy_cost_gap_direct_minus_rke_s": (
                     "" if direct_only else cost_gap
+                ),
+                "binding_constraint": binding_constraint,
+                "checkpoint_landed": int(landed_checkpoint),
+                "windowed_status": (
+                    windowed_info["status"] if windowed else ""
+                ),
+                "windowed_condition_number": (
+                    windowed_info["condition_number"] if windowed else ""
+                ),
+                "windowed_assemble_s": (
+                    windowed_info["assemble_s"] if windowed else ""
+                ),
+                "windowed_register_s": (
+                    windowed_info["register_s"] if windowed else ""
+                ),
+                "windowed_table_load_s": (
+                    windowed_info["load_s"] if windowed else ""
+                ),
+                "windowed_wrangler_build_s": (
+                    windowed_wrangler_build_s if windowed else ""
+                ),
+                "windowed_solve_s": (
+                    windowed_solve_s if windowed else ""
                 ),
             }
         )
@@ -1192,6 +1592,11 @@ def run_case(
     else:
         if t < t_end and step >= max_steps:
             stop_reason = "max_steps"
+
+    checkpoint_data = {
+        "checkpoints": checkpoint_fields,
+        "weights": weights_host,
+    }
 
     field_snapshots["final"] = rho.copy()
     if save_fields is not None:
@@ -1242,9 +1647,33 @@ def run_case(
             "outward_rel_l2": math.nan,
             "pass": False,
         }
+    if windowed:
+        theta_floor_bound_steps = binding_histogram.get("theta_floor", 0)
+        if theta_floor_bound_steps:
+            binding_verdict = "theta_floor_binds"
+        elif binding_histogram.get("cfl", 0):
+            binding_verdict = (
+                "cfl_cap_binds_step_size:constraint_relief_only_"
+                "no_measured_step_size_gain"
+            )
+        elif binding_histogram.get("dt_max", 0):
+            binding_verdict = (
+                "dt_max_cap_binds_step_size:constraint_relief_only_"
+                "no_measured_step_size_gain"
+            )
+        else:
+            binding_verdict = "checkpoint_landing_bound_only"
+        windowed_provisioning_total_s = (
+            windowed_totals["assemble_s"]
+            + windowed_totals["register_s"]
+            + windowed_totals["load_s"]
+            + windowed_totals["wrangler_build_s"]
+        )
+
     summary_row = {
         "case_id": case_id,
         "mode": mode,
+        "strategy": strategy,
         "direct_only": int(direct_only),
         "mass_factor": mass_factor,
         "mass": mass,
@@ -1316,9 +1745,13 @@ def run_case(
         "lambda_max": max(lambdas_seen) if lambdas_seen else "",
         "n_distinct_lambdas": len(lambdas_seen),
         "rke_channel_build_s": "" if direct_only else rke_channel_build_s,
-        "direct_table_build_total_s": direct_table_build_total_s,
+        "direct_table_build_total_s": (
+            "" if windowed else direct_table_build_total_s
+        ),
         "chemo_solve_total_s": chemo_solve_total_s,
-        "direct_strategy_total_s": direct_strategy_total_s,
+        "direct_strategy_total_s": (
+            "" if windowed else direct_strategy_total_s
+        ),
         "rke_strategy_total_s": "" if direct_only else rke_strategy_total_s,
         "strategy_crossings_json": (
             "" if direct_only else json.dumps(
@@ -1344,13 +1777,78 @@ def run_case(
         "radial_gradient_outward_rel_l2": radial_preflight["outward_rel_l2"],
         "radial_gradient_preflight_pass": int(radial_preflight["pass"]),
         "strategy_cost_definition": (
-            "direct=per-lambda table build+wrangler build+solve;"
-            "rke=one channel family build+per-lambda wrangler build+solve;"
-            "shared fixed-alpha chemoattractant pass, conservative transport,"
-            "diagnostics, and output excluded from both;solve order alternates"
+            (
+                "windowed=one channel family build+per-step offline assembly"
+                "+registration+standard cache load+wrangler build+solve;"
+                "state advances through the windowed-assembled tables;"
+                "shared fixed-alpha chemoattractant pass, conservative "
+                "transport, diagnostics, and output excluded"
+            )
+            if windowed
+            else (
+                "direct=per-lambda table build+wrangler build+solve;"
+                "rke=one channel family build+per-lambda wrangler build+solve;"
+                "shared fixed-alpha chemoattractant pass, conservative "
+                "transport,"
+                "diagnostics, and output excluded from both;"
+                "solve order alternates"
+            )
         ),
+        "window_theta": window_theta if windowed else "",
+        "windowed_p_star": windowed_p_star if windowed else "",
+        "min_theta_seen": (
+            min_theta_seen if math.isfinite(min_theta_seen) else ""
+        ),
+        "dt_min": dt_min_seen if math.isfinite(dt_min_seen) else "",
+        "dt_max_seen": dt_max_seen if dt_max_seen > 0.0 else "",
+        "lambda_quantization": (
+            "continuous_unquantized" if windowed
+            else f"geometric_ladder_ratio_{ladder_ratio:.10g}"
+        ),
+        "binding_constraint_histogram_json": (
+            json.dumps(binding_histogram, sort_keys=True,
+                       separators=(",", ":"))
+            if windowed else ""
+        ),
+        "theta_floor_bound_steps": (
+            theta_floor_bound_steps if windowed else ""
+        ),
+        "go_no_go_binding_verdict": binding_verdict if windowed else "",
+        "windowed_channel_build_s": (
+            windowed_channel_build_s if windowed else ""
+        ),
+        "windowed_assemble_total_s": (
+            windowed_totals["assemble_s"] if windowed else ""
+        ),
+        "windowed_register_total_s": (
+            windowed_totals["register_s"] if windowed else ""
+        ),
+        "windowed_table_load_total_s": (
+            windowed_totals["load_s"] if windowed else ""
+        ),
+        "windowed_wrangler_build_total_s": (
+            windowed_totals["wrangler_build_s"] if windowed else ""
+        ),
+        "windowed_solve_total_s": (
+            windowed_totals["solve_s"] if windowed else ""
+        ),
+        "windowed_strategy_total_s": (
+            windowed_strategy_total_s if windowed else ""
+        ),
+        "windowed_mean_provisioning_s_per_step": (
+            (windowed_provisioning_total_s / max(step, 1))
+            if windowed else ""
+        ),
+        "n_windowed_refused": n_windowed_refused if windowed else "",
+        "n_windowed_failed": n_windowed_failed if windowed else "",
+        "checkpoint_times_json": json.dumps(
+            checkpoint_times, separators=(",", ":")
+        ),
+        "checkpoint_agreement_json": "",
+        "max_checkpoint_rel_l2": "",
+        "baseline_case_id": "",
     }
-    return step_rows, summary_row
+    return step_rows, summary_row, checkpoint_data
 
 
 def _write_csv(path: Path, fieldnames, rows) -> None:
@@ -1359,6 +1857,102 @@ def _write_csv(path: Path, fieldnames, rows) -> None:
         writer = csv.DictWriter(outfile, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
+
+
+CHECKPOINT_FIELDS = (
+    "case_id",
+    "baseline_case_id",
+    "mode",
+    "checkpoint_time",
+    "windowed_vs_direct_weighted_rel_l2",
+    "baseline_mass",
+    "windowed_mass",
+    "baseline_rho_max",
+    "windowed_rho_max",
+)
+
+
+def _compare_checkpoints(
+    baseline_data: dict[str, Any],
+    windowed_data: dict[str, Any],
+    *,
+    case_id: str,
+    baseline_case_id: str,
+    mode: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, float]]]:
+    """Weighted relative L2 agreement of the windowed trajectory against the
+    resolved direct baseline at the checkpoints both runs reached."""
+    weights = np.asarray(baseline_data["weights"])
+    baseline_by_time = {
+        round(t, 14): field for t, field in baseline_data["checkpoints"]
+    }
+    rows = []
+    agreement = []
+    for t, windowed_field in windowed_data["checkpoints"]:
+        baseline_field = baseline_by_time.get(round(t, 14))
+        if baseline_field is None:
+            continue
+        difference = np.asarray(windowed_field) - np.asarray(baseline_field)
+        reference = max(
+            float(np.sqrt(np.sum(weights * np.asarray(baseline_field) ** 2))),
+            1e-300,
+        )
+        rel_l2 = float(np.sqrt(np.sum(weights * difference**2))) / reference
+        rows.append(
+            {
+                "case_id": case_id,
+                "baseline_case_id": baseline_case_id,
+                "mode": mode,
+                "checkpoint_time": t,
+                "windowed_vs_direct_weighted_rel_l2": rel_l2,
+                "baseline_mass": float(np.sum(weights * baseline_field)),
+                "windowed_mass": float(np.sum(weights * windowed_field)),
+                "baseline_rho_max": float(np.max(baseline_field)),
+                "windowed_rho_max": float(np.max(windowed_field)),
+            }
+        )
+        agreement.append({"time": t, "rel_l2": rel_l2})
+    return rows, agreement
+
+
+def _apply_pair_outcome(summary_rows: list[dict[str, Any]]) -> None:
+    """Sub/supercritical pair verdict, applied per strategy group."""
+    by_strategy: dict[str, list[dict[str, Any]]] = {}
+    for row in summary_rows:
+        by_strategy.setdefault(row["strategy"], []).append(row)
+    for group in by_strategy.values():
+        if len(group) != 2:
+            continue
+        subcritical = next(
+            (
+                row for row in group
+                if row["regime"] == "below_8pi_reference"
+            ),
+            None,
+        )
+        supercritical = next(
+            (
+                row for row in group
+                if row["regime"] == "above_8pi_reference"
+            ),
+            None,
+        )
+        if subcritical is None or supercritical is None:
+            continue
+        separation = (
+            subcritical["second_moment_ratio"]
+            - supercritical["second_moment_ratio"]
+        )
+        pair_pass = (
+            bool(subcritical["admissible"])
+            and bool(supercritical["admissible"])
+            and bool(subcritical["trend_criterion_pass"])
+            and bool(supercritical["trend_criterion_pass"])
+            and separation >= 0.06
+        )
+        for row in group:
+            row["pair_outcome_pass"] = int(pair_pass)
+            row["pair_moment_ratio_separation"] = separation
 
 
 def main() -> int:
@@ -1404,6 +1998,34 @@ def main() -> int:
         "--rke-beta-mode", choices=("table", "p2p"), default="table"
     )
     parser.add_argument("--direct-only", action="store_true")
+    parser.add_argument(
+        "--strategy",
+        choices=STRATEGIES,
+        default="paired",
+        help=(
+            "'paired' (state via direct, online-RKE shadow), 'direct' "
+            "(no shadow), or 'windowed' (E4: state advances through "
+            "windowed offline-assembled tables at an unquantized lambda, "
+            "with a direct-strategy baseline run at its quantized ladder "
+            "for comparison at shared checkpoints)"
+        ),
+    )
+    parser.add_argument(
+        "--window-theta", type=float, default=DEFAULT_WINDOW_THETA,
+        help="declared window Theta certifying theta = lambda h <= Theta",
+    )
+    parser.add_argument(
+        "--windowed-p-star", type=int, default=DEFAULT_WINDOWED_P_STAR,
+    )
+    parser.add_argument(
+        "--checkpoint-fractions",
+        help=(
+            "comma-separated fractions of t_end at which trajectories are "
+            "forced to land (and, for --strategy windowed, compared); "
+            "default '1.0' in smoke and '0.25,0.5,0.75,1.0' in full mode "
+            "for the windowed strategy, '1.0' otherwise"
+        ),
+    )
     parser.add_argument("--t-end", type=float)
     parser.add_argument("--max-steps", type=int)
     parser.add_argument("--blowup-factor", type=float, default=10.0)
@@ -1441,22 +2063,45 @@ def main() -> int:
         3 if smoke else 100
     )
 
+    strategy = args.strategy
+    if args.direct_only:
+        if strategy == "windowed":
+            parser.error("--direct-only conflicts with --strategy windowed")
+        strategy = "direct"
+
+    if args.checkpoint_fractions is not None:
+        fractions = [
+            float(part.strip())
+            for part in args.checkpoint_fractions.split(",")
+            if part.strip()
+        ]
+        if not fractions or any(
+            not (0.0 < fraction <= 1.0) for fraction in fractions
+        ):
+            parser.error("checkpoint fractions must lie in (0, 1]")
+        if len(set(fractions)) != len(fractions):
+            parser.error("checkpoint fractions must be unique")
+    elif strategy == "windowed" and not smoke:
+        fractions = [0.25, 0.5, 0.75, 1.0]
+    else:
+        fractions = [1.0]
+    checkpoint_times = sorted(fraction * t_end for fraction in fractions)
+
     device = _select_opencl_device(cl, args.backend)
     ctx = cl.Context([device])
     queue = cl.CommandQueue(ctx)
 
     step_rows = []
     summary_rows = []
+    checkpoint_rows = []
+    windowed_failure_messages = []
     for mass_factor in args.mass_factors:
         case_id = (
             f"ks2d-{args.initial_profile}-q{q_order}-l{nlevels}"
             f"-a{args.alpha:g}-m{mass_factor:g}"
         )
-        case_steps, case_summary = run_case(
-            ctx,
-            queue,
+        shared_case_kwargs = dict(
             mode=args.mode,
-            case_id=case_id,
             mass_factor=mass_factor,
             cache_dir=args.cache_dir,
             q_order=q_order,
@@ -1478,51 +2123,110 @@ def main() -> int:
             core_radius=args.core_radius,
             ladder_ratio=args.lambda_ladder_ratio,
             rke_beta_mode=args.rke_beta_mode,
-            direct_only=args.direct_only,
-            save_fields=(args.out_dir / "fields") if args.save_fields else None,
-        )
-        step_rows.extend(case_steps)
-        summary_rows.append(case_summary)
-        print(
-            f"[{case_id}] done: {case_summary['n_steps']} steps, "
-            f"stop={case_summary['stop_reason']}, "
-            f"rho_max_ratio={case_summary['rho_max_ratio']:.2f}",
-            flush=True,
+            direct_only=False,
+            save_fields=(
+                (args.out_dir / "fields") if args.save_fields else None
+            ),
+            window_theta=args.window_theta,
+            windowed_p_star=args.windowed_p_star,
+            checkpoint_times=checkpoint_times,
         )
 
-    if len(summary_rows) == 2:
-        subcritical = next(
-            (
-                row for row in summary_rows
-                if row["regime"] == "below_8pi_reference"
-            ),
-            None,
-        )
-        supercritical = next(
-            (
-                row for row in summary_rows
-                if row["regime"] == "above_8pi_reference"
-            ),
-            None,
-        )
-        if subcritical is not None and supercritical is not None:
-            separation = (
-                subcritical["second_moment_ratio"]
-                - supercritical["second_moment_ratio"]
+        if strategy == "windowed":
+            case_specs = [
+                (f"{case_id}-direct-baseline", "direct"),
+                (f"{case_id}-windowed", "windowed"),
+            ]
+        else:
+            case_specs = [(case_id, strategy)]
+
+        case_results = {}
+        for run_case_id, run_strategy in case_specs:
+            case_steps, case_summary, case_checkpoints = run_case(
+                ctx,
+                queue,
+                case_id=run_case_id,
+                strategy=run_strategy,
+                **shared_case_kwargs,
             )
-            pair_pass = (
-                bool(subcritical["admissible"])
-                and bool(supercritical["admissible"])
-                and bool(subcritical["trend_criterion_pass"])
-                and bool(supercritical["trend_criterion_pass"])
-                and separation >= 0.06
+            step_rows.extend(case_steps)
+            summary_rows.append(case_summary)
+            case_results[run_strategy] = (case_summary, case_checkpoints)
+            print(
+                f"[{run_case_id}] done: {case_summary['n_steps']} steps, "
+                f"stop={case_summary['stop_reason']}, "
+                f"rho_max_ratio={case_summary['rho_max_ratio']:.2f}",
+                flush=True,
             )
-            for row in summary_rows:
-                row["pair_outcome_pass"] = int(pair_pass)
-                row["pair_moment_ratio_separation"] = separation
+
+        if strategy == "windowed":
+            baseline_summary, baseline_checkpoints = case_results["direct"]
+            windowed_summary, windowed_checkpoints = case_results["windowed"]
+            pair_rows, agreement = _compare_checkpoints(
+                baseline_checkpoints,
+                windowed_checkpoints,
+                case_id=windowed_summary["case_id"],
+                baseline_case_id=baseline_summary["case_id"],
+                mode=args.mode,
+            )
+            checkpoint_rows.extend(pair_rows)
+            windowed_summary["baseline_case_id"] = baseline_summary["case_id"]
+            windowed_summary["checkpoint_agreement_json"] = json.dumps(
+                agreement, separators=(",", ":")
+            )
+            if agreement:
+                windowed_summary["max_checkpoint_rel_l2"] = max(
+                    entry["rel_l2"] for entry in agreement
+                )
+                print(
+                    f"[{windowed_summary['case_id']}] checkpoint agreement "
+                    "vs direct baseline: "
+                    + ", ".join(
+                        f"t={entry['time']:.4g}: {entry['rel_l2']:.3e}"
+                        for entry in agreement
+                    ),
+                    flush=True,
+                )
+            else:
+                print(
+                    f"[{windowed_summary['case_id']}] no shared checkpoints "
+                    "reached by both runs (baseline stop: "
+                    f"{baseline_summary['stop_reason']}, windowed stop: "
+                    f"{windowed_summary['stop_reason']})",
+                    flush=True,
+                )
+            print(
+                f"[{windowed_summary['case_id']}] binding-constraint "
+                f"verdict: {windowed_summary['go_no_go_binding_verdict']} "
+                f"(histogram "
+                f"{windowed_summary['binding_constraint_histogram_json']})",
+                flush=True,
+            )
+            if int(windowed_summary["n_windowed_failed"] or 0) > 0:
+                windowed_failure_messages.append(
+                    f"{windowed_summary['case_id']}: windowed provisioning "
+                    "failed"
+                )
+            if int(windowed_summary["n_windowed_refused"] or 0) > 0:
+                windowed_failure_messages.append(
+                    f"{windowed_summary['case_id']}: windowed certificate "
+                    "refused inside the declared window"
+                )
+
+    _apply_pair_outcome(summary_rows)
 
     _write_csv(args.out_dir / "ks_steps.csv", STEP_FIELDS, step_rows)
     _write_csv(args.out_dir / "ks_summary.csv", SUMMARY_FIELDS, summary_rows)
+    if strategy == "windowed":
+        _write_csv(
+            args.out_dir / "ks_windowed_checkpoints.csv",
+            CHECKPOINT_FIELDS,
+            checkpoint_rows,
+        )
+    if windowed_failure_messages:
+        for message in windowed_failure_messages:
+            print(f"FAILURE: {message}", flush=True)
+        return 1
     return 0
 
 

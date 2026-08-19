@@ -7,9 +7,15 @@ channel strategy, with a modeled ``p = 3`` break-even of roughly 340 repeats
 per parameter on the reference host.  This driver measures the crossing
 directly:
 
-* cold phase: eagerly build the direct fixed-``lambda`` tables for every
-  anticipated level and parameter (the Table 3 provisioning policy), and the
-  RKE channel family once, both timed through the table-manager timing hooks;
+* cold phase: build the direct fixed-``lambda`` tables and the RKE channel
+  family once, both timed through the table-manager timing hooks.  The
+  direct provisioning strategy is selectable (``--direct-provisioning``):
+  ``eager`` builds every anticipated level per parameter (the historical
+  Table 3 policy and the committed-artifact default), while ``lazy`` builds
+  only the level the priced workload actually touches — on the uniform
+  benchmark tree the leaf level owns all List 1 work, so the lazy baseline
+  executes the provisioning policy the cost model previously carried only
+  as an arithmetic projection (experiment E3);
 * repeat phase: run interleaved warm level-``nlevels`` solves for both
   strategies, recording every solve wall time individually, until past the
   modeled break-even;
@@ -17,7 +23,15 @@ directly:
   ``C(n) = build_total + sum over parameters of the first n solve times``
   and report the measured crossing (first ``n`` with the RKE curve above the
   direct curve, plus a linearly interpolated fractional crossing), next to
-  the linear-model prediction recomputed from this run's own measured means.
+  the linear-model prediction recomputed from this run's own measured means;
+* operation counters (experiment E3): alongside the timing columns, the
+  summary row reports the operation counts of the cost model, computed at
+  the driver level from the executed configuration — symmetry-reduced
+  entries per table, singular-quadrature node evaluations per entry (from
+  the executed node builders and the actual build routing),
+  special-function evaluations by function, near-field point pairs per
+  solve, split-remainder series lengths, and table-apply FMA counts.  They
+  are computed after the timed phases, so timings are unaffected.
 
 The repeat phase alternates strategies within each repeat index so slow host
 drift affects both curves equally.  This is a timing benchmark: full mode
@@ -94,6 +108,30 @@ SUMMARY_FIELDS = (
     "cumulative_cost_definition",
     "max_rel_l2_rke_vs_direct",
     "benchmark_total_s",
+    # provisioning strategy of the direct baseline (E3): "eager" builds all
+    # anticipated levels, "lazy" only the level the priced workload touches
+    "direct_provisioning",
+    # operation counters (E3), computed from the executed configuration
+    "ops_reduced_entries_per_table",
+    "ops_direct_build_routing",
+    "ops_direct_tables_built",
+    "ops_direct_entries_built",
+    "ops_direct_singular_nodes_per_entry",
+    "ops_direct_singular_node_evals",
+    "ops_direct_special_function",
+    "ops_direct_special_function_evals",
+    "ops_rke_channel_tables_built",
+    "ops_rke_channel_entries_built",
+    "ops_rke_channel_singular_nodes_per_entry",
+    "ops_rke_channel_singular_node_evals",
+    "ops_rke_channel_special_function_evals",
+    "ops_nearfield_point_pairs_per_solve",
+    "ops_direct_table_fmas_per_solve",
+    "ops_split_table_count",
+    "ops_split_table_fmas_per_solve",
+    "ops_split_series_nmax_per_parameter",
+    "ops_split_remainder_pair_evals_per_solve",
+    "ops_split_remainder_term_flops_per_solve_per_parameter",
 )
 
 
@@ -141,6 +179,140 @@ def _modeled_break_even(
     return ""
 
 
+def _resolve_direct_levels(
+    *, smoke: bool, provisioning: str, nlevels: int
+) -> list[int]:
+    """Levels the direct baseline provisions under the chosen strategy.
+
+    ``eager`` reproduces the committed-artifact policy (all anticipated
+    levels).  ``lazy`` provisions only what the priced workload touches: the
+    warm solves run on a uniform level-``nlevels`` grid whose List 1 work is
+    owned entirely by the leaf level, so exactly one table per parameter.
+    """
+    if provisioning == "lazy":
+        return [nlevels]
+    if provisioning != "eager":
+        raise ValueError(
+            f"unknown direct provisioning strategy: {provisioning!r}"
+        )
+    return [1, 2] if smoke else [0, 1, 2, 3, 4, 5]
+
+
+def _operation_counters(
+    *,
+    queue,
+    traversal,
+    parameters,
+    direct_levels,
+    direct_tables,
+    direct_build_config,
+    rke_base_table,
+    split_term_tables,
+    rke_channel_build_config,
+    rke_wranglers,
+    split_order,
+):
+    """Operation counts of the cost model, from the executed configuration.
+
+    Every number is derived from executed objects — the built tables'
+    symmetry-reduced entry sets, the node builders at the requested orders,
+    the actual build routing predicate, the FMM traversal's List 1, and the
+    wrangler's own series-length rule — not from hardcoded constants, so the
+    emitted columns confirm (or refute) the analytic counts of the ops cost
+    model in situ.
+    """
+    import volumential.opcounters as opcounters
+
+    sample_direct = direct_tables[parameters[0]]
+    n_rep = opcounters.reduced_entry_count(sample_direct)
+    routing = (
+        "batched"
+        if sample_direct._supports_batched_duffy_builder()
+        else "scalar"
+    )
+    if routing == "batched":
+        direct_nodes_per_entry = opcounters.batched_duffy_nodes_per_entry(
+            int(sample_direct.dim),
+            direct_build_config.regular_quad_order,
+            direct_build_config.radial_quad_order,
+        )
+        direct_special_function = "hankel1_imaginary_ray"
+    else:
+        geometry = opcounters.duffy_block_geometry(sample_direct)
+        direct_nodes_per_entry = opcounters.scalar_duffy_singular_nodes(
+            sample_direct,
+            direct_build_config.regular_quad_order,
+            direct_build_config.radial_quad_order,
+            geometry=geometry,
+        ) / max(geometry["n_reduced_entries"], 1)
+        direct_special_function = "kv0"
+    direct_tables_built = len(parameters) * len(direct_levels)
+    direct_entries_built = direct_tables_built * n_rep
+    direct_node_evals = int(
+        round(direct_entries_built * direct_nodes_per_entry)
+    )
+
+    # split_term_tables maps each term key to a per-level list of tables (the
+    # wrangler normalizes a bare table to a one-element list), so flatten
+    # before counting: every listed table is separately built and its entries
+    # separately quadratured.
+    rke_tables = [rke_base_table]
+    for term_tables in split_term_tables.values():
+        if isinstance(term_tables, list):
+            rke_tables.extend(term_tables)
+        else:
+            rke_tables.append(term_tables)
+    rke_entry_counts = [
+        opcounters.reduced_entry_count(table) for table in rke_tables
+    ]
+    rke_nodes_per_entry = opcounters.batched_duffy_nodes_per_entry(
+        int(rke_base_table.dim),
+        rke_channel_build_config.regular_quad_order,
+        rke_channel_build_config.radial_quad_order,
+    )
+    rke_entries_built = int(np.sum(rke_entry_counts))
+
+    n_nf = opcounters.nearfield_point_pairs(queue, traversal)
+    nmax_by_parameter = [
+        int(rke_wranglers[parameter]._helmholtz_split_series_nmax(
+            split_order
+        ))
+        for parameter in parameters
+    ]
+    split_table_count = len(rke_tables)
+
+    return {
+        "ops_reduced_entries_per_table": n_rep,
+        "ops_direct_build_routing": routing,
+        "ops_direct_tables_built": direct_tables_built,
+        "ops_direct_entries_built": direct_entries_built,
+        "ops_direct_singular_nodes_per_entry": direct_nodes_per_entry,
+        "ops_direct_singular_node_evals": direct_node_evals,
+        "ops_direct_special_function": direct_special_function,
+        "ops_direct_special_function_evals": direct_node_evals,
+        "ops_rke_channel_tables_built": len(rke_tables),
+        "ops_rke_channel_entries_built": rke_entries_built,
+        "ops_rke_channel_singular_nodes_per_entry": rke_nodes_per_entry,
+        "ops_rke_channel_singular_node_evals": (
+            rke_entries_built * rke_nodes_per_entry
+        ),
+        # power/power-log channel integrands are elementary (log and radial
+        # powers): no special-function quadrature anywhere in the family
+        "ops_rke_channel_special_function_evals": 0,
+        "ops_nearfield_point_pairs_per_solve": n_nf,
+        "ops_direct_table_fmas_per_solve": n_nf,
+        "ops_split_table_count": split_table_count,
+        "ops_split_table_fmas_per_solve": split_table_count * n_nf,
+        "ops_split_series_nmax_per_parameter": ";".join(
+            str(nmax) for nmax in nmax_by_parameter
+        ),
+        "ops_split_remainder_pair_evals_per_solve": n_nf,
+        "ops_split_remainder_term_flops_per_solve_per_parameter": ";".join(
+            str(n_nf * nmax) for nmax in nmax_by_parameter
+        ),
+    }
+
+
 def run_validation(
     *,
     mode: str,
@@ -154,6 +326,7 @@ def run_validation(
     direct_levels: list[int],
     repeat_count: int,
     warmup_count: int,
+    direct_provisioning: str = "eager",
 ):
     import pyopencl as cl
 
@@ -177,7 +350,8 @@ def run_validation(
         q_order, split_order, high_accuracy=high_accuracy
     )
 
-    # cold phase: eager direct provisioning per parameter
+    # cold phase: direct provisioning per parameter (eager: all anticipated
+    # levels; lazy: only the level the priced workload touches)
     direct_tables = {}
     direct_build_total_s = 0.0
     for parameter in parameters:
@@ -360,6 +534,38 @@ def run_validation(
         rke_solve_mean_s=rke_mean,
     )
 
+    # operation counters (E3): computed after every timed phase, so the
+    # timing columns are unaffected by the counting itself
+    operation_counters = _operation_counters(
+        queue=queue,
+        traversal=traversal,
+        parameters=parameters,
+        direct_levels=direct_levels,
+        direct_tables=direct_tables,
+        direct_build_config=direct_build_config,
+        rke_base_table=rke_table,
+        split_term_tables=split_term_tables,
+        rke_channel_build_config=rke_channel_build_config,
+        rke_wranglers={
+            parameter: paths[parameter]["rke"] for parameter in parameters
+        },
+        split_order=split_order,
+    )
+    print(
+        "ops: direct "
+        f"{operation_counters['ops_direct_entries_built']} entries x "
+        f"{operation_counters['ops_direct_singular_nodes_per_entry']:g} "
+        f"{operation_counters['ops_direct_build_routing']} nodes "
+        f"({operation_counters['ops_direct_special_function']}); rke "
+        f"{operation_counters['ops_rke_channel_entries_built']} entries x "
+        f"{operation_counters['ops_rke_channel_singular_nodes_per_entry']} "
+        "nodes (elementary); near-field pairs/solve "
+        f"{operation_counters['ops_nearfield_point_pairs_per_solve']}, "
+        "series nmax "
+        f"{operation_counters['ops_split_series_nmax_per_parameter']}",
+        flush=True,
+    )
+
     summary_row = {
         "mode": mode,
         "kernel": "Yukawa",
@@ -402,6 +608,8 @@ def run_validation(
         ),
         "max_rel_l2_rke_vs_direct": max_rel_l2,
         "benchmark_total_s": time.perf_counter() - benchmark_start,
+        "direct_provisioning": direct_provisioning,
+        **operation_counters,
     }
     return solve_rows, summary_row
 
@@ -430,6 +638,15 @@ def main() -> int:
     )
     parser.add_argument("--repeat-count", type=int)
     parser.add_argument("--split-order", type=int, default=3)
+    parser.add_argument(
+        "--direct-provisioning",
+        choices=("eager", "lazy"),
+        default="eager",
+        help="direct-baseline provisioning strategy: 'eager' builds every "
+        "anticipated level per parameter (the committed-artifact default); "
+        "'lazy' builds only the leaf level the priced workload touches "
+        "(the executed lazy baseline of experiment E3)",
+    )
     args = parser.parse_args()
 
     smoke = args.mode == "smoke"
@@ -437,7 +654,11 @@ def main() -> int:
     nlevels = 2 if smoke else 5
     fmm_order = 8 if smoke else 16
     parameters = [4.0] if smoke else [4.0, 8.0, 12.0]
-    direct_levels = [1, 2] if smoke else [0, 1, 2, 3, 4, 5]
+    direct_levels = _resolve_direct_levels(
+        smoke=smoke,
+        provisioning=args.direct_provisioning,
+        nlevels=nlevels,
+    )
     repeat_count = args.repeat_count
     if repeat_count is None:
         repeat_count = 6 if smoke else 400
@@ -455,6 +676,7 @@ def main() -> int:
         direct_levels=direct_levels,
         repeat_count=repeat_count,
         warmup_count=warmup_count,
+        direct_provisioning=args.direct_provisioning,
     )
 
     _write_csv(args.out_dir / "break_even_solves.csv", SOLVE_FIELDS, solve_rows)

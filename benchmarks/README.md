@@ -73,6 +73,8 @@ python benchmarks/split_parameter_sweep.py --mode smoke --out build/benchmarks/s
 
 The benchmark sweeps 2D scalar Helmholtz wave numbers and Yukawa screening parameters. Each row compares the full implemented split evaluator against a direct fixed-parameter near-field table at the same parameter and application level. Full mode prevents the split-order trend from being limited by quadrature noise: at `q=4`, Yukawa direct references use regular/radial Duffy orders 80/320, channel tables use 48/160, and retained orders above one use smooth-remainder order `2q`. The effective orders are recorded in every row, and full runs reject a nonconvergent Yukawa `p=1,2,3` sweep. The benchmark separately records direct-table and RKE-channel setup/load costs, payload, repeated full applications, isolated coefficient and residual diagnostics, cold/warm strategy totals, and a linear break-even model. `--direct-levels` controls the levels provisioned by the direct setup strategy, while `--nlevels` is the application level; `--repeat-count` is the number of applications per parameter, and `break_even_repeat_count` uses the same per-parameter unit.
 
+The sweep additionally runs a windowed-assembled table-provisioning strategy (rows tagged `table_strategy=windowed_assembled`): for each `--windowed-thetas` value (a theta at the application level, up to the `--window-theta` declaration, default 16), a fixed-parameter table is offline-assembled from the windowed channel family, registered through the standard table manager (`register_external_table`), reloaded through the ordinary cache path, and applied through the identical evaluator against the same direct fixed-parameter reference. Rows carry the certificate status (`ok`/`refused`/`failed`), condition number, per-parameter assembly/registration/load costs, and a polynomial-completion certificate probe per theta (`--classical-probe`: cheap truncation-only in smoke, full assembly in full mode) so one CSV holds the evaluator-level windowed + polynomial + direct comparison. The driver fails on any `failed` row, on a refusal inside the declaration, and on small-theta disagreement with the direct reference.
+
 ## Adaptive Timing
 
 ```bash
@@ -98,6 +100,46 @@ python benchmarks/adaptive_split_composition.py --mode smoke
 python benchmarks/break_even_validation.py --mode smoke
 python benchmarks/keller_segel_continuation.py --mode smoke
 ```
+
+The Keller--Segel driver supports `--strategy windowed`: per mass factor it
+runs a direct-strategy baseline at its quantized lambda ladder (resolved
+regime, `theta <= --theta-max`) and a windowed continuation whose
+screened-Yukawa state advances through per-step windowed offline-assembled
+tables at the exact unquantized `lambda = 1/sqrt(dt)`, with no `theta` step
+floor beyond the declared certificate `theta <= --window-theta` (default 16)
+and the advective CFL cap kept. Both runs land on shared
+`--checkpoint-fractions` of `t_end`; `ks_windowed_checkpoints.csv` records the
+weighted relative L2 trajectory agreement there, the summary reports the
+per-step provisioning costs, the achieved dt/theta ranges, the
+refused/skipped/failed taxonomy, and a binding-constraint histogram with an
+explicit go/no-go verdict naming which constraint (CFL, `dt` cap, checkpoint
+landing, or theta floor) actually bound the step size.
+
+The break-even driver selects its direct-baseline provisioning policy with
+`--direct-provisioning {eager,lazy}`. `eager` (default, the committed-artifact
+policy) builds every anticipated level per parameter; `lazy` builds only the
+leaf level the priced workload touches, which on the uniform benchmark tree
+owns all List 1 work. Both policies produce identical answers --- the strategy
+changes provisioning, not results --- so the pair isolates how much of the
+measured cold-build advantage belongs to the mechanism rather than to eager
+defaults. Either policy also emits `ops_*` operation-count columns (entries
+built, singular and smooth node evaluations, special-function evaluations by
+function, recombination flops, near-field point pairs per solve), computed
+after every timed phase from the executed node builders and degeneracy
+predicates in `volumential/opcounters.py` rather than from constants, so the
+counts confirm or refute the analytic cost model in situ. Run the two policies
+as separate metadata-wrapped invocations with distinct cache directories.
+
+The windowed sweep accepts `--complex-phases` to add damped complex-frequency
+rows at `zeta = Theta^2 exp(i pi f)` for each requested fraction `f` in
+`(0, 1)` (the bare flag defaults to `0.25,0.5,0.75`; the endpoints are the real
+Yukawa and Helmholtz rays the sweep already covers). Damped rows use the same
+real channel family and carry every real-row certificate and deviation column
+plus `zeta_phase_fraction`, `zeta_real`, and `zeta_imag`; the direct reference
+applies the selected-branch kernel's real and imaginary parts separately at
+both Duffy policies, so the reference-floor semantics are unchanged. The
+polynomial-completion assembler has no complex path and is recorded as
+`skipped` on these rows, distinct from a certificate `refused`.
 
 The complex Bessel driver additionally requires the benchmark extra:
 `python -m pip install -e ".[benchmark]"`.

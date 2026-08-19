@@ -108,7 +108,63 @@ FIELDS = (
     "break_even_time_kind",
     "benchmark_total_s",
     "benchmark_total_time_kind",
+    # table-provisioning strategy columns (E1).  "online_split" rows are the
+    # historical online split-evaluator comparison; "windowed_assembled" rows
+    # provision the near-field table by windowed offline assembly
+    # (rke_table_assembly.assemble_windowed_parameterized_table), register it
+    # through the standard table manager, and run the identical evaluator
+    # path against the same direct fixed-parameter reference.
+    "table_strategy",
+    "theta",
+    "window_theta",
+    "windowed_p_star",
+    "windowed_smooth_quad_order",
+    "windowed_chan_regular_order",
+    "windowed_chan_radial_order",
+    "windowed_status",
+    "windowed_refusal",
+    "windowed_condition_number",
+    "windowed_channel_build_s",
+    "windowed_channel_build_was_cold",
+    "windowed_assemble_s",
+    "windowed_register_s",
+    "windowed_register_payload_bytes",
+    "windowed_table_load_s",
+    "windowed_table_load_payload_bytes",
+    "windowed_solve_warm_s",
+    "windowed_table_apply_mean_s",
+    "classical_probe_kind",
+    "classical_probe_status",
+    "classical_probe_detail",
+    "classical_probe_n_terms",
+    "classical_probe_condition_number",
+    "classical_probe_s",
 )
+
+# Root extent of the table-manager convention used throughout this driver
+# (the [-0.5, 0.5]^2 unit tree maps to table level ell + 1).
+TABLE_ROOT_EXTENT = 2.0
+
+# Windowed strategy defaults (E1): declared window and per-mode theta ladders.
+# The smoke ladder holds one theta inside the polynomial-certified range, one
+# in the polynomial refusal band, and the declaration edge itself.
+DEFAULT_WINDOW_THETA = 16.0
+DEFAULT_WINDOWED_P_STAR = 6
+DEFAULT_WINDOWED_CHAN_ORDERS_2D = (48, 61)
+DEFAULT_SMOKE_WINDOWED_THETAS = (1.0, 6.0, 16.0)
+DEFAULT_FULL_WINDOWED_THETAS = (
+    0.25, 0.5, 1.0, 2.0, 4.0, 6.0, 8.0, 12.0, 16.0,
+)
+CLASSICAL_PROBE_TOLERANCE = 1.0e-11
+# Evaluator-level agreement gates for the windowed-assembled strategy at
+# small theta (theta <= 2), where the direct reference is well resolved.
+# The smoke gate tolerates the loose smoke-mode direct quadrature; the full
+# gate sits above the ~2e-7 channel-quadrature accuracy of the default
+# 48/61 orders (see rke_table_assembly._resolve_channel_orders) with margin,
+# while still catching any structural (sign/normalization/registration)
+# error, which would show up at O(1).
+WINDOWED_SMALL_THETA_AGREEMENT = {"smoke": 1.0e-2, "full": 1.0e-5}
+WINDOWED_SMALL_THETA_MAX = 2.0
 
 
 def _parse_csv_floats(raw: str, *, allow_empty: bool = False) -> list[float]:
@@ -867,6 +923,598 @@ def _prepare_rke_channels(
     )
 
 
+# {{{ windowed-assembled table-provisioning strategy (E1)
+
+def _parse_windowed_thetas(raw: str | None, mode: str) -> list[float]:
+    if raw is None:
+        defaults = (
+            DEFAULT_SMOKE_WINDOWED_THETAS
+            if mode == "smoke"
+            else DEFAULT_FULL_WINDOWED_THETAS
+        )
+        return list(defaults)
+    if raw.strip().lower() in {"", "none", "skip"}:
+        return []
+    values = _parse_csv_floats(raw)
+    if any(not math.isfinite(value) or value <= 0.0 for value in values):
+        raise ValueError("windowed thetas must be finite and positive")
+    if len(set(values)) != len(values):
+        raise ValueError("windowed thetas must be unique")
+    return values
+
+
+def _prepare_windowed_family(
+    *,
+    cache_path: Path,
+    q_order: int,
+    source_box_level: int,
+    window_theta: float,
+    p_star: int,
+    chan_regular_order: int,
+    chan_radial_order: int,
+) -> dict[str, Any]:
+    """Build or reload the parameter-independent windowed channel family."""
+    from volumential.rke_table_assembly import get_windowed_channel_table
+
+    was_cold = False
+    start = time.perf_counter()
+    for m in range(p_star):
+        channel = get_windowed_channel_table(
+            cache_path,
+            2,
+            q_order,
+            m,
+            source_box_level=source_box_level,
+            root_extent=TABLE_ROOT_EXTENT,
+            window_theta=window_theta,
+            chan_regular_order=chan_regular_order,
+            chan_radial_order=chan_radial_order,
+        )
+        disposition = getattr(channel, "_windowed_cache_disposition", None)
+        if disposition not in ("hit", "rebuilt"):
+            raise RuntimeError(
+                "windowed channel table did not report a valid cache "
+                "disposition"
+            )
+        was_cold = was_cold or disposition == "rebuilt"
+    return {
+        "build_s": time.perf_counter() - start,
+        "was_cold": was_cold,
+    }
+
+
+def _classical_certificate_probe(
+    *,
+    queue,
+    cache_path: Path,
+    kernel: str,
+    q_order: int,
+    parameter: float,
+    source_box_level: int,
+    tolerance: float,
+    probe_kind: str,
+) -> dict[str, Any]:
+    """Certificate status of the polynomial-completion assembler at this
+    parameter: ``certified`` / ``refused`` / ``failed`` (plus ``skipped``).
+
+    ``probe_kind == "truncation"`` checks only the (cheap) series-tail
+    certificate; ``"full"`` runs the complete certified assembly, exposing
+    both refusal modes (term budget and recombination conditioning).
+    """
+    empty = {
+        "kind": probe_kind,
+        "status": "skipped",
+        "detail": "",
+        "n_terms": "",
+        "condition_number": "",
+        "probe_s": "",
+    }
+    if probe_kind == "off":
+        return empty
+
+    from volumential.rke_table_assembly import (
+        RKEConditioningError,
+        RKETruncationError,
+        assemble_parameterized_table,
+        choose_truncation_order,
+    )
+
+    start = time.perf_counter()
+    if probe_kind == "truncation":
+        box_extent = TABLE_ROOT_EXTENT * 0.5**source_box_level
+        radius = 3.0 * math.sqrt(2.0) * box_extent
+        k = (
+            complex(parameter)
+            if kernel == "Helmholtz"
+            else complex(1j * parameter)
+        )
+        try:
+            n_terms, _ = choose_truncation_order(2, k, radius, tolerance)
+        except RKETruncationError as exc:
+            return {
+                **empty,
+                "status": "refused",
+                "detail": f"{type(exc).__name__}: {exc}",
+                "probe_s": time.perf_counter() - start,
+            }
+        except Exception as exc:  # noqa: BLE001 - recorded, then re-raised
+            return {
+                **empty,
+                "status": "failed",
+                "detail": f"{type(exc).__name__}: {exc}",
+                "probe_s": time.perf_counter() - start,
+            }
+        return {
+            **empty,
+            "status": "certified-truncation-only",
+            "n_terms": int(n_terms),
+            "probe_s": time.perf_counter() - start,
+        }
+
+    if probe_kind != "full":
+        raise ValueError(f"unknown classical probe kind: {probe_kind}")
+    try:
+        _, certificate = assemble_parameterized_table(
+            queue,
+            cache_path,
+            2,
+            kernel,
+            q_order,
+            parameter,
+            source_box_level=source_box_level,
+            root_extent=TABLE_ROOT_EXTENT,
+            tolerance=tolerance,
+        )
+    except (RKETruncationError, RKEConditioningError) as exc:
+        return {
+            **empty,
+            "status": "refused",
+            "detail": f"{type(exc).__name__}: {exc}",
+            "probe_s": time.perf_counter() - start,
+        }
+    except Exception as exc:  # noqa: BLE001 - recorded for the taxonomy
+        return {
+            **empty,
+            "status": "failed",
+            "detail": f"{type(exc).__name__}: {exc}",
+            "probe_s": time.perf_counter() - start,
+        }
+    return {
+        **empty,
+        "status": "certified",
+        "n_terms": int(certificate["n_series_terms"]),
+        "condition_number": float(certificate["condition_number"]),
+        "probe_s": time.perf_counter() - start,
+    }
+
+
+def _register_and_load_windowed_table(
+    *,
+    queue,
+    cache_path: Path,
+    kernel: str,
+    q_order: int,
+    parameter: float,
+    source_box_level: int,
+    table,
+    certificate: dict[str, Any],
+) -> tuple[Any, dict[str, Any]]:
+    """Register the assembled table under the standard cache slot, then load
+    it back through the ordinary ``get_table`` path (asserting a pure cache
+    load), so the evaluator consumes it exactly like a direct-built table."""
+    from volumential.table_manager import NearFieldInteractionTableManager
+
+    manager_kwargs: dict[str, Any] = {}
+    get_kwargs: dict[str, Any] = {}
+    if kernel == "Helmholtz":
+        from sumpy.kernel import HelmholtzKernel
+
+        knl = HelmholtzKernel(2)
+        manager_kwargs["dtype"] = np.complex128
+        get_kwargs["sumpy_knl"] = knl
+        get_kwargs[knl.helmholtz_k_name] = float(parameter)
+        kernel_request = "Helmholtz-Reference"
+    elif kernel == "Yukawa":
+        get_kwargs["lam"] = float(parameter)
+        kernel_request = "Yukawa"
+    else:
+        raise ValueError(f"unknown kernel: {kernel}")
+
+    _clear_sqlite_cache(cache_path)
+    provenance = {
+        "kind": "windowed_rke_assembly",
+        "window_theta": float(certificate["window_theta"]),
+        "p_star": int(certificate["p_star"]),
+        "smooth_quad_order": int(certificate["smooth_quad_order"]),
+        "condition_number": float(certificate["condition_number"]),
+    }
+    register_start = time.perf_counter()
+    with NearFieldInteractionTableManager(
+        str(cache_path), root_extent=TABLE_ROOT_EXTENT, queue=queue,
+        **manager_kwargs,
+    ) as table_manager:
+        table_manager.register_external_table(
+            2,
+            kernel_request,
+            q_order,
+            table,
+            source_box_level=source_box_level,
+            provenance=provenance,
+            **get_kwargs,
+        )
+        register_payload_bytes = int(
+            table_manager.last_register_timings["payload_bytes"]
+        )
+    register_s = time.perf_counter() - register_start
+
+    with _capture_table_get_timings() as load_records:
+        with NearFieldInteractionTableManager(
+            str(cache_path), root_extent=TABLE_ROOT_EXTENT, queue=queue,
+            **manager_kwargs,
+        ) as table_manager:
+            loaded_table, is_recomputed = table_manager.get_table(
+                2,
+                kernel_request,
+                q_order,
+                source_box_level=source_box_level,
+                queue=queue,
+                **get_kwargs,
+            )
+    if is_recomputed:
+        raise RuntimeError(
+            "registered windowed table did not load as a pure cache hit"
+        )
+    load_summary = _summarize_table_get_timings(load_records)
+    if load_summary["build_count"] or load_summary["load_count"] != 1:
+        raise RuntimeError(
+            "registered windowed table load pass was not a single pure load"
+        )
+    return loaded_table, {
+        "register_s": register_s,
+        "register_payload_bytes": register_payload_bytes,
+        "load_s": load_summary["load_s"],
+        "load_payload_bytes": load_summary["cache_payload_bytes"],
+    }
+
+
+def _windowed_row_base(
+    *,
+    mode: str,
+    kernel: str,
+    parameter_name: str,
+    parameter: float,
+    theta: float,
+    window_theta: float,
+    p_star: int,
+    chan_orders: tuple[int, int],
+    direct_build_config,
+    q_order: int,
+    nlevels: int,
+    fmm_order: int,
+    repeat_count: int,
+    classical_probe: dict[str, Any],
+) -> dict[str, Any]:
+    row = {field: "" for field in FIELDS}
+    row.update(
+        {
+            "case_id": (
+                f"{kernel.lower()}2d-{parameter_name}{parameter:g}"
+                f"-windowed-theta{theta:g}"
+            ),
+            "mode": mode,
+            "kernel": kernel,
+            "dim": 2,
+            "parameter_name": parameter_name,
+            "parameter_value": parameter,
+            "direct_regular_quad_order": direct_build_config.regular_quad_order,
+            "direct_radial_quad_order": direct_build_config.radial_quad_order,
+            "q_order": q_order,
+            "nlevels": nlevels,
+            "fmm_order": fmm_order,
+            "reference_path": "direct_fixed_parameter_table",
+            "repeat_count": repeat_count,
+            "table_strategy": "windowed_assembled",
+            "theta": theta,
+            "window_theta": window_theta,
+            "windowed_p_star": p_star,
+            "windowed_chan_regular_order": chan_orders[0],
+            "windowed_chan_radial_order": chan_orders[1],
+            "classical_probe_kind": classical_probe["kind"],
+            "classical_probe_status": classical_probe["status"],
+            "classical_probe_detail": classical_probe["detail"],
+            "classical_probe_n_terms": classical_probe["n_terms"],
+            "classical_probe_condition_number": classical_probe[
+                "condition_number"
+            ],
+            "classical_probe_s": classical_probe["probe_s"],
+        }
+    )
+    return row
+
+
+def _run_windowed_strategy(
+    *,
+    mode: str,
+    ctx,
+    queue,
+    traversal,
+    cache_dir: Path,
+    q_order: int,
+    nlevels: int,
+    fmm_order: int,
+    kernel: str,
+    parameter_name: str,
+    thetas: list[float],
+    window_theta: float,
+    p_star: int,
+    chan_orders: tuple[int, int],
+    classical_probe_kind: str,
+    classical_probe_tolerance: float,
+    direct_build_config,
+    repeat_count: int,
+    source_weights,
+    q_points,
+    coords_host,
+) -> list[dict[str, Any]]:
+    from volumential.rke_table_assembly import (
+        RKEWindowConditioningError,
+        RKEWindowCoverageError,
+        assemble_windowed_parameterized_table,
+    )
+
+    box_extent = TABLE_ROOT_EXTENT * 0.5**nlevels
+    family_cache = cache_dir / (
+        f"windowed-channels-q{q_order}-l{nlevels}-Theta{window_theta:g}.sqlite"
+    )
+    classical_cache = cache_dir / f"classical-probe-q{q_order}-l{nlevels}.sqlite"
+
+    family = _prepare_windowed_family(
+        cache_path=family_cache,
+        q_order=q_order,
+        source_box_level=nlevels,
+        window_theta=window_theta,
+        p_star=p_star,
+        chan_regular_order=chan_orders[0],
+        chan_radial_order=chan_orders[1],
+    )
+
+    rows: list[dict[str, Any]] = []
+    for theta in thetas:
+        parameter = theta / box_extent
+        classical_probe = _classical_certificate_probe(
+            queue=queue,
+            cache_path=classical_cache,
+            kernel=kernel,
+            q_order=q_order,
+            parameter=parameter,
+            source_box_level=nlevels,
+            tolerance=classical_probe_tolerance,
+            probe_kind=classical_probe_kind,
+        )
+        row = _windowed_row_base(
+            mode=mode,
+            kernel=kernel,
+            parameter_name=parameter_name,
+            parameter=parameter,
+            theta=theta,
+            window_theta=window_theta,
+            p_star=p_star,
+            chan_orders=chan_orders,
+            direct_build_config=direct_build_config,
+            q_order=q_order,
+            nlevels=nlevels,
+            fmm_order=fmm_order,
+            repeat_count=repeat_count,
+            classical_probe=classical_probe,
+        )
+        row["windowed_channel_build_s"] = family["build_s"]
+        row["windowed_channel_build_was_cold"] = int(family["was_cold"])
+
+        assemble_start = time.perf_counter()
+        try:
+            assembled_table, certificate = (
+                assemble_windowed_parameterized_table(
+                    family_cache,
+                    2,
+                    kernel,
+                    q_order,
+                    parameter,
+                    source_box_level=nlevels,
+                    root_extent=TABLE_ROOT_EXTENT,
+                    window_theta=window_theta,
+                    p_star=p_star,
+                    chan_regular_order=chan_orders[0],
+                    chan_radial_order=chan_orders[1],
+                )
+            )
+        except (RKEWindowCoverageError, RKEWindowConditioningError) as exc:
+            row["windowed_status"] = "refused"
+            row["windowed_refusal"] = f"{type(exc).__name__}: {exc}"
+            row["windowed_assemble_s"] = time.perf_counter() - assemble_start
+            rows.append(row)
+            continue
+        except (ValueError, RuntimeError, NotImplementedError) as exc:
+            row["windowed_status"] = "failed"
+            row["windowed_refusal"] = f"{type(exc).__name__}: {exc}"
+            row["windowed_assemble_s"] = time.perf_counter() - assemble_start
+            rows.append(row)
+            continue
+        row["windowed_assemble_s"] = time.perf_counter() - assemble_start
+        row["windowed_status"] = "ok"
+        row["windowed_condition_number"] = float(
+            certificate["condition_number"]
+        )
+        row["windowed_smooth_quad_order"] = int(
+            certificate["smooth_quad_order"]
+        )
+
+        parameter_tag = (
+            f"{parameter:.17g}".replace("-", "m").replace(".", "p")
+        )
+        registered_cache = cache_dir / (
+            f"windowed-registered-{kernel.lower()}-parameter{parameter_tag}"
+            f"-q{q_order}.sqlite"
+        )
+        loaded_table, transfer = _register_and_load_windowed_table(
+            queue=queue,
+            cache_path=registered_cache,
+            kernel=kernel,
+            q_order=q_order,
+            parameter=parameter,
+            source_box_level=nlevels,
+            table=assembled_table,
+            certificate=certificate,
+        )
+        row["windowed_register_s"] = transfer["register_s"]
+        row["windowed_register_payload_bytes"] = transfer[
+            "register_payload_bytes"
+        ]
+        row["windowed_table_load_s"] = transfer["load_s"]
+        row["windowed_table_load_payload_bytes"] = transfer[
+            "load_payload_bytes"
+        ]
+
+        if kernel == "Helmholtz":
+            source_values_host, _exact = (
+                _helmholtz_manufactured_source_and_exact(
+                    coords_host, parameter
+                )
+            )
+        else:
+            source_values_host = _gaussian_source_host(coords_host)
+
+        direct_table, direct_costs = _prepare_direct_tables(
+            kernel=kernel,
+            queue=queue,
+            cache_dir=cache_dir,
+            q_order=q_order,
+            parameter=parameter,
+            direct_levels=[nlevels],
+            active_level=nlevels,
+            build_config=direct_build_config,
+        )
+        row.update(
+            {
+                "level_count": 1,
+                "direct_levels": str(nlevels),
+                "direct_table_count": direct_costs["table_count"],
+                "direct_table_payload_bytes": direct_costs["payload_bytes"],
+                "direct_table_cache_payload_bytes": direct_costs[
+                    "cache_payload_bytes"
+                ],
+                "direct_table_build_s": direct_costs["build_s"],
+                "direct_table_quadrature_build_s": direct_costs[
+                    "quadrature_build_s"
+                ],
+                "direct_table_load_s": direct_costs["load_s"],
+            }
+        )
+
+        reference_values, reference_timing, _ = _run_path(
+            ctx=ctx,
+            queue=queue,
+            traversal=traversal,
+            q_order=q_order,
+            fmm_order=fmm_order,
+            kernel=kernel,
+            parameter=parameter,
+            table=direct_table,
+            source_weights=source_weights,
+            q_points=q_points,
+            source_values_host=source_values_host,
+            split=False,
+            split_order=1,
+            repeat_count=repeat_count,
+        )
+        windowed_values, windowed_timing, _ = _run_path(
+            ctx=ctx,
+            queue=queue,
+            traversal=traversal,
+            q_order=q_order,
+            fmm_order=fmm_order,
+            kernel=kernel,
+            parameter=parameter,
+            table=loaded_table,
+            source_weights=source_weights,
+            q_points=q_points,
+            source_values_host=source_values_host,
+            split=False,
+            split_order=1,
+            repeat_count=repeat_count,
+        )
+
+        diff = windowed_values - reference_values
+        reference_norm = max(
+            float(np.linalg.norm(reference_values)), 1.0e-300
+        )
+        row.update(
+            {
+                "n_targets": int(reference_values.size),
+                "rel_l2_error": float(np.linalg.norm(diff) / reference_norm),
+                "linf_error": float(np.max(np.abs(diff))),
+                "reference_warm_s": reference_timing["solve_mean_s"],
+                "direct_table_apply_total_s": reference_timing[
+                    "table_apply_total_s"
+                ],
+                "direct_table_apply_mean_s": reference_timing[
+                    "table_apply_mean_s"
+                ],
+                "reference_solve_total_s": reference_timing["solve_total_s"],
+                "windowed_solve_warm_s": windowed_timing["solve_mean_s"],
+                "windowed_table_apply_mean_s": windowed_timing[
+                    "table_apply_mean_s"
+                ],
+            }
+        )
+        rows.append(row)
+    return rows
+
+
+def _validate_windowed_rows(rows: list[dict[str, Any]]) -> None:
+    """Taxonomy and agreement gates for windowed-assembled strategy rows.
+
+    A ``failed`` row, or a certificate refusal at a theta the declaration
+    covers, is a driver failure.  At small theta the windowed-assembled
+    evaluator path must agree with the direct fixed-parameter reference.
+    """
+    for row in rows:
+        if row.get("table_strategy") != "windowed_assembled":
+            continue
+        theta = float(row["theta"])
+        window_theta = float(row["window_theta"])
+        status = row["windowed_status"]
+        if status == "failed":
+            raise RuntimeError(
+                f"windowed assembly failed for {row['case_id']}: "
+                f"{row['windowed_refusal']}"
+            )
+        if row["classical_probe_status"] == "failed":
+            raise RuntimeError(
+                f"classical certificate probe failed for {row['case_id']}: "
+                f"{row['classical_probe_detail']}"
+            )
+        if status == "refused" and theta <= window_theta * (1.0 + 1.0e-9):
+            raise RuntimeError(
+                f"windowed assembly refused inside the declaration for "
+                f"{row['case_id']} (theta={theta:g} <= Theta="
+                f"{window_theta:g}): {row['windowed_refusal']}"
+            )
+        if (
+            status == "ok"
+            and theta <= WINDOWED_SMALL_THETA_MAX
+        ):
+            gate = WINDOWED_SMALL_THETA_AGREEMENT[row["mode"]]
+            rel_l2 = float(row["rel_l2_error"])
+            if not rel_l2 <= gate:
+                raise RuntimeError(
+                    "windowed-assembled evaluator path disagrees with the "
+                    f"direct reference at small theta for {row['case_id']}: "
+                    f"rel_l2={rel_l2:.3e} > {gate:.1e}"
+                )
+
+# }}}
+
+
 def _positive_root(value: float) -> float | str:
     if math.isfinite(value) and value > 0.0:
         return float(value)
@@ -961,6 +1609,8 @@ def _validate_yukawa_order_convergence(rows: list[dict[str, Any]]) -> None:
     errors_by_parameter: dict[float, dict[int, float]] = {}
     for row in rows:
         if row["mode"] != "full" or row["kernel"] != "Yukawa":
+            continue
+        if row.get("table_strategy", "online_split") != "online_split":
             continue
         errors_by_parameter.setdefault(float(row["parameter_value"]), {})[
             int(row["split_order"])
@@ -1077,6 +1727,8 @@ def _row_from_result(
         "reference_solve_total_s": reference_timing["solve_total_s"],
         "split_solve_total_s": split_timing["solve_total_s"],
         **amortization,
+        "table_strategy": "online_split",
+        "theta": parameter * TABLE_ROOT_EXTENT * 0.5**nlevels,
     }
 
 
@@ -1094,6 +1746,12 @@ def run_benchmark(
     direct_levels: list[int],
     repeat_count: int,
     power_log_beta_mode: str = "p2p",
+    windowed_thetas: list[float] | None = None,
+    window_theta: float = DEFAULT_WINDOW_THETA,
+    windowed_p_star: int = DEFAULT_WINDOWED_P_STAR,
+    windowed_chan_orders: tuple[int, int] = DEFAULT_WINDOWED_CHAN_ORDERS_2D,
+    classical_probe_kind: str | None = None,
+    classical_probe_tolerance: float = CLASSICAL_PROBE_TOLERANCE,
 ) -> list[dict[str, Any]]:
     import pyopencl as cl
 
@@ -1105,6 +1763,19 @@ def run_benchmark(
         raise ValueError("direct_levels must include nlevels")
     if power_log_beta_mode not in {"p2p", "table"}:
         raise ValueError("power_log_beta_mode must be 'p2p' or 'table'")
+    if windowed_thetas is None:
+        windowed_thetas = []
+    if classical_probe_kind is None:
+        classical_probe_kind = "truncation" if mode == "smoke" else "full"
+    if classical_probe_kind not in {"off", "truncation", "full"}:
+        raise ValueError(
+            "classical_probe_kind must be 'off', 'truncation', or 'full'"
+        )
+    if windowed_thetas:
+        if not math.isfinite(window_theta) or window_theta <= 0.0:
+            raise ValueError("window_theta must be finite and positive")
+        if windowed_p_star < 1:
+            raise ValueError("windowed_p_star must be >= 1")
 
     split_auto_config = {
         "power_log_single_table_beta_mode": power_log_beta_mode,
@@ -1128,7 +1799,7 @@ def run_benchmark(
     ]
 
     for kernel, parameter_name, parameters in sweep_specs:
-        if not parameters:
+        if not parameters and not windowed_thetas:
             continue
 
         high_accuracy = mode == "full"
@@ -1211,7 +1882,9 @@ def run_benchmark(
         rke_cache_path = cache_dir / f"cost-rke-{kernel.lower()}-q{q_order}.sqlite"
         cumulative_rke_build_s = 0.0
         cumulative_rke_quadrature_build_s = 0.0
-        for split_index, split_order in enumerate(sorted(split_orders)):
+        for split_index, split_order in enumerate(
+            sorted(split_orders) if parameter_cases else []
+        ):
             smooth_quad_order = _split_smooth_quad_order(
                 q_order, split_order, high_accuracy=high_accuracy
             )
@@ -1317,7 +1990,35 @@ def run_benchmark(
                     )
                 )
 
+        if windowed_thetas:
+            rows.extend(
+                _run_windowed_strategy(
+                    mode=mode,
+                    ctx=ctx,
+                    queue=queue,
+                    traversal=traversal,
+                    cache_dir=cache_dir,
+                    q_order=q_order,
+                    nlevels=nlevels,
+                    fmm_order=fmm_order,
+                    kernel=kernel,
+                    parameter_name=parameter_name,
+                    thetas=windowed_thetas,
+                    window_theta=window_theta,
+                    p_star=windowed_p_star,
+                    chan_orders=windowed_chan_orders,
+                    classical_probe_kind=classical_probe_kind,
+                    classical_probe_tolerance=classical_probe_tolerance,
+                    direct_build_config=direct_build_config,
+                    repeat_count=repeat_count,
+                    source_weights=source_weights,
+                    q_points=q_points,
+                    coords_host=coords_host,
+                )
+            )
+
     _validate_yukawa_order_convergence(rows)
+    _validate_windowed_rows(rows)
 
     benchmark_total_s = time.perf_counter() - benchmark_start
     for row in rows:
@@ -1385,6 +2086,49 @@ def main() -> int:
         type=int,
         help="number of timed applications per parameter",
     )
+    parser.add_argument(
+        "--windowed-thetas",
+        help=(
+            "comma-separated theta = parameter * leaf-table-extent values "
+            "for the windowed-assembled strategy (E1); 'none' disables; "
+            "default smoke '1,6,16', full "
+            "'0.25,0.5,1,2,4,6,8,12,16'"
+        ),
+    )
+    parser.add_argument(
+        "--window-theta",
+        type=float,
+        default=DEFAULT_WINDOW_THETA,
+        help="declared window Theta for the windowed-assembled strategy",
+    )
+    parser.add_argument(
+        "--windowed-p-star",
+        type=int,
+        default=DEFAULT_WINDOWED_P_STAR,
+        help="number of tabulated windowed channels",
+    )
+    parser.add_argument(
+        "--windowed-chan-orders",
+        default=None,
+        help=(
+            "'regular,radial' channel quadrature orders "
+            "(default 48,61: the assembler's tested 2D orders)"
+        ),
+    )
+    parser.add_argument(
+        "--classical-probe",
+        choices=("off", "truncation", "full"),
+        default=None,
+        help=(
+            "polynomial-completion certificate probe per windowed theta; "
+            "default 'truncation' (cheap) in smoke, 'full' in full mode"
+        ),
+    )
+    parser.add_argument(
+        "--classical-probe-tolerance",
+        type=float,
+        default=CLASSICAL_PROBE_TOLERANCE,
+    )
     args = parser.parse_args()
 
     smoke = args.mode == "smoke"
@@ -1432,9 +2176,24 @@ def main() -> int:
         parser.error(
             "--direct-levels must include --nlevels for the direct reference"
         )
-    if not helmholtz_k and not yukawa_lam:
+    try:
+        windowed_thetas = _parse_windowed_thetas(args.windowed_thetas, args.mode)
+    except ValueError as exc:
+        parser.error(str(exc))
+    if args.windowed_chan_orders is None:
+        windowed_chan_orders = DEFAULT_WINDOWED_CHAN_ORDERS_2D
+    else:
+        parts = _parse_csv_ints(args.windowed_chan_orders)
+        if len(parts) != 2:
+            parser.error(
+                "--windowed-chan-orders must be a 'regular,radial' pair"
+            )
+        windowed_chan_orders = (parts[0], parts[1])
+
+    if not helmholtz_k and not yukawa_lam and not windowed_thetas:
         parser.error(
-            "at least one of --helmholtz-k or --yukawa-lambda must be non-empty"
+            "at least one of --helmholtz-k, --yukawa-lambda, or "
+            "--windowed-thetas must be non-empty"
         )
 
     rows = run_benchmark(
@@ -1450,6 +2209,12 @@ def main() -> int:
         direct_levels=direct_levels,
         repeat_count=repeat_count,
         power_log_beta_mode=args.power_log_beta_mode,
+        windowed_thetas=windowed_thetas,
+        window_theta=args.window_theta,
+        windowed_p_star=args.windowed_p_star,
+        windowed_chan_orders=windowed_chan_orders,
+        classical_probe_kind=args.classical_probe,
+        classical_probe_tolerance=args.classical_probe_tolerance,
     )
     write_csv(args.out, rows)
     return 0
