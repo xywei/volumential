@@ -92,6 +92,7 @@ acceptance gates and are intentionally not part of `performance_suite.py`:
 
 ```bash
 python benchmarks/adaptive_timing_3d.py --mode smoke
+python benchmarks/graded_tree_convergence.py --mode smoke
 python benchmarks/rke_field_demo_3d.py --mode smoke --force-recompute
 python benchmarks/complex_channel_closure.py --mode smoke
 python benchmarks/complex_bessel_parameterized.py --mode smoke
@@ -114,6 +115,31 @@ per-step provisioning costs, the achieved dt/theta ranges, the
 refused/skipped/failed taxonomy, and a binding-constraint histogram with an
 explicit go/no-go verdict naming which constraint (CFL, `dt` cap, checkpoint
 landing, or theta floor) actually bound the step size.
+
+`graded_tree_convergence.py` (E9) measures manufactured-solution continuum
+convergence, error against degrees of freedom, on genuinely graded 2:1 trees
+--- the committed continuum-accuracy studies are all uniform-tree. A tight
+off-center Gaussian (`--source-alpha`, `--source-center`) drives
+source-adapted refinement through `refine_and_coarsen_tree_of_boxes` plus a
+colleague-preserving 2:1 balance closure (MeshGen's public update path would
+turn these compact cases uniform), refining leaves whose local
+interpolation-error proxy `|f(center)| * h**q_order` is within
+`--adapt-fraction` of the maximum. The 3D Laplace potential runs through the
+canonical rescaled-table path against the closed-form analytic Gaussian
+potential; the Gaussian mass omitted outside the box is gated at `1e-10` so
+the modeling gap cannot masquerade as continuum error. Two ladders share one
+table, FMM order, and table quadrature: uniform over `--uniform-nlevels` and
+adaptive over `--adapt-steps` from `--base-nlevels` (full defaults: `q=3`,
+uniform `3,4,5`, adaptive steps `0..6`). Every row records the leaf-level
+histogram, 2:1 balance, cross-level List 1 fractions, and a `grading_status`;
+the driver fails hard if any adaptive rung is not genuinely graded or if a
+ladder does not converge. Observed orders in DOF between consecutive rungs,
+the per-ladder asymptotic-regime verdict (two consecutive rungs agreeing
+within 25%, or an explicit `limitation: ... extend the ladder` statement),
+and the matched-error DOF advantage of the adaptive ladder land in the CSV
+and the JSON metadata sidecar (`<out stem>-metadata.json`). If the full-mode
+verdict states a limitation, extend with `--uniform-nlevels 3,4,5,6` and/or
+more adaptive steps rather than requoting a pre-asymptotic order.
 
 The break-even driver selects its direct-baseline provisioning policy with
 `--direct-provisioning {eager,lazy}`. `eager` (default, the committed-artifact
