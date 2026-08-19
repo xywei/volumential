@@ -952,6 +952,7 @@ def _prepare_windowed_family(
     p_star: int,
     chan_regular_order: int,
     chan_radial_order: int,
+    root_extent: float = TABLE_ROOT_EXTENT,
 ) -> dict[str, Any]:
     """Build or reload the parameter-independent windowed channel family."""
     from volumential.rke_table_assembly import get_windowed_channel_table
@@ -965,7 +966,7 @@ def _prepare_windowed_family(
             q_order,
             m,
             source_box_level=source_box_level,
-            root_extent=TABLE_ROOT_EXTENT,
+            root_extent=root_extent,
             window_theta=window_theta,
             chan_regular_order=chan_regular_order,
             chan_radial_order=chan_radial_order,
@@ -1098,6 +1099,7 @@ def _register_and_load_windowed_table(
     source_box_level: int,
     table,
     certificate: dict[str, Any],
+    root_extent: float = TABLE_ROOT_EXTENT,
 ) -> tuple[Any, dict[str, Any]]:
     """Register the assembled table under the standard cache slot, then load
     it back through the ordinary ``get_table`` path (asserting a pure cache
@@ -1130,7 +1132,7 @@ def _register_and_load_windowed_table(
     }
     register_start = time.perf_counter()
     with NearFieldInteractionTableManager(
-        str(cache_path), root_extent=TABLE_ROOT_EXTENT, queue=queue,
+        str(cache_path), root_extent=root_extent, queue=queue,
         **manager_kwargs,
     ) as table_manager:
         table_manager.register_external_table(
@@ -1149,7 +1151,7 @@ def _register_and_load_windowed_table(
 
     with _capture_table_get_timings() as load_records:
         with NearFieldInteractionTableManager(
-            str(cache_path), root_extent=TABLE_ROOT_EXTENT, queue=queue,
+            str(cache_path), root_extent=root_extent, queue=queue,
             **manager_kwargs,
         ) as table_manager:
             loaded_table, is_recomputed = table_manager.get_table(
