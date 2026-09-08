@@ -1309,7 +1309,12 @@ def _prepare_windowed_family(
     root_extent: float = TABLE_ROOT_EXTENT,
     dim: int = 2,
 ) -> dict[str, Any]:
-    """Build or reload the parameter-independent windowed channel family."""
+    """Build or reload the parameter-independent windowed channel family.
+
+    ``dim`` defaults to 2 so every 2D caller keeps its exact behaviour; the
+    3D composition driver passes ``dim=3`` to build the same family on the
+    3D channel geometry.
+    """
     from volumential.rke_table_assembly import get_windowed_channel_table
 
     dim = _require_dimension(dim)
@@ -1464,7 +1469,10 @@ def _register_and_load_windowed_table(
 ) -> tuple[Any, dict[str, Any]]:
     """Register the assembled table under the standard cache slot, then load
     it back through the ordinary ``get_table`` path (asserting a pure cache
-    load), so the evaluator consumes it exactly like a direct-built table."""
+    load), so the evaluator consumes it exactly like a direct-built table.
+
+    ``dim`` defaults to 2 so every 2D caller keeps its exact behaviour.
+    """
     from volumential.table_manager import NearFieldInteractionTableManager
 
     dim = _require_dimension(dim)
