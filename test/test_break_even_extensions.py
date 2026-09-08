@@ -1,5 +1,6 @@
-"""Tests for the E3 extensions of the break-even driver: the lazy-direct
-provisioning strategy and the operation-counter summary columns."""
+"""Tests for the E3/E6 extensions of the break-even driver: the lazy-direct
+provisioning strategy, the operation-counter summary columns, and the
+per-phase share columns."""
 
 __copyright__ = "Copyright (C) 2026 Xiaoyu Wei"
 
@@ -99,6 +100,177 @@ def test_summary_fields_extend_the_committed_layout():
         "ops_split_series_nmax_per_parameter",
     ):
         assert name in fields
+
+
+# {{{ per-phase share columns (E6)
+
+def _phase_summary_row(module, *, with_seconds=True):
+    """A summary row shaped like a finished run, with round numbers."""
+    row = {
+        "mode": "smoke",
+        "kernel": "Yukawa",
+        "direct_provisioning": "eager",
+        "phase_counting_rule": module.PHASE_COUNTING_RULE,
+        "phase_profile_repeat_count": 2,
+        "phase_profile_solves_per_strategy": "direct:2;rke:2",
+        "phase_profile_nested_phases": "",
+        "ops_phase_far_total": 0,
+        "ops_phase_fmm_multipole_coefficients_by_level": "7;7",
+        "ops_phase_fmm_local_coefficients_by_level": "9;9",
+        "ops_phase_nearfield_table_apply_direct": 1000,
+        "ops_phase_nearfield_table_apply_rke": 1000,
+        "ops_phase_split_correction_rke": 9000.0,
+        "ops_phase_split_correction_extra_table_fmas": 2000,
+        "ops_phase_split_correction_remainder_pair_evals": 4000,
+        "ops_phase_split_correction_remainder_term_evals": 4000.0,
+        "ops_phase_split_correction_beta_p2p_pair_evals": 2000,
+        "ops_phase_split_correction_smooth_interp_fmas": 1000,
+        "ops_phase_split_smooth_sources_per_box": 16,
+        "ops_phase_split_correction_status": "interpolated_smooth_quadrature",
+        "ops_phase_recombination_per_solve": 0,
+        "ops_phase_solve_total_direct": 1000,
+        "ops_phase_solve_total_rke": 10000.0,
+        "ops_phase_setup_direct_table_build": 500,
+        "ops_phase_setup_channel_family_build": 250,
+        "ops_phase_setup_recombination_flops": 0,
+        "s_phase_setup_direct_table_build": 8.0,
+        "s_phase_setup_direct_table_cache_load": 2.0,
+        "s_phase_setup_channel_family_build": 3.0,
+        "s_phase_setup_channel_family_cache_load": 1.0,
+        "s_phase_setup_recombination": 0.0,
+    }
+    for stage in module.PHASE_FAR_STAGES:
+        row[f"ops_phase_far_{stage}"] = 100
+        row["ops_phase_far_total"] += 100
+    for strategy in module.PHASE_STRATEGIES:
+        for stage in module.PHASE_FAR_STAGES:
+            row[f"s_phase_far_{stage}_{strategy}"] = 0.1 if with_seconds else 0.0
+        row[f"s_phase_far_total_{strategy}"] = (
+            0.1 * len(module.PHASE_FAR_STAGES) if with_seconds else 0.0
+        )
+        row[f"s_phase_nearfield_table_apply_{strategy}"] = 0.2
+        row[f"s_phase_split_correction_{strategy}"] = (
+            1.0 if strategy == "rke" else 0.0
+        )
+        row[f"s_phase_other_{strategy}"] = 0.1
+        row[f"s_phase_solve_total_{strategy}"] = (
+            0.7 + 0.2 + 0.1 + (1.0 if strategy == "rke" else 0.0)
+        )
+    return row
+
+
+def test_phase_columns_extend_the_layout_without_moving_anything():
+    module = _load_break_even()
+    fields = list(module.SUMMARY_FIELDS)
+    # append-only: every pre-E6 column keeps its position
+    assert fields.index("mode") == 0
+    assert fields.index("direct_provisioning") < fields.index(
+        "ops_reduced_entries_per_table"
+    )
+    last_pre_e6 = fields.index(
+        "ops_split_remainder_term_flops_per_solve_per_parameter"
+    )
+    for name in module.PHASE_OPS_FIELDS + module.PHASE_SECONDS_FIELDS:
+        assert fields.index(name) > last_pre_e6
+    # and no column is emitted twice
+    assert len(fields) == len(set(fields))
+
+
+def test_phase_column_names_carry_the_required_prefixes():
+    module = _load_break_even()
+    for name in module.PHASE_OPS_FIELDS:
+        assert name.startswith("ops_phase_") or name.startswith("phase_")
+    for name in module.PHASE_SECONDS_FIELDS:
+        assert name.startswith("s_phase_")
+    # every far-field stage is priced and timed for both strategies
+    for stage in module.PHASE_FAR_STAGES:
+        assert f"ops_phase_far_{stage}" in module.PHASE_OPS_FIELDS
+        for strategy in module.PHASE_STRATEGIES:
+            assert (
+                f"s_phase_far_{stage}_{strategy}"
+                in module.PHASE_SECONDS_FIELDS
+            )
+
+
+def test_phase_rows_partition_each_strategy_into_shares():
+    module = _load_break_even()
+    row = _phase_summary_row(module)
+    phase_rows = module._phase_rows(row)
+
+    assert {entry["scope"] for entry in phase_rows} == {"solve", "setup"}
+    assert set(phase_rows[0]) == set(module.PHASE_FIELDS)
+
+    for strategy in module.PHASE_STRATEGIES:
+        solve_rows = [
+            entry
+            for entry in phase_rows
+            if entry["scope"] == "solve" and entry["strategy"] == strategy
+        ]
+        # seven far stages plus table apply, correction, recombination, other
+        assert len(solve_rows) == len(module.PHASE_FAR_STAGES) + 4
+        seconds_shares = [
+            entry["seconds_share"] for entry in solve_rows
+        ]
+        assert sum(seconds_shares) == pytest.approx(1.0)
+        ops_shares = [
+            entry["ops_share"] for entry in solve_rows
+            if entry["ops_share"] != ""
+        ]
+        assert sum(ops_shares) == pytest.approx(1.0)
+
+
+def test_direct_strategy_rows_carry_no_split_correction_work():
+    module = _load_break_even()
+    phase_rows = module._phase_rows(_phase_summary_row(module))
+    (direct_correction,) = [
+        entry
+        for entry in phase_rows
+        if entry["scope"] == "solve"
+        and entry["strategy"] == "direct"
+        and entry["phase"] == "split_correction"
+    ]
+    assert direct_correction["ops"] == 0
+    assert direct_correction["seconds"] == 0.0
+
+
+def test_setup_rows_are_per_run_and_split_build_from_cache_load():
+    module = _load_break_even()
+    phase_rows = module._phase_rows(_phase_summary_row(module))
+    setup = {
+        (entry["strategy"], entry["phase"]): entry
+        for entry in phase_rows
+        if entry["scope"] == "setup"
+    }
+    assert setup[("direct", "direct_table_build")]["ops"] == 500
+    assert setup[("direct", "direct_table_build")]["unit"] == "per_run"
+    assert setup[("direct", "direct_table_build")]["seconds_share"] == (
+        pytest.approx(0.8)
+    )
+    assert setup[("rke", "recombination")]["ops"] == 0
+
+
+def test_zero_seconds_denominator_yields_blank_shares_not_a_crash():
+    module = _load_break_even()
+    row = _phase_summary_row(module)
+    for strategy in module.PHASE_STRATEGIES:
+        for name in module.PHASE_SECOND_NAMES:
+            row[f"s_phase_{name}_{strategy}"] = 0.0
+    phase_rows = module._phase_rows(row)
+    solve_rows = [
+        entry for entry in phase_rows if entry["scope"] == "solve"
+    ]
+    assert all(entry["seconds_share"] == "" for entry in solve_rows)
+    # the operation shares are unaffected by an absent timing
+    assert any(entry["ops_share"] != "" for entry in solve_rows)
+
+
+def test_counting_rule_string_names_every_component():
+    module = _load_break_even()
+    rule = module.PHASE_COUNTING_RULE
+    for token in ("far=", "nearfield=", "split_correction=", "recombination="):
+        assert token in rule
+
+# }}}
 
 
 if __name__ == "__main__":

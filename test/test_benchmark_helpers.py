@@ -1311,3 +1311,80 @@ def test_keller_segel_endpoint_planner_avoids_short_terminal_step():
     assert quantized_below_floor == pytest.approx((0.001, False, True))
 
     assert module._plan_time_step(0.0015, 0.0012, 0.001, 2.0) is None
+
+
+# {{{ per-phase share columns of the split-parameter sweep (E6)
+
+def test_sweep_phase_columns_are_appended_and_unique():
+    module = _load_benchmark("split_parameter_sweep")
+    fields = list(module.FIELDS)
+    assert len(fields) == len(set(fields))
+    last_pre_e6 = fields.index("classical_probe_s")
+    for name in module.PHASE_FIELDS:
+        assert fields.index(name) > last_pre_e6
+    for name in module.PHASE_FIELDS:
+        assert name.startswith(("ops_phase_", "s_phase_", "phase_"))
+
+
+def test_sweep_phase_measurements_are_inert_when_disabled():
+    module = _load_benchmark("split_parameter_sweep")
+
+    def _explode():  # pragma: no cover - must never be called
+        raise AssertionError("no solve may run when phase profiling is off")
+
+    measurements = module._phase_measurements(
+        queue=None,
+        traversal=None,
+        wrangler=None,
+        solve=_explode,
+        phase_repeat_count=0,
+    )
+    assert measurements["phase_profile_repeat_count"] == 0
+    for key, value in measurements.items():
+        if key != "phase_profile_repeat_count":
+            assert value == module.PHASE_UNMEASURED
+
+
+def test_sweep_phase_row_columns_map_both_paths():
+    module = _load_benchmark("split_parameter_sweep")
+    reference = module._phase_measurements(
+        queue=None, traversal=None, wrangler=None, solve=None,
+        phase_repeat_count=0,
+    )
+    split = dict(reference)
+    reference["ops_phase_far_total"] = 1700
+    reference["s_phase_solve_total"] = 0.5
+    split["s_phase_solve_total"] = 2.0
+    split["s_phase_split_correction"] = 1.5
+
+    columns = module._phase_row_columns(
+        reference_timing=reference, split_timing=split
+    )
+    assert set(columns) == set(module.PHASE_FIELDS)
+    # the shared traversal's counts are taken from whichever path has them
+    assert columns["ops_phase_far_total"] == 1700
+    assert columns["s_phase_solve_total_reference"] == 0.5
+    assert columns["s_phase_solve_total_split"] == 2.0
+    assert columns["s_phase_split_correction_split"] == 1.5
+    assert columns["s_phase_split_correction_reference"] == (
+        module.PHASE_UNMEASURED
+    )
+
+
+def test_sweep_phase_row_columns_are_empty_for_an_unprofiled_run():
+    module = _load_benchmark("split_parameter_sweep")
+    unmeasured = module._phase_measurements(
+        queue=None, traversal=None, wrangler=None, solve=None,
+        phase_repeat_count=0,
+    )
+    columns = module._phase_row_columns(
+        reference_timing=unmeasured, split_timing=unmeasured
+    )
+    assert columns["phase_profile_repeat_count"] == 0
+    assert all(
+        value == module.PHASE_UNMEASURED
+        for key, value in columns.items()
+        if key != "phase_profile_repeat_count"
+    )
+
+# }}}

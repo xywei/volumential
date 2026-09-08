@@ -45,6 +45,50 @@ from typing import Any
 import numpy as np
 
 
+# {{{ per-phase share columns (E6)
+
+#: Far-field FMM stage names, matching
+#: :data:`volumential.opcounters.FMM_FAR_FIELD_STAGES`.
+PHASE_FAR_STAGES = (
+    "form_multipoles",
+    "coarsen_multipoles",
+    "multipole_to_local",
+    "eval_multipoles",
+    "form_locals",
+    "refine_locals",
+    "eval_locals",
+)
+
+#: Timed phases reported per path, aggregated over the far-field stages.
+PHASE_TIMED_NAMES = (
+    "far_total",
+    "nearfield_table_apply",
+    "split_correction",
+    "other",
+    "solve_total",
+)
+
+#: Path prefixes: the fixed-parameter direct reference and the split path.
+PHASE_PATHS = ("reference", "split")
+
+PHASE_FIELDS = (
+    "phase_profile_repeat_count",
+    *(f"ops_phase_far_{stage}" for stage in PHASE_FAR_STAGES),
+    "ops_phase_far_total",
+    "ops_phase_nearfield_point_pairs_per_solve",
+    *(
+        f"s_phase_{name}_{path}"
+        for path in PHASE_PATHS
+        for name in PHASE_TIMED_NAMES
+    ),
+)
+
+#: Value written into every per-phase column when phase profiling is off.
+PHASE_UNMEASURED = ""
+
+# }}}
+
+
 FIELDS = (
     "case_id",
     "mode",
@@ -165,6 +209,19 @@ FIELDS = (
     "fmm_expansion_radius",
     "far_field_status",
     "implied_reference_norm",
+    # per-phase shares of one end-to-end solve (E6), opt-in through
+    # --phase-repeat-count.  Off by default, so a run that does not ask for
+    # them emits these columns empty and is otherwise unchanged.  Counting
+    # rules and the split-correction caveats are documented in
+    # benchmarks/break_even_validation.py, which owns the primary E6
+    # artifact; here the far field is reported as one aggregate because the
+    # per-stage breakdown is the same traversal in every row.  The
+    # "_reference" suffix is the row's fixed-parameter direct reference
+    # path; "_split" is the row's own table_strategy path -- the online
+    # split evaluator on online_split rows, and the windowed-assembled
+    # table (which rides the unchanged direct warm path, so it records no
+    # split_correction seconds) on windowed_assembled rows.
+    *PHASE_FIELDS,
 )
 
 
@@ -947,6 +1004,7 @@ def _run_path(
     split_smooth_quad_order: int | None = None,
     repeat_count: int,
     dim: int = 2,
+    phase_repeat_count: int = 0,
 ):
     from volumential.volume_fmm import drive_volume_fmm
 
@@ -1084,7 +1142,102 @@ def _run_path(
                 "isolated_warm_python_scalar_coefficients"
             )
 
+    timing.update(
+        _phase_measurements(
+            queue=queue,
+            traversal=traversal,
+            wrangler=wrangler,
+            solve=solve,
+            phase_repeat_count=phase_repeat_count,
+        )
+    )
+
     return potential.get(queue), timing, wrangler
+
+
+def _phase_measurements(
+    *, queue, traversal, wrangler, solve, phase_repeat_count: int
+):
+    """Per-phase operation counts and seconds of one end-to-end solve (E6).
+
+    Runs ``phase_repeat_count`` extra, phase-instrumented solves *after*
+    every timed phase, so no reported timing column is perturbed.  Phase
+    profiling synchronizes the command queue at every phase boundary, which
+    makes a profiled solve slower than an unprofiled one; the profiled total
+    is reported next to the shares so the perturbation stays visible.  With
+    ``phase_repeat_count == 0`` nothing runs and every phase value is left
+    unmeasured.
+
+    Counting rules are those of ``benchmarks/break_even_validation.py``: the
+    far-field counts are dense coefficient touches derived from the executed
+    traversal and expansion sizes, and the near-field pair count is one
+    fused multiply-add per (target point, source quadrature point) pair per
+    applied table.
+    """
+    measurements = {
+        "phase_profile_repeat_count": phase_repeat_count,
+        "ops_phase_far_total": PHASE_UNMEASURED,
+        "ops_phase_nearfield_point_pairs_per_solve": PHASE_UNMEASURED,
+        **{
+            f"ops_phase_far_{stage}": PHASE_UNMEASURED
+            for stage in PHASE_FAR_STAGES
+        },
+        **{
+            f"s_phase_{name}": PHASE_UNMEASURED
+            for name in PHASE_TIMED_NAMES
+        },
+    }
+    if phase_repeat_count <= 0:
+        return measurements
+
+    import volumential.opcounters as opcounters
+    from volumential.phase_profile import (
+        FAR_FIELD_PHASES,
+        PhaseProfile,
+        profiling,
+    )
+
+    far = opcounters.fmm_stage_operation_counts_from_traversal(
+        queue, traversal, wrangler
+    )
+    measurements["ops_phase_far_total"] = far["far_total"]
+    for stage in PHASE_FAR_STAGES:
+        measurements[f"ops_phase_far_{stage}"] = far[stage]
+    measurements["ops_phase_nearfield_point_pairs_per_solve"] = (
+        opcounters.nearfield_point_pairs(queue, traversal)
+    )
+
+    profile = PhaseProfile(sync=queue.finish)
+    solve_total_s = 0.0
+    for _ in range(phase_repeat_count):
+        queue.finish()
+        start = time.perf_counter()
+        with profiling(profile):
+            solve()
+        queue.finish()
+        solve_total_s += time.perf_counter() - start
+
+    solve_total_s /= phase_repeat_count
+    far_total_s = sum(
+        profile.seconds(name) for name in FAR_FIELD_PHASES
+    ) / phase_repeat_count
+    table_s = (
+        profile.seconds("nearfield_table_apply") / phase_repeat_count
+    )
+    correction_s = profile.seconds("split_correction") / phase_repeat_count
+    measurements.update(
+        {
+            "s_phase_far_total": far_total_s,
+            "s_phase_nearfield_table_apply": table_s,
+            "s_phase_split_correction": correction_s,
+            "s_phase_other": solve_total_s
+            - far_total_s
+            - table_s
+            - correction_s,
+            "s_phase_solve_total": solve_total_s,
+        }
+    )
+    return measurements
 
 
 def _get_direct_table(
@@ -1656,6 +1809,7 @@ def _run_windowed_strategy(
     classical_probe_tolerance: float,
     direct_build_config,
     repeat_count: int,
+    phase_repeat_count: int,
     source_weights,
     q_points,
     coords_host,
@@ -1868,6 +2022,7 @@ def _run_windowed_strategy(
             split=False,
             split_order=1,
             repeat_count=repeat_count,
+            phase_repeat_count=phase_repeat_count,
         )
         windowed_values, windowed_timing, _ = _run_path(
             ctx=ctx,
@@ -1885,6 +2040,7 @@ def _run_windowed_strategy(
             split=False,
             split_order=1,
             repeat_count=repeat_count,
+            phase_repeat_count=phase_repeat_count,
         )
 
         diff = windowed_values - reference_values
@@ -1908,6 +2064,14 @@ def _run_windowed_strategy(
                 "windowed_table_apply_mean_s": windowed_timing[
                     "table_apply_mean_s"
                 ],
+                # on a windowed_assembled row the row's strategy path is the
+                # assembled table, which rides the unchanged direct warm
+                # evaluator, so its split_correction phase is empty by
+                # construction
+                **_phase_row_columns(
+                    reference_timing=reference_timing,
+                    split_timing=windowed_timing,
+                ),
             }
         )
         row["implied_reference_norm"] = _implied_reference_norm(
@@ -2149,6 +2313,37 @@ def _validate_yukawa_order_convergence(rows: list[dict[str, Any]]) -> None:
             )
 
 
+def _phase_row_columns(*, reference_timing, split_timing):
+    """Map the two paths' phase measurements onto the row's phase columns.
+
+    The operation counts describe the shared traversal and are therefore
+    taken from whichever path measured them; the seconds are per path.  A
+    row whose run did not ask for phase profiling gets every column empty.
+    """
+    by_path = {"reference": reference_timing, "split": split_timing}
+    columns = {
+        "phase_profile_repeat_count": reference_timing.get(
+            "phase_profile_repeat_count", PHASE_UNMEASURED
+        ),
+    }
+    for name in ("ops_phase_far_total",
+                 "ops_phase_nearfield_point_pairs_per_solve",
+                 *(f"ops_phase_far_{stage}" for stage in PHASE_FAR_STAGES)):
+        value = PHASE_UNMEASURED
+        for timing in (reference_timing, split_timing):
+            candidate = timing.get(name, PHASE_UNMEASURED)
+            if candidate != PHASE_UNMEASURED:
+                value = candidate
+                break
+        columns[name] = value
+    for path, timing in by_path.items():
+        for name in PHASE_TIMED_NAMES:
+            columns[f"s_phase_{name}_{path}"] = timing.get(
+                f"s_phase_{name}", PHASE_UNMEASURED
+            )
+    return columns
+
+
 def _row_from_result(
     *,
     mode: str,
@@ -2217,6 +2412,9 @@ def _row_from_result(
         "online_remainder_s": split_timing["smooth_residual_mean_s"],
         "online_remainder_time_kind": split_timing["smooth_residual_time_kind"],
         "split_term_keys": _split_term_keys(accounting),
+        **_phase_row_columns(
+            reference_timing=reference_timing, split_timing=split_timing
+        ),
         **{
             key: value
             for key, value in accounting_dict.items()
@@ -2276,6 +2474,7 @@ def run_benchmark(
     direct_levels: list[int],
     repeat_count: int,
     dim: int = 2,
+    phase_repeat_count: int = 0,
     power_log_beta_mode: str = "p2p",
     windowed_thetas: list[float] | None = None,
     window_theta: float = DEFAULT_WINDOW_THETA,
@@ -2332,6 +2531,8 @@ def run_benchmark(
         )
     if repeat_count < 1:
         raise ValueError("repeat_count must be >= 1")
+    if phase_repeat_count < 0:
+        raise ValueError("phase_repeat_count must be >= 0")
     if len(set(split_orders)) != len(split_orders):
         raise ValueError("split_orders must be unique")
     if nlevels not in direct_levels:
@@ -2447,6 +2648,7 @@ def run_benchmark(
                 split=False,
                 split_order=1,
                 repeat_count=repeat_count,
+                phase_repeat_count=phase_repeat_count,
             )
             parameter_cases.append(
                 {
@@ -2525,6 +2727,7 @@ def run_benchmark(
                     split_auto_config=split_auto_config,
                     split_smooth_quad_order=smooth_quad_order,
                     repeat_count=repeat_count,
+                    phase_repeat_count=phase_repeat_count,
                 )
                 accounting = split_wrangler.get_helmholtz_split_cache_accounting(
                     parameter_count=len(parameters)
@@ -2603,6 +2806,7 @@ def run_benchmark(
                     classical_probe_tolerance=classical_probe_tolerance,
                     direct_build_config=direct_build_config,
                     repeat_count=repeat_count,
+                    phase_repeat_count=phase_repeat_count,
                     source_weights=source_weights,
                     q_points=q_points,
                     coords_host=coords_host,
@@ -2689,6 +2893,17 @@ def main() -> int:
         "--repeat-count",
         type=int,
         help="number of timed applications per parameter",
+    )
+    parser.add_argument(
+        "--phase-repeat-count",
+        type=int,
+        default=0,
+        help="extra phase-instrumented solves per row for the E6 per-phase "
+        "share columns (default 0, i.e. off: the ops_phase_*/s_phase_* "
+        "columns stay empty and the run is otherwise unchanged).  These "
+        "solves run after every timed phase and never enter a timing "
+        "column; profiling synchronizes the queue at each phase boundary, "
+        "so s_phase_solve_total_* exceeds the unprofiled solve mean",
     )
     parser.add_argument(
         "--windowed-thetas",
@@ -2804,6 +3019,8 @@ def main() -> int:
     )
     if repeat_count < 1:
         parser.error("--repeat-count must be >= 1")
+    if args.phase_repeat_count < 0:
+        parser.error("--phase-repeat-count must be >= 0")
 
     if args.direct_levels:
         direct_levels = _parse_csv_levels(args.direct_levels)
@@ -2856,6 +3073,7 @@ def main() -> int:
             yukawa_lam=yukawa_lam,
             direct_levels=direct_levels,
             repeat_count=repeat_count,
+            phase_repeat_count=args.phase_repeat_count,
             power_log_beta_mode=args.power_log_beta_mode,
             windowed_thetas=windowed_thetas,
             window_theta=args.window_theta,

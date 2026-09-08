@@ -68,6 +68,7 @@ from volumential.expansion_wrangler_fpnd import (
 )
 from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
 from volumential.lagrange import barycentric_lagrange_weights
+from volumential.phase_profile import phase as _fmm_phase
 
 
 logger = logging.getLogger(__name__)
@@ -712,6 +713,14 @@ def drive_volume_fmm(
         potentials are reordered into user order before return).
 
     Returns the potentials computed by *expansion_wrangler*.
+
+    Each stage below runs inside a :func:`volumential.phase_profile.phase`
+    block, so a caller that activates a
+    :class:`volumential.phase_profile.PhaseProfile` gets per-phase wall
+    seconds for the solve.  The blocks are inert (one truthiness check)
+    when no profile is active, and a profiled solve synchronizes the
+    command queue at every phase boundary, so profiled totals must not be
+    quoted as unprofiled solve times.
     """
     wrangler = expansion_wrangler
     assert issubclass(type(wrangler), ExpansionWranglerInterface)
@@ -875,9 +884,12 @@ def drive_volume_fmm(
     # {{{ Construct local multipoles
 
     logger.debug("construct local multipoles")
-    mpole_exps, timing_future = wrangler.form_multipoles(
-        traversal.level_start_source_box_nrs, traversal.source_boxes, src_weights
-    )
+    with _fmm_phase("far_form_multipoles"):
+        mpole_exps, timing_future = wrangler.form_multipoles(
+            traversal.level_start_source_box_nrs,
+            traversal.source_boxes,
+            src_weights,
+        )
     recorder.add("form_multipoles", timing_future)
 
     # }}}
@@ -885,11 +897,12 @@ def drive_volume_fmm(
     # {{{ Propagate multipoles upward
 
     logger.debug("propagate multipoles upward")
-    mpole_exps, timing_future = wrangler.coarsen_multipoles(
-        traversal.level_start_source_parent_box_nrs,
-        traversal.source_parent_boxes,
-        mpole_exps,
-    )
+    with _fmm_phase("far_coarsen_multipoles"):
+        mpole_exps, timing_future = wrangler.coarsen_multipoles(
+            traversal.level_start_source_parent_box_nrs,
+            traversal.source_parent_boxes,
+            mpole_exps,
+        )
     recorder.add("coarsen_multipoles", timing_future)
 
     # mpole_exps is called Phi in [1]
@@ -987,12 +1000,13 @@ def drive_volume_fmm(
     direct_timing_futures = []
     potentials = None
     for idx_s, field in enumerate(src_func):
-        field_potentials, timing_future = wrangler.eval_direct(
-            traversal.target_boxes,
-            traversal.neighbor_source_boxes_starts,
-            traversal.neighbor_source_boxes_lists,
-            field,
-        )
+        with _fmm_phase("nearfield_table_apply"):
+            field_potentials, timing_future = wrangler.eval_direct(
+                traversal.target_boxes,
+                traversal.neighbor_source_boxes_starts,
+                traversal.neighbor_source_boxes_lists,
+                field,
+            )
 
         if _contains_nonfinite(field_potentials):
             raise RuntimeError(
@@ -1007,15 +1021,16 @@ def drive_volume_fmm(
             and getattr(wrangler, "helmholtz_split")
             and hasattr(wrangler, "eval_direct_helmholtz_split_correction")
         ):
-            correction, correction_timing_future = (
-                wrangler.eval_direct_helmholtz_split_correction(
-                    traversal.target_boxes,
-                    traversal.neighbor_source_boxes_starts,
-                    traversal.neighbor_source_boxes_lists,
-                    src_weights[idx_s],
-                    src_func=field,
+            with _fmm_phase("split_correction"):
+                correction, correction_timing_future = (
+                    wrangler.eval_direct_helmholtz_split_correction(
+                        traversal.target_boxes,
+                        traversal.neighbor_source_boxes_starts,
+                        traversal.neighbor_source_boxes_lists,
+                        src_weights[idx_s],
+                        src_func=field,
+                    )
                 )
-            )
             if correction_timing_future is not None:
                 direct_timing_futures.append(correction_timing_future)
             correction = _coerce_obj_array_like(correction, field_potentials, queue)
@@ -1071,13 +1086,14 @@ def drive_volume_fmm(
     # {{{ Translate separated siblings' ("list 2") mpoles to local
 
     logger.debug("translate separated siblings' ('list 2') mpoles to local")
-    local_exps, timing_future = wrangler.multipole_to_local(
-        traversal.level_start_target_or_target_parent_box_nrs,
-        traversal.target_or_target_parent_boxes,
-        traversal.from_sep_siblings_starts,
-        traversal.from_sep_siblings_lists,
-        mpole_exps,
-    )
+    with _fmm_phase("far_multipole_to_local"):
+        local_exps, timing_future = wrangler.multipole_to_local(
+            traversal.level_start_target_or_target_parent_box_nrs,
+            traversal.target_or_target_parent_boxes,
+            traversal.from_sep_siblings_starts,
+            traversal.from_sep_siblings_lists,
+            mpole_exps,
+        )
     _debug_nan_status("local_exps_after_m2l", local_exps[0])
     recorder.add("multipole_to_local", timing_future)
 
@@ -1092,11 +1108,12 @@ def drive_volume_fmm(
     # (the point of aiming this stage at particles is specifically to keep its
     # contribution *out* of the downward-propagating local expansions)
 
-    mpole_result, timing_future = wrangler.eval_multipoles(
-        traversal.target_boxes_sep_smaller_by_source_level,
-        traversal.from_sep_smaller_by_level,
-        mpole_exps,
-    )
+    with _fmm_phase("far_eval_multipoles"):
+        mpole_result, timing_future = wrangler.eval_multipoles(
+            traversal.target_boxes_sep_smaller_by_source_level,
+            traversal.from_sep_smaller_by_level,
+            mpole_exps,
+        )
     _debug_nan_status("mpole_result", mpole_result[0])
     recorder.add("eval_multipoles", timing_future)
 
@@ -1122,13 +1139,14 @@ def drive_volume_fmm(
 
     logger.debug("form locals for separated bigger source boxes ('list 4 far')")
 
-    local_result, timing_future = wrangler.form_locals(
-        traversal.level_start_target_or_target_parent_box_nrs,
-        traversal.target_or_target_parent_boxes,
-        traversal.from_sep_bigger_starts,
-        traversal.from_sep_bigger_lists,
-        src_weights,
-    )
+    with _fmm_phase("far_form_locals"):
+        local_result, timing_future = wrangler.form_locals(
+            traversal.level_start_target_or_target_parent_box_nrs,
+            traversal.target_or_target_parent_boxes,
+            traversal.from_sep_bigger_starts,
+            traversal.from_sep_bigger_lists,
+            src_weights,
+        )
     _debug_nan_status("local_result", local_result[0])
 
     recorder.add("form_locals", timing_future)
@@ -1153,11 +1171,12 @@ def drive_volume_fmm(
     logger.debug("propagate local_exps downward")
     # import numpy.linalg as la
 
-    local_exps, timing_future = wrangler.refine_locals(
-        traversal.level_start_target_or_target_parent_box_nrs,
-        traversal.target_or_target_parent_boxes,
-        local_exps,
-    )
+    with _fmm_phase("far_refine_locals"):
+        local_exps, timing_future = wrangler.refine_locals(
+            traversal.level_start_target_or_target_parent_box_nrs,
+            traversal.target_or_target_parent_boxes,
+            local_exps,
+        )
     _debug_nan_status("local_exps_after_refine", local_exps[0])
 
     recorder.add("refine_locals", timing_future)
@@ -1168,9 +1187,12 @@ def drive_volume_fmm(
 
     logger.debug("evaluate locals")
 
-    local_result, timing_future = wrangler.eval_locals(
-        traversal.level_start_target_box_nrs, traversal.target_boxes, local_exps
-    )
+    with _fmm_phase("far_eval_locals"):
+        local_result, timing_future = wrangler.eval_locals(
+            traversal.level_start_target_box_nrs,
+            traversal.target_boxes,
+            local_exps,
+        )
     _debug_nan_status("local_eval", local_result[0])
 
     recorder.add("eval_locals", timing_future)
