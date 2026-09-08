@@ -67,7 +67,13 @@ pair per applied table.  The direct path applies one table; the online split
 path applies the base table in this phase and its ``p-1`` retained-channel
 tables in the correction phase below, so its total is ``p`` times the
 direct path's, which is the identity the ``ops_split_table_fmas_per_solve``
-column already reports.
+column already reports.  The count is *dtype blind*, matching the
+pre-existing ``ops_*`` columns: this driver runs a complex128 source
+function, and a retained-channel apply of a real-valued term kernel is
+dispatched twice (real part, imaginary part) inside one counted apply, so
+the executed List 1 launch count of the correction phase is twice
+``ops_phase_split_correction_extra_table_fmas / N_nf``.  Do not read these
+columns as launch counts.
 
 *Split correction.*  The online split path's correction phase is *not* the
 series remainder alone, and the cost model's ``Delta W`` (kb:
@@ -85,11 +91,20 @@ separately here rather than folded away:
    pair count ``ops_phase_split_correction_remainder_pair_evals`` exceeds
    the model's ``N_nf`` by ``(q_smooth/q)**d``.  The rebuild itself costs
    ``ops_phase_split_correction_smooth_interp_fmas`` interpolation FMAs
-   *per solve*;
+   *per solve*, priced as the axis-by-axis tensor-product contraction the
+   implementation performs and not as a dense ``q_smooth**d`` by ``q**d``
+   matrix apply (:func:`_tensor_product_interp_fmas`);
 3. each 2D single-table ``power_log`` term runs an additional near-field
    P2P pass for its ``beta`` contribution when the auto-config's
    ``power_log_single_table_beta_mode`` is ``p2p``, counted at
    ``ops_phase_split_correction_beta_p2p_pair_evals``.
+
+``ops_phase_split_correction_remainder_term_evals`` (and therefore
+``ops_phase_split_correction_rke`` and ``ops_phase_solve_total_rke``) uses
+the *mean* of ``ops_split_series_nmax_per_parameter`` over the run's
+parameters, because the profiled seconds it sits beside are likewise means
+over the same parameter set.  The per-parameter series lengths stay
+available, unaveraged, in the pre-existing column.
 
 The pre-existing ``ops_split_remainder_*`` columns keep their published
 meaning (the model's ``N_nf``-based count) and are not touched.
@@ -104,7 +119,13 @@ recombination work was executed, not "unmeasured".
 *Setup.*  ``ops_phase_setup_direct_table_build`` and
 ``ops_phase_setup_channel_family_build`` are the singular-quadrature node
 evaluations of the two cold builds; their seconds are the cold-build and
-warm cache-load times the table manager's own timing hooks record.
+warm cache-load times the table manager's own timing hooks record.  These
+are a *different currency* from the per-solve counts above -- whole kernel
+or channel evaluations inside a Duffy rule, not multiply-adds -- so setup
+and solve operation counts must never be added or shared against each
+other.  The long-format ``break_even_phases.csv`` states the currency of
+every row in its ``ops_unit`` column, and setup rows carry no
+``ops_share`` for exactly this reason.
 
 *Reading the far-field seconds.*  ``s_phase_far_multipole_to_local_*`` is
 the one phase whose seconds routinely fail to track its operation count,
@@ -116,7 +137,12 @@ compilation on *every* solve; the run then emits ``VkFFT not found`` and
 ``DirectCallUncachedWarning`` and the M2L phase can dominate the profiled
 solve while its coefficient-touch count does not.  Check the run log
 before quoting a far-field time share, and quote the operation share
-instead when those warnings are present.
+instead when those warnings are present.  The converse also occurs and is
+not a defect: on a uniform tree List 3 and List 4 are empty, so
+``ops_phase_far_eval_multipoles`` and ``ops_phase_far_form_locals`` are 0
+while their seconds are not, because the wrangler still launches a kernel
+over an empty interaction list.  A zero operation count means zero
+counted work, never zero elapsed time.
 
 *Seconds.*  ``s_phase_*`` are means over dedicated, phase-instrumented
 solves run *after* every timed phase, so no reported timing column is
@@ -305,19 +331,32 @@ PHASE_FIELDS = (
     "strategy",
     "phase",
     "unit",
+    "ops_unit",
     "ops",
     "seconds",
     "ops_share",
     "seconds_share",
 )
 
+#: What the ``ops`` column counts in each scope.  Solve and setup rows are
+#: in *different* currencies and must never be added together: a solve row
+#: counts coefficient touches, table FMAs, series-term and pair evaluations
+#: (all "one multiply-add against one datum"), while a setup row counts
+#: singular-quadrature node evaluations of a table build, which are whole
+#: kernel or channel evaluations.
+PHASE_OPS_UNITS = {
+    "solve": "coefficient_touches_fmas_and_pair_evals",
+    "setup": "singular_quadrature_node_evals",
+}
+
 #: Identifies the counting-rule revision the ``ops_phase_*`` columns follow,
 #: so a consumer can tell two executions of different rules apart.
 PHASE_COUNTING_RULE = (
-    "e6-v1:far=dense_coefficient_touches_from_traversal_and_expansion_sizes;"
-    "nearfield=fma_per_nearfield_pair_per_applied_table;"
-    "split_correction=extra_table_fmas+remainder_pair_evals*nmax"
+    "e6-v2:far=dense_coefficient_touches_from_traversal_and_expansion_sizes;"
+    "nearfield=fma_per_nearfield_pair_per_applied_table_dtype_blind;"
+    "split_correction=extra_table_fmas+remainder_pair_evals*mean_nmax"
     "+beta_p2p_pair_evals+smooth_interp_fmas;"
+    "smooth_interp=tensor_product_axis_by_axis_not_dense;"
     "recombination=0_per_solve_and_no_windowed_family_in_this_driver"
 )
 
@@ -504,6 +543,25 @@ def _operation_counters(
 
 # {{{ per-phase operation counts and timings (E6)
 
+def _tensor_product_interp_fmas(*, dim: int, q: int, q_smooth: int) -> int:
+    """FMAs of one box's smooth-quadrature interpolation, as executed.
+
+    ``_interpolate_box_values_to_smooth_quad`` applies the 1D barycentric
+    matrix one axis at a time (``interp_mat @ v @ interp_mat.T`` in 2D, the
+    optimized ``einsum`` path in 3D), so the cost is the tensor-product sum
+    ``sum_{k=1..d} q_smooth**k * q**(d-k+1)`` and *not* the dense
+    ``q_smooth**d * q**d`` a matrix-free reading would suggest.  At the
+    production configuration (``d = 2``, ``q = 4``, ``q_smooth = 8``) this
+    is 384 per box against 1024 dense, a factor of 2.67.
+    """
+    dim = int(dim)
+    q = int(q)
+    q_smooth = int(q_smooth)
+    return int(
+        sum(q_smooth ** (axis + 1) * q ** (dim - axis) for axis in range(dim))
+    )
+
+
 def _split_correction_operation_counts(
     *, queue, traversal, wrangler, q_order, smooth_quad_order
 ):
@@ -517,6 +575,23 @@ def _split_correction_operation_counts(
     further near-field P2P.  Every count below is read off the executed
     wrangler and traversal, so it prices what ran rather than the symbolic
     ``Delta W`` of the cost model.
+
+    Two conventions are inherited from the pre-existing ``ops_*`` columns
+    and are worth stating because they make these counts *lower bounds* on
+    executed kernel launches rather than launch counts:
+
+    * a table apply is priced at one FMA per near-field pair per applied
+      table, blind to the arithmetic dtype.  This driver runs a complex128
+      source function, and ``_eval_direct_helmholtz_split_term_table``
+      dispatches a real-valued term kernel once for the real part and once
+      for the imaginary part, so each retained channel executes *two* List 1
+      passes for the one apply counted here.  Counting it once is what keeps
+      ``base + extra == ops_split_table_fmas_per_solve``, the published
+      ``p``-times-direct identity, and it prices the two strategies on the
+      same dtype-blind footing;
+    * the smooth-source rebuild is priced by
+      :func:`_tensor_product_interp_fmas`, i.e. as the axis-by-axis
+      contraction the implementation performs.
 
     :returns: a dict of counts plus a ``status`` string; on any failure to
         interrogate the wrangler the counts are ``""`` and ``status``
@@ -586,7 +661,10 @@ def _split_correction_operation_counts(
         if use_interp_smooth_quad:
             n_active_source_boxes = int(np.count_nonzero(box_source_counts))
             smooth_interp_fmas = (
-                n_active_source_boxes * smooth_sources_per_box * n_quad_points
+                n_active_source_boxes
+                * _tensor_product_interp_fmas(
+                    dim=dim, q=int(q_order), q_smooth=int(smooth_order)
+                )
             )
         else:
             smooth_interp_fmas = 0
@@ -759,7 +837,7 @@ def _profile_solve_phases(
     profiles = {}
     solve_totals = {}
     solve_counts = {}
-    for strategy in ("direct", "rke"):
+    for strategy in PHASE_STRATEGIES:
         profile = PhaseProfile(sync=queue.finish)
         total_s = 0.0
         n_solves = 0
@@ -886,6 +964,7 @@ def _phase_rows(summary_row):
                     "strategy": strategy,
                     "phase": phase,
                     "unit": "per_solve",
+                    "ops_unit": PHASE_OPS_UNITS["solve"],
                     "ops": ops,
                     "seconds": seconds,
                     "ops_share": (
@@ -946,6 +1025,7 @@ def _phase_rows(summary_row):
                     "strategy": strategy,
                     "phase": phase,
                     "unit": "per_run",
+                    "ops_unit": PHASE_OPS_UNITS["setup"],
                     "ops": ops,
                     "seconds": seconds,
                     "ops_share": "",

@@ -249,6 +249,21 @@ def test_setup_rows_are_per_run_and_split_build_from_cache_load():
     assert setup[("rke", "recombination")]["ops"] == 0
 
 
+def test_setup_and_solve_operations_declare_different_currencies():
+    module = _load_break_even()
+    phase_rows = module._phase_rows(_phase_summary_row(module))
+    by_scope = {entry["scope"]: entry["ops_unit"] for entry in phase_rows}
+    assert by_scope == module.PHASE_OPS_UNITS
+    assert by_scope["solve"] != by_scope["setup"]
+    # a setup row never offers an operation share, so the two currencies
+    # cannot be summed into one denominator by accident
+    assert all(
+        entry["ops_share"] == ""
+        for entry in phase_rows
+        if entry["scope"] == "setup"
+    )
+
+
 def test_zero_seconds_denominator_yields_blank_shares_not_a_crash():
     module = _load_break_even()
     row = _phase_summary_row(module)
@@ -267,8 +282,39 @@ def test_zero_seconds_denominator_yields_blank_shares_not_a_crash():
 def test_counting_rule_string_names_every_component():
     module = _load_break_even()
     rule = module.PHASE_COUNTING_RULE
-    for token in ("far=", "nearfield=", "split_correction=", "recombination="):
+    for token in (
+        "far=",
+        "nearfield=",
+        "split_correction=",
+        "smooth_interp=",
+        "recombination=",
+    ):
         assert token in rule
+
+
+def test_smooth_interp_is_priced_as_the_tensor_product_that_runs():
+    module = _load_break_even()
+    # d = 2: interp_mat @ v costs q_s * q * q, then @ interp_mat.T costs
+    # q_s * q * q_s, exactly what _interpolate_box_values_to_smooth_quad does
+    assert module._tensor_product_interp_fmas(dim=2, q=4, q_smooth=8) == 384
+    assert module._tensor_product_interp_fmas(dim=1, q=4, q_smooth=8) == 32
+    assert module._tensor_product_interp_fmas(dim=3, q=3, q_smooth=6) == (
+        6 * 27 + 36 * 9 + 216 * 3
+    )
+    # and it is strictly below the dense q_s**d x q**d reading it replaces
+    for dim, q, q_smooth in ((2, 4, 8), (3, 3, 6)):
+        assert module._tensor_product_interp_fmas(
+            dim=dim, q=q, q_smooth=q_smooth
+        ) < q_smooth**dim * q**dim
+
+
+def test_smooth_interp_price_degenerates_when_orders_match():
+    module = _load_break_even()
+    # q_smooth == q is the non-interpolating path; the formula still returns
+    # the axis-by-axis cost rather than something undefined
+    assert module._tensor_product_interp_fmas(dim=2, q=4, q_smooth=4) == (
+        4 * 16 + 16 * 4
+    )
 
 # }}}
 
