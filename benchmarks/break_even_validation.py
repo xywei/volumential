@@ -109,6 +109,14 @@ available, unaveraged, in the pre-existing column.
 The pre-existing ``ops_split_remainder_*`` columns keep their published
 meaning (the model's ``N_nf``-based count) and are not touched.
 
+``ops_phase_split_correction_status`` records why a correction count is
+blank when the wrangler cannot be interrogated.  A blank there propagates:
+``ops_phase_split_correction_rke`` and ``ops_phase_solve_total_rke`` go
+blank too, and ``break_even_phases.csv`` then withholds the whole
+strategy's ``ops_share`` column rather than dividing the surviving phases
+by their own sum, which would report a confident share of a denominator
+that is missing the dominant phase.
+
 *Recombination.*  Windowed recombination is a per-*parameter setup* cost
 (``p_star`` FMAs per assembled entry), never a per-solve cost, and this
 driver provisions no windowed family at all: both
@@ -897,7 +905,19 @@ def _phase_second_columns(*, profiles, solve_totals, solve_counts):
 
 
 def _phase_rows(summary_row):
-    """Long-format phase rows derived from a finished summary row."""
+    """Long-format phase rows derived from a finished summary row.
+
+    An operation share is emitted only when every phase that is supposed to
+    carry a count actually carries one.  ``other`` is unpriced by design (it
+    is the seconds residual and has no operation count), but a *priced*
+    phase that came back blank -- which is what
+    :func:`_split_correction_operation_counts` writes when it cannot
+    interrogate the wrangler -- means the remaining counts are not a
+    partition of the solve.  Dividing them by their own sum would then
+    present a confident share of the wrong denominator, so in that case the
+    whole strategy's ``ops_share`` column is left empty instead and the
+    blank ``ops`` cell says why.
+    """
     rows = []
     shared = {
         "mode": summary_row["mode"],
@@ -911,6 +931,8 @@ def _phase_rows(summary_row):
         return float(value)
 
     for strategy in PHASE_STRATEGIES:
+        # (phase, ops, seconds, priced): "priced" phases must all carry a
+        # number for the operation shares to be a partition
         entries = []
         for stage in PHASE_FAR_STAGES:
             entries.append(
@@ -918,6 +940,7 @@ def _phase_rows(summary_row):
                     f"far_{stage}",
                     summary_row[f"ops_phase_far_{stage}"],
                     summary_row[f"s_phase_far_{stage}_{strategy}"],
+                    True,
                 )
             )
         entries.append(
@@ -925,6 +948,7 @@ def _phase_rows(summary_row):
                 "nearfield_table_apply",
                 summary_row[f"ops_phase_nearfield_table_apply_{strategy}"],
                 summary_row[f"s_phase_nearfield_table_apply_{strategy}"],
+                True,
             )
         )
         entries.append(
@@ -936,6 +960,7 @@ def _phase_rows(summary_row):
                     else 0
                 ),
                 summary_row[f"s_phase_split_correction_{strategy}"],
+                True,
             )
         )
         entries.append(
@@ -943,18 +968,26 @@ def _phase_rows(summary_row):
                 "recombination",
                 summary_row["ops_phase_recombination_per_solve"],
                 0.0,
+                True,
             )
         )
         entries.append(
-            ("other", "", summary_row[f"s_phase_other_{strategy}"])
+            ("other", "", summary_row[f"s_phase_other_{strategy}"], False)
         )
 
-        ops_values = [_number(ops) for _, ops, _ in entries]
+        ops_values = [_number(ops) for _, ops, _, _ in entries]
+        partition_is_complete = all(
+            value is not None
+            for value, (_, _, _, priced) in zip(
+                ops_values, entries, strict=True
+            )
+            if priced
+        )
         ops_total = sum(value for value in ops_values if value is not None)
         seconds_total = float(
             summary_row[f"s_phase_solve_total_{strategy}"]
         )
-        for (phase, ops, seconds), ops_value in zip(
+        for (phase, ops, seconds, _priced), ops_value in zip(
             entries, ops_values, strict=True
         ):
             rows.append(
@@ -969,7 +1002,9 @@ def _phase_rows(summary_row):
                     "seconds": seconds,
                     "ops_share": (
                         ops_value / ops_total
-                        if ops_value is not None and ops_total > 0.0
+                        if partition_is_complete
+                        and ops_value is not None
+                        and ops_total > 0.0
                         else ""
                     ),
                     "seconds_share": (

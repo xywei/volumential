@@ -264,6 +264,39 @@ def test_setup_and_solve_operations_declare_different_currencies():
     )
 
 
+def test_an_unpriced_phase_withholds_the_whole_operation_partition():
+    module = _load_break_even()
+    row = _phase_summary_row(module)
+    # what _split_correction_operation_counts writes when it cannot
+    # interrogate the wrangler: the dominant phase of the split path has no
+    # count at all
+    row["ops_phase_split_correction_rke"] = ""
+    row["ops_phase_solve_total_rke"] = ""
+    phase_rows = module._phase_rows(row)
+
+    rke_solve = [
+        entry
+        for entry in phase_rows
+        if entry["scope"] == "solve" and entry["strategy"] == "rke"
+    ]
+    # no share is offered for any rke phase: far / table shares divided by
+    # their own sum would be a confident number for the wrong denominator
+    assert all(entry["ops_share"] == "" for entry in rke_solve)
+    # the seconds partition is independent and survives
+    assert sum(
+        float(entry["seconds_share"]) for entry in rke_solve
+    ) == pytest.approx(1.0)
+    # and the direct path, whose phases are all priced, is unaffected
+    direct_shares = [
+        float(entry["ops_share"])
+        for entry in phase_rows
+        if entry["scope"] == "solve"
+        and entry["strategy"] == "direct"
+        and entry["ops_share"] != ""
+    ]
+    assert sum(direct_shares) == pytest.approx(1.0)
+
+
 def test_zero_seconds_denominator_yields_blank_shares_not_a_crash():
     module = _load_break_even()
     row = _phase_summary_row(module)
