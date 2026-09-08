@@ -7,6 +7,22 @@ direct near-field tables and separate direct-table setup/apply costs from RKE
 channel setup, coefficient, residual, and full split costs. Cold/warm strategy
 totals and break-even roots expose the parameter/level/repeat amortization model.
 
+``--dim`` selects the spatial dimension (2, the historical default, or 3).
+The three-dimensional path uses the same conventions the other Paper 1 3D
+drivers already exercise: ``MeshGen3D`` geometry on ``[-0.5, 0.5]^3``, the
+3D Helmholtz ``exp(i k r) / (4 pi r)`` and Yukawa ``exp(-lambda r) / (4 pi r)``
+kernels, the loose ``16/45`` and tight ``24/61`` direct Duffy policies of
+``windowed_rke_sweep.py``, and its per-dimension windowed channel orders
+(``48/61`` in 2D, ``20/61`` in 3D).
+
+``--fmm-order-rule resolved`` prescribes the surrounding FMM expansion order
+per row from the row's own Helmholtz wave number instead of pinning it, so a
+theta ladder that walks the wave number up stays resolved inside a single
+cold-cache invocation (see :func:`_resolved_fmm_order`).  ``--max-fmm-order``
+caps that prescription: a row whose prescribed order exceeds the cap is
+recorded as refused rather than solved at an order that cannot represent its
+far field.
+
 Smoke mode is intended for CI/local validation. Full mode is intended for
 metadata-wrapped runs on a controlled remote compute host.
 """
@@ -139,18 +155,49 @@ FIELDS = (
     "classical_probe_n_terms",
     "classical_probe_condition_number",
     "classical_probe_s",
+    # far-field resolution accounting (E1b/E1c).  Appended after the
+    # historical 106 columns so committed artifacts stay readable by name.
+    "fmm_order_rule",
+    "fmm_order_floor",
+    "fmm_expansion_radius",
+    "far_field_status",
+    "implied_reference_norm",
 )
 
 # Root extent of the table-manager convention used throughout this driver
-# (the [-0.5, 0.5]^2 unit tree maps to table level ell + 1).
+# (the [-0.5, 0.5]^d unit tree maps to table level ell + 1).
 TABLE_ROOT_EXTENT = 2.0
+
+SUPPORTED_DIMENSIONS = (2, 3)
+
+# Per-dimension production discretizations.  The 2D values are the historical
+# defaults of this driver; the 3D values are the production source order and
+# smoke order of ``windowed_rke_sweep.py`` and ``rke_field_demo_3d.py``.
+DEFAULT_Q_ORDER = {
+    2: {"smoke": 2, "full": 4},
+    3: {"smoke": 2, "full": 3},
+}
+DEFAULT_NLEVELS = {
+    2: {"smoke": 2, "full": 3},
+    3: {"smoke": 2, "full": 3},
+}
+DEFAULT_FMM_ORDER = {
+    2: {"smoke": 8, "full": 16},
+    3: {"smoke": 8, "full": 12},
+}
 
 # Windowed strategy defaults (E1): declared window and per-mode theta ladders.
 # The smoke ladder holds one theta inside the polynomial-certified range, one
 # in the polynomial refusal band, and the declaration edge itself.
 DEFAULT_WINDOW_THETA = 16.0
 DEFAULT_WINDOWED_P_STAR = 6
-DEFAULT_WINDOWED_CHAN_ORDERS_2D = (48, 61)
+# Tested per-dimension channel quadrature orders; these mirror
+# ``rke_table_assembly._resolve_channel_orders`` (48/61 in 2D, where the
+# high-aspect Duffy triangles of edge-adjacent interpolation nodes converge
+# slowly in the angular order, and 20/61 in 3D, whose cone geometry is mild).
+DEFAULT_WINDOWED_CHAN_ORDERS = {2: (48, 61), 3: (20, 61)}
+DEFAULT_WINDOWED_CHAN_ORDERS_2D = DEFAULT_WINDOWED_CHAN_ORDERS[2]
+DEFAULT_WINDOWED_CHAN_ORDERS_3D = DEFAULT_WINDOWED_CHAN_ORDERS[3]
 DEFAULT_SMOKE_WINDOWED_THETAS = (1.0, 6.0, 16.0)
 DEFAULT_FULL_WINDOWED_THETAS = (
     0.25, 0.5, 1.0, 2.0, 4.0, 6.0, 8.0, 12.0, 16.0,
@@ -165,6 +212,125 @@ CLASSICAL_PROBE_TOLERANCE = 1.0e-11
 # error, which would show up at O(1).
 WINDOWED_SMALL_THETA_AGREEMENT = {"smoke": 1.0e-2, "full": 1.0e-5}
 WINDOWED_SMALL_THETA_MAX = 2.0
+
+# Accuracy-margin term of the resolved FMM-order rule (see
+# :func:`_resolved_fmm_order`).
+FMM_ORDER_ACCURACY_TERMS = 3.0
+# The implied reference-field norm ``linf_error / rel_l2_error`` of a solved
+# row is a lower bound on the norm the relative column divides by.  A resolved
+# far field keeps it O(1); an underresolved Helmholtz far field drives it
+# through many orders of magnitude before both columns collapse to zero.  The
+# band below is the pass criterion of the 2D order-scaled run, widened by two
+# decades on each side so it flags divergence rather than ordinary variation.
+FAR_FIELD_IMPLIED_NORM_BAND = (1.0e-2, 1.0e2)
+
+
+def _require_dimension(dim: int) -> int:
+    dim = int(dim)
+    if dim not in SUPPORTED_DIMENSIONS:
+        raise ValueError(
+            f"dim must be one of {SUPPORTED_DIMENSIONS}; got {dim}"
+        )
+    return dim
+
+
+def _box_extent(nlevels: int, root_extent: float = TABLE_ROOT_EXTENT) -> float:
+    """Source-box extent of the leaf table level, in either dimension.
+
+    The driver's tree is the unit box ``[-0.5, 0.5]^d`` while the table cache
+    convention uses root extent 2, so the leaf tree box of a depth-``nlevels``
+    uniform tree is the table manager's level-``nlevels`` box and the two
+    extents agree: ``2 * 2**-nlevels == 1 * 2**-(nlevels - 1)``.
+    """
+    return float(root_extent) * 0.5**int(nlevels)
+
+
+def _uniform_target_count(dim: int, q_order: int, nlevels: int) -> int:
+    """Quadrature-node count of the uniform ``MeshGen`` tree this driver builds.
+
+    ``MeshGen{2,3}D(q, nlevels, ...)`` refines to ``2**((nlevels - 1) * dim)``
+    leaves carrying ``q**dim`` nodes each.  Kept as a pure function so the
+    configuration guard can be checked without building geometry.
+    """
+    dim = _require_dimension(dim)
+    if q_order < 1:
+        raise ValueError("q_order must be >= 1")
+    if nlevels < 1:
+        raise ValueError("nlevels must be >= 1")
+    return int(q_order) ** dim * 2 ** ((int(nlevels) - 1) * dim)
+
+
+def _fmm_expansion_radius(dim: int) -> float:
+    """Radius the surrounding FMM's expansions must represent, in units of the
+    unit root box.
+
+    A level-1 box of the unit tree has side ``1/2``, so its half-diagonal is
+    ``sqrt(dim) / 4``.  The 2D value ``sqrt(2)/4`` is not an assumption: it is
+    calibrated in ``kb/reports/helmholtz-fmm-order-contamination.md`` against
+    two committed sweeps whose Helmholtz breakdown threshold is
+    ``nlevels``-independent, which falsifies a leaf-radius rule outright and
+    fixes the binding radius at this domain-scale length.  The 3D value is the
+    same geometric quantity in three dimensions and is checked, not assumed,
+    by the implied-reference-norm criterion of
+    :func:`_validate_far_field_resolution`.
+    """
+    return math.sqrt(_require_dimension(dim)) / 4.0
+
+
+def _resolved_fmm_order(dim: int, wave_number: float, *, floor: int) -> int:
+    """``p(k) = max(floor, ceil(k a + 3 ln(k a + pi)))`` with ``a`` the
+    expansion radius of :func:`_fmm_expansion_radius`.
+
+    The form is the standard multipole/local truncation estimate: the order
+    must exceed the wave number times the radius of the region the expansion
+    represents, plus a logarithmic accuracy term.  ``floor`` is a floor and
+    never a ceiling, so no row is less resolved than a pinned-order run of
+    the same configuration.
+    """
+    floor = int(floor)
+    if floor < 1:
+        raise ValueError("fmm order floor must be >= 1")
+    wave_number = abs(float(wave_number))
+    if not math.isfinite(wave_number):
+        raise ValueError("wave number must be finite")
+    ka = wave_number * _fmm_expansion_radius(dim)
+    prescribed = math.ceil(ka + FMM_ORDER_ACCURACY_TERMS * math.log(ka + math.pi))
+    return max(floor, int(prescribed))
+
+
+def _prescribed_fmm_order(
+    dim: int,
+    kernel: str,
+    parameter: float,
+    *,
+    floor: int,
+    rule: str,
+) -> int:
+    """The FMM order this row is solved at.
+
+    Only the oscillatory kernel drives the order: the Yukawa far field decays
+    and its expansions are resolved at the floor, which is why the 2D
+    order-scaled run leaves the Yukawa mismatch column unchanged to twelve
+    significant digits at raised orders.
+    """
+    if rule not in {"fixed", "resolved"}:
+        raise ValueError("fmm order rule must be 'fixed' or 'resolved'")
+    if rule == "fixed" or kernel != "Helmholtz":
+        return int(floor)
+    return _resolved_fmm_order(dim, parameter, floor=floor)
+
+
+def _implied_reference_norm(linf_error, rel_l2_error):
+    """``linf / rel_l2``: a lower bound on the reference-field norm the
+    relative error column divides by.  Blank when it is not computable."""
+    try:
+        linf = float(linf_error)
+        rel_l2 = float(rel_l2_error)
+    except (TypeError, ValueError):
+        return ""
+    if not math.isfinite(linf) or not math.isfinite(rel_l2) or rel_l2 == 0.0:
+        return ""
+    return linf / rel_l2
 
 
 def _parse_csv_floats(raw: str, *, allow_empty: bool = False) -> list[float]:
@@ -359,9 +525,84 @@ def _split_smooth_quad_order(
     return (2 if high_accuracy else 1) * q_order
 
 
-def _get_laplace_2d_table(
+def _duffy_config(regular_quad_order: int, radial_quad_order: int):
+    from volumential.nearfield_potential_table import DuffyBuildConfig
+
+    return DuffyBuildConfig(
+        radial_rule="tanh-sinh-fast",
+        regular_quad_order=int(regular_quad_order),
+        radial_quad_order=int(radial_quad_order),
+    )
+
+
+def _direct_build_config_3d(q_order: int, *, high_accuracy: bool):
+    """Direct fixed-parameter reference policy in 3D.
+
+    The two policies are the loose/tight pair ``windowed_rke_sweep.py``
+    declares: ``16/45`` (the accuracy the 3D field demo builds its direct
+    references at) and ``24/61`` (the tight reference the windowed sweep
+    reports its 3D deviations against).  Both kernels share them, the 3D
+    singularity being ``1/r`` for Helmholtz and Yukawa alike.
+    """
+    if high_accuracy:
+        return _duffy_config(max(24, 8 * q_order), max(61, 20 * q_order))
+    return _duffy_config(max(16, 4 * q_order), max(45, 12 * q_order))
+
+
+def _split_channel_build_config_3d(q_order: int, *, high_accuracy: bool):
+    """Auto-built 3D odd-power channel policy of ``rke_field_demo_3d.py``."""
+    if high_accuracy:
+        return _duffy_config(max(12, 4 * q_order), max(35, 10 * q_order))
+    return _duffy_config(max(8, 4 * q_order), max(21, 10 * q_order))
+
+
+def _direct_build_config(
+    dim: int, kernel: str, q_order: int, *, high_accuracy: bool
+):
+    if _require_dimension(dim) == 3:
+        return _direct_build_config_3d(q_order, high_accuracy=high_accuracy)
+    if kernel == "Yukawa":
+        return _yukawa_reference_build_config(
+            q_order, high_accuracy=high_accuracy
+        )
+    return _build_config(q_order)
+
+
+def _channel_build_config(
+    dim: int, kernel: str, q_order: int, *, high_accuracy: bool
+):
+    if _require_dimension(dim) == 3:
+        return _split_channel_build_config_3d(
+            q_order, high_accuracy=high_accuracy
+        )
+    if kernel == "Yukawa":
+        return _split_channel_build_config(
+            q_order, high_accuracy=high_accuracy
+        )
+    return _build_config(q_order)
+
+
+def _smooth_quad_order(
+    dim: int, q_order: int, split_order: int, *, high_accuracy: bool
+) -> int:
+    """Online smooth-remainder order per axis.
+
+    3D follows ``rke_field_demo_3d._field_smooth_quad_order``; 2D keeps this
+    driver's historical rule.
+    """
+    if _require_dimension(dim) == 3:
+        if high_accuracy and split_order > 1:
+            return 2 * q_order
+        return q_order
+    return _split_smooth_quad_order(
+        q_order, split_order, high_accuracy=high_accuracy
+    )
+
+
+def _get_laplace_table(
     queue,
     cache_path: Path,
+    dim: int,
     q_order: int,
     *,
     force_recompute: bool = False,
@@ -369,11 +610,12 @@ def _get_laplace_2d_table(
 ):
     from volumential.table_manager import NearFieldInteractionTableManager
 
+    dim = _require_dimension(dim)
     with NearFieldInteractionTableManager(
-        str(cache_path), root_extent=2.0, queue=queue
+        str(cache_path), root_extent=TABLE_ROOT_EXTENT, queue=queue
     ) as table_manager:
         table, _ = table_manager.get_table(
-            2,
+            dim,
             "Laplace",
             q_order,
             force_recompute=force_recompute,
@@ -385,9 +627,10 @@ def _get_laplace_2d_table(
     return table
 
 
-def _get_yukawa_2d_table(
+def _get_yukawa_table(
     queue,
     cache_path: Path,
+    dim: int,
     q_order: int,
     lam: float,
     level: int,
@@ -397,11 +640,12 @@ def _get_yukawa_2d_table(
 ):
     from volumential.table_manager import NearFieldInteractionTableManager
 
+    dim = _require_dimension(dim)
     with NearFieldInteractionTableManager(
-        str(cache_path), root_extent=2.0, queue=queue
+        str(cache_path), root_extent=TABLE_ROOT_EXTENT, queue=queue
     ) as table_manager:
         table, _ = table_manager.get_table(
-            2,
+            dim,
             "Yukawa",
             q_order,
             source_box_level=int(level),
@@ -415,9 +659,10 @@ def _get_yukawa_2d_table(
     return table
 
 
-def _build_helmholtz_2d_table(
+def _build_helmholtz_table(
     queue,
     cache_path: Path,
+    dim: int,
     q_order: int,
     wave_number: float,
     level: int,
@@ -428,13 +673,17 @@ def _build_helmholtz_2d_table(
     from sumpy.kernel import HelmholtzKernel
     from volumential.table_manager import NearFieldInteractionTableManager
 
-    kernel = HelmholtzKernel(2)
+    dim = _require_dimension(dim)
+    kernel = HelmholtzKernel(dim)
     kernel_kwargs = {kernel.helmholtz_k_name: float(wave_number)}
     with NearFieldInteractionTableManager(
-        str(cache_path), root_extent=2.0, dtype=np.complex128, queue=queue
+        str(cache_path),
+        root_extent=TABLE_ROOT_EXTENT,
+        dtype=np.complex128,
+        queue=queue,
     ) as table_manager:
         table, _ = table_manager.get_table(
-            2,
+            dim,
             "Helmholtz-Reference",
             q_order,
             source_box_level=int(level),
@@ -449,17 +698,46 @@ def _build_helmholtz_2d_table(
     return table
 
 
-def _build_geometry(ctx, queue, q_order: int, nlevels: int):
+# Historical two-dimensional names, kept because the other Paper 1 drivers
+# (adaptive_split_composition.py, keller_segel_continuation.py) import them.
+def _get_laplace_2d_table(queue, cache_path: Path, q_order: int, **kwargs):
+    return _get_laplace_table(queue, cache_path, 2, q_order, **kwargs)
+
+
+def _get_yukawa_2d_table(
+    queue, cache_path: Path, q_order: int, lam: float, level: int, **kwargs
+):
+    return _get_yukawa_table(
+        queue, cache_path, 2, q_order, lam, level, **kwargs
+    )
+
+
+def _build_helmholtz_2d_table(
+    queue,
+    cache_path: Path,
+    q_order: int,
+    wave_number: float,
+    level: int,
+    **kwargs,
+):
+    return _build_helmholtz_table(
+        queue, cache_path, 2, q_order, wave_number, level, **kwargs
+    )
+
+
+def _build_geometry(ctx, queue, q_order: int, nlevels: int, *, dim: int = 2):
     import volumential.meshgen as mg
 
-    mesh = mg.MeshGen2D(q_order, nlevels, -0.5, 0.5, queue=queue)
+    dim = _require_dimension(dim)
+    mesh_cls = {2: mg.MeshGen2D, 3: mg.MeshGen3D}[dim]
+    mesh = mesh_cls(q_order, nlevels, -0.5, 0.5, queue=queue)
     return mg.build_geometry_info(
         ctx,
         queue,
-        2,
+        dim,
         q_order,
         mesh,
-        bbox=np.array([[-0.5, 0.5]] * 2, dtype=np.float64),
+        bbox=np.array([[-0.5, 0.5]] * dim, dtype=np.float64),
     )
 
 
@@ -467,17 +745,36 @@ def _coords_host(queue, q_points):
     return np.array([axis.get(queue) for axis in q_points])
 
 
+# Off-centre offsets of the screened-kernel Gaussian source, per axis.  The
+# first two reproduce the historical 2D source exactly.
+_GAUSSIAN_SOURCE_OFFSETS = (0.11, -0.07, 0.03)
+
+
 def _gaussian_source_host(coords):
-    x = coords[0]
-    y = coords[1]
-    return np.exp(-35.0 * ((x + 0.11) ** 2 + (y - 0.07) ** 2))
+    coords = np.asarray(coords)
+    dim = coords.shape[0]
+    r2 = sum(
+        (coords[axis] + _GAUSSIAN_SOURCE_OFFSETS[axis]) ** 2
+        for axis in range(dim)
+    )
+    return np.exp(-35.0 * r2)
 
 
 def _helmholtz_manufactured_source_and_exact(coords, wave_number: float):
+    """``u = exp(-alpha |x|^2)`` and the source ``-(lap + k^2) u`` it solves.
+
+    ``lap exp(-alpha r^2) = (4 alpha^2 r^2 - 2 d alpha) exp(-alpha r^2)`` in
+    ``d`` dimensions, so the ``2 d alpha`` term below reduces to the
+    historical ``4 alpha`` in 2D.
+    """
     alpha = 80.0
-    r2 = coords[0] * coords[0] + coords[1] * coords[1]
+    coords = np.asarray(coords)
+    dim = coords.shape[0]
+    r2 = sum(coords[axis] * coords[axis] for axis in range(dim))
     exact = np.exp(-alpha * r2)
-    source = (4 * alpha - 4 * alpha * alpha * r2 - wave_number * wave_number) * exact
+    source = (
+        2 * dim * alpha - 4 * alpha * alpha * r2 - wave_number * wave_number
+    ) * exact
     return source, exact
 
 
@@ -509,6 +806,7 @@ def _build_path(
     split_term_tables=None,
     split_auto_config=None,
     split_smooth_quad_order: int | None = None,
+    dim: int = 2,
 ):
     from functools import partial
 
@@ -519,12 +817,13 @@ def _build_path(
         FPNDTreeIndependentDataForWrangler,
     )
 
+    dim = _require_dimension(dim)
     if kernel == "Helmholtz":
-        out_kernel = HelmholtzKernel(2)
+        out_kernel = HelmholtzKernel(dim)
         kernel_kwargs = {out_kernel.helmholtz_k_name: float(parameter)}
         dtype = np.complex128
     elif kernel == "Yukawa":
-        out_kernel = YukawaKernel(2)
+        out_kernel = YukawaKernel(dim)
         kernel_kwargs = {out_kernel.yukawa_lambda_name: float(parameter)}
         # The shared split evaluator currently emits complex intermediates for
         # both kernel families. Keep direct and split paths on the same dtype.
@@ -603,6 +902,7 @@ def _run_path(
     split_auto_config=None,
     split_smooth_quad_order: int | None = None,
     repeat_count: int,
+    dim: int = 2,
 ):
     from volumential.volume_fmm import drive_volume_fmm
 
@@ -610,6 +910,7 @@ def _run_path(
         ctx=ctx,
         queue=queue,
         traversal=traversal,
+        dim=dim,
         q_order=q_order,
         fmm_order=fmm_order,
         kernel=kernel,
@@ -751,20 +1052,23 @@ def _get_direct_table(
     parameter: float,
     level: int,
     build_config=None,
+    dim: int = 2,
 ):
     if kernel == "Helmholtz":
-        return _build_helmholtz_2d_table(
+        return _build_helmholtz_table(
             queue,
             cache_path,
+            dim,
             q_order,
             parameter,
             level,
             build_config=build_config,
         )
     if kernel == "Yukawa":
-        return _get_yukawa_2d_table(
+        return _get_yukawa_table(
             queue,
             cache_path,
+            dim,
             q_order,
             parameter,
             level,
@@ -783,10 +1087,12 @@ def _prepare_direct_tables(
     direct_levels: list[int],
     active_level: int,
     build_config=None,
+    dim: int = 2,
 ):
     parameter_tag = f"{parameter:.17g}".replace("-", "m").replace(".", "p")
     cache_path = cache_dir / (
-        f"cost-direct-{kernel.lower()}-parameter{parameter_tag}-q{q_order}.sqlite"
+        f"cost-direct-{kernel.lower()}-{dim}d-parameter{parameter_tag}"
+        f"-q{q_order}.sqlite"
     )
     _clear_sqlite_cache(cache_path)
 
@@ -796,6 +1102,7 @@ def _prepare_direct_tables(
                 kernel=kernel,
                 queue=queue,
                 cache_path=cache_path,
+                dim=dim,
                 q_order=q_order,
                 parameter=parameter,
                 level=level,
@@ -809,6 +1116,7 @@ def _prepare_direct_tables(
                 kernel=kernel,
                 queue=queue,
                 cache_path=cache_path,
+                dim=dim,
                 q_order=q_order,
                 parameter=parameter,
                 level=level,
@@ -851,22 +1159,24 @@ def _prepare_rke_channels(
     split_smooth_quad_order: int | None = None,
     cache_path: Path | None = None,
     clear_cache: bool = True,
+    dim: int = 2,
 ):
     if cache_path is None:
         cache_path = cache_dir / (
-            f"cost-rke-{kernel.lower()}-q{q_order}-p{split_order}.sqlite"
+            f"cost-rke-{kernel.lower()}-{dim}d-q{q_order}-p{split_order}.sqlite"
         )
     if clear_cache:
         _clear_sqlite_cache(cache_path)
 
     with _capture_table_get_timings() as cold_records:
-        cold_base_table = _get_laplace_2d_table(
-            queue, cache_path, q_order, build_config=build_config
+        cold_base_table = _get_laplace_table(
+            queue, cache_path, dim, q_order, build_config=build_config
         )
         _build_path(
             ctx=ctx,
             queue=queue,
             traversal=traversal,
+            dim=dim,
             q_order=q_order,
             fmm_order=fmm_order,
             kernel=kernel,
@@ -882,13 +1192,14 @@ def _prepare_rke_channels(
         )
 
     with _capture_table_get_timings() as warm_records:
-        warm_base_table = _get_laplace_2d_table(
-            queue, cache_path, q_order, build_config=build_config
+        warm_base_table = _get_laplace_table(
+            queue, cache_path, dim, q_order, build_config=build_config
         )
         warm_wrangler, _, _ = _build_path(
             ctx=ctx,
             queue=queue,
             traversal=traversal,
+            dim=dim,
             q_order=q_order,
             fmm_order=fmm_order,
             kernel=kernel,
@@ -953,16 +1264,18 @@ def _prepare_windowed_family(
     chan_regular_order: int,
     chan_radial_order: int,
     root_extent: float = TABLE_ROOT_EXTENT,
+    dim: int = 2,
 ) -> dict[str, Any]:
     """Build or reload the parameter-independent windowed channel family."""
     from volumential.rke_table_assembly import get_windowed_channel_table
 
+    dim = _require_dimension(dim)
     was_cold = False
     start = time.perf_counter()
     for m in range(p_star):
         channel = get_windowed_channel_table(
             cache_path,
-            2,
+            dim,
             q_order,
             m,
             source_box_level=source_box_level,
@@ -994,6 +1307,7 @@ def _classical_certificate_probe(
     source_box_level: int,
     tolerance: float,
     probe_kind: str,
+    dim: int = 2,
 ) -> dict[str, Any]:
     """Certificate status of the polynomial-completion assembler at this
     parameter: ``certified`` / ``refused`` / ``failed`` (plus ``skipped``).
@@ -1002,6 +1316,7 @@ def _classical_certificate_probe(
     certificate; ``"full"`` runs the complete certified assembly, exposing
     both refusal modes (term budget and recombination conditioning).
     """
+    dim = _require_dimension(dim)
     empty = {
         "kind": probe_kind,
         "status": "skipped",
@@ -1022,15 +1337,17 @@ def _classical_certificate_probe(
 
     start = time.perf_counter()
     if probe_kind == "truncation":
-        box_extent = TABLE_ROOT_EXTENT * 0.5**source_box_level
-        radius = 3.0 * math.sqrt(2.0) * box_extent
+        box_extent = _box_extent(source_box_level)
+        # The conservative near-field separation radius of
+        # rke_table_assembly.assemble_parameterized_table.
+        radius = 3.0 * math.sqrt(dim) * box_extent
         k = (
             complex(parameter)
             if kernel == "Helmholtz"
             else complex(1j * parameter)
         )
         try:
-            n_terms, _ = choose_truncation_order(2, k, radius, tolerance)
+            n_terms, _ = choose_truncation_order(dim, k, radius, tolerance)
         except RKETruncationError as exc:
             return {
                 **empty,
@@ -1058,7 +1375,7 @@ def _classical_certificate_probe(
         _, certificate = assemble_parameterized_table(
             queue,
             cache_path,
-            2,
+            dim,
             kernel,
             q_order,
             parameter,
@@ -1100,18 +1417,20 @@ def _register_and_load_windowed_table(
     table,
     certificate: dict[str, Any],
     root_extent: float = TABLE_ROOT_EXTENT,
+    dim: int = 2,
 ) -> tuple[Any, dict[str, Any]]:
     """Register the assembled table under the standard cache slot, then load
     it back through the ordinary ``get_table`` path (asserting a pure cache
     load), so the evaluator consumes it exactly like a direct-built table."""
     from volumential.table_manager import NearFieldInteractionTableManager
 
+    dim = _require_dimension(dim)
     manager_kwargs: dict[str, Any] = {}
     get_kwargs: dict[str, Any] = {}
     if kernel == "Helmholtz":
         from sumpy.kernel import HelmholtzKernel
 
-        knl = HelmholtzKernel(2)
+        knl = HelmholtzKernel(dim)
         manager_kwargs["dtype"] = np.complex128
         get_kwargs["sumpy_knl"] = knl
         get_kwargs[knl.helmholtz_k_name] = float(parameter)
@@ -1136,7 +1455,7 @@ def _register_and_load_windowed_table(
         **manager_kwargs,
     ) as table_manager:
         table_manager.register_external_table(
-            2,
+            dim,
             kernel_request,
             q_order,
             table,
@@ -1155,7 +1474,7 @@ def _register_and_load_windowed_table(
             **manager_kwargs,
         ) as table_manager:
             loaded_table, is_recomputed = table_manager.get_table(
-                2,
+                dim,
                 kernel_request,
                 q_order,
                 source_box_level=source_box_level,
@@ -1182,6 +1501,7 @@ def _register_and_load_windowed_table(
 def _windowed_row_base(
     *,
     mode: str,
+    dim: int,
     kernel: str,
     parameter_name: str,
     parameter: float,
@@ -1193,19 +1513,23 @@ def _windowed_row_base(
     q_order: int,
     nlevels: int,
     fmm_order: int,
+    fmm_order_rule: str,
+    fmm_order_floor: int,
+    far_field_status: str,
     repeat_count: int,
     classical_probe: dict[str, Any],
 ) -> dict[str, Any]:
+    dim = _require_dimension(dim)
     row = {field: "" for field in FIELDS}
     row.update(
         {
             "case_id": (
-                f"{kernel.lower()}2d-{parameter_name}{parameter:g}"
+                f"{kernel.lower()}{dim}d-{parameter_name}{parameter:g}"
                 f"-windowed-theta{theta:g}"
             ),
             "mode": mode,
             "kernel": kernel,
-            "dim": 2,
+            "dim": dim,
             "parameter_name": parameter_name,
             "parameter_value": parameter,
             "direct_regular_quad_order": direct_build_config.regular_quad_order,
@@ -1213,6 +1537,10 @@ def _windowed_row_base(
             "q_order": q_order,
             "nlevels": nlevels,
             "fmm_order": fmm_order,
+            "fmm_order_rule": fmm_order_rule,
+            "fmm_order_floor": fmm_order_floor,
+            "fmm_expansion_radius": _fmm_expansion_radius(dim),
+            "far_field_status": far_field_status,
             "reference_path": "direct_fixed_parameter_table",
             "repeat_count": repeat_count,
             "table_strategy": "windowed_assembled",
@@ -1244,6 +1572,9 @@ def _run_windowed_strategy(
     q_order: int,
     nlevels: int,
     fmm_order: int,
+    dim: int = 2,
+    fmm_order_rule: str = "fixed",
+    max_fmm_order: int | None = None,
     kernel: str,
     parameter_name: str,
     thetas: list[float],
@@ -1264,14 +1595,19 @@ def _run_windowed_strategy(
         assemble_windowed_parameterized_table,
     )
 
-    box_extent = TABLE_ROOT_EXTENT * 0.5**nlevels
+    dim = _require_dimension(dim)
+    box_extent = _box_extent(nlevels)
     family_cache = cache_dir / (
-        f"windowed-channels-q{q_order}-l{nlevels}-Theta{window_theta:g}.sqlite"
+        f"windowed-channels-{dim}d-q{q_order}-l{nlevels}"
+        f"-Theta{window_theta:g}.sqlite"
     )
-    classical_cache = cache_dir / f"classical-probe-q{q_order}-l{nlevels}.sqlite"
+    classical_cache = cache_dir / (
+        f"classical-probe-{dim}d-q{q_order}-l{nlevels}.sqlite"
+    )
 
     family = _prepare_windowed_family(
         cache_path=family_cache,
+        dim=dim,
         q_order=q_order,
         source_box_level=nlevels,
         window_theta=window_theta,
@@ -1283,9 +1619,23 @@ def _run_windowed_strategy(
     rows: list[dict[str, Any]] = []
     for theta in thetas:
         parameter = theta / box_extent
+        row_fmm_order = _prescribed_fmm_order(
+            dim,
+            kernel,
+            parameter,
+            floor=fmm_order,
+            rule=fmm_order_rule,
+        )
+        if max_fmm_order is not None and row_fmm_order > max_fmm_order:
+            far_field_status = "refused_order_cap"
+        elif fmm_order_rule == "resolved" and kernel == "Helmholtz":
+            far_field_status = "resolved_by_rule"
+        else:
+            far_field_status = "pinned"
         classical_probe = _classical_certificate_probe(
             queue=queue,
             cache_path=classical_cache,
+            dim=dim,
             kernel=kernel,
             q_order=q_order,
             parameter=parameter,
@@ -1295,6 +1645,7 @@ def _run_windowed_strategy(
         )
         row = _windowed_row_base(
             mode=mode,
+            dim=dim,
             kernel=kernel,
             parameter_name=parameter_name,
             parameter=parameter,
@@ -1305,7 +1656,10 @@ def _run_windowed_strategy(
             direct_build_config=direct_build_config,
             q_order=q_order,
             nlevels=nlevels,
-            fmm_order=fmm_order,
+            fmm_order=row_fmm_order,
+            fmm_order_rule=fmm_order_rule,
+            fmm_order_floor=fmm_order,
+            far_field_status=far_field_status,
             repeat_count=repeat_count,
             classical_probe=classical_probe,
         )
@@ -1317,7 +1671,7 @@ def _run_windowed_strategy(
             assembled_table, certificate = (
                 assemble_windowed_parameterized_table(
                     family_cache,
-                    2,
+                    dim,
                     kernel,
                     q_order,
                     parameter,
@@ -1354,12 +1708,13 @@ def _run_windowed_strategy(
             f"{parameter:.17g}".replace("-", "m").replace(".", "p")
         )
         registered_cache = cache_dir / (
-            f"windowed-registered-{kernel.lower()}-parameter{parameter_tag}"
-            f"-q{q_order}.sqlite"
+            f"windowed-registered-{kernel.lower()}-{dim}d"
+            f"-parameter{parameter_tag}-q{q_order}.sqlite"
         )
         loaded_table, transfer = _register_and_load_windowed_table(
             queue=queue,
             cache_path=registered_cache,
+            dim=dim,
             kernel=kernel,
             q_order=q_order,
             parameter=parameter,
@@ -1376,6 +1731,19 @@ def _run_windowed_strategy(
             "load_payload_bytes"
         ]
 
+        if far_field_status == "refused_order_cap":
+            # The certificate columns above are evaluator-independent and
+            # stay measured; what is refused is the solve, because the order
+            # this row's wave number requires exceeds --max-fmm-order and a
+            # solve at a lower order would report agreement between two
+            # unresolved far fields rather than a path mismatch.
+            row["windowed_refusal"] = (
+                f"far-field order {row_fmm_order} exceeds the "
+                f"--max-fmm-order cap {max_fmm_order}"
+            )
+            rows.append(row)
+            continue
+
         if kernel == "Helmholtz":
             source_values_host, _exact = (
                 _helmholtz_manufactured_source_and_exact(
@@ -1389,6 +1757,7 @@ def _run_windowed_strategy(
             kernel=kernel,
             queue=queue,
             cache_dir=cache_dir,
+            dim=dim,
             q_order=q_order,
             parameter=parameter,
             direct_levels=[nlevels],
@@ -1416,8 +1785,9 @@ def _run_windowed_strategy(
             ctx=ctx,
             queue=queue,
             traversal=traversal,
+            dim=dim,
             q_order=q_order,
-            fmm_order=fmm_order,
+            fmm_order=row_fmm_order,
             kernel=kernel,
             parameter=parameter,
             table=direct_table,
@@ -1432,8 +1802,9 @@ def _run_windowed_strategy(
             ctx=ctx,
             queue=queue,
             traversal=traversal,
+            dim=dim,
             q_order=q_order,
-            fmm_order=fmm_order,
+            fmm_order=row_fmm_order,
             kernel=kernel,
             parameter=parameter,
             table=loaded_table,
@@ -1468,6 +1839,9 @@ def _run_windowed_strategy(
                 ],
             }
         )
+        row["implied_reference_norm"] = _implied_reference_norm(
+            row["linf_error"], row["rel_l2_error"]
+        )
         rows.append(row)
     return rows
 
@@ -1485,6 +1859,7 @@ def _validate_windowed_rows(rows: list[dict[str, Any]]) -> None:
         theta = float(row["theta"])
         window_theta = float(row["window_theta"])
         status = row["windowed_status"]
+        solved = row.get("far_field_status") != "refused_order_cap"
         if status == "failed":
             raise RuntimeError(
                 f"windowed assembly failed for {row['case_id']}: "
@@ -1503,6 +1878,7 @@ def _validate_windowed_rows(rows: list[dict[str, Any]]) -> None:
             )
         if (
             status == "ok"
+            and solved
             and theta <= WINDOWED_SMALL_THETA_MAX
         ):
             gate = WINDOWED_SMALL_THETA_AGREEMENT[row["mode"]]
@@ -1513,6 +1889,53 @@ def _validate_windowed_rows(rows: list[dict[str, Any]]) -> None:
                     f"direct reference at small theta for {row['case_id']}: "
                     f"rel_l2={rel_l2:.3e} > {gate:.1e}"
                 )
+
+
+def _far_field_resolution_failures(
+    rows: list[dict[str, Any]],
+    *,
+    band: tuple[float, float] = FAR_FIELD_IMPLIED_NORM_BAND,
+) -> list[str]:
+    """Rows whose solved Helmholtz far field is not resolved at the order used.
+
+    The diagnostic is the implied reference-field norm
+    ``linf_error / rel_l2_error``, a lower bound on the norm the relative
+    column divides by.  A pinned order on a wave number that outgrows it
+    drives that norm through many decades and then collapses both error
+    columns to exactly zero -- a difference of two overflowed fields, not an
+    agreement.  Returns the failure messages rather than raising, so a long
+    run can still write its CSV before the caller reports the failure.
+    """
+    low, high = band
+    failures: list[str] = []
+    for row in rows:
+        if row.get("kernel") != "Helmholtz":
+            continue
+        if row.get("far_field_status") in ("", None, "refused_order_cap"):
+            continue
+        rel_l2 = row.get("rel_l2_error", "")
+        linf = row.get("linf_error", "")
+        if rel_l2 == "" or linf == "":
+            continue
+        rel_l2 = float(rel_l2)
+        linf = float(linf)
+        if rel_l2 == 0.0 and linf == 0.0:
+            failures.append(
+                f"{row['case_id']}: both Helmholtz error columns are exactly "
+                "zero, the signature of a diverged-then-zeroed far field at "
+                f"fmm_order={row['fmm_order']}"
+            )
+            continue
+        implied = _implied_reference_norm(linf, rel_l2)
+        if implied == "":
+            continue
+        if not low <= implied <= high:
+            failures.append(
+                f"{row['case_id']}: implied reference-field norm "
+                f"{implied:.3e} outside [{low:g}, {high:g}] at "
+                f"fmm_order={row['fmm_order']}"
+            )
+    return failures
 
 # }}}
 
@@ -1607,28 +2030,38 @@ def _split_term_keys(accounting) -> str:
     return ";".join(f"{kind}:{power}" for kind, power in accounting.split_term_keys)
 
 
+# Order-to-order improvement the online split path must show for Yukawa.
+# 2D keeps this driver's historical three-orders-of-magnitude gate.  The 3D
+# gate is one order of magnitude, the range the committed 3D field demo
+# measures across its parameters (p=1 -> p=2 improves by 97x at lambda = 8,
+# 355x at 4 and 1332x at 2), so a stricter gate would reject healthy runs.
+YUKAWA_ORDER_IMPROVEMENT_GATE = {2: 1.0e-3, 3: 1.0e-1}
+
+
 def _validate_yukawa_order_convergence(rows: list[dict[str, Any]]) -> None:
-    errors_by_parameter: dict[float, dict[int, float]] = {}
+    errors_by_parameter: dict[tuple[int, float], dict[int, float]] = {}
     for row in rows:
         if row["mode"] != "full" or row["kernel"] != "Yukawa":
             continue
         if row.get("table_strategy", "online_split") != "online_split":
             continue
-        errors_by_parameter.setdefault(float(row["parameter_value"]), {})[
+        key = (int(row["dim"]), float(row["parameter_value"]))
+        errors_by_parameter.setdefault(key, {})[
             int(row["split_order"])
         ] = float(row["rel_l2_error"])
 
-    for parameter, errors in errors_by_parameter.items():
-        if 1 in errors and 2 in errors and errors[2] > 1.0e-3 * errors[1]:
+    for (dim, parameter), errors in errors_by_parameter.items():
+        gate = YUKAWA_ORDER_IMPROVEMENT_GATE[dim]
+        if 1 in errors and 2 in errors and errors[2] > gate * errors[1]:
             raise RuntimeError(
-                "full 2D Yukawa RKE p=2 error did not improve by three "
-                f"orders of magnitude at lambda={parameter:g}: "
+                f"full {dim}D Yukawa RKE p=2 error did not improve by the "
+                f"required factor {1.0 / gate:g} at lambda={parameter:g}: "
                 f"p=1 gives {errors[1]:.3e}, p=2 gives {errors[2]:.3e}"
             )
         if 2 in errors and 3 in errors and errors[3] > 1.1 * errors[2]:
             raise RuntimeError(
-                "full 2D Yukawa RKE p=3 error materially degraded from p=2 at "
-                f"lambda={parameter:g}: p=2 gives {errors[2]:.3e}, "
+                f"full {dim}D Yukawa RKE p=3 error materially degraded from "
+                f"p=2 at lambda={parameter:g}: p=2 gives {errors[2]:.3e}, "
                 f"p=3 gives {errors[3]:.3e}"
             )
 
@@ -1658,17 +2091,22 @@ def _row_from_result(
     amortization: dict[str, Any],
     direct_levels: list[int],
     repeat_count: int,
+    dim: int = 2,
 ) -> dict[str, Any]:
+    dim = _require_dimension(dim)
     diff = split_values - reference_values
     reference_norm = max(float(np.linalg.norm(reference_values)), 1.0e-300)
+    rel_l2_error = float(np.linalg.norm(diff) / reference_norm)
+    linf_error = float(np.max(np.abs(diff)))
     accounting_dict = asdict(accounting)
     return {
         "case_id": (
-            f"{kernel.lower()}2d-{parameter_name}{parameter:g}-p{split_order}"
+            f"{kernel.lower()}{dim}d-{parameter_name}{parameter:g}"
+            f"-p{split_order}"
         ),
         "mode": mode,
         "kernel": kernel,
-        "dim": 2,
+        "dim": dim,
         "parameter_name": parameter_name,
         "parameter_value": parameter,
         "split_order": split_order,
@@ -1689,8 +2127,8 @@ def _row_from_result(
         "fmm_order": fmm_order,
         "n_targets": int(reference_values.size),
         "reference_path": reference_path,
-        "rel_l2_error": float(np.linalg.norm(diff) / reference_norm),
-        "linf_error": float(np.max(np.abs(diff))),
+        "rel_l2_error": rel_l2_error,
+        "linf_error": linf_error,
         "reference_warm_s": reference_timing["solve_mean_s"],
         "split_warm_s": split_timing["solve_mean_s"],
         "online_remainder_s": split_timing["smooth_residual_mean_s"],
@@ -1730,7 +2168,14 @@ def _row_from_result(
         "split_solve_total_s": split_timing["solve_total_s"],
         **amortization,
         "table_strategy": "online_split",
-        "theta": parameter * TABLE_ROOT_EXTENT * 0.5**nlevels,
+        "theta": parameter * _box_extent(nlevels),
+        "fmm_order_rule": "fixed",
+        "fmm_order_floor": fmm_order,
+        "fmm_expansion_radius": _fmm_expansion_radius(dim),
+        "far_field_status": "pinned",
+        "implied_reference_norm": _implied_reference_norm(
+            linf_error, rel_l2_error
+        ),
     }
 
 
@@ -1747,16 +2192,40 @@ def run_benchmark(
     yukawa_lam: list[float],
     direct_levels: list[int],
     repeat_count: int,
+    dim: int = 2,
     power_log_beta_mode: str = "p2p",
     windowed_thetas: list[float] | None = None,
     window_theta: float = DEFAULT_WINDOW_THETA,
     windowed_p_star: int = DEFAULT_WINDOWED_P_STAR,
-    windowed_chan_orders: tuple[int, int] = DEFAULT_WINDOWED_CHAN_ORDERS_2D,
+    windowed_chan_orders: tuple[int, int] | None = None,
     classical_probe_kind: str | None = None,
     classical_probe_tolerance: float = CLASSICAL_PROBE_TOLERANCE,
+    fmm_order_rule: str = "fixed",
+    max_fmm_order: int | None = None,
+    min_targets: int | None = None,
 ) -> list[dict[str, Any]]:
     import pyopencl as cl
 
+    dim = _require_dimension(dim)
+    if windowed_chan_orders is None:
+        windowed_chan_orders = DEFAULT_WINDOWED_CHAN_ORDERS[dim]
+    if fmm_order_rule not in {"fixed", "resolved"}:
+        raise ValueError("fmm_order_rule must be 'fixed' or 'resolved'")
+    if max_fmm_order is not None and max_fmm_order < fmm_order:
+        raise ValueError(
+            "max_fmm_order must be at least the fmm_order floor"
+        )
+    if fmm_order_rule == "resolved" and helmholtz_k:
+        # The online-split rows of one kernel share a single cold/warm
+        # amortization account, so letting their order vary per parameter
+        # would mix orders inside one cost column.  The resolved rule is
+        # defined for the windowed theta ladder, where every row owns its
+        # own solve pair.
+        raise ValueError(
+            "--fmm-order-rule resolved applies to the windowed theta ladder "
+            "only; run the fixed-parameter Helmholtz sweep with "
+            "--fmm-order-rule fixed (or --helmholtz-k none)"
+        )
     if repeat_count < 1:
         raise ValueError("repeat_count must be >= 1")
     if len(set(split_orders)) != len(split_orders):
@@ -1788,8 +2257,15 @@ def run_benchmark(
     ctx = cl.Context([device])
     queue = cl.CommandQueue(ctx)
     q_points, source_weights, _tree, traversal = _build_geometry(
-        ctx, queue, q_order, nlevels
+        ctx, queue, q_order, nlevels, dim=dim
     )
+    n_targets = int(q_points[0].shape[0])
+    if min_targets is not None and n_targets < min_targets:
+        raise RuntimeError(
+            f"the requested {dim}D geometry carries {n_targets} targets, "
+            f"below the required minimum {min_targets}; raise --nlevels or "
+            "--q-order"
+        )
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     rows: list[dict[str, Any]] = []
@@ -1805,17 +2281,11 @@ def run_benchmark(
             continue
 
         high_accuracy = mode == "full"
-        direct_build_config = (
-            _yukawa_reference_build_config(
-                q_order, high_accuracy=high_accuracy
-            )
-            if kernel == "Yukawa"
-            else _build_config(q_order)
+        direct_build_config = _direct_build_config(
+            dim, kernel, q_order, high_accuracy=high_accuracy
         )
-        rke_channel_build_config = (
-            _split_channel_build_config(q_order, high_accuracy=high_accuracy)
-            if kernel == "Yukawa"
-            else _build_config(q_order)
+        rke_channel_build_config = _channel_build_config(
+            dim, kernel, q_order, high_accuracy=high_accuracy
         )
         parameter_cases = []
         direct_costs = {
@@ -1841,6 +2311,7 @@ def run_benchmark(
                 kernel=kernel,
                 queue=queue,
                 cache_dir=cache_dir,
+                dim=dim,
                 q_order=q_order,
                 parameter=parameter,
                 direct_levels=direct_levels,
@@ -1854,6 +2325,7 @@ def run_benchmark(
                 ctx=ctx,
                 queue=queue,
                 traversal=traversal,
+                dim=dim,
                 q_order=q_order,
                 fmm_order=fmm_order,
                 kernel=kernel,
@@ -1881,20 +2353,23 @@ def run_benchmark(
 
         # Keep one cache across orders so each pass measures only newly required
         # tables; _prepare_rke_channels otherwise defaults to a per-order file.
-        rke_cache_path = cache_dir / f"cost-rke-{kernel.lower()}-q{q_order}.sqlite"
+        rke_cache_path = cache_dir / (
+            f"cost-rke-{kernel.lower()}-{dim}d-q{q_order}.sqlite"
+        )
         cumulative_rke_build_s = 0.0
         cumulative_rke_quadrature_build_s = 0.0
         for split_index, split_order in enumerate(
             sorted(split_orders) if parameter_cases else []
         ):
-            smooth_quad_order = _split_smooth_quad_order(
-                q_order, split_order, high_accuracy=high_accuracy
+            smooth_quad_order = _smooth_quad_order(
+                dim, q_order, split_order, high_accuracy=high_accuracy
             )
             representative_case = parameter_cases[0]
             split_table, split_term_tables, rke_costs = _prepare_rke_channels(
                 ctx=ctx,
                 queue=queue,
                 traversal=traversal,
+                dim=dim,
                 q_order=q_order,
                 fmm_order=fmm_order,
                 kernel=kernel,
@@ -1925,6 +2400,7 @@ def run_benchmark(
                     ctx=ctx,
                     queue=queue,
                     traversal=traversal,
+                    dim=dim,
                     q_order=q_order,
                     fmm_order=fmm_order,
                     kernel=kernel,
@@ -1967,6 +2443,7 @@ def run_benchmark(
                 rows.append(
                     _row_from_result(
                         mode=mode,
+                        dim=dim,
                         kernel=kernel,
                         parameter_name=parameter_name,
                         parameter=case["parameter"],
@@ -2000,9 +2477,12 @@ def run_benchmark(
                     queue=queue,
                     traversal=traversal,
                     cache_dir=cache_dir,
+                    dim=dim,
                     q_order=q_order,
                     nlevels=nlevels,
                     fmm_order=fmm_order,
+                    fmm_order_rule=fmm_order_rule,
+                    max_fmm_order=max_fmm_order,
                     kernel=kernel,
                     parameter_name=parameter_name,
                     thetas=windowed_thetas,
@@ -2044,6 +2524,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("smoke", "full"), default="smoke")
     parser.add_argument("--backend", default="auto")
+    parser.add_argument(
+        "--dim",
+        type=int,
+        choices=SUPPORTED_DIMENSIONS,
+        default=2,
+        help="spatial dimension (default 2, the historical Paper 1 path)",
+    )
     parser.add_argument(
         "--out",
         type=Path,
@@ -2131,13 +2618,53 @@ def main() -> int:
         type=float,
         default=CLASSICAL_PROBE_TOLERANCE,
     )
+    parser.add_argument(
+        "--fmm-order-rule",
+        choices=("fixed", "resolved"),
+        default="fixed",
+        help=(
+            "'fixed' pins the FMM expansion order at --fmm-order (default, "
+            "the historical behaviour); 'resolved' prescribes it per "
+            "windowed row from that row's Helmholtz wave number by "
+            "p(k) = max(--fmm-order, ceil(k*a + 3*ln(k*a + pi))) with "
+            "a = sqrt(dim)/4, leaving Yukawa rows at the floor"
+        ),
+    )
+    parser.add_argument(
+        "--max-fmm-order",
+        type=int,
+        default=None,
+        help=(
+            "refuse (rather than solve) any row whose prescribed FMM order "
+            "exceeds this cap; the row keeps its certificate columns and "
+            "records far_field_status = refused_order_cap"
+        ),
+    )
+    parser.add_argument(
+        "--min-targets",
+        type=int,
+        default=None,
+        help="fail before any build if the geometry carries fewer targets",
+    )
     args = parser.parse_args()
 
     smoke = args.mode == "smoke"
-    q_order = args.q_order if args.q_order is not None else (2 if smoke else 4)
-    nlevels = args.nlevels if args.nlevels is not None else (2 if smoke else 3)
+    mode_key = "smoke" if smoke else "full"
+    dim = _require_dimension(args.dim)
+    q_order = (
+        args.q_order
+        if args.q_order is not None
+        else DEFAULT_Q_ORDER[dim][mode_key]
+    )
+    nlevels = (
+        args.nlevels
+        if args.nlevels is not None
+        else DEFAULT_NLEVELS[dim][mode_key]
+    )
     fmm_order = (
-        args.fmm_order if args.fmm_order is not None else (8 if smoke else 16)
+        args.fmm_order
+        if args.fmm_order is not None
+        else DEFAULT_FMM_ORDER[dim][mode_key]
     )
     split_orders = _parse_csv_ints(
         args.split_orders or ("1,2" if smoke else "1,2,3")
@@ -2183,7 +2710,7 @@ def main() -> int:
     except ValueError as exc:
         parser.error(str(exc))
     if args.windowed_chan_orders is None:
-        windowed_chan_orders = DEFAULT_WINDOWED_CHAN_ORDERS_2D
+        windowed_chan_orders = DEFAULT_WINDOWED_CHAN_ORDERS[dim]
     else:
         parts = _parse_csv_ints(args.windowed_chan_orders)
         if len(parts) != 2:
@@ -2197,11 +2724,14 @@ def main() -> int:
             "at least one of --helmholtz-k, --yukawa-lambda, or "
             "--windowed-thetas must be non-empty"
         )
+    if args.max_fmm_order is not None and args.max_fmm_order < fmm_order:
+        parser.error("--max-fmm-order must be at least --fmm-order")
 
     rows = run_benchmark(
         mode=args.mode,
         backend=args.backend,
         cache_dir=args.cache_dir,
+        dim=dim,
         q_order=q_order,
         nlevels=nlevels,
         fmm_order=fmm_order,
@@ -2217,8 +2747,18 @@ def main() -> int:
         windowed_chan_orders=windowed_chan_orders,
         classical_probe_kind=args.classical_probe,
         classical_probe_tolerance=args.classical_probe_tolerance,
+        fmm_order_rule=args.fmm_order_rule,
+        max_fmm_order=args.max_fmm_order,
+        min_targets=args.min_targets,
     )
+    # Write first, then report the far-field resolution check, so a long run
+    # never loses its measurements to a failing diagnostic.
     write_csv(args.out, rows)
+    failures = _far_field_resolution_failures(rows)
+    if failures:
+        for message in failures:
+            print(f"FAR-FIELD-UNRESOLVED: {message}")
+        return 2
     return 0
 
 

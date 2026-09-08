@@ -177,6 +177,7 @@ def test_windowed_row_base_covers_all_fields(sweep):
 
     row = sweep._windowed_row_base(
         mode="smoke",
+        dim=2,
         kernel="Yukawa",
         parameter_name="lambda",
         parameter=4.0,
@@ -192,6 +193,9 @@ def test_windowed_row_base_covers_all_fields(sweep):
         q_order=2,
         nlevels=2,
         fmm_order=8,
+        fmm_order_rule="fixed",
+        fmm_order_floor=8,
+        far_field_status="pinned",
         repeat_count=1,
         classical_probe={
             "kind": "truncation",
@@ -214,6 +218,7 @@ def test_classical_truncation_probe_refuses_at_declaration_edge(sweep):
     refused = sweep._classical_certificate_probe(
         queue=None,
         cache_path=Path("/nonexistent-not-touched"),
+        dim=2,
         kernel="Yukawa",
         q_order=2,
         parameter=32.0,
@@ -227,6 +232,7 @@ def test_classical_truncation_probe_refuses_at_declaration_edge(sweep):
     certified = sweep._classical_certificate_probe(
         queue=None,
         cache_path=Path("/nonexistent-not-touched"),
+        dim=2,
         kernel="Yukawa",
         q_order=2,
         parameter=2.0,
@@ -240,6 +246,7 @@ def test_classical_truncation_probe_refuses_at_declaration_edge(sweep):
     off = sweep._classical_certificate_probe(
         queue=None,
         cache_path=Path("/nonexistent-not-touched"),
+        dim=2,
         kernel="Yukawa",
         q_order=2,
         parameter=2.0,
@@ -248,6 +255,311 @@ def test_classical_truncation_probe_refuses_at_declaration_edge(sweep):
         probe_kind="off",
     )
     assert off["status"] == "skipped"
+
+# }}}
+
+
+# {{{ E1b: three-dimensional path and the resolved FMM-order rule
+
+def test_field_set_is_unique_and_carries_far_field_columns(sweep):
+    assert len(set(sweep.FIELDS)) == len(sweep.FIELDS)
+    for name in (
+        "fmm_order_rule",
+        "fmm_order_floor",
+        "fmm_expansion_radius",
+        "far_field_status",
+        "implied_reference_norm",
+    ):
+        assert name in sweep.FIELDS
+    # the historical 106 columns keep their positions
+    assert sweep.FIELDS[:106] == sweep.FIELDS[:-5]
+    assert sweep.FIELDS[0] == "case_id"
+    assert sweep.FIELDS[3] == "dim"
+
+
+def test_dimension_validation(sweep):
+    assert sweep._require_dimension(2) == 2
+    assert sweep._require_dimension(3) == 3
+    for bad in (1, 4, 0, -2):
+        with pytest.raises(ValueError, match="dim must be"):
+            sweep._require_dimension(bad)
+
+
+def test_box_extent_and_theta_mapping_matches_committed_geometries(sweep):
+    # 2D committed runs: nlevels = 3 gives leaf width 1/4 (k = 4 theta) and
+    # nlevels = 5 gives 1/16 (k = 16 theta).
+    assert sweep._box_extent(3) == pytest.approx(0.25)
+    assert sweep._box_extent(5) == pytest.approx(0.0625)
+    # the 3D windowed table sweep declares source level 2 at root extent 2
+    assert sweep._box_extent(2) == pytest.approx(0.5)
+    for nlevels, theta in ((5, 16.0), (5, 0.25), (3, 6.0), (2, 16.0)):
+        parameter = theta / sweep._box_extent(nlevels)
+        assert parameter * sweep._box_extent(nlevels) == pytest.approx(theta)
+
+
+def test_uniform_target_count_matches_committed_runs(sweep):
+    # 2D q = 4: nlevels 3 -> 256 targets, nlevels 5 -> 4096 (tbl:strategy-cost)
+    assert sweep._uniform_target_count(2, 4, 3) == 256
+    assert sweep._uniform_target_count(2, 4, 5) == 4096
+    # 3D q = 3: the committed field demo at nlevels 4 carries 13824 nodes
+    assert sweep._uniform_target_count(3, 3, 4) == 13824
+    assert sweep._uniform_target_count(3, 3, 5) == 110592
+    with pytest.raises(ValueError):
+        sweep._uniform_target_count(3, 0, 4)
+
+
+def test_fmm_expansion_radius_is_the_level_one_half_diagonal(sweep):
+    assert sweep._fmm_expansion_radius(2) == pytest.approx(np.sqrt(2.0) / 4.0)
+    assert sweep._fmm_expansion_radius(3) == pytest.approx(np.sqrt(3.0) / 4.0)
+
+
+def test_resolved_fmm_order_reproduces_the_2d_order_ladder(sweep):
+    """The committed 2D order-scaled run's band -> order mapping."""
+    # nlevels = 3, k = 4 theta over theta = 0.25 .. 16
+    expected = {1: 16, 2: 16, 4: 16, 8: 16, 16: 16, 24: 16,
+                32: 20, 48: 26, 64: 33}
+    for k, order in expected.items():
+        assert sweep._resolved_fmm_order(2, k, floor=16) == order
+    # nlevels = 5, k = 16 theta: the orders the manuscript quotes for the
+    # matched-configuration run
+    expected_l5 = {4: 16, 8: 16, 16: 16, 32: 20, 64: 33,
+                   96: 45, 128: 57, 192: 81, 256: 105}
+    for k, order in expected_l5.items():
+        assert sweep._resolved_fmm_order(2, k, floor=16) == order
+
+
+def test_resolved_fmm_order_is_monotone_and_floored(sweep):
+    previous = 0
+    for k in range(0, 300, 7):
+        order = sweep._resolved_fmm_order(3, k, floor=12)
+        assert order >= 12
+        assert order >= previous
+        previous = order
+    with pytest.raises(ValueError):
+        sweep._resolved_fmm_order(3, 1.0, floor=0)
+    with pytest.raises(ValueError):
+        sweep._resolved_fmm_order(3, float("inf"), floor=12)
+
+
+def test_prescribed_fmm_order_only_scales_the_oscillatory_kernel(sweep):
+    assert sweep._prescribed_fmm_order(
+        3, "Yukawa", 256.0, floor=12, rule="resolved"
+    ) == 12
+    assert sweep._prescribed_fmm_order(
+        3, "Helmholtz", 256.0, floor=12, rule="fixed"
+    ) == 12
+    assert sweep._prescribed_fmm_order(
+        3, "Helmholtz", 64.0, floor=12, rule="resolved"
+    ) == sweep._resolved_fmm_order(3, 64.0, floor=12)
+    with pytest.raises(ValueError, match="fmm order rule"):
+        sweep._prescribed_fmm_order(
+            3, "Helmholtz", 1.0, floor=12, rule="nonsense"
+        )
+
+
+def test_implied_reference_norm(sweep):
+    assert sweep._implied_reference_norm(9.06e-5, 6.234e-5) == pytest.approx(
+        1.4533, rel=1.0e-3
+    )
+    assert sweep._implied_reference_norm(0.0, 0.0) == ""
+    assert sweep._implied_reference_norm("", "") == ""
+    assert sweep._implied_reference_norm(1.0, float("nan")) == ""
+
+
+def test_far_field_resolution_failures_flag_the_documented_pathologies(sweep):
+    clean = {
+        "case_id": "helmholtz2d-k4-windowed-theta0.25",
+        "kernel": "Helmholtz",
+        "far_field_status": "resolved_by_rule",
+        "fmm_order": 16,
+        "rel_l2_error": 1.726e-7,
+        "linf_error": 1.453e-7,
+    }
+    assert sweep._far_field_resolution_failures([clean]) == []
+
+    zeroed = {**clean, "rel_l2_error": 0.0, "linf_error": 0.0,
+              "far_field_status": "pinned"}
+    (message,) = sweep._far_field_resolution_failures([zeroed])
+    assert "exactly zero" in message
+
+    diverged = {**clean, "rel_l2_error": 3.926e-8, "linf_error": 9.06e-5,
+                "far_field_status": "pinned"}
+    (message,) = sweep._far_field_resolution_failures([diverged])
+    assert "implied reference-field norm" in message
+
+    # Yukawa rows and refused rows are not subject to the check
+    assert sweep._far_field_resolution_failures(
+        [{**zeroed, "kernel": "Yukawa"}]
+    ) == []
+    assert sweep._far_field_resolution_failures(
+        [{**zeroed, "far_field_status": "refused_order_cap"}]
+    ) == []
+
+
+def test_three_dimensional_quadrature_policies(sweep):
+    direct_tight = sweep._direct_build_config(
+        3, "Helmholtz", 3, high_accuracy=True
+    )
+    direct_loose = sweep._direct_build_config(
+        3, "Yukawa", 3, high_accuracy=False
+    )
+    channels = sweep._channel_build_config(3, "Yukawa", 3, high_accuracy=True)
+    assert (
+        direct_tight.regular_quad_order,
+        direct_tight.radial_quad_order,
+    ) == (24, 61)
+    assert (
+        direct_loose.regular_quad_order,
+        direct_loose.radial_quad_order,
+    ) == (16, 45)
+    assert (channels.regular_quad_order, channels.radial_quad_order) == (12, 35)
+    # 2D policies are unchanged
+    yukawa_2d = sweep._direct_build_config(2, "Yukawa", 4, high_accuracy=True)
+    helmholtz_2d = sweep._direct_build_config(
+        2, "Helmholtz", 4, high_accuracy=True
+    )
+    assert (
+        yukawa_2d.regular_quad_order,
+        yukawa_2d.radial_quad_order,
+    ) == (80, 320)
+    assert (
+        helmholtz_2d.regular_quad_order,
+        helmholtz_2d.radial_quad_order,
+    ) == (16, 40)
+    assert sweep._smooth_quad_order(3, 3, 1, high_accuracy=True) == 3
+    assert sweep._smooth_quad_order(3, 3, 2, high_accuracy=True) == 6
+    assert sweep._smooth_quad_order(2, 4, 2, high_accuracy=True) == 8
+
+
+def test_three_dimensional_channel_order_default(sweep):
+    assert sweep.DEFAULT_WINDOWED_CHAN_ORDERS[2] == (48, 61)
+    assert sweep.DEFAULT_WINDOWED_CHAN_ORDERS[3] == (20, 61)
+
+
+def test_sources_are_dimension_generic_and_preserve_the_2d_forms(sweep):
+    rng = np.random.default_rng(20260908)
+    coords2 = rng.uniform(-0.5, 0.5, size=(2, 11))
+    x, y = coords2
+    assert np.allclose(
+        sweep._gaussian_source_host(coords2),
+        np.exp(-35.0 * ((x + 0.11) ** 2 + (y - 0.07) ** 2)),
+    )
+    source2, exact2 = sweep._helmholtz_manufactured_source_and_exact(
+        coords2, 4.0
+    )
+    alpha = 80.0
+    r2 = x * x + y * y
+    assert np.allclose(exact2, np.exp(-alpha * r2))
+    assert np.allclose(
+        source2, (4 * alpha - 4 * alpha**2 * r2 - 16.0) * np.exp(-alpha * r2)
+    )
+
+    coords3 = rng.uniform(-0.5, 0.5, size=(3, 7))
+    gaussian3 = sweep._gaussian_source_host(coords3)
+    assert gaussian3.shape == (7,)
+    assert np.all(gaussian3 > 0.0)
+    source3, exact3 = sweep._helmholtz_manufactured_source_and_exact(
+        coords3, 4.0
+    )
+    r3sq = (coords3**2).sum(axis=0)
+    assert np.allclose(exact3, np.exp(-alpha * r3sq))
+    assert np.allclose(
+        source3,
+        (6 * alpha - 4 * alpha**2 * r3sq - 16.0) * np.exp(-alpha * r3sq),
+    )
+
+
+def test_windowed_row_base_tags_the_dimension(sweep):
+    from volumential.nearfield_potential_table import DuffyBuildConfig
+
+    row = sweep._windowed_row_base(
+        mode="full",
+        dim=3,
+        kernel="Helmholtz",
+        parameter_name="k",
+        parameter=16.0,
+        theta=1.0,
+        window_theta=16.0,
+        p_star=6,
+        chan_orders=sweep.DEFAULT_WINDOWED_CHAN_ORDERS[3],
+        direct_build_config=DuffyBuildConfig(
+            radial_rule="tanh-sinh-fast",
+            regular_quad_order=24,
+            radial_quad_order=61,
+        ),
+        q_order=3,
+        nlevels=5,
+        fmm_order=19,
+        fmm_order_rule="resolved",
+        fmm_order_floor=12,
+        far_field_status="resolved_by_rule",
+        repeat_count=5,
+        classical_probe={
+            "kind": "full",
+            "status": "certified",
+            "detail": "",
+            "n_terms": 20,
+            "condition_number": 3.0,
+            "probe_s": 1.0,
+        },
+    )
+    assert set(row) == set(sweep.FIELDS)
+    assert row["dim"] == 3
+    assert row["case_id"] == "helmholtz3d-k16-windowed-theta1"
+    assert row["fmm_order"] == 19
+    assert row["fmm_order_floor"] == 12
+    assert row["fmm_expansion_radius"] == pytest.approx(np.sqrt(3.0) / 4.0)
+    assert row["far_field_status"] == "resolved_by_rule"
+    assert row["windowed_chan_regular_order"] == 20
+
+
+def test_windowed_validation_skips_agreement_for_refused_order_rows(sweep):
+    row = _windowed_row(
+        sweep,
+        far_field_status="refused_order_cap",
+        rel_l2_error="",
+        windowed_refusal="far-field order 45 exceeds the cap 20",
+    )
+    sweep._validate_windowed_rows([row])
+
+
+def test_resolved_rule_is_refused_for_the_fixed_parameter_sweep(sweep, tmp_path):
+    with pytest.raises(ValueError, match="windowed theta ladder"):
+        sweep.run_benchmark(
+            mode="smoke",
+            backend="pocl-cpu",
+            cache_dir=tmp_path,
+            dim=3,
+            q_order=2,
+            nlevels=2,
+            fmm_order=8,
+            split_orders=[1],
+            helmholtz_k=[4.0],
+            yukawa_lam=[],
+            direct_levels=[2],
+            repeat_count=1,
+            fmm_order_rule="resolved",
+        )
+
+
+def test_max_fmm_order_must_not_undercut_the_floor(sweep, tmp_path):
+    with pytest.raises(ValueError, match="max_fmm_order"):
+        sweep.run_benchmark(
+            mode="smoke",
+            backend="pocl-cpu",
+            cache_dir=tmp_path,
+            dim=3,
+            q_order=2,
+            nlevels=2,
+            fmm_order=12,
+            split_orders=[1],
+            helmholtz_k=[],
+            yukawa_lam=[],
+            direct_levels=[2],
+            repeat_count=1,
+            windowed_thetas=[1.0],
+            max_fmm_order=8,
+        )
 
 # }}}
 
