@@ -387,6 +387,17 @@ def test_far_field_resolution_failures_flag_the_documented_pathologies(sweep):
     (message,) = sweep._far_field_resolution_failures([diverged])
     assert "implied reference-field norm" in message
 
+    # The overflow end of the same pathology: the implied-norm ratio is not
+    # computable for a non-finite column, so it must be caught on its own.
+    for bad in (float("nan"), float("inf")):
+        overflowed = {**clean, "rel_l2_error": bad, "linf_error": bad,
+                      "far_field_status": "pinned"}
+        (message,) = sweep._far_field_resolution_failures([overflowed])
+        assert "non-finite" in message
+        half = {**clean, "linf_error": bad, "far_field_status": "pinned"}
+        (message,) = sweep._far_field_resolution_failures([half])
+        assert "non-finite" in message
+
     # Yukawa rows and refused rows are not subject to the check
     assert sweep._far_field_resolution_failures(
         [{**zeroed, "kernel": "Yukawa"}]
@@ -560,6 +571,49 @@ def test_max_fmm_order_must_not_undercut_the_floor(sweep, tmp_path):
             windowed_thetas=[1.0],
             max_fmm_order=8,
         )
+
+
+def test_min_targets_is_refused_before_any_device_or_geometry(sweep, tmp_path):
+    """The guard is a pure node count, so it fires without touching OpenCL.
+
+    ``run_benchmark`` selects a device and builds geometry before it could
+    measure a realized target count; a dispatch that asks for more targets
+    than its (q, nlevels) can carry must fail immediately instead.
+    """
+    assert sweep._uniform_target_count(3, 2, 2) == 64
+    with pytest.raises(RuntimeError, match="below the required minimum 4096"):
+        sweep.run_benchmark(
+            mode="smoke",
+            backend="this-backend-does-not-exist",
+            cache_dir=tmp_path / "never-created",
+            dim=3,
+            q_order=2,
+            nlevels=2,
+            fmm_order=8,
+            split_orders=[1],
+            helmholtz_k=[],
+            yukawa_lam=[],
+            direct_levels=[2],
+            repeat_count=1,
+            windowed_thetas=[1.0],
+            min_targets=4096,
+        )
+    assert not (tmp_path / "never-created").exists()
+
+
+def test_gate_failure_carries_its_rows_for_the_csv(sweep):
+    """A failing gate must not cost a long run its measurements.
+
+    ``run_benchmark`` wraps both post-run gates in ``_BenchmarkGateError``,
+    which carries the complete rows so ``main`` can write the CSV before
+    re-raising.  The class is a ``RuntimeError``, so callers that catch the
+    historical exception type are unaffected.
+    """
+    assert issubclass(sweep._BenchmarkGateError, RuntimeError)
+    rows = [_windowed_row(sweep)]
+    error = sweep._BenchmarkGateError("gate says no", rows)
+    assert error.rows is rows
+    assert str(error) == "gate says no"
 
 # }}}
 

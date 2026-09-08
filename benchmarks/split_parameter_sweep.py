@@ -11,9 +11,11 @@ totals and break-even roots expose the parameter/level/repeat amortization model
 The three-dimensional path uses the same conventions the other Paper 1 3D
 drivers already exercise: ``MeshGen3D`` geometry on ``[-0.5, 0.5]^3``, the
 3D Helmholtz ``exp(i k r) / (4 pi r)`` and Yukawa ``exp(-lambda r) / (4 pi r)``
-kernels, the loose ``16/45`` and tight ``24/61`` direct Duffy policies of
-``windowed_rke_sweep.py``, and its per-dimension windowed channel orders
-(``48/61`` in 2D, ``20/61`` in 3D).
+kernels, the loose ``16/45`` and tight ``24/61`` direct Duffy policies of the
+committed three-dimensional production dispatch of ``windowed_rke_sweep.py``
+(``--direct-policies '16,45;24,61'``; the script's own default pair is the 2D
+one), and its per-dimension windowed channel orders (``48/61`` in 2D,
+``20/61`` in 3D).
 
 ``--fmm-order-rule resolved`` prescribes the surrounding FMM expansion order
 per row from the row's own Helmholtz wave number instead of pinning it, so a
@@ -164,6 +166,23 @@ FIELDS = (
     "implied_reference_norm",
 )
 
+
+class _BenchmarkGateError(RuntimeError):
+    """A post-run gate failure that carries the rows it was measured on.
+
+    The gates of :func:`_validate_yukawa_order_convergence` and
+    :func:`_validate_windowed_rows` run on complete rows, so a failure means
+    the measurements exist and only the verdict on them is negative.
+    :func:`main` writes them out before re-raising: a multi-hour run must not
+    lose its CSV to a failing gate, for the same reason the far-field
+    resolution check reports after the write rather than before it.
+    """
+
+    def __init__(self, message: str, rows: list[dict[str, Any]]) -> None:
+        super().__init__(message)
+        self.rows = rows
+
+
 # Root extent of the table-manager convention used throughout this driver
 # (the [-0.5, 0.5]^d unit tree maps to table level ell + 1).
 TABLE_ROOT_EXTENT = 2.0
@@ -258,6 +277,16 @@ def _uniform_target_count(dim: int, q_order: int, nlevels: int) -> int:
     if nlevels < 1:
         raise ValueError("nlevels must be >= 1")
     return int(q_order) ** dim * 2 ** ((int(nlevels) - 1) * dim)
+
+
+def _require_min_targets(n_targets: int, min_targets: int, dim: int) -> None:
+    """Refuse a geometry smaller than the configuration the run declares."""
+    if int(n_targets) < int(min_targets):
+        raise RuntimeError(
+            f"the requested {dim}D geometry carries {int(n_targets)} "
+            f"targets, below the required minimum {int(min_targets)}; raise "
+            "--nlevels or --q-order"
+        )
 
 
 def _fmm_expansion_radius(dim: int) -> float:
@@ -538,11 +567,14 @@ def _duffy_config(regular_quad_order: int, radial_quad_order: int):
 def _direct_build_config_3d(q_order: int, *, high_accuracy: bool):
     """Direct fixed-parameter reference policy in 3D.
 
-    The two policies are the loose/tight pair ``windowed_rke_sweep.py``
-    declares: ``16/45`` (the accuracy the 3D field demo builds its direct
-    references at) and ``24/61`` (the tight reference the windowed sweep
-    reports its 3D deviations against).  Both kernels share them, the 3D
-    singularity being ``1/r`` for Helmholtz and Yukawa alike.
+    The two policies are the loose/tight pair the committed 3D production
+    dispatch of ``windowed_rke_sweep.py`` passes as
+    ``--direct-policies '16,45;24,61'`` (the script's own default pair,
+    ``24,61;48,160``, is the 2D one): ``16/45`` is also the accuracy the 3D
+    field demo builds its direct references at, and ``24/61`` is the tight
+    reference that 3D sweep reports its deviations against.  Both kernels
+    share them, the 3D singularity being ``1/r`` for Helmholtz and Yukawa
+    alike.
     """
     if high_accuracy:
         return _duffy_config(max(24, 8 * q_order), max(61, 20 * q_order))
@@ -1903,8 +1935,10 @@ def _far_field_resolution_failures(
     column divides by.  A pinned order on a wave number that outgrows it
     drives that norm through many decades and then collapses both error
     columns to exactly zero -- a difference of two overflowed fields, not an
-    agreement.  Returns the failure messages rather than raising, so a long
-    run can still write its CSV before the caller reports the failure.
+    agreement.  A non-finite column is the same pathology one step further
+    on, and is reported on its own because no ratio is computable from it.
+    Returns the failure messages rather than raising, so a long run can still
+    write its CSV before the caller reports the failure.
     """
     low, high = band
     failures: list[str] = []
@@ -1919,6 +1953,16 @@ def _far_field_resolution_failures(
             continue
         rel_l2 = float(rel_l2)
         linf = float(linf)
+        if not math.isfinite(rel_l2) or not math.isfinite(linf):
+            # The other end of the same pathology: a far field that overflows
+            # instead of cancelling.  ``_implied_reference_norm`` declines to
+            # report a ratio here, so the band test below would never see it.
+            failures.append(
+                f"{row['case_id']}: non-finite Helmholtz error columns "
+                f"(rel_l2={rel_l2}, linf={linf}) at "
+                f"fmm_order={row['fmm_order']}"
+            )
+            continue
         if rel_l2 == 0.0 and linf == 0.0:
             failures.append(
                 f"{row['case_id']}: both Helmholtz error columns are exactly "
@@ -2252,6 +2296,14 @@ def run_benchmark(
         "power_log_single_table_beta_mode": power_log_beta_mode,
     }
 
+    if min_targets is not None:
+        # Checked from the pure node count first, before any device is
+        # selected or any geometry built, so a misconfigured dispatch fails
+        # immediately rather than after the setup it cannot use.
+        _require_min_targets(
+            _uniform_target_count(dim, q_order, nlevels), min_targets, dim
+        )
+
     benchmark_start = time.perf_counter()
     device = _select_opencl_device(cl, backend)
     ctx = cl.Context([device])
@@ -2260,12 +2312,10 @@ def run_benchmark(
         ctx, queue, q_order, nlevels, dim=dim
     )
     n_targets = int(q_points[0].shape[0])
-    if min_targets is not None and n_targets < min_targets:
-        raise RuntimeError(
-            f"the requested {dim}D geometry carries {n_targets} targets, "
-            f"below the required minimum {min_targets}; raise --nlevels or "
-            "--q-order"
-        )
+    if min_targets is not None:
+        # The realized count, in case the mesh generator ever departs from
+        # the uniform node count the pre-check used.
+        _require_min_targets(n_targets, min_targets, dim)
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     rows: list[dict[str, Any]] = []
@@ -2499,15 +2549,20 @@ def run_benchmark(
                 )
             )
 
-    _validate_yukawa_order_convergence(rows)
-    _validate_windowed_rows(rows)
-
     benchmark_total_s = time.perf_counter() - benchmark_start
     for row in rows:
         row["benchmark_total_s"] = benchmark_total_s
         row["benchmark_total_time_kind"] = (
             "driver_wall_including_all_cases_setup_and_isolated_diagnostics"
         )
+
+    # The gates run last, on complete rows, and carry those rows out on the
+    # exception so ``main`` can write the CSV before reporting the failure.
+    try:
+        _validate_yukawa_order_convergence(rows)
+        _validate_windowed_rows(rows)
+    except RuntimeError as exc:
+        raise _BenchmarkGateError(str(exc), rows) from exc
 
     return rows
 
@@ -2727,30 +2782,37 @@ def main() -> int:
     if args.max_fmm_order is not None and args.max_fmm_order < fmm_order:
         parser.error("--max-fmm-order must be at least --fmm-order")
 
-    rows = run_benchmark(
-        mode=args.mode,
-        backend=args.backend,
-        cache_dir=args.cache_dir,
-        dim=dim,
-        q_order=q_order,
-        nlevels=nlevels,
-        fmm_order=fmm_order,
-        split_orders=split_orders,
-        helmholtz_k=helmholtz_k,
-        yukawa_lam=yukawa_lam,
-        direct_levels=direct_levels,
-        repeat_count=repeat_count,
-        power_log_beta_mode=args.power_log_beta_mode,
-        windowed_thetas=windowed_thetas,
-        window_theta=args.window_theta,
-        windowed_p_star=args.windowed_p_star,
-        windowed_chan_orders=windowed_chan_orders,
-        classical_probe_kind=args.classical_probe,
-        classical_probe_tolerance=args.classical_probe_tolerance,
-        fmm_order_rule=args.fmm_order_rule,
-        max_fmm_order=args.max_fmm_order,
-        min_targets=args.min_targets,
-    )
+    try:
+        rows = run_benchmark(
+            mode=args.mode,
+            backend=args.backend,
+            cache_dir=args.cache_dir,
+            dim=dim,
+            q_order=q_order,
+            nlevels=nlevels,
+            fmm_order=fmm_order,
+            split_orders=split_orders,
+            helmholtz_k=helmholtz_k,
+            yukawa_lam=yukawa_lam,
+            direct_levels=direct_levels,
+            repeat_count=repeat_count,
+            power_log_beta_mode=args.power_log_beta_mode,
+            windowed_thetas=windowed_thetas,
+            window_theta=args.window_theta,
+            windowed_p_star=args.windowed_p_star,
+            windowed_chan_orders=windowed_chan_orders,
+            classical_probe_kind=args.classical_probe,
+            classical_probe_tolerance=args.classical_probe_tolerance,
+            fmm_order_rule=args.fmm_order_rule,
+            max_fmm_order=args.max_fmm_order,
+            min_targets=args.min_targets,
+        )
+    except _BenchmarkGateError as exc:
+        # The rows are measured; only the verdict on them failed.  Write them
+        # before re-raising, so a multi-hour run keeps its CSV.
+        write_csv(args.out, exc.rows)
+        print(f"GATE-FAILED (CSV written to {args.out}): {exc}")
+        raise
     # Write first, then report the far-field resolution check, so a long run
     # never loses its measurements to a failing diagnostic.
     write_csv(args.out, rows)
