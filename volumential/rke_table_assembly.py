@@ -135,11 +135,6 @@ _O1_EXTENT_MAX = 1.0e3
 # series/channel conventions certify as real (Yukawa).
 _REAL_TABLE_IMAG_REL_TOL = 1.0e-10
 
-# Relative slack on the closed coverage disk ``|zeta| <= (Theta / b)**2``, so
-# a parameter that lands on the declaration boundary is not refused by
-# roundoff in ``theta = parameter * b``.
-_WINDOW_COVERAGE_SLACK = 1.0e-12
-
 # Number of trailing series terms scanned when closing the tail majorant with
 # its geometric remainder bound.
 _TAIL_MAJORANT_TERM_WINDOW = 400
@@ -566,6 +561,107 @@ def _get_channel_tables(
 # }}}
 
 
+# {{{ shared recombination plumbing
+
+class _ChannelAccumulation(NamedTuple):
+    """Result of summing the coefficient-weighted channel contributions."""
+
+    values: np.ndarray
+    abs_accumulation: np.ndarray
+    peak_contribution: float
+    sum_of_channel_maxima: float
+
+
+def _classical_channel_contributions(
+    dim: int,
+    k: np.complex128,
+    n_terms: int,
+    tables: dict[str, NearFieldInteractionTable],
+    entry_ids: np.ndarray,
+) -> list[np.ndarray]:
+    """Coefficient-weighted series channels of the classical assembly, in
+    the order the recombination sums them."""
+
+    def reduced(label):
+        # Address every channel through full entry IDs so dense-stored
+        # (legacy cache) and compact symmetry-reduced channels interoperate;
+        # the accessor raises if a channel lacks any canonical entry.
+        return np.asarray(
+            tables[label].get_entry_data_for_full_indices(entry_ids)
+        )
+
+    contributions = [reduced("laplace").astype(np.complex128)]
+    if dim == 2:
+        c0, coeff_log, coeff_power = _coefficients_2d(k, n_terms)
+        contributions.append(c0 * reduced("constant"))
+        for n in range(1, n_terms + 1):
+            contributions.append(coeff_log[n] * reduced(f"power_log:{2 * n}"))
+            contributions.append(coeff_power[n] * reduced(f"power:{2 * n}"))
+    else:
+        coeffs = _coefficients_3d(k, n_terms)
+        for n in range(1, n_terms + 1):
+            label = "constant" if n - 1 == 0 else f"power:{n - 1}"
+            contributions.append(coeffs[n - 1] * reduced(label))
+    return contributions
+
+
+def _accumulate_channel_contributions(
+    contributions: list[np.ndarray],
+) -> _ChannelAccumulation:
+    """Sum the channel contributions in order, collecting the magnitudes the
+    conditioning and quadrature-amplification bounds are built from."""
+    values = np.zeros_like(contributions[0])
+    abs_accumulation = np.zeros(values.shape, dtype=np.float64)
+    peak_contribution = 0.0
+    sum_of_channel_maxima = 0.0
+    for index, contribution in enumerate(contributions):
+        if not np.all(np.isfinite(contribution)):
+            raise RuntimeError(
+                f"channel contribution {index} is not finite; the channel "
+                "integrals or coefficients over/underflowed float64 "
+                "(rescale the problem to an O(1) root extent)"
+            )
+        channel_max = float(np.max(np.abs(contribution)))
+        peak_contribution = max(peak_contribution, channel_max)
+        sum_of_channel_maxima += channel_max
+        abs_accumulation += np.abs(contribution)
+        values = values + contribution
+    return _ChannelAccumulation(
+        values, abs_accumulation, peak_contribution, sum_of_channel_maxima
+    )
+
+
+def _finalize_assembled_table(
+    base: NearFieldInteractionTable,
+    entry_ids: np.ndarray,
+    values: np.ndarray,
+    result_dtype: Any,
+) -> NearFieldInteractionTable:
+    """Copy the base channel table and install the assembled entries.
+
+    Do not inherit the base channel's kernel identity: a fixed-parameter
+    Helmholtz/Yukawa table is not scale reusable, and a "log"/"inv_power"
+    scale type would silently apply log-kernel or homogeneous rescaling.
+    ``None`` matches what a direct fixed-parameter build records and makes
+    scaling queries fail loudly.  The DuffyRadial build routing goes with
+    it, for the same reason: the copy would otherwise claim its values came
+    from a Duffy quadrature that never touched them.
+    """
+    result = copy.deepcopy(base)
+    result.dtype = np.dtype(result_dtype).type
+    result.kernel_type = None
+    for identity_attr in ("integral_knl", "kernel_func", "kernel_type_cached"):
+        if hasattr(result, identity_attr):
+            setattr(result, identity_attr, None)
+    _clear_inherited_build_routing(result)
+    result._data = None
+    result.set_reduced_table_data(entry_ids, values.astype(result_dtype))
+    result.is_built = True
+    return result
+
+# }}}
+
+
 def assemble_parameterized_table(
     queue,
     cache_path,
@@ -579,9 +675,9 @@ def assemble_parameterized_table(
     tolerance: float = 1.0e-12,
     max_terms: int = 60,
     max_condition: float = 1.0e6,
-    build_config=None,
+    build_config: Any = None,
     force_channel_recompute: bool = False,
-):
+) -> _AssemblyResult:
     """Assemble a fixed-parameter near-field table from canonical channels.
 
     :arg kernel_type: ``"Helmholtz"`` (outgoing, ``k = parameter``) or
@@ -622,10 +718,6 @@ NearFieldInteractionTable`
             "coefficients contain log(k/2)); build the Laplace table directly"
         )
 
-    # Conservative bound for the near-field separation radius.  The adaptive
-    # List 1 gallery contains center offsets up to 1.5 source-box extents
-    # with target boxes up to twice the source size, so a source point and a
-    # target point can be up to 1.5 + 1 + 0.5 = 3 extents apart per axis.
     box_extent = float(root_extent) * 0.5**source_box_level
     # The recombination evaluates channel integrals (which scale like
     # extent**(power + dim)) against coefficients (which scale like
@@ -633,13 +725,10 @@ NearFieldInteractionTable`
     # can overflow or underflow one factor even when the dimensionless
     # product is moderate.  The table infrastructure's canonical convention
     # is an O(1) root extent; enforce it rather than certify garbage.
-    if not 1.0e-3 <= box_extent <= 1.0e3:
-        raise ValueError(
-            f"source-box extent {box_extent:g} is outside the supported "
-            "O(1) range for certified float64 recombination; rescale the "
-            "problem to an O(1) root extent (the canonical table convention)"
-        )
-    radius = 3.0 * np.sqrt(dim) * box_extent
+    _require_o1_box_extent(box_extent)
+    # Conservative bound for the near-field separation radius; see
+    # ``_NEAR_FIELD_SEPARATION_EXTENTS``.
+    radius = _NEAR_FIELD_SEPARATION_EXTENTS * np.sqrt(dim) * box_extent
 
     n_terms, tail_bound = choose_truncation_order(
         dim, k, radius, tolerance, max_terms=max_terms
@@ -661,70 +750,23 @@ NearFieldInteractionTable`
 
     base = tables["laplace"]
     entry_ids = np.asarray(base.get_reduced_entry_ids(), dtype=np.int64)
-
-    def reduced(label):
-        # Address every channel through full entry IDs so dense-stored
-        # (legacy cache) and compact symmetry-reduced channels interoperate;
-        # the accessor raises if a channel lacks any canonical entry.
-        return np.asarray(
-            tables[label].get_entry_data_for_full_indices(entry_ids)
-        )
-
-    contributions = [reduced("laplace").astype(np.complex128)]
-    if dim == 2:
-        c0, coeff_log, coeff_power = _coefficients_2d(k, n_terms)
-        contributions.append(c0 * reduced("constant"))
-        for n in range(1, n_terms + 1):
-            contributions.append(coeff_log[n] * reduced(f"power_log:{2 * n}"))
-            contributions.append(coeff_power[n] * reduced(f"power:{2 * n}"))
-    else:
-        coeffs = _coefficients_3d(k, n_terms)
-        for n in range(1, n_terms + 1):
-            label = "constant" if n - 1 == 0 else f"power:{n - 1}"
-            contributions.append(coeffs[n - 1] * reduced(label))
-
-    values = np.zeros_like(contributions[0])
-    abs_accumulation = np.zeros(values.shape, dtype=np.float64)
-    peak_contribution = 0.0
-    sum_of_channel_maxima = 0.0
-    for index, contribution in enumerate(contributions):
-        if not np.all(np.isfinite(contribution)):
-            raise RuntimeError(
-                f"channel contribution {index} is not finite; the channel "
-                "integrals or coefficients over/underflowed float64 "
-                "(rescale the problem to an O(1) root extent)"
-            )
-        channel_max = float(np.max(np.abs(contribution)))
-        peak_contribution = max(peak_contribution, channel_max)
-        sum_of_channel_maxima += channel_max
-        abs_accumulation += np.abs(contribution)
-        values = values + contribution
+    contributions = _classical_channel_contributions(
+        dim, k, n_terms, tables, entry_ids
+    )
+    accumulation = _accumulate_channel_contributions(contributions)
+    values = accumulation.values
 
     max_imag = float(np.max(np.abs(values.imag))) if values.size else 0.0
     if result_dtype == np.float64:
         reference_scale = max(float(np.max(np.abs(values.real))), 1e-300)
-        if max_imag > 1.0e-10 * reference_scale:
+        if max_imag > _REAL_TABLE_IMAG_REL_TOL * reference_scale:
             raise RuntimeError(
                 "assembled Yukawa table has non-negligible imaginary part "
                 f"({max_imag:g}); coefficient branch error suspected"
             )
         values = np.ascontiguousarray(values.real)
 
-    result = copy.deepcopy(base)
-    result.dtype = result_dtype
-    # Do not inherit the Laplace channel's kernel identity: a fixed-parameter
-    # Helmholtz/Yukawa table is not scale reusable, and the base table's
-    # "log"/"inv_power" scale type would silently apply log-kernel or
-    # homogeneous rescaling. ``None`` matches what a direct fixed-parameter
-    # build records and makes scaling queries fail loudly.
-    result.kernel_type = None
-    for identity_attr in ("integral_knl", "kernel_func", "kernel_type_cached"):
-        if hasattr(result, identity_attr):
-            setattr(result, identity_attr, None)
-    _clear_inherited_build_routing(result)
-    result._data = None
-    result.set_reduced_table_data(entry_ids, values.astype(result_dtype))
-    result.is_built = True
+    result = _finalize_assembled_table(base, entry_ids, values, result_dtype)
 
     basis_l1 = _basis_l1_norms(base)
     entry_bound = tail_bound * float(np.max(basis_l1))
@@ -745,7 +787,9 @@ NearFieldInteractionTable`
     m_terms = len(contributions)
     gamma_m = (m_terms + 1) * eps / max(1.0 - (m_terms + 1) * eps, 0.5)
     coefficient_eval_ulps = 32.0 + 8.0 * n_terms
-    max_abs_sum = float(np.max(abs_accumulation)) if values.size else 0.0
+    max_abs_sum = (
+        float(np.max(accumulation.abs_accumulation)) if values.size else 0.0
+    )
     cancellation_bound = (gamma_m + coefficient_eval_ulps * eps) * max_abs_sum
     condition = max_abs_sum / max(max_entry, 1e-300)
     if condition > max_condition:
@@ -773,7 +817,7 @@ NearFieldInteractionTable`
         "certified_entry_bound_relative": (
             float(entry_bound / max_entry) if max_entry > 0 else 0.0
         ),
-        "peak_contribution": float(peak_contribution),
+        "peak_contribution": float(accumulation.peak_contribution),
         "condition_number": float(condition),
         # Channel quadrature error is owned by ``build_config`` (exactly as
         # for direct builds) and is NOT part of the certified bounds below.
@@ -783,7 +827,9 @@ NearFieldInteractionTable`
         # the sum over channels of each coefficient-weighted channel's own
         # maximum (channel maxima need not share an entry, so this is the
         # honest amplification, larger than the entrywise abs-sum).
-        "quadrature_amplification_bound": float(sum_of_channel_maxima),
+        "quadrature_amplification_bound": float(
+            accumulation.sum_of_channel_maxima
+        ),
         "coefficient_eval_ulps_model": float(coefficient_eval_ulps),
         "coefficient_eval_ulps_model_form": "32 + 8 * n_series_terms",
         "cancellation_entry_bound": float(cancellation_bound),
@@ -1687,19 +1733,112 @@ def _windowed_channel_payload_checksum(
     return digest.hexdigest()
 
 
+def _load_windowed_channel_values(
+    cache_file: Path,
+    key: dict[str, Any],
+    table: NearFieldInteractionTable,
+    expected_entry_ids: np.ndarray,
+    m: int,
+    window_scale: float,
+) -> np.ndarray | None:
+    """Cached channel values for ``cache_file``, or ``None`` when the file
+    must be rebuilt.
+
+    A cache read must never wedge the assembly: a torn or corrupted file
+    (crash or concurrent writer mid-``np.savez``) or a stale layout missing
+    expected arrays falls through to a rebuild that atomically overwrites
+    the bad file.  Every discard is logged as a warning, because a
+    permanently unreadable cache file otherwise looks exactly like a cache
+    hit while paying a full rebuild on every call.
+    """
+    try:
+        with np.load(cache_file, allow_pickle=False) as payload:
+            stored_key = {
+                name: payload[f"key_{name}"].item() for name in key
+            }
+            stored_ids = np.asarray(payload["entry_ids"], dtype=np.int64)
+            stored_values = np.asarray(payload["values"], dtype=np.float64)
+            stored_checksum = str(payload["payload_checksum"].item())
+    except Exception as exc:
+        logger.warning(
+            "discarding unreadable windowed channel cache %s: %s: %s",
+            cache_file, type(exc).__name__, exc,
+        )
+        return None
+
+    # A cache written before the schema, checksum, or entry bound was
+    # enforced is treated exactly like a torn file.  Shape checks come
+    # before the table setter so malformed data cannot wedge later
+    # calls on a permanently loadable bad file.
+    try:
+        if stored_key != key:
+            raise RuntimeError("stored cache key does not match")
+        if not np.array_equal(stored_ids, expected_entry_ids):
+            raise RuntimeError("stored entry IDs do not match")
+        if stored_values.shape != expected_entry_ids.shape:
+            raise RuntimeError(
+                f"stored value array of shape {stored_values.shape} "
+                f"does not match the {expected_entry_ids.shape} "
+                "reduced entries"
+            )
+        computed_checksum = _windowed_channel_payload_checksum(
+            stored_ids, stored_values
+        )
+        if stored_checksum != computed_checksum:
+            raise RuntimeError("stored payload checksum does not match")
+        _check_channel_table_values(table, stored_values, m, window_scale)
+    except RuntimeError as exc:
+        logger.warning(
+            "rebuilding windowed channel cache %s: %s", cache_file, exc,
+        )
+        return None
+    return stored_values
+
+
+def _store_windowed_channel_values(
+    cache_file: Path,
+    key: dict[str, Any],
+    entry_ids: np.ndarray,
+    entry_values: np.ndarray,
+) -> None:
+    """Publish one channel's entries atomically (write-then-rename), so a
+    crash or a concurrent writer can never leave a torn final file behind."""
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    tmp_file = cache_file.with_name(
+        f"{cache_file.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}"
+    )
+    try:
+        with open(tmp_file, "wb") as stream:
+            np.savez(
+                stream,
+                entry_ids=entry_ids,
+                values=entry_values,
+                payload_checksum=np.asarray(
+                    _windowed_channel_payload_checksum(entry_ids, entry_values)
+                ),
+                **{
+                    f"key_{name}": np.asarray(value)
+                    for name, value in key.items()
+                },
+            )
+        os.replace(tmp_file, cache_file)
+    finally:
+        tmp_file.unlink(missing_ok=True)
+
+
 def get_windowed_channel_table(
-    cache_path,
-    dim,
-    q_order,
-    m,
+    cache_path: str | Path,
+    dim: int,
+    q_order: int,
+    m: int,
     *,
-    source_box_level=0,
-    root_extent=2.0,
-    window_theta=16.0,
-    chan_regular_order=None,
-    chan_radial_order=None,
-    force_recompute=False,
-):
+    source_box_level: int = 0,
+    root_extent: float = 2.0,
+    window_theta: float = 16.0,
+    chan_regular_order: int | None = None,
+    chan_radial_order: int | None = None,
+    force_recompute: bool = False,
+) -> NearFieldInteractionTable:
     """Build or load the normalized windowed channel table ``psi_m``.
 
     The channel family depends on the declaration ``window_theta`` (and the
@@ -1759,66 +1898,14 @@ def get_windowed_channel_table(
     )
 
     if not force_recompute and cache_file.is_file():
-        # A cache read must never wedge the assembly: a torn or corrupted
-        # file (crash or concurrent writer mid-``np.savez``) or a stale
-        # layout missing expected arrays falls through to a rebuild that
-        # atomically overwrites the bad file.
-        try:
-            with np.load(cache_file, allow_pickle=False) as payload:
-                stored_key = {
-                    name: payload[f"key_{name}"].item() for name in key
-                }
-                stored_ids = np.asarray(
-                    payload["entry_ids"], dtype=np.int64
-                )
-                stored_values = np.asarray(
-                    payload["values"], dtype=np.float64
-                )
-                stored_checksum = str(payload["payload_checksum"].item())
-        except Exception as exc:
-            # never silent: a permanently unreadable cache file otherwise
-            # looks exactly like a cache hit while paying a full rebuild on
-            # every call
-            logger.warning(
-                "discarding unreadable windowed channel cache %s: %s: %s",
-                cache_file, type(exc).__name__, exc,
-            )
-        else:
-            # A cache written before the schema, checksum, or entry bound was
-            # enforced is treated exactly like a torn file.  Shape checks come
-            # before the table setter so malformed data cannot wedge later
-            # calls on a permanently loadable bad file.
-            try:
-                if stored_key != key:
-                    raise RuntimeError("stored cache key does not match")
-                if not np.array_equal(stored_ids, expected_entry_ids):
-                    raise RuntimeError("stored entry IDs do not match")
-                if stored_values.shape != expected_entry_ids.shape:
-                    raise RuntimeError(
-                        f"stored value array of shape {stored_values.shape} "
-                        f"does not match the {expected_entry_ids.shape} "
-                        "reduced entries"
-                    )
-                computed_checksum = _windowed_channel_payload_checksum(
-                    stored_ids, stored_values
-                )
-                if stored_checksum != computed_checksum:
-                    raise RuntimeError("stored payload checksum does not match")
-                _check_channel_table_values(
-                    table, stored_values, m, window_scale
-                )
-            except RuntimeError as exc:
-                logger.warning(
-                    "rebuilding windowed channel cache %s: %s",
-                    cache_file, exc,
-                )
-            else:
-                table.set_reduced_table_data(
-                    expected_entry_ids, stored_values
-                )
-                table.is_built = True
-                table._windowed_cache_disposition = "hit"
-                return table
+        stored_values = _load_windowed_channel_values(
+            cache_file, key, table, expected_entry_ids, m, window_scale
+        )
+        if stored_values is not None:
+            table.set_reduced_table_data(expected_entry_ids, stored_values)
+            table.is_built = True
+            table._windowed_cache_disposition = "hit"
+            return table
 
     entry_ids, entry_values = _duffy_channel_entry_values(
         table,
@@ -1839,29 +1926,7 @@ def get_windowed_channel_table(
     # certificate field, so it has to die here.
     _check_channel_table_values(table, entry_values, m, window_scale)
 
-    # Publish atomically (write-then-rename) so a crash or a concurrent
-    # writer can never leave a torn final file behind.
-    cache_file.parent.mkdir(parents=True, exist_ok=True)
-    tmp_file = cache_file.with_name(
-        f"{cache_file.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}"
-    )
-    try:
-        with open(tmp_file, "wb") as stream:
-            np.savez(
-                stream,
-                entry_ids=entry_ids,
-                values=entry_values,
-                payload_checksum=np.asarray(
-                    _windowed_channel_payload_checksum(entry_ids, entry_values)
-                ),
-                **{
-                    f"key_{name}": np.asarray(value)
-                    for name, value in key.items()
-                },
-            )
-        os.replace(tmp_file, cache_file)
-    finally:
-        tmp_file.unlink(missing_ok=True)
+    _store_windowed_channel_values(cache_file, key, entry_ids, entry_values)
     table.set_reduced_table_data(entry_ids, entry_values)
     table.is_built = True
     table._windowed_cache_disposition = "rebuilt"
@@ -1959,24 +2024,102 @@ def _smooth_remainder_entry_values(
     return values
 
 
+def _resolve_smooth_quad_order(
+    smooth_quad_order: int | None,
+    q_order: int,
+    theta_abs: float,
+    window_theta: float,
+) -> int:
+    """Points per axis of the smooth-remainder Gauss rule.
+
+    Two resolution requirements drive the default: the kernel oscillation
+    (theta/2 plus margin) and the windowed channels inside R, whose
+    transition features live at scale sqrt(t_w) = b/Theta regardless of the
+    swept parameter.  Measured 2D convergence of assembled entries (q=3,
+    theta=1) against converged references: the window term reaches ~1e-14
+    relative at about 1.25*Theta points per axis (Theta=16: 24, Theta=32:
+    48, Theta=64: 80, Theta=128: ~160), so 1.25*Theta + 8 carries margin at
+    every declaration, not just the default Theta = 16.
+    """
+    if smooth_quad_order is None:
+        smooth_quad_order = max(
+            16,
+            2 * q_order,
+            int(np.ceil(theta_abs / 2.0)) + 16,
+            int(np.ceil(1.25 * window_theta)) + 8,
+        )
+    # Gauss rules of the table's own order reproduce the self-interaction
+    # target points, and any two odd-order Gauss rules share the interval
+    # midpoint; either collision would sample the remainder at r = 0
+    # (where the kernel diverges), so nudge the order clear of both.
+    if smooth_quad_order == q_order or (
+        smooth_quad_order % 2 == 1 and q_order % 2 == 1
+    ):
+        smooth_quad_order += 1
+    return smooth_quad_order
+
+
+def _recombine_windowed_channels(
+    channels: list[NearFieldInteractionTable],
+    entry_ids: np.ndarray,
+    coefficients: np.ndarray,
+    prefactor: float,
+    p_star: int,
+    remainder_values: np.ndarray,
+) -> tuple[np.ndarray, list[float]]:
+    """Add the coefficient-weighted channel entries onto the smooth
+    remainder, returning the assembled values and the per-channel peaks."""
+    values = remainder_values.astype(np.complex128, copy=True)
+    per_channel_peak = []
+    for m in range(p_star):
+        contribution = (
+            prefactor
+            * coefficients[m]
+            * np.asarray(
+                channels[m].get_entry_data_for_full_indices(entry_ids)
+            )
+        )
+        if not np.all(np.isfinite(contribution)):
+            raise RuntimeError(
+                f"windowed channel contribution {m} is not finite"
+            )
+        per_channel_peak.append(float(np.max(np.abs(contribution))))
+        values = values + contribution
+    if not np.all(np.isfinite(values)):
+        raise RuntimeError("windowed assembly produced non-finite entries")
+    return values, per_channel_peak
+
+
+def _windowed_coefficient_bound(
+    zeta: complex, window_scale: float, p_star: int
+) -> float:
+    """Largest retained coefficient magnitude ``max_m |zeta t_w|^m / m!``."""
+    coefficient_bound = 0.0
+    magnitude = 1.0
+    for m in range(p_star):
+        coefficient_bound = max(coefficient_bound, magnitude)
+        magnitude = magnitude * abs(zeta) * window_scale / (m + 1)
+    return coefficient_bound
+
+
 def _assemble_windowed_for_zeta(
-    cache_path,
-    dim,
-    q_order,
-    zeta,
-    kernel_radial,
+    cache_path: str | Path,
+    dim: int,
+    q_order: int,
+    zeta: complex,
+    kernel_radial: _RadialProfile,
     *,
-    source_box_level=0,
-    root_extent=2.0,
-    window_theta=16.0,
-    p_star=6,
-    smooth_quad_order=None,
-    max_condition=1.0e6,
-    chan_regular_order=None,
-    chan_radial_order=None,
-    force_channel_recompute=False,
-    result_dtype=np.complex128,
-):
+    source_box_level: int = 0,
+    root_extent: float = 2.0,
+    window_theta: float = 16.0,
+    p_star: int = 6,
+    smooth_quad_order: int | None = None,
+    max_condition: float = 1.0e6,
+    chan_regular_order: int | None = None,
+    chan_radial_order: int | None = None,
+    force_channel_recompute: bool = False,
+    result_dtype: Any = np.complex128,
+) -> _AssemblyResult:
     """Windowed assembly at an explicit squared-frequency parameter ``zeta``
     and kernel radial profile; :func:`assemble_windowed_parameterized_table`
     wraps this with the standard Helmholtz/Yukawa identifications, and tests
@@ -2021,30 +2164,9 @@ def _assemble_windowed_for_zeta(
             "|zeta| <= (Theta/b)**2"
         )
 
-    if smooth_quad_order is None:
-        # Two resolution requirements: the kernel oscillation (theta/2 plus
-        # margin) and the windowed channels inside R, whose transition
-        # features live at scale sqrt(t_w) = b/Theta regardless of the
-        # swept parameter.  Measured 2D convergence of assembled entries
-        # (q=3, theta=1) against converged references: the window term
-        # reaches ~1e-14 relative at about 1.25*Theta points per axis
-        # (Theta=16: 24, Theta=32: 48, Theta=64: 80, Theta=128: ~160), so
-        # 1.25*Theta + 8 carries margin at every declaration, not just the
-        # default Theta = 16.
-        smooth_quad_order = max(
-            16,
-            2 * q_order,
-            int(np.ceil(theta_abs / 2.0)) + 16,
-            int(np.ceil(1.25 * window_theta)) + 8,
-        )
-    # Gauss rules of the table's own order reproduce the self-interaction
-    # target points, and any two odd-order Gauss rules share the interval
-    # midpoint; either collision would sample the remainder at r = 0
-    # (where the kernel diverges), so nudge the order clear of both.
-    if smooth_quad_order == q_order or (
-        smooth_quad_order % 2 == 1 and q_order % 2 == 1
-    ):
-        smooth_quad_order += 1
+    smooth_quad_order = _resolve_smooth_quad_order(
+        smooth_quad_order, q_order, theta_abs, window_theta
+    )
 
     channels = [
         get_windowed_channel_table(
@@ -2074,24 +2196,9 @@ def _assemble_windowed_for_zeta(
         base, entry_ids, remainder_radial, smooth_quad_order
     )
 
-    values = remainder_values.astype(np.complex128, copy=True)
-    per_channel_peak = []
-    for m in range(p_star):
-        contribution = (
-            prefactor
-            * coefficients[m]
-            * np.asarray(
-                channels[m].get_entry_data_for_full_indices(entry_ids)
-            )
-        )
-        if not np.all(np.isfinite(contribution)):
-            raise RuntimeError(
-                f"windowed channel contribution {m} is not finite"
-            )
-        per_channel_peak.append(float(np.max(np.abs(contribution))))
-        values = values + contribution
-    if not np.all(np.isfinite(values)):
-        raise RuntimeError("windowed assembly produced non-finite entries")
+    values, per_channel_peak = _recombine_windowed_channels(
+        channels, entry_ids, coefficients, prefactor, p_star, remainder_values
+    )
     # Recombination cost: the remainder entry seeds the accumulator and each
     # of the p_star channels contributes one complex fused multiply-add per
     # entry; the coefficients come from a p_star-step recurrence.
@@ -2120,32 +2227,21 @@ def _assemble_windowed_for_zeta(
             "lies outside the conditioning contract of the declared window"
         )
 
-    coefficient_bound = 0.0
-    magnitude = 1.0
-    for m in range(p_star):
-        coefficient_bound = max(coefficient_bound, magnitude)
-        magnitude = magnitude * abs(zeta) * window_scale / (m + 1)
+    coefficient_bound = _windowed_coefficient_bound(
+        zeta, window_scale, p_star
+    )
 
     max_imag = float(np.max(np.abs(values.imag))) if values.size else 0.0
     if np.dtype(result_dtype) == np.dtype(np.float64):
         reference_scale = max(float(np.max(np.abs(values.real))), 1e-300)
-        if max_imag > 1.0e-10 * reference_scale:
+        if max_imag > _REAL_TABLE_IMAG_REL_TOL * reference_scale:
             raise RuntimeError(
                 "assembled windowed Yukawa table has non-negligible "
                 f"imaginary part ({max_imag:g})"
             )
         values = np.ascontiguousarray(values.real)
 
-    result = copy.deepcopy(base)
-    result.dtype = np.dtype(result_dtype).type
-    result.kernel_type = None
-    for identity_attr in ("integral_knl", "kernel_func", "kernel_type_cached"):
-        if hasattr(result, identity_attr):
-            setattr(result, identity_attr, None)
-    _clear_inherited_build_routing(result)
-    result._data = None
-    result.set_reduced_table_data(entry_ids, values.astype(result_dtype))
-    result.is_built = True
+    result = _finalize_assembled_table(base, entry_ids, values, result_dtype)
 
     certificate = {
         "kernel_type": None,
@@ -2178,67 +2274,12 @@ def _assemble_windowed_for_zeta(
     return result, certificate
 
 
-def assemble_windowed_parameterized_table(
-    cache_path,
-    dim: int,
-    kernel_type: str,
-    q_order: int,
-    parameter: float,
-    *,
-    source_box_level: int = 0,
-    root_extent: float = 2.0,
-    window_theta: float = 16.0,
-    p_star: int = 6,
-    smooth_quad_order=None,
-    max_condition: float = 1.0e6,
-    chan_regular_order: int | None = None,
-    chan_radial_order: int | None = None,
-    force_channel_recompute: bool = False,
-):
-    """Assemble a fixed-parameter near-field table from windowed channels.
-
-    :arg kernel_type: ``"Helmholtz"`` (outgoing, ``k = parameter``) or
-        ``"Yukawa"`` (``lam = parameter``).
-    :arg window_theta: the declaration ``Theta``; the local parameter
-        ``theta = parameter * b`` (with ``b`` the source-box extent) must
-        not exceed it.
-    :arg p_star: number of tabulated windowed channels.
-    :arg smooth_quad_order: Gauss-Legendre points per axis for the smooth
-        remainder; defaults to ``max(16, 2 q_order, ceil(theta/2) + 16,
-        ceil(1.25 window_theta) + 8)`` — a Nyquist-style term for the kernel
-        oscillation plus a declaration-scaled term for the windowed-channel
-        transition features (width ``b/Theta``) inside the remainder.
-    :arg chan_regular_order: angular (2D) / tail (3D) Gauss order of the
-        one-time singular channel quadrature; ``None`` selects the tested
-        per-dimension default (48 in 2D — the high-aspect Duffy triangles of
-        edge-adjacent 2D interpolation nodes converge slowly in this order —
-        and 20 in 3D).  ``chan_radial_order`` (radial tanh-sinh order)
-        defaults to 61 in both dimensions.
-    :returns: ``(table, certificate)`` with ``table`` a
-        :class:`~volumential.nearfield_potential_table.\
-NearFieldInteractionTable`
-        (complex128 for Helmholtz, float64 for Yukawa) whose kernel identity
-        is nulled exactly like the classical assembler's, and
-        ``certificate`` a dict of the assembly provenance.
-    """
-    dim, q_order = _require_dim_q_order(dim, q_order)
-    source_box_level = _require_integer(
-        "source_box_level", source_box_level, minimum=0
-    )
-    window_theta = _require_finite_positive("window_theta", window_theta)
-    parameter = float(parameter)
-    if not parameter > 0.0:
-        raise ValueError("windowed assembly requires a positive parameter")
-
-    box_extent = float(root_extent) * 0.5**source_box_level
-    theta = parameter * box_extent
-    if theta > window_theta * (1.0 + WINDOW_COVERAGE_RELATIVE_TOLERANCE):
-        raise RKEWindowCoverageError(
-            f"local parameter theta = {theta:g} exceeds the declared window "
-            f"Theta = {window_theta:g}; the requested parameter is "
-            "outside the declaration"
-        )
-
+def _real_parameter_kernel(
+    dim: int, kernel_type: str, parameter: float
+) -> tuple[complex, Any, _RadialProfile]:
+    """Squared frequency, result dtype, and radial kernel profile of the
+    real-parameter Helmholtz (outgoing) / Yukawa identifications."""
+    # Deferred: SciPy is only needed on the kernel-evaluation path.
     import scipy.special as sps
 
     if kernel_type == "Yukawa":
@@ -2283,6 +2324,73 @@ NearFieldInteractionTable`
         raise NotImplementedError(
             "windowed RKE assembly supports Helmholtz and Yukawa"
         )
+    return zeta, result_dtype, kernel_radial
+
+
+def assemble_windowed_parameterized_table(
+    cache_path: str | Path,
+    dim: int,
+    kernel_type: str,
+    q_order: int,
+    parameter: float,
+    *,
+    source_box_level: int = 0,
+    root_extent: float = 2.0,
+    window_theta: float = 16.0,
+    p_star: int = 6,
+    smooth_quad_order: int | None = None,
+    max_condition: float = 1.0e6,
+    chan_regular_order: int | None = None,
+    chan_radial_order: int | None = None,
+    force_channel_recompute: bool = False,
+) -> _AssemblyResult:
+    """Assemble a fixed-parameter near-field table from windowed channels.
+
+    :arg kernel_type: ``"Helmholtz"`` (outgoing, ``k = parameter``) or
+        ``"Yukawa"`` (``lam = parameter``).
+    :arg window_theta: the declaration ``Theta``; the local parameter
+        ``theta = parameter * b`` (with ``b`` the source-box extent) must
+        not exceed it.
+    :arg p_star: number of tabulated windowed channels.
+    :arg smooth_quad_order: Gauss-Legendre points per axis for the smooth
+        remainder; defaults to ``max(16, 2 q_order, ceil(theta/2) + 16,
+        ceil(1.25 window_theta) + 8)`` — a Nyquist-style term for the kernel
+        oscillation plus a declaration-scaled term for the windowed-channel
+        transition features (width ``b/Theta``) inside the remainder.
+    :arg chan_regular_order: angular (2D) / tail (3D) Gauss order of the
+        one-time singular channel quadrature; ``None`` selects the tested
+        per-dimension default (48 in 2D — the high-aspect Duffy triangles of
+        edge-adjacent 2D interpolation nodes converge slowly in this order —
+        and 20 in 3D).  ``chan_radial_order`` (radial tanh-sinh order)
+        defaults to 61 in both dimensions.
+    :returns: ``(table, certificate)`` with ``table`` a
+        :class:`~volumential.nearfield_potential_table.\
+NearFieldInteractionTable`
+        (complex128 for Helmholtz, float64 for Yukawa) whose kernel identity
+        is nulled exactly like the classical assembler's, and
+        ``certificate`` a dict of the assembly provenance.
+    """
+    dim, q_order = _require_dim_q_order(dim, q_order)
+    source_box_level = _require_integer(
+        "source_box_level", source_box_level, minimum=0
+    )
+    window_theta = _require_finite_positive("window_theta", window_theta)
+    parameter = float(parameter)
+    if not parameter > 0.0:
+        raise ValueError("windowed assembly requires a positive parameter")
+
+    box_extent = float(root_extent) * 0.5**source_box_level
+    theta = parameter * box_extent
+    if theta > window_theta * (1.0 + WINDOW_COVERAGE_RELATIVE_TOLERANCE):
+        raise RKEWindowCoverageError(
+            f"local parameter theta = {theta:g} exceeds the declared window "
+            f"Theta = {window_theta:g}; the requested parameter is "
+            "outside the declaration"
+        )
+
+    zeta, result_dtype, kernel_radial = _real_parameter_kernel(
+        dim, kernel_type, parameter
+    )
 
     table, certificate = _assemble_windowed_for_zeta(
         cache_path,
