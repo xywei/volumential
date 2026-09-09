@@ -98,7 +98,7 @@ def test_is_in_r():
 
 
 def test_tria2rect_map():
-    t2r, jac_t2r, r2t, jac_r2t = sint.tria2rect_map_2d()
+    t2r, _jac_t2r, r2t, _jac_r2t = sint.tria2rect_map_2d()
     assert np.allclose(t2r((0, 0)), (0, 0))
     assert np.allclose(t2r((1, 0)), (1, 0))
     assert np.allclose(t2r((0, 1)), (1, np.pi / 2))

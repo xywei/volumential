@@ -160,8 +160,13 @@ def test_duffy_batched_gpu_laplace_derivative_matches_finite_difference(
 
     if dim == 1:
         laplace_knl = _Laplace1DKernel()
-        laplace_func = lambda x: -0.5 * np.abs(np.asarray(x))
-        derivative_func = lambda x: 0.5 * np.sign(np.asarray(x))
+
+        def laplace_func(x):
+            return -0.5 * np.abs(np.asarray(x))
+
+        def derivative_func(x):
+            return 0.5 * np.sign(np.asarray(x))
+
         regular_quad_order = 6
         radial_quad_order = 21
         legendre_order = 250
@@ -227,8 +232,11 @@ def test_duffy_batched_gpu_helmholtz_plane_wave_matches_exact_values(ctx_factory
     helmholtz_knl = _HelmholtzPlaneWaveKernel(dim, k)
     helmholtz_dx_knl = AxisTargetDerivative(0, helmholtz_knl)
 
-    kernel_func = lambda x, *rest: np.cos(k * np.asarray(x))
-    kernel_dx_func = lambda x, *rest: k * np.sin(k * np.asarray(x))
+    def kernel_func(x, *rest):
+        return np.cos(k * np.asarray(x))
+
+    def kernel_dx_func(x, *rest):
+        return k * np.sin(k * np.asarray(x))
 
     table = npt.NearFieldInteractionTable(
         quad_order=1,
