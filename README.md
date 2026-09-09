@@ -40,6 +40,31 @@ Debug tip: when validating source-node evaluations, set
 with separate-but-identical source/target arrays (use `targets=None` to build a
 true coincident tree).
 
+## Near-Field Table Build Routing
+
+Near-field DuffyRadial tables are built by a batched OpenCL kernel.  If that
+build raises, the table falls back to the scalar per-entry builder, which is
+orders of magnitude slower and converges differently at the same requested
+quadrature orders.  The fallback is therefore never silent:
+
+- it logs a `WARNING` plus a `[duffy:builder] mode=scalar-fallback` line and
+  emits a `RuntimeWarning` carrying the kernel class, dimension, exception
+  type and reason;
+- it records `table.build_routing` (`batched`, `scalar`, `scalar-adaptive` or
+  `scalar-fallback`) and `table.build_fallback_reason` on the table, and both
+  are persisted with the cached payload, so a warm, cache-loaded table still
+  reports how it was originally built
+  (`volumential.opcounters.direct_build_routing`);
+- the Paper 1 benchmark drivers emit it as a `direct_build_routing` CSV column.
+
+Set `VOLUMENTIAL_DUFFY_NO_FALLBACK=1` to turn the fallback into a
+`RuntimeError` instead — campaign runs use this so that a table which quietly
+dropped to the scalar builder cannot be recorded as a batched build.  Any
+value other than unset, `0`, `false`, `no` or `off` enables the strict mode.
+It is an environment switch rather than a `DuffyBuildConfig` field because the
+build config is hashed into the table-cache fingerprint, and an operational
+strictness policy should not invalidate cached numerical data.
+
 ## Near-Field Symmetry and Cache Format
 
 - Near-field table storage uses orbit canonicalization over

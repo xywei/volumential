@@ -2781,6 +2781,94 @@ def test_batched_duffy_non_cl_executor_signature(monkeypatch):
     assert np.allclose(values, np.array([3.14], dtype=table.dtype))
 
 
+# {{{ batched-to-scalar fallback is loud and recorded
+
+
+def _const_table_for_fallback():
+    return npt.NearFieldInteractionTable(
+        quad_order=1,
+        kernel_func=npt.constant_one,
+        kernel_type="const",
+        sumpy_kernel=ConstantKernel(2),
+        progress_bar=False,
+    )
+
+
+def _raise_batched(monkeypatch, message="synthetic batched build failure"):
+    def failing_batched(self, queue, *args, **kwargs):
+        raise RuntimeError(message)
+
+    monkeypatch.setattr(
+        npt.NearFieldInteractionTable,
+        "build_table_via_duffy_radial_batched",
+        failing_batched,
+    )
+
+
+def test_scalar_fallback_warns_and_records_routing(monkeypatch):
+    queue = _make_build_queue_or_skip()
+    monkeypatch.delenv(npt.DUFFY_NO_FALLBACK_ENV_VAR, raising=False)
+    _raise_batched(monkeypatch)
+
+    table = _const_table_for_fallback()
+    with pytest.warns(RuntimeWarning, match="falling back to the scalar"):
+        table.build_table(queue=queue)
+
+    assert table.is_built
+    assert table.build_routing == "scalar-fallback"
+    assert table.build_fallback_reason == (
+        "RuntimeError: synthetic batched build failure"
+    )
+    # the scalar builder still produced the right table
+    for entry_id in range(len(table.data)):
+        assert np.allclose(table.get_entry_data(entry_id), 1)
+
+
+def test_batched_build_records_batched_routing(monkeypatch):
+    queue = _make_build_queue_or_skip()
+    monkeypatch.delenv(npt.DUFFY_NO_FALLBACK_ENV_VAR, raising=False)
+
+    table = _const_table_for_fallback()
+    table.build_table(queue=queue)
+
+    assert table.build_routing == "batched"
+    assert table.build_fallback_reason is None
+
+
+def test_no_fallback_env_var_turns_the_fallback_into_an_error(monkeypatch):
+    queue = _make_build_queue_or_skip()
+    monkeypatch.setenv(npt.DUFFY_NO_FALLBACK_ENV_VAR, "1")
+    _raise_batched(monkeypatch)
+
+    table = _const_table_for_fallback()
+    with pytest.raises(RuntimeError, match=npt.DUFFY_NO_FALLBACK_ENV_VAR):
+        table.build_table(queue=queue)
+
+    assert not table.is_built
+
+
+@pytest.mark.parametrize("value", ["0", "false", "off", ""])
+def test_no_fallback_env_var_off_values_keep_the_fallback(monkeypatch, value):
+    queue = _make_build_queue_or_skip()
+    monkeypatch.setenv(npt.DUFFY_NO_FALLBACK_ENV_VAR, value)
+    _raise_batched(monkeypatch)
+
+    table = _const_table_for_fallback()
+    with pytest.warns(RuntimeWarning, match="falling back to the scalar"):
+        table.build_table(queue=queue)
+
+    assert table.build_routing == "scalar-fallback"
+
+
+def test_record_build_routing_rejects_unknown_routings():
+    table = _const_table_for_fallback()
+    with pytest.raises(ValueError, match="unknown DuffyRadial build routing"):
+        table._record_build_routing("turbo")
+
+
+# }}}
+
+
 if __name__ == "__main__":
     import sys
 

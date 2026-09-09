@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import csv
+import logging
 import math
 import time
 from contextlib import contextmanager
@@ -266,6 +267,11 @@ FIELDS = (
     # interrogated (see ops_phase_split_correction_status) and the split
     # total is withheld rather than reported without its dominant phase.
     *PHASE_FIELDS,
+    # which DuffyRadial builder actually produced the direct reference tables
+    # of this row (';'-joined over the built levels).  A "scalar-fallback"
+    # here means the batched OpenCL build failed and the slower, differently
+    # converged per-entry builder produced the numbers.
+    "direct_build_routing",
 )
 
 
@@ -515,6 +521,32 @@ def _table_payload_bytes(table) -> int:
         data = np.asarray(table.data)
         return int(np.count_nonzero(np.isfinite(data)) * data.dtype.itemsize)
     return int(np.asarray(table.data).nbytes)
+
+
+def _configure_logging() -> None:
+    """Route library INFO/WARNING records to stderr for the run log.
+
+    Without this the ``[duffy:builder] mode=...`` routing lines are dropped and
+    a batched-to-scalar fallback warning only reaches stderr through Python's
+    last-resort handler.  Only configures the root logger when the embedding
+    process has not already installed handlers.
+    """
+    if logging.getLogger().handlers:
+        return
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+
+
+def _table_build_routing(tables) -> str:
+    """The distinct recorded DuffyRadial routings of ``tables``, ';'-joined."""
+    import volumential.opcounters as opcounters
+
+    routings = sorted({
+        opcounters.direct_build_routing(table) for table in tables
+    })
+    return ";".join(routings)
 
 
 def _clear_sqlite_cache(path: Path) -> None:
@@ -1750,6 +1782,9 @@ def _prepare_direct_tables(
         "table_count": len(warm_tables),
         "payload_bytes": sum(_table_payload_bytes(table)
                              for table in warm_tables.values()),
+        # the routing recorded by the builder and carried through the cache
+        # round trip (these tables are the warm, cache-loaded ones)
+        "build_routing": _table_build_routing(warm_tables.values()),
     }
 
 
@@ -2419,6 +2454,9 @@ def _run_windowed_strategy(
                     "quadrature_build_s"
                 ],
                 "direct_table_load_s": direct_costs["load_s"],
+                "direct_build_routing": direct_costs.get(
+                    "build_routing", "unknown"
+                ),
             }
         )
 
@@ -2854,6 +2892,7 @@ def _row_from_result(
         "direct_table_build_s": direct_costs["build_s"],
         "direct_table_quadrature_build_s": direct_costs["quadrature_build_s"],
         "direct_table_load_s": direct_costs["load_s"],
+        "direct_build_routing": direct_costs.get("build_routing", "unknown"),
         "rke_channel_build_s": rke_costs["build_s"],
         "rke_channel_quadrature_build_s": rke_costs["quadrature_build_s"],
         "rke_channel_load_s": rke_costs["load_s"],
@@ -3032,6 +3071,9 @@ def run_benchmark(
             "table_count": 0,
             "payload_bytes": 0,
         }
+        # routings are unioned, not summed, so they stay out of direct_costs
+        # until the per-parameter loop is done
+        direct_routings: set[str] = set()
 
         for parameter in parameters:
             if kernel == "Helmholtz":
@@ -3056,6 +3098,12 @@ def run_benchmark(
             )
             for key in direct_costs:
                 direct_costs[key] += parameter_direct_costs[key]
+            direct_routings.update(
+                routing
+                for routing in
+                str(parameter_direct_costs["build_routing"]).split(";")
+                if routing
+            )
 
             reference_values, reference_timing, _ = _run_path(
                 ctx=ctx,
@@ -3083,6 +3131,8 @@ def run_benchmark(
                     "reference_timing": reference_timing,
                 }
             )
+
+        direct_costs["build_routing"] = ";".join(sorted(direct_routings))
 
         direct_solve_total_s = sum(
             case["reference_timing"]["solve_total_s"] for case in parameter_cases
@@ -3265,6 +3315,7 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
 
 
 def main() -> int:
+    _configure_logging()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("smoke", "full"), default="smoke")
     parser.add_argument("--backend", default="auto")

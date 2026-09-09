@@ -191,6 +191,7 @@ if str(_BENCH_DIR) not in sys.path:
 from split_parameter_sweep import (  # noqa: E402
     _build_geometry,
     _build_path,
+    _configure_logging,
     _coords_host,
     _gaussian_source_host,
     _prepare_direct_tables,
@@ -273,6 +274,11 @@ SUMMARY_FIELDS = (
     "ops_split_series_nmax_per_parameter",
     "ops_split_remainder_pair_evals_per_solve",
     "ops_split_remainder_term_flops_per_solve_per_parameter",
+    # the DuffyRadial routing recorded by the builder and carried through the
+    # cache round trip, unioned over every direct table this row provisioned
+    # (';'-joined).  ``ops_direct_build_routing`` above is derived from it, so
+    # a "scalar-fallback" invalidates the batched node counts of that row.
+    "direct_build_routing",
 )
 
 # {{{ per-phase columns (E6)
@@ -480,12 +486,12 @@ def _operation_counters(
 
     sample_direct = direct_tables[parameters[0]]
     n_rep = opcounters.reduced_entry_count(sample_direct)
-    routing = (
-        "batched"
-        if sample_direct._supports_batched_duffy_builder()
-        else "scalar"
-    )
-    if routing == "batched":
+    # The routing recorded by the builder, not the routing predicate: a
+    # batched build that failed and fell back to the scalar per-entry builder
+    # pays every Duffy region once per member entry instead of once per block,
+    # so reading the predicate here would report the wrong node counts.
+    routing = opcounters.direct_build_routing(sample_direct)
+    if routing in ("batched", "unknown"):
         direct_nodes_per_entry = opcounters.batched_duffy_nodes_per_entry(
             int(sample_direct.dim),
             direct_build_config.regular_quad_order,
@@ -1001,6 +1007,7 @@ def run_validation(
     direct_tables = {}
     direct_build_total_s = 0.0
     direct_load_total_s = 0.0
+    direct_routings: set[str] = set()
     for parameter in parameters:
         table, costs = _prepare_direct_tables(
             kernel="Yukawa",
@@ -1015,10 +1022,17 @@ def run_validation(
         direct_tables[parameter] = table
         direct_build_total_s += costs["build_s"]
         direct_load_total_s += costs["load_s"]
+        direct_routings.update(
+            routing
+            for routing in str(costs["build_routing"]).split(";")
+            if routing
+        )
         print(
-            f"direct cold build lam={parameter:g}: {costs['build_s']:.1f} s",
+            f"direct cold build lam={parameter:g}: {costs['build_s']:.1f} s "
+            f"({costs['build_routing']})",
             flush=True,
         )
+    direct_build_routing = ";".join(sorted(direct_routings))
 
     # cold phase: one RKE channel family for all parameters
     rke_table, split_term_tables, rke_costs = _prepare_rke_channels(
@@ -1336,6 +1350,7 @@ def run_validation(
         "max_rel_l2_rke_vs_direct": max_rel_l2,
         "benchmark_total_s": time.perf_counter() - benchmark_start,
         "direct_provisioning": direct_provisioning,
+        "direct_build_routing": direct_build_routing,
         **operation_counters,
         **phase_columns,
     }
@@ -1351,6 +1366,7 @@ def _write_csv(path: Path, fieldnames, rows) -> None:
 
 
 def main() -> int:
+    _configure_logging()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("smoke", "full"), default="smoke")
     parser.add_argument("--backend", default="auto")

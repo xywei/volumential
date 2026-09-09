@@ -72,6 +72,7 @@ from split_parameter_sweep import (  # noqa: E402
     _build_path,
     _capture_table_get_timings,
     _clear_sqlite_cache,
+    _configure_logging,
     _coords_host,
     _gaussian_source_host,
     _get_laplace_2d_table,
@@ -81,6 +82,7 @@ from split_parameter_sweep import (  # noqa: E402
     _split_channel_build_config,
     _split_smooth_quad_order,
     _summarize_table_get_timings,
+    _table_build_routing,
     _yukawa_reference_build_config,
 )
 
@@ -150,6 +152,10 @@ FIELDS = (
     "windowed_wall_s",
     "windowed_vs_direct_weighted_rel_l2",
     "windowed_vs_direct_linf",
+    # which DuffyRadial builder produced the per-level direct reference tables
+    # of this row (';'-joined over levels); "scalar-fallback" marks a row whose
+    # reference came from the slower per-entry builder after a batched failure
+    "direct_build_routing",
 )
 
 WINDOWED_FIELDS = tuple(
@@ -675,6 +681,9 @@ def run_case(
                 "table_count": len(direct_tables),
                 "build_s": direct_build_s,
                 "payload_bytes": direct_payload_bytes,
+                # the routing recorded by the builder for every per-level
+                # direct table of this parameter (';'-joined when they differ)
+                "build_routing": _table_build_routing(direct_tables),
             }
 
         for split_order in split_orders:
@@ -793,6 +802,9 @@ def run_case(
                         "direct_table_payload_bytes": (
                             direct_result["payload_bytes"]
                         ),
+                        "direct_build_routing": direct_result[
+                            "build_routing"
+                        ],
                         "rke_base_table_build_s": rke_base_table_build_s,
                         "rke_base_table_payload_bytes": (
                             rke_base_table_payload_bytes
@@ -868,6 +880,7 @@ def run_case(
                 "direct_table_count": direct_result["table_count"],
                 "direct_table_build_s": direct_result["build_s"],
                 "direct_table_payload_bytes": direct_result["payload_bytes"],
+                "direct_build_routing": direct_result["build_routing"],
                 "rke_base_table_build_s": "",
                 "rke_base_table_payload_bytes": "",
                 "rke_channel_table_count": "",
@@ -935,6 +948,7 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
 
 
 def main() -> int:
+    _configure_logging()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("smoke", "full"), default="smoke")
     parser.add_argument("--backend", default="auto")

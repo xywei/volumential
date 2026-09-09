@@ -74,6 +74,10 @@ FIELDS = (
     "per_level_table_count",
     "per_level_table_build_s",
     "per_level_table_payload_bytes",
+    # DuffyRadial routing recorded by the builder for the per-level direct
+    # tables (';'-joined over levels); "scalar-fallback" marks a row built by
+    # the slower per-entry builder after a batched failure
+    "direct_build_routing",
 )
 
 
@@ -380,6 +384,7 @@ def _get_per_level_tables(
         "per_level_table_count": len(tables),
         "per_level_table_build_s": build_s,
         "per_level_table_payload_bytes": payload_bytes,
+        "direct_build_routing": _table_build_routing(tables),
     }
 
 
@@ -547,6 +552,15 @@ def _table_build_seconds(timings) -> float:
         return 0.0
     details = timings.get("compute") or {}
     return float(details.get("table_build_s", details.get("total_s", 0.0)))
+
+
+def _table_build_routing(tables) -> str:
+    """The distinct recorded DuffyRadial routings of ``tables``, ';'-joined."""
+    import volumential.opcounters as opcounters
+
+    return ";".join(sorted({
+        opcounters.direct_build_routing(table) for table in tables
+    }))
 
 
 def _equivalence_diagnostics(

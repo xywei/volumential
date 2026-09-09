@@ -57,6 +57,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import logging
 import operator
 import time
 from pathlib import Path
@@ -109,12 +110,18 @@ FIELDS = (
     "direct_loose_radial_order",
     "direct_loose_status",
     "direct_loose_build_seconds",
+    "direct_loose_build_routing",
     "direct_tight_regular_order",
     "direct_tight_radial_order",
     "direct_tight_status",
     "direct_tight_build_seconds",
+    "direct_tight_build_routing",
     "direct_policy_rel_max_entry_floor",
     "direct_reference_policy",
+    # which DuffyRadial builder actually produced the reference table used by
+    # this row (a "scalar-fallback" changes both the cost class and the
+    # converged accuracy at the requested orders)
+    "direct_build_routing",
     "windowed_vs_direct_rel_max_entry",
     "windowed_vs_direct_rel_l2",
     "classical_vs_direct_rel_max_entry",
@@ -321,6 +328,22 @@ def _parse_order_pair(raw: str) -> tuple[int, int]:
         raise ValueError("expected a 'regular,radial' integer pair")
     return _require_usable_order_pair(
         (parts[0], parts[1]), "classical channel policy"
+    )
+
+
+def _configure_logging() -> None:
+    """Route library INFO/WARNING records to stderr for the run log.
+
+    Without this the ``[duffy:builder] mode=...`` routing lines are dropped and
+    a batched-to-scalar fallback warning only reaches stderr through Python's
+    last-resort handler.  Only configures the root logger when the embedding
+    process has not already installed handlers.
+    """
+    if logging.getLogger().handlers:
+        return
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
 
 
@@ -645,11 +668,16 @@ def _build_damped_reference(
             "status": f"failed: {type(exc).__name__}: {exc}",
             "build_seconds": time.perf_counter() - start,
             "values": None,
+            "routing": "failed",
         }
     return {
         "status": "ok",
         "build_seconds": time.perf_counter() - start,
         "values": values,
+        # damped rows never build a DuffyRadial table: the reference comes
+        # from the grouped channel builder, so it has no batched/scalar
+        # routing of its own
+        "routing": "channel-grouped",
     }
 
 
@@ -801,6 +829,7 @@ def _build_direct_table(
     radial_order: int,
     entry_ids,
 ) -> dict[str, Any]:
+    import volumential.opcounters as opcounters
     from volumential.nearfield_potential_table import DuffyBuildConfig
     from volumential.table_manager import NearFieldInteractionTableManager
 
@@ -854,9 +883,27 @@ def _build_direct_table(
             "status": f"failed: {type(exc).__name__}: {exc}",
             "build_seconds": time.perf_counter() - start,
             "values": None,
+            "routing": "failed",
         }
     build_seconds = time.perf_counter() - start
-    return {"status": "ok", "build_seconds": build_seconds, "values": values}
+    return {
+        "status": "ok",
+        "build_seconds": build_seconds,
+        "values": values,
+        "routing": opcounters.direct_build_routing(table),
+    }
+
+
+def _reference_build_routing(
+    loose: dict[str, Any], tight: dict[str, Any], reference_policy: str
+) -> str:
+    """The recorded DuffyRadial routing of the policy that supplied the
+    reference values, or the empty string when no policy did."""
+    if reference_policy == "tight":
+        return str(tight.get("routing", ""))
+    if reference_policy == "loose":
+        return str(loose.get("routing", ""))
+    return ""
 
 
 def _reference_from_policies(
@@ -1182,6 +1229,7 @@ def run_sweep(
                                 "status": "skipped: --skip-3d-tight",
                                 "build_seconds": "",
                                 "values": None,
+                                "routing": "skipped",
                             }
                         )
                         continue
@@ -1350,6 +1398,9 @@ def run_sweep(
                                     "direct_loose_build_seconds": loose[
                                         "build_seconds"
                                     ],
+                                    "direct_loose_build_routing": (
+                                        loose.get("routing", "")
+                                    ),
                                     "direct_tight_regular_order": (
                                         direct_policies[1][0]
                                     ),
@@ -1360,11 +1411,19 @@ def run_sweep(
                                     "direct_tight_build_seconds": tight[
                                         "build_seconds"
                                     ],
+                                    "direct_tight_build_routing": (
+                                        tight.get("routing", "")
+                                    ),
                                     "direct_policy_rel_max_entry_floor": (
                                         floor_rel_max
                                     ),
                                     "direct_reference_policy": (
                                         reference_policy
+                                    ),
+                                    "direct_build_routing": (
+                                        _reference_build_routing(
+                                            loose, tight, reference_policy
+                                        )
                                     ),
                                     "windowed_vs_direct_rel_max_entry": (
                                         windowed_rel_max
@@ -1457,6 +1516,7 @@ def run_sweep(
                                 "status": "skipped: --skip-3d-tight",
                                 "build_seconds": "",
                                 "values": None,
+                                "routing": "skipped",
                             }
                         )
                         continue
@@ -1589,6 +1649,9 @@ def run_sweep(
                                     "direct_loose_build_seconds": loose[
                                         "build_seconds"
                                     ],
+                                    "direct_loose_build_routing": (
+                                        loose.get("routing", "")
+                                    ),
                                     "direct_tight_regular_order": (
                                         direct_policies[1][0]
                                     ),
@@ -1599,11 +1662,19 @@ def run_sweep(
                                     "direct_tight_build_seconds": tight[
                                         "build_seconds"
                                     ],
+                                    "direct_tight_build_routing": (
+                                        tight.get("routing", "")
+                                    ),
                                     "direct_policy_rel_max_entry_floor": (
                                         floor_rel_max
                                     ),
                                     "direct_reference_policy": (
                                         reference_policy
+                                    ),
+                                    "direct_build_routing": (
+                                        _reference_build_routing(
+                                            loose, tight, reference_policy
+                                        )
                                     ),
                                     "windowed_vs_direct_rel_max_entry": (
                                         windowed_rel_max
@@ -1673,6 +1744,7 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
 
 
 def main() -> int:
+    _configure_logging()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("smoke", "full"), default="smoke")
     parser.add_argument(

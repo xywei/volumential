@@ -36,6 +36,7 @@ from adaptive_timing import (  # noqa: E402
     _populated_source_levels,
     _sample_statistics,
     _select_opencl_device,
+    _table_build_routing,
     _table_build_seconds,
     _table_payload_bytes,
     _table_phase_seconds,
@@ -252,6 +253,7 @@ def _get_per_level_tables(
         "per_level_table_count": len(tables),
         "per_level_table_build_s": build_s,
         "per_level_table_payload_bytes": payload_bytes,
+        "direct_build_routing": _table_build_routing(tables),
     }
 
 

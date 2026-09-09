@@ -201,6 +201,81 @@ def test_load_saved_yukawa_table_accepts_float32_roundtrip(ctx_factory, tmp_path
     assert table.is_built
 
 
+def test_build_routing_survives_the_cache_round_trip(ctx_factory, tmp_path):
+    """A cached table remembers whether it was a batched build or a scalar
+    fallback, so a warm run can still be told apart from a cold one."""
+    import volumential.nearfield_potential_table as npt
+    import volumential.opcounters as opcounters
+
+    cl_ctx = ctx_factory()
+    queue = cl.CommandQueue(cl_ctx)
+
+    original_batched = npt.NearFieldInteractionTable.\
+        build_table_via_duffy_radial_batched
+
+    def failing_batched(self, build_queue, *args, **kwargs):
+        raise RuntimeError("synthetic batched build failure")
+
+    cache_file = tmp_path / "nft-routing-roundtrip.sqlite"
+    npt.NearFieldInteractionTable.build_table_via_duffy_radial_batched = (
+        failing_batched
+    )
+    try:
+        with NFTable(str(cache_file), progress_bar=False) as table_manager:
+            with pytest.warns(RuntimeWarning, match="falling back to the"):
+                built, _ = table_manager.get_table(
+                    2,
+                    "Laplace",
+                    q_order=1,
+                    force_recompute=True,
+                    queue=queue,
+                )
+    finally:
+        npt.NearFieldInteractionTable.build_table_via_duffy_radial_batched = (
+            original_batched
+        )
+
+    assert built.build_routing == "scalar-fallback"
+    assert built.build_fallback_reason == (
+        "RuntimeError: synthetic batched build failure"
+    )
+
+    with NFTable(str(cache_file), progress_bar=False) as table_manager:
+        request = TableRequest.from_args(2, "Laplace", 1, 0)
+        loaded = table_manager._load_saved_table_for_request(request)
+
+    assert loaded.build_routing == "scalar-fallback"
+    assert loaded.build_fallback_reason == (
+        "RuntimeError: synthetic batched build failure"
+    )
+    assert opcounters.direct_build_routing(loaded) == "scalar-fallback"
+    assert np.allclose(np.asarray(loaded.data), np.asarray(built.data),
+                       equal_nan=True)
+
+
+def test_batched_build_routing_survives_the_cache_round_trip(
+    ctx_factory, tmp_path
+):
+    import volumential.opcounters as opcounters
+
+    cl_ctx = ctx_factory()
+    queue = cl.CommandQueue(cl_ctx)
+
+    cache_file = tmp_path / "nft-routing-roundtrip-batched.sqlite"
+    with NFTable(str(cache_file), progress_bar=False) as table_manager:
+        built, _ = table_manager.get_table(
+            2, "Laplace", q_order=1, force_recompute=True, queue=queue
+        )
+        assert built.build_routing == "batched"
+
+        request = TableRequest.from_args(2, "Laplace", 1, 0)
+        loaded = table_manager._load_saved_table_for_request(request)
+
+    assert loaded.build_routing == "batched"
+    assert loaded.build_fallback_reason is None
+    assert opcounters.direct_build_routing(loaded) == "batched"
+
+
 def laplace_const_source_same_box(table_2d_order1, queue, q_order, dim=2):
     if q_order == 1:
         nft = table_2d_order1

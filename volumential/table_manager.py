@@ -210,6 +210,18 @@ def _serialize_table_payload(table):
             symmetry_source_direction, dtype=np.float64
         )
 
+    # Which DuffyRadial builder produced the data, so a cached table still
+    # answers "was this a batched build or a scalar fallback?".  Stored as
+    # one-element unicode arrays (npz-safe without pickle); both keys are
+    # absent from payloads written before the routing was recorded, and the
+    # loader treats absence as unknown.
+    build_routing = getattr(table, "build_routing", None)
+    if build_routing is not None:
+        payload["build_routing"] = np.array([str(build_routing)])
+    build_fallback_reason = getattr(table, "build_fallback_reason", None)
+    if build_fallback_reason is not None:
+        payload["build_fallback_reason"] = np.array([str(build_fallback_reason)])
+
     if table_data_is_symmetry_reduced:
         if hasattr(table, "get_reduced_table_data"):
             reduced_entry_ids, reduced_data = table.get_reduced_table_data()
@@ -1666,6 +1678,13 @@ class NearFieldInteractionTableManager:
             if "table_data_is_symmetry_reduced" in payload:
                 table.table_data_is_symmetry_reduced = bool(
                     payload["table_data_is_symmetry_reduced"][0]
+                )
+
+            if "build_routing" in payload:
+                table.build_routing = str(payload["build_routing"][0])
+            if "build_fallback_reason" in payload:
+                table.build_fallback_reason = str(
+                    payload["build_fallback_reason"][0]
                 )
 
         except KeyError:

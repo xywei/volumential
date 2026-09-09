@@ -22,7 +22,9 @@ THE SOFTWARE.
 
 import logging
 import numbers
+import os
 import time
+import warnings
 from dataclasses import dataclass
 from functools import partial
 
@@ -51,6 +53,32 @@ _TABLE_BUILD_METHOD = "DuffyRadial"
 _DUFFY_PROGRESS_STAGES = 3
 _ARITHMETIC_INVARIANT_CACHE = {}
 _ORBIT_CANONICAL_CACHE = {}
+
+#: Environment variable that turns the batched-to-scalar DuffyRadial fallback
+#: into a hard error.  Campaign runs set it so that a table which quietly
+#: dropped to the (orders-of-magnitude slower, differently converged) scalar
+#: per-entry builder cannot be mistaken for a batched build.  It is an
+#: environment switch rather than a :class:`DuffyBuildConfig` field on purpose:
+#: the build config is hashed into the table-cache fingerprint, so adding a
+#: field there would invalidate every cached table and would make an
+#: operational strictness policy part of the numerical cache key.
+DUFFY_NO_FALLBACK_ENV_VAR = "VOLUMENTIAL_DUFFY_NO_FALLBACK"
+
+#: Recognized values of :data:`table.build_routing`.
+DUFFY_BUILD_ROUTINGS = (
+    "batched",
+    "scalar",
+    "scalar-adaptive",
+    "scalar-fallback",
+)
+
+
+def _duffy_fallback_is_disabled():
+    """Whether :data:`DUFFY_NO_FALLBACK_ENV_VAR` forbids the scalar fallback."""
+    value = os.environ.get(DUFFY_NO_FALLBACK_ENV_VAR)
+    if value is None:
+        return False
+    return value.strip().lower() not in ("", "0", "false", "no", "off")
 
 
 def _kernel_symmetry_meta(kernel):
@@ -613,6 +641,13 @@ class NearFieldInteractionTable:
         self.last_duffy_order_selection = None
         self.last_duffy_build_timings = None
         self.table_data_is_symmetry_reduced = False
+
+        # Which DuffyRadial builder actually produced this table's data (one
+        # of DUFFY_BUILD_ROUTINGS), and, when the batched builder failed and
+        # the scalar builder took over, why.  Both are persisted with the
+        # table payload so a cached table remembers how it was built.
+        self.build_routing = None
+        self.build_fallback_reason = None
 
     # }}} End constructor
 
@@ -1777,6 +1812,22 @@ class NearFieldInteractionTable:
                 child = getattr(knl, attr, None)
                 if child is not None:
                     stack.append(child)
+
+    def _record_build_routing(self, routing, reason=None):
+        """Record which DuffyRadial builder produced this table's data.
+
+        ``routing`` is one of :data:`DUFFY_BUILD_ROUTINGS`; ``reason`` is the
+        ``"<ExceptionType>: <message>"`` that forced a ``scalar-fallback`` and
+        is ``None`` for every other routing.
+        """
+        routing = str(routing)
+        if routing not in DUFFY_BUILD_ROUTINGS:
+            raise ValueError(
+                f"unknown DuffyRadial build routing {routing!r}; expected one "
+                "of " + ", ".join(DUFFY_BUILD_ROUTINGS)
+            )
+        self.build_routing = routing
+        self.build_fallback_reason = None if reason is None else str(reason)
 
     def _supports_batched_duffy_builder(self):
         if self.integral_knl is None:
@@ -3076,6 +3127,7 @@ class NearFieldInteractionTable:
                 self.dim,
                 kernel_name,
             )
+            self._record_build_routing("scalar-adaptive")
             return_value = self._build_table_via_duffy_radial_scalar(
                 radial_rule=build_config.radial_rule,
                 deg_theta=int(build_config.regular_quad_order),
@@ -3135,6 +3187,7 @@ class NearFieldInteractionTable:
                 kernel_name,
                 device_name,
             )
+            self._record_build_routing("batched")
             try:
                 return_value = self.build_table_via_duffy_radial_batched(
                     queue,
@@ -3145,6 +3198,7 @@ class NearFieldInteractionTable:
                     kernel_kwargs=kernel_kwargs,
                 )
             except Exception as exc:
+                reason = f"{type(exc).__name__}: {exc}"
                 if not self._scalar_duffy_fallback_is_safe():
                     raise RuntimeError(
                         "Batched DuffyRadial build failed for wrapped kernel "
@@ -3152,17 +3206,41 @@ class NearFieldInteractionTable:
                         "is disabled because it may drop wrapper postprocessing"
                     ) from exc
 
+                if _duffy_fallback_is_disabled():
+                    raise RuntimeError(
+                        "Batched DuffyRadial build failed for "
+                        f"{self.integral_knl.__class__.__name__} (dim={self.dim}) "
+                        f"and the scalar fallback is refused because "
+                        f"{DUFFY_NO_FALLBACK_ENV_VAR} is set: {reason}"
+                    ) from exc
+
+                # A fallback silently changes the cost class (per-entry
+                # interpreted quadrature instead of one batched kernel) and
+                # the converged accuracy at fixed orders, so it is reported
+                # three ways: the log, a RuntimeWarning that survives a run
+                # without logging configured, and recorded state on the table
+                # that is persisted with the cached payload.
                 logger.warning(
                     "Batched DuffyRadial build failed for %s (%s); falling back "
                     "to scalar builder",
                     self.integral_knl.__class__.__name__,
                     type(exc).__name__,
+                    exc_info=exc,
+                )
+                warnings.warn(
+                    "Batched DuffyRadial table build failed for "
+                    f"{self.integral_knl.__class__.__name__} (dim={self.dim}); "
+                    f"falling back to the scalar per-entry builder: {reason}. "
+                    f"Set {DUFFY_NO_FALLBACK_ENV_VAR}=1 to make this an error.",
+                    RuntimeWarning,
+                    stacklevel=2,
                 )
                 logger.info(
                     "[duffy:builder] mode=scalar-fallback dim=%d kernel=%s",
                     self.dim,
                     kernel_name,
                 )
+                self._record_build_routing("scalar-fallback", reason=reason)
                 return_value = self._build_table_via_duffy_radial_scalar(
                     build_config.radial_rule,
                     int(build_config.regular_quad_order),
@@ -3184,6 +3262,7 @@ class NearFieldInteractionTable:
                 self.dim,
                 kernel_name,
             )
+            self._record_build_routing("scalar")
             return_value = self._build_table_via_duffy_radial_scalar(
                 build_config.radial_rule,
                 int(build_config.regular_quad_order),
@@ -3196,7 +3275,12 @@ class NearFieldInteractionTable:
             self.last_duffy_build_timings["total_with_normalizer_s"] = (
                 self.last_duffy_build_timings["total_s"] + normalizer_s
             )
-        _log_duffy_finish("batched" if use_batched_builder else "scalar")
+        # Report the routing that actually ran, not the routing that was
+        # attempted: a scalar fallback must not be logged as "batched".
+        _log_duffy_finish(
+            self.build_routing
+            or ("batched" if use_batched_builder else "scalar")
+        )
         if self.pb is not None:
             self.pb.finished()
         return return_value
