@@ -352,7 +352,9 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
             and target_points.dtype == object
             and isinstance(target_points[0], cl.array.Array)
         ):
-            target_points = cl.array.concatenate(target_points).reshape([self.dim, -1])
+            target_points = cl.array.concatenate(target_points).reshape(
+                [self.dim, -1]
+            )
 
         assert target_points.shape[0] == self.dim
 

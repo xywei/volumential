@@ -118,7 +118,9 @@ class DiscreteLegendreTransform(BoxSpecificMap):
         self.leg_tplt_x, self.leg_tplt_w = np.polynomial.legendre.leggauss(degree)
 
         if self.dim == 1:
-            self.V = np.polynomial.legendre.legvander(self.leg_tplt_x, self.degree - 1)
+            self.V = np.polynomial.legendre.legvander(
+                self.leg_tplt_x, self.degree - 1
+            )
             self.W = self.leg_tplt_w.reshape(-1)
 
         elif self.dim == 2:
@@ -126,7 +128,9 @@ class DiscreteLegendreTransform(BoxSpecificMap):
             self.V = np.polynomial.legendre.legvander2d(
                 x.reshape(-1), y.reshape(-1), [self.degree - 1] * self.dim
             )
-            self.W = (self.leg_tplt_w[None, :] * self.leg_tplt_w[:, None]).reshape(-1)
+            self.W = (
+                self.leg_tplt_w[None, :] * self.leg_tplt_w[:, None]
+            ).reshape(-1)
 
         elif self.dim == 3:
             x, y, z = np.meshgrid(self.leg_tplt_x, self.leg_tplt_x, self.leg_tplt_x)
@@ -217,7 +221,9 @@ class DiscreteLegendreTransform(BoxSpecificMap):
                 lp.ValueArg("n_box_nodes, n_boxes", np.int32),
                 # lp.ValueArg("root_extent", np.float64),
                 lp.GlobalArg(
-                    "weight, normalizer, filter_multiplier", np.float64, "n_box_nodes"
+                    "weight, normalizer, filter_multiplier",
+                    np.float64,
+                    "n_box_nodes",
                 ),
                 lp.GlobalArg("vandermonde", np.float64, "n_box_nodes, n_box_nodes"),
                 lp.GlobalArg("func", np.float64, "n_box_nodes * n_boxes"),
