@@ -78,7 +78,7 @@ import numpy as np
 from volumential import opcounters
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable, Sequence
 
     from volumential.nearfield_potential_table import NearFieldInteractionTable
 
@@ -496,15 +496,15 @@ def _channel_kernel(dim: int, label: str) -> tuple[str, Any]:
 
 
 def _get_channel_tables(
-    queue,
-    cache_path,
-    dim,
-    q_order,
-    source_box_level,
-    root_extent,
-    labels,
-    build_config,
-    force_recompute,
+    queue: Any,
+    cache_path: str | Path,
+    dim: int,
+    q_order: int,
+    source_box_level: int,
+    root_extent: float,
+    labels: Iterable[str],
+    build_config: Any,
+    force_recompute: bool,
 ) -> dict[str, NearFieldInteractionTable]:
     """Build or load one channel table per label, keyed by label."""
     dim, q_order = _require_dim_q_order(dim, q_order)
@@ -636,8 +636,8 @@ def _finalize_assembled_table(
 
 
 def assemble_parameterized_table(
-    queue,
-    cache_path,
+    queue: Any,
+    cache_path: str | Path,
     dim: int,
     kernel_type: str,
     q_order: int,
@@ -1168,7 +1168,7 @@ def _reduced_entry_groups(
 
 def _axis_basis_values(
     table: NearFieldInteractionTable,
-    coords,
+    coords: Sequence[np.ndarray],
     xi: np.ndarray | None,
     bary_weights: np.ndarray | None,
 ) -> list[list[np.ndarray]]:
@@ -1228,8 +1228,11 @@ class _ChannelDuffyContext(NamedTuple):
 
 
 def _duffy_channel_entry_values(
-    table, radial_profile, regular_order, radial_order,
-):
+    table: NearFieldInteractionTable,
+    radial_profile: _RadialProfile,
+    regular_order: int,
+    radial_order: int,
+) -> tuple[np.ndarray, np.ndarray]:
     """Reduced table entries of a radial kernel via the scalar DuffyRadial
     node set, evaluated vectorized.
 
@@ -1646,15 +1649,15 @@ def _check_channel_table_values(
 
 
 def _windowed_channel_cache_file(
-    cache_path,
-    dim,
-    q_order,
-    source_box_level,
-    root_extent,
-    window_theta,
-    m,
-    chan_regular_order,
-    chan_radial_order,
+    cache_path: str | Path,
+    dim: int,
+    q_order: int,
+    source_box_level: int,
+    root_extent: float,
+    window_theta: float,
+    m: int,
+    chan_regular_order: int,
+    chan_radial_order: int,
 ) -> tuple[Path, dict[str, Any]]:
     """Cache file and its full identifying key for one windowed channel."""
     dim, q_order = _require_dim_q_order(dim, q_order)
@@ -1907,7 +1910,10 @@ def get_windowed_channel_table(
 
 
 def _smooth_remainder_entry_values(
-    table, entry_ids, remainder_radial, smooth_quad_order,
+    table: NearFieldInteractionTable,
+    entry_ids: np.ndarray,
+    remainder_radial: _RadialProfile,
+    smooth_quad_order: int,
 ) -> np.ndarray:
     """Entries ``integral over the source box of R(x_j - y) phi_i(y) dy``
     for the given full entry IDs, by a tensor-product Gauss-Legendre rule of
