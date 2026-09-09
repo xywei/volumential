@@ -35,7 +35,8 @@ import pyopencl as cl
 import pyopencl.array
 
 
-def _compute_box_local_ids(queue, tree, n_q_points):
+def _compute_box_local_ids(queue, tree, n_q_points: int) -> "cl.array.Array":
+    """Index of each particle within its own box, in tree particle order."""
     if not getattr(tree, "sources_are_targets", False):
         raise ValueError(
             "table-based near-field evaluation requires sources and targets "
@@ -59,8 +60,9 @@ def _validate_table_box_particle_layout(
     tree,
     target_boxes,
     source_boxes,
-    n_q_points,
-):
+    n_q_points: int,
+) -> None:
+    """Raise unless every active box holds exactly *n_q_points* particles."""
     box_counts = tree.box_target_counts_nonchild.get(queue)
 
     if hasattr(target_boxes, "get"):
@@ -93,7 +95,8 @@ def _validate_table_box_particle_layout(
     )
 
 
-def _array_layout_cache_token(ary):
+def _array_layout_cache_token(ary) -> tuple:
+    """Cheap identity token for an index array, stable across re-wrapping."""
     if isinstance(ary, cl.array.Array):
         base_data = getattr(ary, "base_data", None)
         int_ptr = getattr(base_data, "int_ptr", None)
@@ -132,9 +135,9 @@ def _validate_table_box_particle_layout_cached(
     tree,
     target_boxes,
     source_boxes,
-    n_q_points,
-    validation_cache,
-):
+    n_q_points: int,
+    validation_cache: set | None,
+) -> None:
     """Validate the box layout once per distinct ``(boxes, n_q_points)`` triple.
 
     *validation_cache* is a mutable set owned by the caller; pass ``None`` to

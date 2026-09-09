@@ -31,11 +31,12 @@ import pyopencl as cl
 import pyopencl.array
 
 
-def level_to_rscale(tree, level):
+def level_to_rscale(tree, level: int) -> float:
+    """Expansion rescaling factor for boxes on *level*."""
     return tree.root_extent * (2**-level)
 
 
-def inverse_id_map(queue, mapped_ids):
+def inverse_id_map(queue, mapped_ids) -> "np.ndarray | cl.array.Array":
     """Given a index mapping as its mapped ids, compute its inverse,
     and return the inverse by the inversely-mapped ids.
     """
@@ -53,7 +54,8 @@ def inverse_id_map(queue, mapped_ids):
     return inv_ids
 
 
-def _queue_from_array_like(ary):
+def _queue_from_array_like(ary) -> "cl.CommandQueue | None":
+    """Command queue carried by *ary*, looking inside object arrays."""
     if isinstance(ary, cl.array.Array):
         return ary.queue
 
@@ -65,7 +67,11 @@ def _queue_from_array_like(ary):
     return None
 
 
-def _resolve_queue(queue, traversal, tree_indep):
+def _resolve_queue(queue, traversal, tree_indep) -> "cl.CommandQueue":
+    """Return *queue*, or recover one from the array context or the tree.
+
+    :raises TypeError: when no queue can be found.
+    """
     if queue is not None:
         return queue
 

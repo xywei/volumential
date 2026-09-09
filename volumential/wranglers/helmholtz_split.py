@@ -24,8 +24,8 @@ __doc__ = """Helmholtz near-field split correction for the sumpy backend.
 
 Owns everything behind ``helmholtz_split``: choosing the split order from the
 box-scaled wave number, building/validating the per-term near-field tables,
-the series-remainder P2P, the smooth correction sources, and the self
--interaction diagonal limit.
+the series-remainder P2P, the smooth correction sources, and the diagonal
+limit of the self interaction.
 """
 
 import json
@@ -35,7 +35,6 @@ import numpy as np
 
 import pyopencl as cl
 import pyopencl.array
-
 from pytools.obj_array import new_1d as obj_array_1d
 from sumpy.kernel import (
     AxisSourceDerivative,
@@ -46,6 +45,11 @@ from sumpy.kernel import (
     YukawaKernel,
 )
 
+from volumential.expansion_wrangler_interface import (
+    BoxIndexArray,
+    FMMArray,
+    StageResult,
+)
 from volumential.wranglers.barycentric import (
     _barycentric_interp_matrix,
     _gauss_legendre_nodes_and_weights,
@@ -74,7 +78,10 @@ logger = logging.getLogger(__name__)
 class HelmholtzSplitCorrectionMixin:
     """Near-field Helmholtz split correction, mixed into the sumpy wrangler."""
 
-    def get_helmholtz_split_cache_accounting(self, parameter_count=1):
+    def get_helmholtz_split_cache_accounting(
+        self,
+        parameter_count: int = 1,
+    ) -> HelmholtzSplitCacheAccounting:
         """Return table-storage accounting for Helmholtz/Yukawa split mode."""
         if not isinstance(parameter_count, int):
             try:
@@ -128,13 +135,13 @@ class HelmholtzSplitCorrectionMixin:
 
     def eval_direct_helmholtz_split_correction(
         self,
-        target_boxes,
-        neighbor_source_boxes_starts,
-        neighbor_source_boxes_lists,
-        src_weights,
+        target_boxes: BoxIndexArray,
+        neighbor_source_boxes_starts: BoxIndexArray,
+        neighbor_source_boxes_lists: BoxIndexArray,
+        src_weights: FMMArray,
         src_func=None,
         _split_out_kernel=None,
-    ):
+    ) -> StageResult:
         if not self.helmholtz_split:
             return self.output_zeros(), SumpyTimingFuture(self.queue, [])
 

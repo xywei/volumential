@@ -32,12 +32,18 @@ import numpy as np
 from volumential.lagrange import barycentric_lagrange_weights
 
 
-def _gauss_legendre_nodes_and_weights(order):
+def _gauss_legendre_nodes_and_weights(order: int) -> tuple[np.ndarray, np.ndarray]:
+    """Gauss-Legendre nodes and weights of *order*, mapped to ``[0, 1]``."""
     nodes, weights = np.polynomial.legendre.leggauss(int(order))
     return (0.5 * (nodes + 1.0), 0.5 * weights)
 
 
-def _barycentric_interp_matrix(source_nodes, target_nodes):
+def _barycentric_interp_matrix(source_nodes, target_nodes) -> np.ndarray:
+    """Matrix taking values at *source_nodes* to values at *target_nodes*.
+
+    Uses the barycentric form of Lagrange interpolation; a target node that
+    coincides with a source node gets that source value exactly.
+    """
     source_nodes = np.asarray(source_nodes, dtype=np.float64)
     target_nodes = np.asarray(target_nodes, dtype=np.float64)
 

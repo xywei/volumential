@@ -32,7 +32,6 @@ import numpy as np
 
 import pyopencl as cl
 import pyopencl.array
-
 from sumpy.kernel import AxisSourceDerivative, DirectionalSourceDerivative
 
 

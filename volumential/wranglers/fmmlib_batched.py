@@ -149,7 +149,7 @@ class FMMLibBatchedStagesMixin:
 
     _L2P_OFFSET_RTOL = 1e-12
 
-    def _gemm_l2p_supported(self):
+    def _gemm_l2p_supported(self) -> bool:
         """Whether the GEMM-based L2P code path applies to this wrangler."""
         return (
             not self.tree_indep.ifgrad
