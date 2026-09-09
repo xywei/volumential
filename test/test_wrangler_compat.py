@@ -41,8 +41,15 @@ from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
 
 
 # Names importable from volumential.expansion_wrangler_fpnd before the split
-# into volumential.wranglers.  ``_evaluate_scalar_arithmetic_entry`` is absent
-# on purpose: it was unreferenced dead code and was removed with the split.
+# into volumential.wranglers.  Two groups are absent on purpose:
+#
+# * ``_evaluate_scalar_arithmetic_entry`` -- unreferenced dead code (an exact
+#   copy of the live one in volumential.orbit_arithmetic), removed with the
+#   split;
+# * the names the pre-split module only happened to bind because it imported
+#   them (``np``, ``cl``, ``json``, ``LaplaceKernel``,
+#   ``NearFieldInteractionTable``, ...).  Nothing in the tree imports those
+#   through this module, and each is still importable from its real home.
 LEGACY_NAMES = (
     "FPNDExpansionWrangler",
     "FPNDFMMLibExpansionWrangler",
