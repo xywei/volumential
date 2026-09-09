@@ -204,7 +204,6 @@ class FPNDFMMLibExpansionWrangler(
 
         # {{{ digest target_kernels
 
-        ifgrad = False
         outputs = []
         source_deriv_names = []
         k_names = []
@@ -218,7 +217,6 @@ class FPNDFMMLibExpansionWrangler(
                 out_knl, AxisTargetDerivative
             ) and self.is_supported_helmknl(out_knl.inner_kernel):
                 outputs.append((out_knl.axis,))
-                ifgrad = True
                 no_target_deriv_knl = out_knl.inner_kernel
 
             else:
@@ -320,7 +318,9 @@ class FPNDFMMLibExpansionWrangler(
         for kid in range(len(self.tree_indep.target_kernels)):
             kname = self.tree_indep.target_kernels[kid].__repr__()
             for lev, table in zip(
-                range(len(self.near_field_table[kname])), self.near_field_table[kname]
+                range(len(self.near_field_table[kname])),
+                self.near_field_table[kname],
+                strict=True,
             ):
                 assert table.quad_order == self.quad_order
 
