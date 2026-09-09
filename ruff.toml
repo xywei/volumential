@@ -109,7 +109,6 @@ line-ending = "lf"
 "benchmarks/split_parameter_sweep.py" = ["C420", "E501", "I001", "RUF100", "SIM117"]
 "benchmarks/table_equivalence_cache.py" = ["E501"]
 "benchmarks/windowed_rke_sweep.py" = ["C420", "I001", "PLR0402", "PLW2901"]
-"doc/source/conf.py" = ["UP031"]
 "examples/branched_flow_helmholtz2d.py" = ["I001"]
 "examples/helmholtz2d.py" = ["E501", "I001", "RUF100"]
 "examples/helmholtz2d_split_p_convergence.py" = [
