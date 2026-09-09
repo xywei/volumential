@@ -112,10 +112,18 @@ def _precomputed_legendre_q_points(q_order, dim):
     return np.asarray(q_points, dtype=np.float64)
 
 
-def test_const_order_1():
+@pytest.mark.parametrize(
+    ("quad_order", "expected_entry_value"),
+    [
+        pytest.param(1, 1, id="1"),
+        # the order-2 table is expensive, so it stays behind --longrun
+        pytest.param(2, 0.25, id="2", marks=pytest.mark.usefixtures("longrun")),
+    ],
+)
+def test_const_order(quad_order, expected_entry_value):
     queue = _make_build_queue_or_skip()
     table = npt.NearFieldInteractionTable(
-        quad_order=1,
+        quad_order=quad_order,
         kernel_func=npt.constant_one,
         kernel_type="const",
         sumpy_kernel=ConstantKernel(2),
@@ -123,21 +131,7 @@ def test_const_order_1():
     )
     table.build_table(queue=queue)
     for entry_id in range(len(table.data)):
-        assert np.allclose(table.get_entry_data(entry_id), 1)
-
-
-def test_const_order_2(longrun):
-    queue = _make_build_queue_or_skip()
-    table = npt.NearFieldInteractionTable(
-        quad_order=2,
-        kernel_func=npt.constant_one,
-        kernel_type="const",
-        sumpy_kernel=ConstantKernel(2),
-        progress_bar=False,
-    )
-    table.build_table(queue=queue)
-    for entry_id in range(len(table.data)):
-        assert np.allclose(table.get_entry_data(entry_id), 0.25)
+        assert np.allclose(table.get_entry_data(entry_id), expected_entry_value)
 
 
 def interp_modes(q_order):

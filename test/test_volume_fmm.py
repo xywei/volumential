@@ -983,7 +983,7 @@ def test_looks_like_coincident_source_target_setup(
 
     result = volume_fmm._looks_like_coincident_source_target_setup(tree, queue=None)
 
-    assert result if expected else not result
+    assert bool(result) is expected
 
 
 def test_maybe_guard_coincident_source_target_tree_warns_once(caplog, monkeypatch):
@@ -6457,15 +6457,35 @@ def test_volume_fmm_2d_helmholtz_split_power_log_single_table_matches_multilevel
     assert rel_diff < 5.0e-11
 
 
-def test_volume_fmm_2d_helmholtz_split_order2_auto_builds_term_tables(tmp_path):
+@pytest.mark.parametrize(
+    ("split_order", "q_order", "cache_name", "max_rel_pde_residual"),
+    [
+        pytest.param(
+            2,
+            5,
+            "nft-laplace2d-split-order2-missing-terms-q5.sqlite",
+            1.0,
+            id="order2",
+        ),
+        pytest.param(
+            4,
+            4,
+            "nft-laplace2d-split-order4-auto-q4.sqlite",
+            2.0,
+            id="order4",
+        ),
+    ],
+)
+def test_volume_fmm_2d_helmholtz_split_auto_builds_term_tables(
+    tmp_path, split_order, q_order, cache_name, max_rel_pde_residual
+):
     ctx = _create_non_intel_opencl_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
-    q_order = 5
     wave_number = 8.0
     table = _get_laplace_2d_table(
         queue,
-        tmp_path / "nft-laplace2d-split-order2-missing-terms-q5.sqlite",
+        tmp_path / cache_name,
         q_order,
     )
 
@@ -6478,11 +6498,11 @@ def test_volume_fmm_2d_helmholtz_split_order2_auto_builds_term_tables(tmp_path):
         fmm_order=16,
         wave_number=wave_number,
         helmholtz_split=True,
-        helmholtz_split_order=2,
+        helmholtz_split_order=split_order,
     )
 
     assert np.isfinite(result["rel_pde_residual"])
-    assert result["rel_pde_residual"] < 1.0
+    assert result["rel_pde_residual"] < max_rel_pde_residual
 
 
 def test_volume_fmm_2d_helmholtz_split_rejects_term_tables_from_other_cache(tmp_path):
@@ -6521,34 +6541,6 @@ def test_volume_fmm_2d_helmholtz_split_rejects_term_tables_from_other_cache(tmp_
             helmholtz_split_order=2,
             helmholtz_split_term_tables=term_tables,
         )
-
-
-def test_volume_fmm_2d_helmholtz_split_order4_auto_builds_term_tables(tmp_path):
-    ctx = _create_non_intel_opencl_context_or_skip()
-    queue = cl.CommandQueue(ctx)
-
-    q_order = 4
-    wave_number = 8.0
-    table = _get_laplace_2d_table(
-        queue,
-        tmp_path / "nft-laplace2d-split-order4-auto-q4.sqlite",
-        q_order,
-    )
-
-    result = _run_2d_helmholtz_pde_case(
-        ctx,
-        queue,
-        table,
-        q_order=q_order,
-        nlevels=3,
-        fmm_order=16,
-        wave_number=wave_number,
-        helmholtz_split=True,
-        helmholtz_split_order=4,
-    )
-
-    assert np.isfinite(result["rel_pde_residual"])
-    assert result["rel_pde_residual"] < 2.0
 
 
 def test_volume_fmm_2d_helmholtz_split_order3_smooth_equals_q_runs(tmp_path):
