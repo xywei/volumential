@@ -7,6 +7,8 @@ This module owns everything that the whole suite relies on:
 * the ``--longrun`` and ``--full-accuracy`` command line options and the
   corresponding ``longrun`` fixture / ``full_accuracy`` marker, which keep a
   default ``pytest`` run reasonably short;
+* the ``slow`` marker, which labels (but does not skip) the handful of tests
+  that dominate the wall clock, so that ``-m 'not slow'`` gives a quick run;
 * the xfail policy for OpenCL platforms that are known to crash;
 * the session-scoped ``table_2d_order1`` near-field table, which is expensive
   enough that every test that needs it shares one build; and
@@ -56,6 +58,8 @@ from volumential.table_manager import NearFieldInteractionTableManager as NFTMan
 SUITE_MARKERS = (
     "full_accuracy: high-cost derivative accuracy tests, skipped unless "
     "--full-accuracy",
+    "slow: tests whose aggregate runtime exceeds roughly 30 s on a CPU OpenCL "
+    "backend; they still run by default, deselect them with -m 'not slow'",
 )
 
 XFAIL_OPENCL_PLATFORMS = {

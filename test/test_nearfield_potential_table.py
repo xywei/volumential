@@ -2348,6 +2348,7 @@ def test_arithmetic_orbit_reconstruction_sorts_nonadjacent_group_axes():
         "mixed-directional-target-derivative",
     ],
 )
+@pytest.mark.slow
 def test_arithmetic_orbit_reconstruction_matches_dense_oracle(kernel_case):
     from sumpy.kernel import (
         AxisSourceDerivative,

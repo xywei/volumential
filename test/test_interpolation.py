@@ -570,6 +570,7 @@ def test_from_meshmode_interpolation_3d_nonexact(ctx_factory, params):
         [9, 7, 2, 10],
     ],
 )
+@pytest.mark.slow
 def test_to_meshmode_interpolation_3d_exact(ctx_factory, params):
     cl_ctx = ctx_factory()
     queue = cl.CommandQueue(cl_ctx)
