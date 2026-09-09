@@ -69,16 +69,17 @@ This module enumerates the set of interaction cases that could possibly happen i
 
 .. automodule:: volumential.list1_gallery
 
-Table Lookup (Deprecated)
-*************************
+List 1 Evaluation
+*****************
 
-This module produces table lookup schemes given information about the kernel and the table data format. The module is deprecated in favor of :py:mod:`volumential.nearfield_potential_table` and :py:mod:`volumential.table_manager`.
+The on-device near-field evaluators read table data through the CSR
+interaction lists produced by the traversal:
+:py:class:`volumential.list1.KernelScalingPolicy` records how a kernel's table
+entries are selected and rescaled, :py:class:`volumential.list1.NearFieldEvalBase`
+generates and caches the :mod:`loopy` kernel, and
+:py:class:`volumential.list1.NearFieldFromCSR` drives it over a traversal.
 
 .. automodule:: volumential.list1
-
-.. warning::
-
-   Use :py:mod:`volumential.nearfield_potential_table` and :py:mod:`volumential.table_manager` instead! :py:mod:`volumential.list1` is deprecated and will be removed in the future.
 
 Table and Table Manager
 ***********************
