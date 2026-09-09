@@ -1146,7 +1146,9 @@ def _from_meshmode_resampling_matrix(
 
     :returns: a device array of shape ``(n_source_slots, nunit_dofs)``.
     """
-    rsplm = cl.array.empty(actx.queue, (n_source_slots, nunit_dofs), dtype=value_dtype)
+    rsplm = cl.array.empty(
+        actx.queue, (n_source_slots, nunit_dofs), dtype=value_dtype
+    )
     if n_source_slots == 0:
         return rsplm
 
