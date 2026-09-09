@@ -1124,53 +1124,53 @@ def _create_non_intel_opencl_context_or_skip():
     return cl.Context(devices=[devices[0]])
 
 
-def _get_laplace_3d_table(queue, table_path, q_order):
+#: Radial rule and root extent shared by every near-field table built here.
+_DUFFY_RADIAL_RULE = "tanh-sinh-fast"
+_TABLE_ROOT_EXTENT = 2.0
+
+
+def _duffy_quad_orders_2d(q_order):
+    """Return (regular, radial) Duffy quadrature orders for a 2D table."""
+    return max(8, 4 * q_order), max(21, 10 * q_order)
+
+
+def _duffy_quad_orders_3d(q_order, *, low_order_max=2):
+    """Return (regular, radial) Duffy quadrature orders for a 3D table."""
+    if q_order <= low_order_max:
+        return 6, 21
+    return 8, 31
+
+
+def _get_cached_near_field_tables(
+    queue,
+    table_path,
+    dim,
+    kernel_type,
+    q_order,
+    *,
+    regular_quad_order,
+    radial_quad_order,
+    root_extent=_TABLE_ROOT_EXTENT,
+    manager_dtype=None,
+    source_box_level=None,
+    max_source_box_level=None,
+    **kernel_kwargs,
+):
+    """Build or load near-field tables through the table-manager cache.
+
+    Returns a single table, or -- when `max_source_box_level` is given -- the
+    list of per-level tables for levels ``0 .. max_source_box_level``.
+    """
     from volumential.nearfield_potential_table import DuffyBuildConfig
     from volumential.table_manager import NearFieldInteractionTableManager
 
-    if q_order <= 2:
-        regular_quad_order = 6
-        radial_quad_order = 21
-    else:
-        regular_quad_order = 8
-        radial_quad_order = 31
+    manager_kwargs = {"root_extent": root_extent, "queue": queue}
+    if manager_dtype is not None:
+        manager_kwargs["dtype"] = manager_dtype
 
-    with NearFieldInteractionTableManager(
-        str(table_path), root_extent=2.0, queue=queue
-    ) as tm:
+    with NearFieldInteractionTableManager(str(table_path), **manager_kwargs) as tm:
         build_config = DuffyBuildConfig(
-            radial_rule="tanh-sinh-fast",
-            regular_quad_order=regular_quad_order,
-            radial_quad_order=radial_quad_order,
-        )
-        table, _ = tm.get_table(
-            3,
-            "Laplace",
-            q_order,
-            force_recompute=False,
-            queue=queue,
-            build_config=build_config,
-        )
-
-    return table
-
-
-def _get_laplace_3d_dx_table(queue, table_path, q_order, *, source_box_level=None):
-    from volumential.nearfield_potential_table import DuffyBuildConfig
-    from volumential.table_manager import NearFieldInteractionTableManager
-
-    if q_order <= 2:
-        regular_quad_order = 6
-        radial_quad_order = 21
-    else:
-        regular_quad_order = 8
-        radial_quad_order = 31
-
-    with NearFieldInteractionTableManager(
-        str(table_path), root_extent=2.0, queue=queue
-    ) as tm:
-        build_config = DuffyBuildConfig(
-            radial_rule="tanh-sinh-fast",
+            radial_rule=_DUFFY_RADIAL_RULE,
             regular_quad_order=regular_quad_order,
             radial_quad_order=radial_quad_order,
         )
@@ -1178,18 +1178,99 @@ def _get_laplace_3d_dx_table(queue, table_path, q_order, *, source_box_level=Non
             "force_recompute": False,
             "queue": queue,
             "build_config": build_config,
+            **kernel_kwargs,
         }
-        if source_box_level is not None:
-            get_table_kwargs["source_box_level"] = int(source_box_level)
 
-        table, _ = tm.get_table(
-            3,
-            "Laplace-Dx",
-            q_order,
-            **get_table_kwargs,
-        )
+        if max_source_box_level is None:
+            if source_box_level is not None:
+                get_table_kwargs["source_box_level"] = int(source_box_level)
+            table, _ = tm.get_table(dim, kernel_type, q_order, **get_table_kwargs)
+            return table
+
+        tables = []
+        for level in range(max_source_box_level + 1):
+            table, _ = tm.get_table(
+                dim,
+                kernel_type,
+                q_order,
+                source_box_level=level,
+                **get_table_kwargs,
+            )
+            tables.append(table)
+
+    return tables
+
+
+def _build_rigid_output_table(
+    queue,
+    dim,
+    q_order,
+    out_kernel,
+    kernel_kwargs,
+    *,
+    source_box_level,
+    kernel_type,
+    dtype,
+    regular_quad_order,
+    radial_quad_order,
+):
+    """Build a "rigid" near-field table directly, bypassing the cache."""
+    import volumential.nearfield_potential_table as npt
+
+    source_box_level = int(source_box_level)
+
+    table = npt.NearFieldInteractionTable(
+        quad_order=q_order,
+        dim=dim,
+        build_method="DuffyRadial",
+        kernel_func=npt.sumpy_kernel_to_lambda(
+            out_kernel,
+            parameter_values=kernel_kwargs,
+        ),
+        kernel_type=kernel_type,
+        sumpy_kernel=out_kernel,
+        source_box_extent=_TABLE_ROOT_EXTENT * (2 ** (-source_box_level)),
+        dtype=dtype,
+        progress_bar=False,
+    )
+    table.source_box_level = source_box_level
+    table.table_root_extent = _TABLE_ROOT_EXTENT
+    table.build_table_via_duffy_radial(
+        queue=queue,
+        radial_rule=_DUFFY_RADIAL_RULE,
+        regular_quad_order=regular_quad_order,
+        radial_quad_order=radial_quad_order,
+        **kernel_kwargs,
+    )
 
     return table
+
+
+def _get_laplace_3d_table(queue, table_path, q_order):
+    regular_quad_order, radial_quad_order = _duffy_quad_orders_3d(q_order)
+    return _get_cached_near_field_tables(
+        queue,
+        table_path,
+        3,
+        "Laplace",
+        q_order,
+        regular_quad_order=regular_quad_order,
+        radial_quad_order=radial_quad_order,
+    )
+
+
+def _get_laplace_3d_dx_table(queue, table_path, q_order, *, source_box_level=None):
+    regular_quad_order, radial_quad_order = _duffy_quad_orders_3d(q_order)
+    return _get_cached_near_field_tables(
+        queue,
+        table_path,
+        3,
+        "Laplace-Dx",
+        q_order,
+        regular_quad_order=regular_quad_order,
+        radial_quad_order=radial_quad_order,
+        source_box_level=source_box_level,
+    )
 
 
 def _get_laplace_3d_axis_source_derivative_table(
@@ -1202,77 +1283,32 @@ def _get_laplace_3d_axis_source_derivative_table(
 ):
     from sumpy.kernel import AxisSourceDerivative, LaplaceKernel
 
-    from volumential.nearfield_potential_table import DuffyBuildConfig
-    from volumential.table_manager import NearFieldInteractionTableManager
-
-    if q_order <= 2:
-        regular_quad_order = 6
-        radial_quad_order = 21
-    else:
-        regular_quad_order = 8
-        radial_quad_order = 31
-
-    sumpy_knl = AxisSourceDerivative(int(axis), LaplaceKernel(3))
-    kernel_type = f"Laplace-S{int(axis)}"
-
-    with NearFieldInteractionTableManager(
-        str(table_path), root_extent=2.0, queue=queue
-    ) as tm:
-        build_config = DuffyBuildConfig(
-            radial_rule="tanh-sinh-fast",
-            regular_quad_order=regular_quad_order,
-            radial_quad_order=radial_quad_order,
-        )
-        get_table_kwargs = {
-            "force_recompute": False,
-            "queue": queue,
-            "build_config": build_config,
-            "sumpy_knl": sumpy_knl,
-        }
-        if source_box_level is not None:
-            get_table_kwargs["source_box_level"] = int(source_box_level)
-
-        table, _ = tm.get_table(
-            3,
-            kernel_type,
-            q_order,
-            **get_table_kwargs,
-        )
-
-    return table
+    regular_quad_order, radial_quad_order = _duffy_quad_orders_3d(q_order)
+    return _get_cached_near_field_tables(
+        queue,
+        table_path,
+        3,
+        f"Laplace-S{int(axis)}",
+        q_order,
+        regular_quad_order=regular_quad_order,
+        radial_quad_order=radial_quad_order,
+        source_box_level=source_box_level,
+        sumpy_knl=AxisSourceDerivative(int(axis), LaplaceKernel(3)),
+    )
 
 
 def _get_laplace_2d_table(queue, table_path, q_order, *, source_box_level=None):
-    from volumential.nearfield_potential_table import DuffyBuildConfig
-    from volumential.table_manager import NearFieldInteractionTableManager
-
-    regular_quad_order = max(8, 4 * q_order)
-    radial_quad_order = max(21, 10 * q_order)
-
-    with NearFieldInteractionTableManager(
-        str(table_path), root_extent=2.0, queue=queue
-    ) as tm:
-        build_config = DuffyBuildConfig(
-            radial_rule="tanh-sinh-fast",
-            regular_quad_order=regular_quad_order,
-            radial_quad_order=radial_quad_order,
-        )
-        get_table_kwargs = {
-            "force_recompute": False,
-            "queue": queue,
-            "build_config": build_config,
-        }
-        if source_box_level is not None:
-            get_table_kwargs["source_box_level"] = int(source_box_level)
-
-        table, _ = tm.get_table(
-            2,
-            "Laplace",
-            q_order,
-            **get_table_kwargs,
-        )
-
-    return table
+    regular_quad_order, radial_quad_order = _duffy_quad_orders_2d(q_order)
+    return _get_cached_near_field_tables(
+        queue,
+        table_path,
+        2,
+        "Laplace",
+        q_order,
+        regular_quad_order=regular_quad_order,
+        radial_quad_order=radial_quad_order,
+        source_box_level=source_box_level,
+    )
 
 
 def _get_laplace_2d_dx_table(
@@ -1283,51 +1319,18 @@ def _get_laplace_2d_dx_table(
     source_box_level=None,
     max_source_box_level=None,
 ):
-    from volumential.nearfield_potential_table import DuffyBuildConfig
-    from volumential.table_manager import NearFieldInteractionTableManager
-
-    regular_quad_order = max(8, 4 * q_order)
-    radial_quad_order = max(21, 10 * q_order)
-
-    with NearFieldInteractionTableManager(
-        str(table_path), root_extent=2.0, queue=queue
-    ) as tm:
-        build_config = DuffyBuildConfig(
-            radial_rule="tanh-sinh-fast",
-            regular_quad_order=regular_quad_order,
-            radial_quad_order=radial_quad_order,
-        )
-        if max_source_box_level is None:
-            get_table_kwargs = {
-                "force_recompute": False,
-                "queue": queue,
-                "build_config": build_config,
-            }
-            if source_box_level is not None:
-                get_table_kwargs["source_box_level"] = int(source_box_level)
-
-            table, _ = tm.get_table(
-                2,
-                "Laplace-Dx",
-                q_order,
-                **get_table_kwargs,
-            )
-            return table
-
-        tables = []
-        for level in range(max_source_box_level + 1):
-            table, _ = tm.get_table(
-                2,
-                "Laplace-Dx",
-                q_order,
-                source_box_level=level,
-                force_recompute=False,
-                queue=queue,
-                build_config=build_config,
-            )
-            tables.append(table)
-
-    return tables
+    regular_quad_order, radial_quad_order = _duffy_quad_orders_2d(q_order)
+    return _get_cached_near_field_tables(
+        queue,
+        table_path,
+        2,
+        "Laplace-Dx",
+        q_order,
+        regular_quad_order=regular_quad_order,
+        radial_quad_order=radial_quad_order,
+        source_box_level=source_box_level,
+        max_source_box_level=max_source_box_level,
+    )
 
 
 def _get_yukawa_2d_dx_table(
@@ -1339,53 +1342,19 @@ def _get_yukawa_2d_dx_table(
     source_box_level=None,
     max_source_box_level=None,
 ):
-    from volumential.nearfield_potential_table import DuffyBuildConfig
-    from volumential.table_manager import NearFieldInteractionTableManager
-
-    regular_quad_order = max(8, 4 * q_order)
-    radial_quad_order = max(21, 10 * q_order)
-
-    with NearFieldInteractionTableManager(
-        str(table_path), root_extent=2.0, queue=queue
-    ) as tm:
-        build_config = DuffyBuildConfig(
-            radial_rule="tanh-sinh-fast",
-            regular_quad_order=regular_quad_order,
-            radial_quad_order=radial_quad_order,
-        )
-        if max_source_box_level is None:
-            get_table_kwargs = {
-                "force_recompute": False,
-                "queue": queue,
-                "build_config": build_config,
-                "lam": lam,
-            }
-            if source_box_level is not None:
-                get_table_kwargs["source_box_level"] = int(source_box_level)
-
-            table, _ = tm.get_table(
-                2,
-                "Yukawa-Dx",
-                q_order,
-                **get_table_kwargs,
-            )
-            return table
-
-        tables = []
-        for level in range(max_source_box_level + 1):
-            table, _ = tm.get_table(
-                2,
-                "Yukawa-Dx",
-                q_order,
-                source_box_level=level,
-                force_recompute=False,
-                queue=queue,
-                build_config=build_config,
-                lam=lam,
-            )
-            tables.append(table)
-
-    return tables
+    regular_quad_order, radial_quad_order = _duffy_quad_orders_2d(q_order)
+    return _get_cached_near_field_tables(
+        queue,
+        table_path,
+        2,
+        "Yukawa-Dx",
+        q_order,
+        regular_quad_order=regular_quad_order,
+        radial_quad_order=radial_quad_order,
+        source_box_level=source_box_level,
+        max_source_box_level=max_source_box_level,
+        lam=lam,
+    )
 
 
 def _get_laplace_2d_axis_source_derivative_table(
@@ -1399,56 +1368,19 @@ def _get_laplace_2d_axis_source_derivative_table(
 ):
     from sumpy.kernel import AxisSourceDerivative, LaplaceKernel
 
-    from volumential.nearfield_potential_table import DuffyBuildConfig
-    from volumential.table_manager import NearFieldInteractionTableManager
-
-    regular_quad_order = max(8, 4 * q_order)
-    radial_quad_order = max(21, 10 * q_order)
-
-    sumpy_knl = AxisSourceDerivative(int(axis), LaplaceKernel(2))
-    kernel_type = f"Laplace-S{int(axis)}"
-
-    with NearFieldInteractionTableManager(
-        str(table_path), root_extent=2.0, queue=queue
-    ) as tm:
-        build_config = DuffyBuildConfig(
-            radial_rule="tanh-sinh-fast",
-            regular_quad_order=regular_quad_order,
-            radial_quad_order=radial_quad_order,
-        )
-        if max_source_box_level is None:
-            get_table_kwargs = {
-                "force_recompute": False,
-                "queue": queue,
-                "build_config": build_config,
-                "sumpy_knl": sumpy_knl,
-            }
-            if source_box_level is not None:
-                get_table_kwargs["source_box_level"] = int(source_box_level)
-
-            table, _ = tm.get_table(
-                2,
-                kernel_type,
-                q_order,
-                **get_table_kwargs,
-            )
-            return table
-
-        tables = []
-        for level in range(max_source_box_level + 1):
-            table, _ = tm.get_table(
-                2,
-                kernel_type,
-                q_order,
-                source_box_level=level,
-                force_recompute=False,
-                queue=queue,
-                build_config=build_config,
-                sumpy_knl=sumpy_knl,
-            )
-            tables.append(table)
-
-    return tables
+    regular_quad_order, radial_quad_order = _duffy_quad_orders_2d(q_order)
+    return _get_cached_near_field_tables(
+        queue,
+        table_path,
+        2,
+        f"Laplace-S{int(axis)}",
+        q_order,
+        regular_quad_order=regular_quad_order,
+        radial_quad_order=radial_quad_order,
+        source_box_level=source_box_level,
+        max_source_box_level=max_source_box_level,
+        sumpy_knl=AxisSourceDerivative(int(axis), LaplaceKernel(2)),
+    )
 
 
 def _get_yukawa_2d_axis_source_derivative_table(
@@ -1463,91 +1395,35 @@ def _get_yukawa_2d_axis_source_derivative_table(
 ):
     from sumpy.kernel import AxisSourceDerivative, YukawaKernel
 
-    from volumential.nearfield_potential_table import DuffyBuildConfig
-    from volumential.table_manager import NearFieldInteractionTableManager
-
-    regular_quad_order = max(8, 4 * q_order)
-    radial_quad_order = max(21, 10 * q_order)
-
-    sumpy_knl = AxisSourceDerivative(int(axis), YukawaKernel(2))
-    kernel_type = f"Yukawa-S{int(axis)}"
-
-    with NearFieldInteractionTableManager(
-        str(table_path), root_extent=2.0, queue=queue
-    ) as tm:
-        build_config = DuffyBuildConfig(
-            radial_rule="tanh-sinh-fast",
-            regular_quad_order=regular_quad_order,
-            radial_quad_order=radial_quad_order,
-        )
-        if max_source_box_level is None:
-            get_table_kwargs = {
-                "force_recompute": False,
-                "queue": queue,
-                "build_config": build_config,
-                "sumpy_knl": sumpy_knl,
-                "lam": lam,
-            }
-            if source_box_level is not None:
-                get_table_kwargs["source_box_level"] = int(source_box_level)
-
-            table, _ = tm.get_table(
-                2,
-                kernel_type,
-                q_order,
-                **get_table_kwargs,
-            )
-            return table
-
-        tables = []
-        for level in range(max_source_box_level + 1):
-            table, _ = tm.get_table(
-                2,
-                kernel_type,
-                q_order,
-                source_box_level=level,
-                force_recompute=False,
-                queue=queue,
-                build_config=build_config,
-                sumpy_knl=sumpy_knl,
-                lam=lam,
-            )
-            tables.append(table)
-
-    return tables
+    regular_quad_order, radial_quad_order = _duffy_quad_orders_2d(q_order)
+    return _get_cached_near_field_tables(
+        queue,
+        table_path,
+        2,
+        f"Yukawa-S{int(axis)}",
+        q_order,
+        regular_quad_order=regular_quad_order,
+        radial_quad_order=radial_quad_order,
+        source_box_level=source_box_level,
+        max_source_box_level=max_source_box_level,
+        sumpy_knl=AxisSourceDerivative(int(axis), YukawaKernel(2)),
+        lam=lam,
+    )
 
 
 def _get_yukawa_2d_tables(queue, table_path, q_order, lam, *, max_source_box_level):
-    from volumential.nearfield_potential_table import DuffyBuildConfig
-    from volumential.table_manager import NearFieldInteractionTableManager
-
-    regular_quad_order = max(8, 4 * q_order)
-    radial_quad_order = max(21, 10 * q_order)
-
-    build_config = DuffyBuildConfig(
-        radial_rule="tanh-sinh-fast",
+    regular_quad_order, radial_quad_order = _duffy_quad_orders_2d(q_order)
+    return _get_cached_near_field_tables(
+        queue,
+        table_path,
+        2,
+        "Yukawa",
+        q_order,
         regular_quad_order=regular_quad_order,
         radial_quad_order=radial_quad_order,
+        max_source_box_level=max_source_box_level,
+        lam=lam,
     )
-
-    tables = []
-    with NearFieldInteractionTableManager(
-        str(table_path), root_extent=2.0, queue=queue
-    ) as tm:
-        for source_box_level in range(max_source_box_level + 1):
-            table, _ = tm.get_table(
-                2,
-                "Yukawa",
-                q_order,
-                source_box_level=source_box_level,
-                force_recompute=False,
-                queue=queue,
-                build_config=build_config,
-                lam=lam,
-            )
-            tables.append(table)
-
-    return tables
 
 
 def _build_helmholtz_2d_output_table(
@@ -1561,9 +1437,6 @@ def _build_helmholtz_2d_output_table(
 ):
     from sumpy.kernel import HelmholtzKernel
 
-    import volumential.nearfield_potential_table as npt
-
-    source_box_level = int(source_box_level)
     if out_kernel is None:
         out_kernel = HelmholtzKernel(2)
 
@@ -1573,31 +1446,19 @@ def _build_helmholtz_2d_output_table(
         _build_directional_parameter_values(out_kernel, source_direction)
     )
 
-    table = npt.NearFieldInteractionTable(
-        quad_order=q_order,
-        dim=2,
-        build_method="DuffyRadial",
-        kernel_func=npt.sumpy_kernel_to_lambda(
-            out_kernel,
-            parameter_values=kernel_kwargs,
-        ),
+    regular_quad_order, radial_quad_order = _duffy_quad_orders_2d(q_order)
+    return _build_rigid_output_table(
+        queue,
+        2,
+        q_order,
+        out_kernel,
+        kernel_kwargs,
+        source_box_level=source_box_level,
         kernel_type="helmholtz-rigid",
-        sumpy_kernel=out_kernel,
-        source_box_extent=2.0 * (2 ** (-source_box_level)),
         dtype=np.complex128,
-        progress_bar=False,
+        regular_quad_order=regular_quad_order,
+        radial_quad_order=radial_quad_order,
     )
-    table.source_box_level = source_box_level
-    table.table_root_extent = 2.0
-    table.build_table_via_duffy_radial(
-        queue=queue,
-        radial_rule="tanh-sinh-fast",
-        regular_quad_order=max(8, 4 * q_order),
-        radial_quad_order=max(21, 10 * q_order),
-        **kernel_kwargs,
-    )
-
-    return table
 
 
 def _build_yukawa_2d_output_table(
@@ -1611,9 +1472,6 @@ def _build_yukawa_2d_output_table(
 ):
     from sumpy.kernel import YukawaKernel
 
-    import volumential.nearfield_potential_table as npt
-
-    source_box_level = int(source_box_level)
     if out_kernel is None:
         out_kernel = YukawaKernel(2)
 
@@ -1623,31 +1481,19 @@ def _build_yukawa_2d_output_table(
         _build_directional_parameter_values(out_kernel, source_direction)
     )
 
-    table = npt.NearFieldInteractionTable(
-        quad_order=q_order,
-        dim=2,
-        build_method="DuffyRadial",
-        kernel_func=npt.sumpy_kernel_to_lambda(
-            out_kernel,
-            parameter_values=kernel_kwargs,
-        ),
+    regular_quad_order, radial_quad_order = _duffy_quad_orders_2d(q_order)
+    return _build_rigid_output_table(
+        queue,
+        2,
+        q_order,
+        out_kernel,
+        kernel_kwargs,
+        source_box_level=source_box_level,
         kernel_type="yukawa-rigid",
-        sumpy_kernel=out_kernel,
-        source_box_extent=2.0 * (2 ** (-source_box_level)),
         dtype=np.float64,
-        progress_bar=False,
+        regular_quad_order=regular_quad_order,
+        radial_quad_order=radial_quad_order,
     )
-    table.source_box_level = source_box_level
-    table.table_root_extent = 2.0
-    table.build_table_via_duffy_radial(
-        queue=queue,
-        radial_rule="tanh-sinh-fast",
-        regular_quad_order=max(8, 4 * q_order),
-        radial_quad_order=max(21, 10 * q_order),
-        **kernel_kwargs,
-    )
-
-    return table
 
 
 def _build_laplace_output_table(
@@ -1661,9 +1507,6 @@ def _build_laplace_output_table(
 ):
     from sumpy.kernel import LaplaceKernel
 
-    import volumential.nearfield_potential_table as npt
-
-    source_box_level = int(source_box_level)
     if out_kernel is None:
         out_kernel = LaplaceKernel(dim)
 
@@ -1671,45 +1514,26 @@ def _build_laplace_output_table(
     value_dtype = np.complex128 if out_kernel.is_complex_valued else np.float64
 
     if dim == 2:
-        regular_quad_order = max(8, 4 * q_order)
-        radial_quad_order = max(21, 10 * q_order)
+        regular_quad_order, radial_quad_order = _duffy_quad_orders_2d(q_order)
     elif dim == 3:
-        if q_order <= 2:
-            regular_quad_order = 6
-            radial_quad_order = 21
-        else:
-            regular_quad_order = 8
-            radial_quad_order = 31
+        regular_quad_order, radial_quad_order = _duffy_quad_orders_3d(q_order)
     else:
         raise NotImplementedError(
             f"laplace table helper only supports 2D/3D, got {dim}"
         )
 
-    table = npt.NearFieldInteractionTable(
-        quad_order=q_order,
-        dim=dim,
-        build_method="DuffyRadial",
-        kernel_func=npt.sumpy_kernel_to_lambda(
-            out_kernel,
-            parameter_values=kernel_kwargs,
-        ),
+    return _build_rigid_output_table(
+        queue,
+        dim,
+        q_order,
+        out_kernel,
+        kernel_kwargs,
+        source_box_level=source_box_level,
         kernel_type="laplace-rigid",
-        sumpy_kernel=out_kernel,
-        source_box_extent=2.0 * (2 ** (-source_box_level)),
         dtype=value_dtype,
-        progress_bar=False,
-    )
-    table.source_box_level = source_box_level
-    table.table_root_extent = 2.0
-    table.build_table_via_duffy_radial(
-        queue=queue,
-        radial_rule="tanh-sinh-fast",
         regular_quad_order=regular_quad_order,
         radial_quad_order=radial_quad_order,
-        **kernel_kwargs,
     )
-
-    return table
 
 
 def _build_helmholtz_2d_derivative_table(
@@ -1802,20 +1626,14 @@ def _get_helmholtz_split_term_tables(
         return {}
 
     if dim == 2:
-        regular_quad_order = max(8, 4 * q_order)
-        radial_quad_order = max(21, 10 * q_order)
+        regular_quad_order, radial_quad_order = _duffy_quad_orders_2d(q_order)
     elif dim == 3:
-        if q_order <= 2:
-            regular_quad_order = 6
-            radial_quad_order = 21
-        else:
-            regular_quad_order = 8
-            radial_quad_order = 31
+        regular_quad_order, radial_quad_order = _duffy_quad_orders_3d(q_order)
     else:
         raise NotImplementedError("split term tables currently support 2D/3D")
 
     build_config = DuffyBuildConfig(
-        radial_rule="tanh-sinh-fast",
+        radial_rule=_DUFFY_RADIAL_RULE,
         regular_quad_order=regular_quad_order,
         radial_quad_order=radial_quad_order,
     )
@@ -1830,7 +1648,7 @@ def _get_helmholtz_split_term_tables(
     term_tables = {}
     with NearFieldInteractionTableManager(
         str(table_path),
-        root_extent=2.0,
+        root_extent=_TABLE_ROOT_EXTENT,
         queue=queue,
     ) as tm:
         for term_kind, power in term_specs:
@@ -2111,45 +1929,23 @@ def _build_helmholtz_3d_output_table(
     out_kernel=None,
     source_direction=None,
 ):
-    import volumential.nearfield_potential_table as npt
-
-    if q_order <= 2:
-        regular_quad_order = 6
-        radial_quad_order = 21
-    else:
-        regular_quad_order = 8
-        radial_quad_order = 31
-
-    source_box_level = int(source_box_level)
     base_knl = _make_fixed_helmholtz_3d_kernel(wave_number)
     output_knl = _apply_axis_derivative_wrappers_to_kernel(out_kernel, base_knl)
     kernel_kwargs = _build_directional_parameter_values(output_knl, source_direction)
 
-    table = npt.NearFieldInteractionTable(
-        quad_order=q_order,
-        dim=3,
-        build_method="DuffyRadial",
-        kernel_func=npt.sumpy_kernel_to_lambda(
-            output_knl,
-            parameter_values=kernel_kwargs,
-        ),
+    regular_quad_order, radial_quad_order = _duffy_quad_orders_3d(q_order)
+    return _build_rigid_output_table(
+        queue,
+        3,
+        q_order,
+        output_knl,
+        kernel_kwargs,
+        source_box_level=source_box_level,
         kernel_type="helmholtz-rigid",
-        sumpy_kernel=output_knl,
-        source_box_extent=2.0 * (2 ** (-source_box_level)),
         dtype=np.complex128,
-        progress_bar=False,
-    )
-    table.source_box_level = source_box_level
-    table.table_root_extent = 2.0
-    table.build_table_via_duffy_radial(
-        queue=queue,
-        radial_rule="tanh-sinh-fast",
         regular_quad_order=regular_quad_order,
         radial_quad_order=radial_quad_order,
-        **kernel_kwargs,
     )
-
-    return table
 
 
 def _build_yukawa_3d_output_table(
@@ -2163,16 +1959,6 @@ def _build_yukawa_3d_output_table(
 ):
     from sumpy.kernel import YukawaKernel
 
-    import volumential.nearfield_potential_table as npt
-
-    if q_order <= 2:
-        regular_quad_order = 6
-        radial_quad_order = 21
-    else:
-        regular_quad_order = 8
-        radial_quad_order = 31
-
-    source_box_level = int(source_box_level)
     base_knl = YukawaKernel(3)
     output_knl = _apply_axis_derivative_wrappers_to_kernel(out_kernel, base_knl)
     base_output_knl = output_knl.get_base_kernel()
@@ -2181,31 +1967,19 @@ def _build_yukawa_3d_output_table(
         _build_directional_parameter_values(output_knl, source_direction)
     )
 
-    table = npt.NearFieldInteractionTable(
-        quad_order=q_order,
-        dim=3,
-        build_method="DuffyRadial",
-        kernel_func=npt.sumpy_kernel_to_lambda(
-            output_knl,
-            parameter_values=kernel_kwargs,
-        ),
+    regular_quad_order, radial_quad_order = _duffy_quad_orders_3d(q_order)
+    return _build_rigid_output_table(
+        queue,
+        3,
+        q_order,
+        output_knl,
+        kernel_kwargs,
+        source_box_level=source_box_level,
         kernel_type="yukawa-rigid",
-        sumpy_kernel=output_knl,
-        source_box_extent=2.0 * (2 ** (-source_box_level)),
         dtype=np.float64,
-        progress_bar=False,
-    )
-    table.source_box_level = source_box_level
-    table.table_root_extent = 2.0
-    table.build_table_via_duffy_radial(
-        queue=queue,
-        radial_rule="tanh-sinh-fast",
         regular_quad_order=regular_quad_order,
         radial_quad_order=radial_quad_order,
-        **kernel_kwargs,
     )
-
-    return table
 
 
 def _helmholtz_complex_source_profile_2d(x, y):
@@ -2228,43 +2002,24 @@ def _get_helmholtz_3d_tables(
     *,
     max_source_box_level,
 ):
-    from volumential.nearfield_potential_table import DuffyBuildConfig
-    from volumential.table_manager import NearFieldInteractionTableManager
-
-    if q_order <= 1:
-        regular_quad_order = 6
-        radial_quad_order = 21
-    else:
-        regular_quad_order = 8
-        radial_quad_order = 31
-
-    with NearFieldInteractionTableManager(
-        str(table_path),
+    # NOTE: unlike the other 3D helpers this one switches to the high quadrature
+    # orders already at q_order == 2.
+    regular_quad_order, radial_quad_order = _duffy_quad_orders_3d(
+        q_order, low_order_max=1
+    )
+    return _get_cached_near_field_tables(
+        queue,
+        table_path,
+        3,
+        f"Helmholtz(k={wave_number:.6g})",
+        q_order,
+        regular_quad_order=regular_quad_order,
+        radial_quad_order=radial_quad_order,
         root_extent=1.0,
-        dtype=np.complex128,
-        queue=queue,
-    ) as tm:
-        kernel_tag = f"Helmholtz(k={wave_number:.6g})"
-        build_config = DuffyBuildConfig(
-            radial_rule="tanh-sinh-fast",
-            regular_quad_order=regular_quad_order,
-            radial_quad_order=radial_quad_order,
-        )
-        tables = []
-        for source_box_level in range(max_source_box_level + 1):
-            table, _ = tm.get_table(
-                3,
-                kernel_tag,
-                q_order,
-                source_box_level=source_box_level,
-                force_recompute=False,
-                queue=queue,
-                build_config=build_config,
-                sumpy_knl=_make_fixed_helmholtz_3d_kernel(wave_number),
-            )
-            tables.append(table)
-
-    return tables
+        manager_dtype=np.complex128,
+        max_source_box_level=max_source_box_level,
+        sumpy_knl=_make_fixed_helmholtz_3d_kernel(wave_number),
+    )
 
 
 def _make_patch_targets(queue, *coords):
