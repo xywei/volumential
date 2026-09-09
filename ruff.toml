@@ -160,7 +160,7 @@ line-ending = "lf"
 "test/test_windowed_strategy_benchmarks.py" = ["C420"]
 # OPT_ENABLED/CACHING_ENABLED are module-level switches in the public
 # API, so their setters have to rebind globals.
-"volumential/__init__.py" = ["PLW0603", "RUF022"]
+"volumential/__init__.py" = ["PLW0603"]
 "volumential/expansion_wrangler_fpnd.py" = [
     "B026", "B905", "C408", "E501", "F841", "I001", "PLC1802", "PLR5501",
     "PLW2901", "RUF046", "SIM102", "SIM105", "SIM108", "SIM114", "SIM910",
