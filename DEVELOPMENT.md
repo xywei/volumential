@@ -113,8 +113,9 @@ python benchmarks/adaptive_timing_3d.py --mode full \
 ```
 
 In the `laplace3d-q3-l4-a3` row, `cross_level_list1_fraction` must equal
-`0.16588653810147913` over `21364` cross-level interactions. A different value
-means the tree-of-boxes refinement is the broken one; stop and re-provision.
+`0.16588653810147913`, i.e. `n_cross_level_list1_interactions` = `3544` out of
+`n_list1_interactions` = `21364`. A different value means the tree-of-boxes
+refinement is the broken one; stop and re-provision.
 The driver also fails loudly if the adaptive tree comes out uniform, unbalanced,
 or free of cross-level List 1 work.
 
