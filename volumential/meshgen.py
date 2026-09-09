@@ -46,6 +46,15 @@ from pathlib import Path
 
 import numpy as np
 import pyopencl as cl
+
+# Compatibility re-exports: these boxtree names have historically been
+# importable from ``volumential.meshgen`` and are kept reachable from here even
+# though this module does not use them itself.
+from boxtree import (  # noqa: F401
+    make_tree_of_boxes_root,
+    refine_and_coarsen_tree_of_boxes,
+    uniformly_refine_tree_of_boxes,
+)
 from modepy import LegendreGaussQuadrature
 from pytools.obj_array import new_1d as obj_array_1d
 

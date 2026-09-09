@@ -40,8 +40,6 @@ import numpy as np
 
 
 # {{{ TreeBox class
-
-
 class TreeBox:
     """A minimalistic tree box used only to enumerate the gallery.
 
