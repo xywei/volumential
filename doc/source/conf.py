@@ -9,10 +9,13 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-from volumential.version import VERSION, VERSION_TEXT
 
-
+# Make an uninstalled source checkout importable, so that the build works from
+# a plain clone as well as from an installed environment.  This has to run
+# before ``volumential`` is imported, hence the import below the statement.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from volumential.version import VERSION, VERSION_TEXT
 
 
 # -- General configuration ------------------------------------------------
