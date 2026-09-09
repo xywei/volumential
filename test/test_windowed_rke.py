@@ -20,6 +20,8 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 
+from itertools import pairwise
+
 import numpy as np
 import pytest
 
@@ -208,7 +210,7 @@ def _spot_entry_ids(entry_ids, values, n_top=6, n_spread=6):
     chosen.extend(
         int(i) for i in np.linspace(0, len(entry_ids) - 1, n_spread)
     )
-    positions = sorted(set(int(i) for i in chosen))
+    positions = sorted({int(i) for i in chosen})
     return positions
 
 
@@ -229,7 +231,7 @@ def test_channel_profiles_match_mpmath(dim):
         for m in range(6):
             profile = windowed_channel_profile(dim, m, window_scale)
             values = profile(radii)
-            for radius, value in zip(radii, values):
+            for radius, value in zip(radii, values, strict=True):
                 x = mp.mpf(radius) ** 2 / (4 * mp.mpf(window_scale))
                 if dim == 2:
                     reference = (
@@ -1073,7 +1075,7 @@ def test_smooth_order_convergence(channel_cache):
         )
 
     # non-increasing within noise, and converged (plateaued) by order 32
-    for coarse, fine in zip(deviations[:-1], deviations[1:]):
+    for coarse, fine in pairwise(deviations):
         assert fine <= 1.25 * coarse + 1e-9, deviations
     assert deviations[-1] < 1e-6, deviations
 
@@ -1697,15 +1699,16 @@ def test_invalid_window_condition_thresholds(tmp_path, invalid):
     def zero_kernel(r):
         return np.zeros_like(np.asarray(r, dtype=np.float64))
 
-    with pytest.raises(ValueError, match="max_condition must be finite and positive"):
+    condition_message = "max_condition must be finite and positive"
+    with pytest.raises(ValueError, match=condition_message):
         _assemble_windowed_for_zeta(
             cache, 2, 1, 1.0, zero_kernel, max_condition=invalid
         )
-    with pytest.raises(ValueError, match="max_condition must be finite and positive"):
+    with pytest.raises(ValueError, match=condition_message):
         assemble_windowed_parameterized_table(
             cache, 2, "Yukawa", 1, 1.0, max_condition=invalid
         )
-    with pytest.raises(ValueError, match="max_condition must be finite and positive"):
+    with pytest.raises(ValueError, match=condition_message):
         assemble_parameterized_table(
             None, cache, 2, "Yukawa", 1, 1.0, max_condition=invalid
         )
