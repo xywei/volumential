@@ -1,6 +1,13 @@
 Modules
 ========
 
+Package Entry Point
+-------------------
+
+.. automodule:: volumential
+
+.. automodule:: volumential.version
+
 Box Mesh Generation
 -------------------
 
@@ -11,6 +18,16 @@ The active implementation is the boxtree-based path (including adaptive
 tree-of-boxes refinement).
 
 .. automodule:: volumential.meshgen
+
+Adaptive refinement and coarsening of the tree of boxes, including 2:1 level
+restriction, live in :py:mod:`volumential.tree_interactive_build`.
+
+.. automodule:: volumential.tree_interactive_build
+
+The geometry objects handed to the wranglers (bounding boxes, quadrature
+points, traversals) are assembled in :py:mod:`volumential.geometry`.
+
+.. automodule:: volumential.geometry
 
 Singular Integrals
 ------------------
@@ -39,6 +56,11 @@ The set of symmetry operations that can be used to speed up precomputation depen
 
 .. automodule:: volumential.list1_symmetry
    :members:
+
+The orbit bookkeeping used to canonicalize table entries under those symmetry
+operations lives in :py:mod:`volumential.orbit_arithmetic`.
+
+.. automodule:: volumential.orbit_arithmetic
 
 Interaction Enumeration
 ***********************
@@ -69,6 +91,11 @@ The tables are stored in SQLite format and managed through
 
 .. automodule:: volumential.table_manager
 
+Fixed-parameter tables can also be assembled from a certified reduced kernel
+expansion (RKE).
+
+.. automodule:: volumential.rke_table_assembly
+
 Multipole/Local Expansions
 --------------------------
 
@@ -87,8 +114,17 @@ the total runtime.
 
 .. automodule:: volumential.volume_fmm
 
+Interpolation between meshmode discretizations and the box mesh lives in
+:py:mod:`volumential.interpolation`.  (Its module docstring currently declares
+``.. currentmodule:: volumential``, so pulling it in with ``automodule`` here
+would look up its classes in the wrong module; the entry returns once that is
+fixed.)
+
+Sources and Densities
+---------------------
+
 Function Extension
-------------------
+******************
 
 The :py:mod:`volumential.function_extension` module provides helper functions to
 perform source density extensions using layer potentials. The resulting values
@@ -97,8 +133,22 @@ volume handoff workflows.
 
 .. automodule:: volumential.function_extension
 
+Gaussian Fixtures
+*****************
+
+.. automodule:: volumential.gaussian
+
+Symbolic Expressions
+********************
+
+.. automodule:: volumential.symbolic
+
 Miscellaneous Tools
 -------------------
 
 .. automodule:: volumential.tools
    :members:
+
+.. automodule:: volumential.lagrange
+
+.. automodule:: volumential.opcounters
