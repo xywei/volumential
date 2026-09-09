@@ -68,10 +68,10 @@ import logging
 import operator
 import os
 import uuid
-from itertools import pairwise, product
+from itertools import pairwise, permutations, product
 from math import lgamma
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 import numpy as np
 
@@ -1162,6 +1162,22 @@ def _channel_profile_values(
     )
 
 
+class _ChannelDuffyContext(NamedTuple):
+    """Shared node sets and entry bookkeeping of one channel Duffy build."""
+
+    table: NearFieldInteractionTable
+    dim: int
+    extent: float
+    mode_axes: np.ndarray
+    xi: np.ndarray | None
+    bary_weights: np.ndarray | None
+    entry_ids: np.ndarray
+    groups: dict[tuple[int, int], list[tuple[int, int]]]
+    rho_nodes: np.ndarray
+    rho_weights: np.ndarray
+    regular_order: int
+
+
 def _duffy_channel_entry_values(
     table, radial_profile, regular_order, radial_order,
 ):
@@ -1175,14 +1191,29 @@ def _duffy_channel_entry_values(
     tensor Gauss-Legendre tail), so it agrees with the scalar builder to
     roundoff while evaluating the radial profile on whole node blocks.
     """
+    context = _channel_duffy_context(table, regular_order, radial_order)
+    if context.dim == 2:
+        values = _duffy_channel_entry_values_2d(context, radial_profile)
+    else:
+        values = _duffy_channel_entry_values_3d(context, radial_profile)
+    return context.entry_ids, values
+
+
+def _channel_duffy_context(
+    table: NearFieldInteractionTable,
+    regular_order: int,
+    radial_order: int,
+) -> _ChannelDuffyContext:
+    """Validate the channel quadrature orders and collect the node sets and
+    entry bookkeeping both dimension branches share."""
     regular_order = _require_integer(
         "chan_regular_order", regular_order, minimum=1
     )
     radial_order = _require_integer(
         "chan_radial_order", radial_order, minimum=1
     )
-    import scipy.special as sps
-
+    # Deferred: :mod:`volumential.singular_integral_2d` and the Lagrange
+    # helpers sit below the table manager, which imports this module.
     import volumential.singular_integral_2d as squad
     from volumential.lagrange import barycentric_lagrange_weights
 
@@ -1200,79 +1231,114 @@ def _duffy_channel_entry_values(
         bary_weights = None
 
     entry_ids, groups = _reduced_entry_groups(table)
-    values = np.zeros(len(entry_ids), dtype=np.float64)
-
     rho_nodes, rho_weights = squad._duffy_radial_nodes_weights(
         "tanh-sinh-fast", radial_order, 50
     )
+    return _ChannelDuffyContext(
+        table=table,
+        dim=dim,
+        extent=extent,
+        mode_axes=mode_axes,
+        xi=xi,
+        bary_weights=bary_weights,
+        entry_ids=entry_ids,
+        groups=groups,
+        rho_nodes=rho_nodes,
+        rho_weights=rho_weights,
+        regular_order=regular_order,
+    )
 
-    if dim == 2:
-        th_nodes, th_weights = sps.roots_legendre(regular_order)
-        theta = 0.25 * np.pi * (th_nodes + 1.0)
-        w_theta = 0.25 * np.pi * th_weights
-        cos_sq = np.cos(theta) ** 2
-        sin_sq = np.sin(theta) ** 2
-        duffy_factor = np.outer(np.sin(2.0 * theta), rho_nodes)
-        weight_grid = np.outer(w_theta, rho_weights)
-        corners = [
-            np.array([0.0, 0.0]),
-            np.array([extent, 0.0]),
-            np.array([extent, extent]),
-            np.array([0.0, extent]),
-        ]
 
-        for (case_index, target_index), members in groups.items():
-            target = np.asarray(
-                table.find_target_point(target_index, case_index),
-                dtype=np.float64,
+def _duffy_channel_entry_values_2d(
+    context: _ChannelDuffyContext, radial_profile: _RadialProfile,
+) -> np.ndarray:
+    """Channel entries on the four 2D Duffy triangles of the singular point."""
+    # Deferred: SciPy is only needed on the channel-build path.
+    import scipy.special as sps
+
+    (
+        table, _dim, extent, mode_axes, xi, bary_weights, entry_ids, groups,
+        rho_nodes, rho_weights, regular_order,
+    ) = context
+    values = np.zeros(len(entry_ids), dtype=np.float64)
+
+    th_nodes, th_weights = sps.roots_legendre(regular_order)
+    theta = 0.25 * np.pi * (th_nodes + 1.0)
+    w_theta = 0.25 * np.pi * th_weights
+    cos_sq = np.cos(theta) ** 2
+    sin_sq = np.sin(theta) ** 2
+    duffy_factor = np.outer(np.sin(2.0 * theta), rho_nodes)
+    weight_grid = np.outer(w_theta, rho_weights)
+    corners = [
+        np.array([0.0, 0.0]),
+        np.array([extent, 0.0]),
+        np.array([extent, extent]),
+        np.array([0.0, extent]),
+    ]
+
+    for (case_index, target_index), members in groups.items():
+        target = np.asarray(
+            table.find_target_point(target_index, case_index),
+            dtype=np.float64,
+        )
+        singular = np.clip(target, 0.0, extent)
+        # source-to-target displacement is accumulated from the *offset*
+        # of the Duffy origin, never by differencing absolute box
+        # coordinates: for a self-interaction target the offset is
+        # exactly zero, and a node closer to the target than one ulp of
+        # the coordinate would otherwise be absorbed into it and report
+        # r = 0 (see _channel_profile_values)
+        base_offset = singular - target
+        entry_acc = np.zeros(len(members), dtype=np.float64)
+        for corner_index in range(4):
+            edge1 = corners[corner_index] - singular
+            edge2 = corners[(corner_index + 1) % 4] - singular
+            det = edge1[0] * edge2[1] - edge1[1] * edge2[0]
+            # degenerate-triangle test must scale with the box (det is
+            # an area, ~ extent**2), or small extents would silently
+            # drop every triangle
+            if np.abs(det) < 1.0e-14 * extent * extent:
+                continue
+            u = np.outer(cos_sq, rho_nodes)
+            v = np.outer(sin_sq, rho_nodes)
+            dx = base_offset[0] + u * edge1[0] + v * edge2[0]
+            dy = base_offset[1] + u * edge1[1] + v * edge2[1]
+            xx = target[0] + dx
+            yy = target[1] + dy
+            radius = np.hypot(dx, dy)
+            opcounters.add(
+                opcounters.SINGULAR_NODES, "duffy_radial", radius.size
             )
-            singular = np.clip(target, 0.0, extent)
-            # source-to-target displacement is accumulated from the *offset*
-            # of the Duffy origin, never by differencing absolute box
-            # coordinates: for a self-interaction target the offset is
-            # exactly zero, and a node closer to the target than one ulp of
-            # the coordinate would otherwise be absorbed into it and report
-            # r = 0 (see _channel_profile_values)
-            base_offset = singular - target
-            entry_acc = np.zeros(len(members), dtype=np.float64)
-            for corner_index in range(4):
-                edge1 = corners[corner_index] - singular
-                edge2 = corners[(corner_index + 1) % 4] - singular
-                det = edge1[0] * edge2[1] - edge1[1] * edge2[0]
-                # degenerate-triangle test must scale with the box (det is
-                # an area, ~ extent**2), or small extents would silently
-                # drop every triangle
-                if np.abs(det) < 1.0e-14 * extent * extent:
-                    continue
-                u = np.outer(cos_sq, rho_nodes)
-                v = np.outer(sin_sq, rho_nodes)
-                dx = base_offset[0] + u * edge1[0] + v * edge2[0]
-                dy = base_offset[1] + u * edge1[1] + v * edge2[1]
-                xx = target[0] + dx
-                yy = target[1] + dy
-                radius = np.hypot(dx, dy)
-                opcounters.add(
-                    opcounters.SINGULAR_NODES, "duffy_radial", radius.size
+            common = (
+                _channel_profile_values(radial_profile, radius)
+                * (det * duffy_factor)
+                * weight_grid
+            )
+            basis = _axis_basis_values(
+                table, (xx, yy), xi, bary_weights
+            )
+            for member_index, (_, source_mode) in enumerate(members):
+                a0, a1 = mode_axes[source_mode]
+                entry_acc[member_index] += float(
+                    np.sum(common * basis[0][a0] * basis[1][a1])
                 )
-                common = (
-                    _channel_profile_values(radial_profile, radius)
-                    * (det * duffy_factor)
-                    * weight_grid
-                )
-                basis = _axis_basis_values(
-                    table, (xx, yy), xi, bary_weights
-                )
-                for member_index, (_, source_mode) in enumerate(members):
-                    a0, a1 = mode_axes[source_mode]
-                    entry_acc[member_index] += float(
-                        np.sum(common * basis[0][a0] * basis[1][a1])
-                    )
-            for member_index, (position, _) in enumerate(members):
-                values[position] = entry_acc[member_index]
-        return entry_ids, values
+        for member_index, (position, _) in enumerate(members):
+            values[position] = entry_acc[member_index]
+    return values
 
-    from itertools import permutations
-    from itertools import product as iproduct
+
+def _duffy_channel_entry_values_3d(
+    context: _ChannelDuffyContext, radial_profile: _RadialProfile,
+) -> np.ndarray:
+    """Channel entries on the 3D sign-octant / permutation Duffy cones."""
+    # Deferred: see :func:`_channel_duffy_context`.
+    import volumential.singular_integral_2d as squad
+
+    (
+        table, dim, extent, mode_axes, xi, bary_weights, entry_ids, groups,
+        rho_nodes, rho_weights, regular_order,
+    ) = context
+    values = np.zeros(len(entry_ids), dtype=np.float64)
 
     regular_nodes, regular_weights = squad._duffy_regular_nodes_weights(
         dim - 1, regular_order
@@ -1300,7 +1366,7 @@ def _duffy_channel_entry_values(
         # carries its true (tiny) radius instead of being absorbed to r = 0
         base_offset = singular - target
         entry_acc = np.zeros(len(members), dtype=np.float64)
-        for signs in iproduct((-1.0, 1.0), repeat=dim):
+        for signs in product((-1.0, 1.0), repeat=dim):
             lengths = np.array(
                 [
                     singular[axis] if signs[axis] < 0
@@ -1351,7 +1417,7 @@ def _duffy_channel_entry_values(
                     )
         for member_index, (position, _) in enumerate(members):
             values[position] = entry_acc[member_index]
-    return entry_ids, values
+    return values
 
 
 def _resolve_channel_orders(
