@@ -168,6 +168,10 @@ class FPNDSumpyTreeIndependentDataForWrangler(
         *args,
         **kwargs,
     ) -> "FPNDSumpyExpansionWrangler":
+        """Build a queue-bound wrangler for *traversal*.
+
+        :returns: an :class:`FPNDSumpyExpansionWrangler`.
+        """
         tree_indep = self._for_queue(queue)
 
         return FPNDSumpyExpansionWrangler(
@@ -185,6 +189,7 @@ class FPNDSumpyTreeIndependentDataForWrangler(
 
     @memoize_method
     def p2m(self, tgt_order: int):
+        """Sumpy's point-to-multipole translation for order *tgt_order*."""
         from sumpy.p2e import P2EFromSingleBox
 
         return P2EFromSingleBox(
@@ -196,6 +201,7 @@ class FPNDSumpyTreeIndependentDataForWrangler(
 
     @memoize_method
     def p2l(self, tgt_order: int):
+        """Sumpy's point-to-local translation for order *tgt_order*."""
         from sumpy.p2e import P2EFromCSR
 
         return P2EFromCSR(
@@ -206,6 +212,7 @@ class FPNDSumpyTreeIndependentDataForWrangler(
         )
 
     def opencl_fft_app(self, shape, dtype, inverse: bool):
+        """Cached OpenCL FFT plan for *shape*/*dtype*, forward or *inverse*."""
         from sumpy.tools import get_opencl_fft_app
 
         return get_opencl_fft_app(self._setup_actx, shape, dtype, inverse=inverse)
@@ -911,24 +918,29 @@ class FPNDSumpyExpansionWrangler(
         return self.tree_indep._setup_actx
 
     def multipole_expansion_zeros(self, actx=None) -> FMMArray:
+        """Zeroed multipole-expansion storage, on *actx* or the wrangler's own."""
         if actx is None:
             actx = self._actx
         return SumpyExpansionWrangler.multipole_expansion_zeros(self, actx)
 
     def local_expansion_zeros(self, actx=None) -> FMMArray:
+        """Zeroed local-expansion storage, on *actx* or the wrangler's own."""
         if actx is None:
             actx = self._actx
         return SumpyExpansionWrangler.local_expansion_zeros(self, actx)
 
     def output_zeros(self, actx=None) -> FMMArray:
+        """Zeroed potential storage, on *actx* or the wrangler's own."""
         if actx is None:
             actx = self._actx
         return SumpyExpansionWrangler.output_zeros(self, actx)
 
     def reorder_sources(self, source_array: FMMArray) -> FMMArray:
+        """Return *source_array*, given in user order, in tree source order."""
         return SumpyExpansionWrangler.reorder_sources(self, source_array)
 
     def reorder_targets(self, target_array: FMMArray) -> FMMArray:
+        """Return *target_array* permuted by the tree's target ordering."""
         if not hasattr(self, "_user_target_ids"):
             self._user_target_ids = inverse_id_map(
                 self.queue, self.tree.sorted_target_ids
@@ -936,10 +948,12 @@ class FPNDSumpyExpansionWrangler(
         return target_array.with_queue(self.queue)[self._user_target_ids]
 
     def reorder_potentials(self, potentials: FMMArray) -> FMMArray:
+        """Return *potentials*, given in tree order, in user target order."""
         return SumpyExpansionWrangler.reorder_potentials(self, potentials)
 
     def finalize_potentials(self, potentials: FMMArray) -> FMMArray:
         # return potentials
+        """Apply sumpy's global scaling to the reordered *potentials*."""
         return SumpyExpansionWrangler.finalize_potentials(self, self._actx, potentials)
 
     # }}} End data vector utilities
@@ -952,6 +966,7 @@ class FPNDSumpyExpansionWrangler(
         source_boxes: BoxIndexArray,
         src_weights: FMMArray,
     ) -> StageResult:
+        """P2M: form multipole expansions in *source_boxes*."""
         mpoles = SumpyExpansionWrangler.form_multipoles(
             self, self._actx, level_start_source_box_nrs, source_boxes, src_weights
         )
@@ -963,6 +978,7 @@ class FPNDSumpyExpansionWrangler(
         source_parent_boxes: BoxIndexArray,
         mpoles: FMMArray,
     ) -> StageResult:
+        """M2M: accumulate child multipole expansions into their parents."""
         mpoles = SumpyExpansionWrangler.coarsen_multipoles(
             self,
             self._actx,
@@ -987,17 +1003,16 @@ class FPNDSumpyExpansionWrangler(
         near_field_tables=None,
         list1_extra_kwargs=None,
     ) -> tuple[FMMArray, object]:
+        """Near-field (list 1) contribution to *out_pot* for one target kernel.
+
+        The interaction is read out of the precomputed tables instead of being
+        evaluated point by point.  Returns ``(out_pot, event)``.
+        """
 
         # NOTE: mode_coefs are similar to source_weights BUT
         # do not include quadrature weights (purely function
         # expansiona coefficients)
-
         queue = self.queue
-
-        if 0:
-            print("Returns range for list1")
-            out_pot[:] = cl.array.to_device(queue, np.arange(len(out_pot)))
-            return out_pot, None
 
         kname = out_kernel.__repr__()
 
@@ -1218,6 +1233,7 @@ class FPNDSumpyExpansionWrangler(
         neighbor_source_boxes_lists: BoxIndexArray,
         mode_coefs: FMMArray,
     ) -> StageResult:
+        """Near-field stage: one table-based pass per target kernel."""
         pot = self.output_zeros()
         events = []
         for i in range(len(self.tree_indep.target_kernels)):
@@ -1257,6 +1273,7 @@ class FPNDSumpyExpansionWrangler(
         src_box_lists: BoxIndexArray,
         mpole_exps: FMMArray,
     ) -> StageResult:
+        """M2L: translate list-2 multipole expansions into local expansions."""
         local_exps = SumpyExpansionWrangler.multipole_to_local(
             self,
             self._actx,
@@ -1274,6 +1291,7 @@ class FPNDSumpyExpansionWrangler(
         source_boxes_by_level: BoxIndexArray,
         mpole_exps: FMMArray,
     ) -> StageResult:
+        """M2P: evaluate list-3 multipole expansions at the targets."""
         pot = SumpyExpansionWrangler.eval_multipoles(
             self,
             self._actx,
@@ -1291,6 +1309,7 @@ class FPNDSumpyExpansionWrangler(
         lists: BoxIndexArray,
         src_weights: FMMArray,
     ) -> StageResult:
+        """P2L: form local expansions from the list-4 sources."""
         local_exps = SumpyExpansionWrangler.form_locals(
             self,
             self._actx,
@@ -1308,6 +1327,7 @@ class FPNDSumpyExpansionWrangler(
         target_or_target_parent_boxes: BoxIndexArray,
         local_exps: FMMArray,
     ) -> StageResult:
+        """L2L: push each parent's local expansion down to its children."""
         local_exps = SumpyExpansionWrangler.refine_locals(
             self,
             self._actx,
@@ -1323,6 +1343,7 @@ class FPNDSumpyExpansionWrangler(
         target_boxes: BoxIndexArray,
         local_exps: FMMArray,
     ) -> StageResult:
+        """L2P: evaluate local expansions at the targets."""
         pot = SumpyExpansionWrangler.eval_locals(
             self, self._actx, level_start_target_box_nrs, target_boxes, local_exps
         )
@@ -1339,6 +1360,7 @@ class FPNDSumpyExpansionWrangler(
         source_box_lists: BoxIndexArray,
         src_weights: FMMArray,
     ) -> StageResult:
+        """Near-field stage done as a plain P2P, bypassing the tables."""
         pot = self.output_zeros(self._actx)
 
         kwargs = dict(self.extra_kwargs)
