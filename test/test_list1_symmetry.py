@@ -47,6 +47,15 @@ def test_flip_and_swap_repr_and_ordering():
     assert Flip(0) < Swap(0, 1)
 
 
+def test_repr_tolerates_non_integer_axes():
+    # The original printf-style repr accepted anything %d accepted, including
+    # numpy scalars and floats. Keep that, so repr() can never raise.
+    assert repr(Flip(np.int64(2))) == "Flip(2)"
+    assert repr(Swap(np.int64(2), np.int64(0))) == "Swap(0,2)"
+    assert repr(Flip(2.0)) == "Flip(2)"
+    assert repr(Swap(2.0, 0.0)) == "Swap(0,2)"
+
+
 def test_parse_symmetry_tags_none_means_maximum_symmetry():
     red = CaseVecReduction(vecs=[(-1, -1)], sym_tags=None)
 

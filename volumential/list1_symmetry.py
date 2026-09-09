@@ -66,7 +66,9 @@ class Flip(SymmetryOperationBase):
         self.axis = iaxis
 
     def __repr__(self) -> str:
-        return f"Flip({self.axis:d})"
+        # int() rather than a ``:d`` format spec, so that a non-integer axis
+        # reprs the way the original printf form did instead of raising.
+        return f"Flip({int(self.axis)})"
 
 
 class Swap(SymmetryOperationBase):
@@ -80,7 +82,7 @@ class Swap(SymmetryOperationBase):
 
     def __repr__(self) -> str:
         first, second = sorted(self.axes)
-        return f"Swap({first:d},{second:d})"
+        return f"Swap({int(first)},{int(second)})"
 
 
 # }}} End symmetry operations
