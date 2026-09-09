@@ -68,11 +68,25 @@ import logging
 import operator
 import os
 import uuid
+from itertools import pairwise, product
+from math import lgamma
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-import volumential.opcounters as opcounters
+from volumential import opcounters
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from volumential.nearfield_potential_table import NearFieldInteractionTable
+
+    # Radial profile callable: accepts a scalar or an array of radii and
+    # returns the same shape (a float/complex scalar for scalar input).
+    _RadialProfile = Callable[[Any], Any]
+    # ``(table, certificate)`` as returned by every assembler entry point.
+    _AssemblyResult = tuple[NearFieldInteractionTable, dict[str, Any]]
 
 __all__ = [
     "RKEConditioningError",
@@ -96,8 +110,44 @@ _EULER_GAMMA = np.euler_gamma
 _WINDOWED_CHANNEL_CACHE_SCHEMA = 2
 _WINDOWED_CHANNEL_NORMALIZATION = "psi=chi/t_w**m"
 
+# Conservative near-field separation bound in source-box extents: the
+# adaptive List 1 gallery contains center offsets up to 1.5 source-box
+# extents with target boxes up to twice the source size, so a source point
+# and a target point can be up to 1.5 + 1 + 0.5 = 3 extents apart per axis.
+_NEAR_FIELD_SEPARATION_EXTENTS = 3.0
 
-def _require_integer(name, value, *, minimum=None):
+# The O(1) source-box extent range the float64 recombination is certified
+# for (see :func:`_require_o1_box_extent`).
+_O1_EXTENT_MIN = 1.0e-3
+_O1_EXTENT_MAX = 1.0e3
+
+# Relative size of the imaginary residue still accepted for a table that the
+# series/channel conventions certify as real (Yukawa).
+_REAL_TABLE_IMAG_REL_TOL = 1.0e-10
+
+# Relative slack on the closed coverage disk ``|zeta| <= (Theta / b)**2``, so
+# a parameter that lands on the declaration boundary is not refused by
+# roundoff in ``theta = parameter * b``.
+_WINDOW_COVERAGE_SLACK = 1.0e-12
+
+# Number of trailing series terms scanned when closing the tail majorant with
+# its geometric remainder bound.
+_TAIL_MAJORANT_TERM_WINDOW = 400
+
+# Iteration cap of the generalized exponential-integral continued fraction.
+_EXPINT_CF_MAX_ITERATIONS = 256
+
+# Tested per-dimension channel quadrature defaults; see
+# :func:`_resolve_channel_orders` for the measurements behind them.
+_CHANNEL_REGULAR_ORDER_2D = 48
+_CHANNEL_REGULAR_ORDER_3D = 20
+_CHANNEL_RADIAL_ORDER = 61
+
+
+def _require_integer(
+    name: str, value: Any, *, minimum: int | None = None
+) -> int:
+    """Coerce ``value`` to an ``int``, rejecting bools and non-integers."""
     if isinstance(value, (bool, np.bool_)):
         raise ValueError(f"{name} must be an integer")
     try:
@@ -110,21 +160,24 @@ def _require_integer(name, value, *, minimum=None):
     return result
 
 
-def _require_finite_positive(name, value):
+def _require_finite_positive(name: str, value: Any) -> float:
+    """Coerce ``value`` to a finite, strictly positive ``float``."""
     result = float(value)
     if not np.isfinite(result) or result <= 0.0:
         raise ValueError(f"{name} must be finite and positive")
     return result
 
 
-def _require_dimension(dim):
+def _require_dimension(dim: Any) -> int:
+    """Coerce ``dim`` to one of the supported dimensions (2 or 3)."""
     dim = _require_integer("dim", dim)
     if dim not in (2, 3):
         raise NotImplementedError("RKE assembly supports only 2D and 3D")
     return dim
 
 
-def _require_dim_q_order(dim, q_order):
+def _require_dim_q_order(dim: Any, q_order: Any) -> tuple[int, int]:
+    """Coerce a ``(dim, q_order)`` pair with the module's contracts."""
     return (
         _require_dimension(dim),
         _require_integer("q_order", q_order, minimum=1),
@@ -167,7 +220,9 @@ class RKEWindowConditioningError(RuntimeError):
 
 # {{{ series coefficients
 
-def _coefficients_2d(k: complex, n_terms: int):
+def _coefficients_2d(
+    k: complex, n_terms: int
+) -> tuple[np.complex128, np.ndarray, np.ndarray]:
     """Constant coefficient and per-order (log, power) coefficients for
     ``G_k - G_0`` in 2D, following the exact Bessel series."""
     k = np.complex128(k)
@@ -193,7 +248,7 @@ def _coefficients_2d(k: complex, n_terms: int):
     return c0, coeff_log, coeff_power
 
 
-def _coefficients_3d(k: complex, n_terms: int):
+def _coefficients_3d(k: complex, n_terms: int) -> np.ndarray:
     """Per-order coefficients of ``r^{n-1}`` for ``G_k - G_0`` in 3D,
     computed by the stable recurrence ``c_n = c_{n-1} * (i k) / n`` to
     avoid factorial overflow at high orders."""
@@ -211,6 +266,7 @@ def _coefficients_3d(k: complex, n_terms: int):
 # {{{ truncation certificate
 
 def _exp_clipped(x: float) -> float:
+    """``exp(x)`` saturated at the float64 overflow/underflow thresholds."""
     if x > 700.0:
         return float("inf")
     if x < -745.0:
@@ -242,8 +298,6 @@ def _tail_majorant(dim: int, k: complex, radius: float, n_terms: int) -> float:
     (orders ``n > n_terms``) on ``0 < r <= radius``, computed in log space
     to survive very large orders."""
     dim = _require_dimension(dim)
-    from math import lgamma
-
     k_abs = float(np.abs(np.complex128(k)))
     if k_abs == 0.0:
         # Every omitted series term carries a positive power of k, so the
@@ -257,7 +311,7 @@ def _tail_majorant(dim: int, k: complex, radius: float, n_terms: int) -> float:
     log_two_pi = float(np.log(2.0 * np.pi))
     total = 0.0
     converged = False
-    for n in range(n_terms + 1, n_terms + 400):
+    for n in range(n_terms + 1, n_terms + _TAIL_MAJORANT_TERM_WINDOW):
         if dim == 2:
             log_scale = 2.0 * n * float(np.log(k_abs / 2.0)) - 2.0 * lgamma(
                 n + 1.0
@@ -317,7 +371,7 @@ def choose_truncation_order(
     radius: float,
     tolerance: float,
     max_terms: int = 60,
-):
+) -> tuple[int, float]:
     """Smallest series order whose tail majorant is below ``tolerance``.
 
     Returns ``(n_terms, tail_bound)``; raises :class:`RKETruncationError` if
@@ -341,11 +395,9 @@ def choose_truncation_order(
     )
 
 
-def _basis_l1_norms(table) -> np.ndarray:
+def _basis_l1_norms(table: NearFieldInteractionTable) -> np.ndarray:
     """Numerically computed L1 norms of the source basis functions on the
     source box, used to convert kernel-space bounds to entry bounds."""
-    from itertools import product as iproduct
-
     q = int(table.quad_order)
     extent = float(table.source_box_extent)
     dim = int(table.dim)
@@ -376,7 +428,7 @@ def _basis_l1_norms(table) -> np.ndarray:
         return num / den
 
     one_d_l1 = np.zeros(q, dtype=np.float64)
-    for left, right in zip(breakpoints[:-1], breakpoints[1:]):
+    for left, right in pairwise(breakpoints):
         if right <= left:
             continue
         x = 0.5 * (right - left) * (gl_nodes + 1.0) + left
@@ -384,7 +436,7 @@ def _basis_l1_norms(table) -> np.ndarray:
         for i in range(q):
             one_d_l1[i] += abs(float(np.sum(w * lagrange_values(i, x))))
     norms = np.empty(q**dim, dtype=np.float64)
-    for flat, multi in enumerate(iproduct(range(q), repeat=dim)):
+    for flat, multi in enumerate(product(range(q), repeat=dim)):
         acc = 1.0
         for axis_index in multi:
             acc *= one_d_l1[axis_index]
@@ -396,7 +448,7 @@ def _basis_l1_norms(table) -> np.ndarray:
 
 # {{{ channel table acquisition
 
-def _channel_specs(dim: int, n_terms: int):
+def _channel_specs(dim: int, n_terms: int) -> list[tuple[str, int | None]]:
     """(term label, kernel factory kwargs) for every needed channel."""
     dim = _require_dimension(dim)
     specs = [("laplace", None)]
@@ -414,8 +466,11 @@ def _channel_specs(dim: int, n_terms: int):
     return specs
 
 
-def _channel_kernel(dim: int, label: str):
+def _channel_kernel(dim: int, label: str) -> tuple[str, Any]:
+    """Table-manager kernel type and sumpy kernel for one channel label."""
     dim = _require_dimension(dim)
+    # Deferred: :mod:`volumential.table_manager` imports this module, so the
+    # channel kernel providers can only be reached at call time.
     from volumential.expansion_wrangler_fpnd import (
         _RadialPowerKernel,
         _RadialPowerLogKernel,
@@ -450,11 +505,13 @@ def _get_channel_tables(
     labels,
     build_config,
     force_recompute,
-):
+) -> dict[str, NearFieldInteractionTable]:
+    """Build or load one channel table per label, keyed by label."""
     dim, q_order = _require_dim_q_order(dim, q_order)
     source_box_level = _require_integer(
         "source_box_level", source_box_level, minimum=0
     )
+    # Deferred: the table manager imports this module.
     from volumential.table_manager import NearFieldInteractionTableManager
 
     tables = {}
@@ -713,7 +770,7 @@ NearFieldInteractionTable`
 
 # {{{ windowed channels
 
-def _generalized_exponential_integral_cf(order, x):
+def _generalized_exponential_integral_cf(order: float, x: np.ndarray) -> np.ndarray:
     """Evaluate ``E_order(x)`` for ``x > 1`` by a stable continued fraction."""
     order = float(order)
     x = np.asarray(x, dtype=np.float64)
@@ -723,7 +780,7 @@ def _generalized_exponential_integral_cf(order, x):
     d = 1.0 / b
     value = d.copy()
 
-    for iteration in range(1, 257):
+    for iteration in range(1, _EXPINT_CF_MAX_ITERATIONS + 1):
         numerator = -iteration * (iteration + order - 1.0)
         b = b + 2.0
         d = b + numerator * d
@@ -741,8 +798,13 @@ def _generalized_exponential_integral_cf(order, x):
     )
 
 
-def _windowed_channel_profile_impl(dim, m, window_scale, *, normalized):
+def _windowed_channel_profile_impl(
+    dim: int, m: int, window_scale: float, *, normalized: bool
+) -> _RadialProfile:
+    """Physical (``chi_m``) or normalized (``psi_m = chi_m / t_w**m``)
+    windowed channel profile; see :func:`windowed_channel_profile`."""
     dim = _require_dimension(dim)
+    # Deferred: SciPy is only needed on the channel-evaluation path.
     import scipy.special as sps
 
     m = _require_integer("m", m, minimum=0)
@@ -806,7 +868,9 @@ def _windowed_channel_profile_impl(dim, m, window_scale, *, normalized):
     return profile
 
 
-def windowed_channel_profile(dim, m, window_scale):
+def windowed_channel_profile(
+    dim: int, m: int, window_scale: float
+) -> _RadialProfile:
     """Radial profile ``chi_m(r)`` of the physical windowed channel.
 
     Defined by the generalized exponential-integral recurrences
@@ -833,14 +897,18 @@ def windowed_channel_profile(dim, m, window_scale):
     )
 
 
-def _normalized_windowed_channel_profile(dim, m, window_scale):
+def _normalized_windowed_channel_profile(
+    dim: int, m: int, window_scale: float
+) -> _RadialProfile:
     """Numerically balanced channel ``psi_m = chi_m / t_w**m``."""
     return _windowed_channel_profile_impl(
         dim, m, window_scale, normalized=True
     )
 
 
-def _windowed_channel_kernel_func(dim, m, window_scale, *, normalized=False):
+def _windowed_channel_kernel_func(
+    dim: int, m: int, window_scale: float, *, normalized: bool = False
+) -> Callable[..., Any]:
     """Coordinate-space wrapper with the scalar Duffy path's
     ``kernel_func(x, y[, z])`` signature around a windowed profile."""
     if normalized:
@@ -856,11 +924,11 @@ def _windowed_channel_kernel_func(dim, m, window_scale, *, normalized=False):
     return kernel_func
 
 
-def _require_o1_box_extent(box_extent):
+def _require_o1_box_extent(box_extent: float) -> None:
     """Refuse box extents outside the O(1) range the float64 recombination
     (and the extent-scaled degeneracy tests of the Duffy geometry) are
     certified for — the same contract the classical assembler enforces."""
-    if not 1.0e-3 <= float(box_extent) <= 1.0e3:
+    if not _O1_EXTENT_MIN <= float(box_extent) <= _O1_EXTENT_MAX:
         raise ValueError(
             f"source-box extent {float(box_extent):g} is outside the "
             "supported O(1) range for certified float64 recombination; "
@@ -869,7 +937,7 @@ def _require_o1_box_extent(box_extent):
         )
 
 
-def _selected_decay_root(zeta):
+def _selected_decay_root(zeta: complex) -> np.complex128:
     """The module's square-root branch contract for squared frequencies:
     the decaying root on the Yukawa ray (``Re > 0``) and the outgoing
     lower-half-plane limit on the negative (Helmholtz) ray (``-i k``).
@@ -881,7 +949,7 @@ def _selected_decay_root(zeta):
     return decay
 
 
-def _windowed_coefficients(scaled_zeta, p_star):
+def _windowed_coefficients(scaled_zeta: complex, p_star: int) -> np.ndarray:
     """Balanced coefficients ``(-scaled_zeta)^m / m!``."""
     coefficients = np.empty(p_star, dtype=np.complex128)
     value = np.complex128(1.0)
@@ -891,7 +959,13 @@ def _windowed_coefficients(scaled_zeta, p_star):
     return coefficients
 
 
-def windowed_remainder_profile(dim, zeta, kernel_radial, window_scale, p_star):
+def windowed_remainder_profile(
+    dim: int,
+    zeta: complex,
+    kernel_radial: _RadialProfile,
+    window_scale: float,
+    p_star: int,
+) -> _RadialProfile:
     """Radial profile of the exact windowed remainder
 
     ``R(r) = G(r) - pref * sum_{m < p_star}
@@ -962,7 +1036,9 @@ def windowed_remainder_profile(dim, zeta, kernel_radial, window_scale, p_star):
     return remainder_radial
 
 
-def _tensor_product_gauss_points(q_order, dim, extent):
+def _tensor_product_gauss_points(
+    q_order: int, dim: int, extent: float
+) -> np.ndarray:
     """Tensor-product Gauss-Legendre points on ``[0, extent]^dim`` in the
     lexicographic ordering the table constructor produces from the mesh
     generator (queue-free equivalent of ``mg.make_uniform_cubic_grid`` at
@@ -977,8 +1053,13 @@ def _tensor_product_gauss_points(q_order, dim, extent):
 
 
 def _windowed_channel_skeleton(
-    dim, q_order, source_box_level, root_extent, window_theta, m,
-):
+    dim: int,
+    q_order: int,
+    source_box_level: int,
+    root_extent: float,
+    window_theta: float,
+    m: int,
+) -> NearFieldInteractionTable:
     """Channel table shell (geometry and symmetry metadata, no data) at the
     source-box extent the table manager would use for this level."""
     dim, q_order = _require_dim_q_order(dim, q_order)
@@ -1011,7 +1092,9 @@ def _windowed_channel_skeleton(
     return table
 
 
-def _reduced_entry_groups(table):
+def _reduced_entry_groups(
+    table: NearFieldInteractionTable,
+) -> tuple[np.ndarray, dict[tuple[int, int], list[tuple[int, int]]]]:
     """Reduced entry IDs grouped by ``(case, target)`` with the positions and
     source-mode indices of each member, mirroring the scalar Duffy builder's
     entry enumeration."""
@@ -1034,9 +1117,15 @@ def _reduced_entry_groups(table):
     return entry_ids, groups
 
 
-def _axis_basis_values(table, coords, xi, bary_weights):
+def _axis_basis_values(
+    table: NearFieldInteractionTable,
+    coords,
+    xi: np.ndarray | None,
+    bary_weights: np.ndarray | None,
+) -> list[list[np.ndarray]]:
     """Per-axis Lagrange basis values (list over axes of list over basis
     indices) at the given coordinate arrays."""
+    # Deferred: see :func:`_channel_duffy_context`.
     from volumential.lagrange import evaluate_lagrange_basis_1d
 
     q = int(table.quad_order)
@@ -1053,7 +1142,9 @@ def _axis_basis_values(table, coords, xi, bary_weights):
     ]
 
 
-def _channel_profile_values(radial_profile, radius):
+def _channel_profile_values(
+    radial_profile: _RadialProfile, radius: np.ndarray
+) -> np.ndarray:
     """Channel profile values on a Duffy node block, with any node that
     rounds onto the singular point (``r == 0``) contributing zero.
 
@@ -1263,7 +1354,9 @@ def _duffy_channel_entry_values(
     return entry_ids, values
 
 
-def _resolve_channel_orders(dim, chan_regular_order, chan_radial_order):
+def _resolve_channel_orders(
+    dim: int, chan_regular_order: int | None, chan_radial_order: int | None
+) -> tuple[int, int]:
     """Resolve ``None`` channel quadrature orders to the tested defaults.
 
     2D interpolation nodes near the box edge create high-aspect Duffy
@@ -1275,9 +1368,11 @@ def _resolve_channel_orders(dim, chan_regular_order, chan_radial_order):
     """
     dim = _require_dimension(dim)
     if chan_regular_order is None:
-        chan_regular_order = 48 if dim == 2 else 20
+        chan_regular_order = (
+            _CHANNEL_REGULAR_ORDER_2D if dim == 2 else _CHANNEL_REGULAR_ORDER_3D
+        )
     if chan_radial_order is None:
-        chan_radial_order = 61
+        chan_radial_order = _CHANNEL_RADIAL_ORDER
     return _validate_channel_orders(chan_regular_order, chan_radial_order)
 
 
@@ -1291,7 +1386,9 @@ def _resolve_channel_orders(dim, chan_regular_order, chan_radial_order):
 _CHANNEL_RADIAL_WEIGHT_TOL = 1.0e-8
 
 
-def _validate_channel_orders(chan_regular_order, chan_radial_order):
+def _validate_channel_orders(
+    chan_regular_order: int, chan_radial_order: int
+) -> tuple[int, int]:
     """Refuse channel quadrature orders the underlying node builders do not
     honour, instead of letting them degrade silently.
 
@@ -1303,6 +1400,7 @@ def _validate_channel_orders(chan_regular_order, chan_radial_order):
     hard-coded list, so the rule — not this function — remains the
     authority on which orders are usable.
     """
+    # Deferred: see :func:`_channel_duffy_context`.
     import volumential.singular_integral_2d as squad
 
     regular = _require_integer("chan_regular_order", chan_regular_order)
@@ -1337,10 +1435,11 @@ def _validate_channel_orders(chan_regular_order, chan_radial_order):
     return regular, radial
 
 
-def _channel_source_mode_sup(table):
+def _channel_source_mode_sup(table: NearFieldInteractionTable) -> float:
     """Sup norm over the source box of the tensor-product source modes,
     ``max_i sup_y |phi_i(y)|``, bounded axis-wise (the tensor product of the
     per-axis sups dominates the sup of the product)."""
+    # Deferred: see :func:`_channel_duffy_context`.
     from volumential.lagrange import (
         barycentric_lagrange_weights,
         evaluate_lagrange_basis_1d,
@@ -1370,7 +1469,12 @@ def _channel_source_mode_sup(table):
     return axis_sup**dim
 
 
-def _channel_entry_magnitude_bound(table, m, window_scale, safety=8.0):
+def _channel_entry_magnitude_bound(
+    table: NearFieldInteractionTable,
+    m: int,
+    window_scale: float,
+    safety: float = 8.0,
+) -> float:
     """Analytic upper bound on normalized ``|psi_m|`` table entries.
 
     A table entry is ``int_box psi_m(|x_t - y|) phi_i(y) dy``, so
@@ -1395,7 +1499,12 @@ def _channel_entry_magnitude_bound(table, m, window_scale, safety=8.0):
     return float(safety) * _channel_source_mode_sup(table) * channel_mass
 
 
-def _check_channel_table_values(table, values, m, window_scale):
+def _check_channel_table_values(
+    table: NearFieldInteractionTable,
+    values: np.ndarray,
+    m: int,
+    window_scale: float,
+) -> None:
     """Reject a channel table whose entries are not finite or exceed the
     analytic bound of :func:`_channel_entry_magnitude_bound`.
 
@@ -1431,7 +1540,8 @@ def _windowed_channel_cache_file(
     m,
     chan_regular_order,
     chan_radial_order,
-):
+) -> tuple[Path, dict[str, Any]]:
+    """Cache file and its full identifying key for one windowed channel."""
     dim, q_order = _require_dim_q_order(dim, q_order)
     source_box_level = _require_integer(
         "source_box_level", source_box_level, minimum=0
@@ -1465,13 +1575,16 @@ def _windowed_channel_cache_file(
     return directory / filename, dict(key)
 
 
-def _windowed_channel_payload_checksum(entry_ids, values):
+def _windowed_channel_payload_checksum(
+    entry_ids: np.ndarray, values: np.ndarray
+) -> str:
+    """Checksum over the cached entry IDs and values, in canonical dtypes."""
     digest = hashlib.sha256()
-    for label, array, dtype in (
+    for label, payload, dtype in (
         (b"entry_ids\0", entry_ids, "<i8"),
         (b"values\0", values, "<f8"),
     ):
-        array = np.ascontiguousarray(array, dtype=dtype)
+        array = np.ascontiguousarray(payload, dtype=dtype)
         digest.update(label)
         digest.update(np.asarray(array.shape, dtype="<i8").tobytes())
         digest.update(array.tobytes())
@@ -1661,7 +1774,7 @@ def get_windowed_channel_table(
 
 def _smooth_remainder_entry_values(
     table, entry_ids, remainder_radial, smooth_quad_order,
-):
+) -> np.ndarray:
     """Entries ``integral over the source box of R(x_j - y) phi_i(y) dy``
     for the given full entry IDs, by a tensor-product Gauss-Legendre rule of
     ``smooth_quad_order`` points per axis on the source box, mirroring the
@@ -1670,6 +1783,7 @@ def _smooth_remainder_entry_values(
     n_nodes = _require_integer(
         "smooth_quad_order", smooth_quad_order, minimum=1
     )
+    # Deferred: see :func:`_channel_duffy_context`.
     from volumential.lagrange import (
         barycentric_lagrange_weights,
         evaluate_lagrange_basis_1d,
@@ -2096,7 +2210,7 @@ NearFieldInteractionTable`
     return table, certificate
 
 
-def damped_kernel_radial(dim, zeta):
+def damped_kernel_radial(dim: int, zeta: complex) -> _RadialProfile:
     """Radial kernel profile for a complex squared frequency ``zeta``,
     with the module's square-root branch contract.
 
@@ -2117,6 +2231,7 @@ def damped_kernel_radial(dim, zeta):
     :returns: a vectorized complex-valued callable ``g(r)``.
     """
     dim = _require_dimension(dim)
+    # Deferred: SciPy is only needed on the kernel-evaluation path.
     import scipy.special as sps
 
     zeta = complex(zeta)
@@ -2148,21 +2263,21 @@ def damped_kernel_radial(dim, zeta):
 
 
 def assemble_windowed_damped_table(
-    cache_path,
+    cache_path: str | Path,
     dim: int,
     q_order: int,
-    zeta,
+    zeta: complex,
     *,
     source_box_level: int = 0,
     root_extent: float = 2.0,
     window_theta: float = 16.0,
     p_star: int = 6,
-    smooth_quad_order=None,
+    smooth_quad_order: int | None = None,
     max_condition: float = 1.0e6,
     chan_regular_order: int | None = None,
     chan_radial_order: int | None = None,
     force_channel_recompute: bool = False,
-):
+) -> _AssemblyResult:
     """Assemble a fixed-parameter table at a damped complex frequency.
 
     ``zeta`` is the complex squared frequency; the supported coverage is the
