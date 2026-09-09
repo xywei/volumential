@@ -23,6 +23,7 @@ THE SOFTWARE.
 __doc__ = """Timing-future adapter for the boxtree FMM driver.
 """
 
+
 class SumpyTimingFuture:
     """The timing handle boxtree's FMM driver expects from a wrangler stage.
 
