@@ -1,3 +1,16 @@
+"""Symmetry bookkeeping for the *list 1* interaction gallery.
+
+This module owns the description of the discrete symmetries a near-field
+interaction table may exploit (axis flips and axis swaps), and the reduction of
+a set of case vectors to the subset of symmetry representatives together with
+each representative's invariant group.
+
+.. autoclass:: SymmetryOperationBase
+.. autoclass:: Flip
+.. autoclass:: Swap
+.. autoclass:: CaseVecReduction
+"""
+
 __copyright__ = "Copyright (C) 2018 Xiaoyu Wei"
 
 __license__ = """
@@ -21,6 +34,7 @@ THE SOFTWARE.
 """
 
 import math
+from collections.abc import Sequence
 
 import numpy as np
 
@@ -29,10 +43,12 @@ import numpy as np
 
 
 class SymmetryOperationBase:
-    def __init__(self, index):
+    """Base class for the symmetry operations a case vector may admit."""
+
+    def __init__(self, index) -> None:
         self._index = index
 
-    def __lt__(self, other):
+    def __lt__(self, other: "SymmetryOperationBase") -> bool:
         if type(self) is type(other):
             return self._index < other._index
 
@@ -45,12 +61,12 @@ class Flip(SymmetryOperationBase):
     Flip the sign of an axis, spanning S_2^dim
     """
 
-    def __init__(self, iaxis):
+    def __init__(self, iaxis: int) -> None:
         super().__init__(iaxis)
         self.axis = iaxis
 
-    def __repr__(self):
-        return "Flip(%d)" % self.axis
+    def __repr__(self) -> str:
+        return f"Flip({self.axis:d})"
 
 
 class Swap(SymmetryOperationBase):
@@ -58,12 +74,13 @@ class Swap(SymmetryOperationBase):
     Swap two axes, spanning S_dim
     """
 
-    def __init__(self, iaxis, jaxis):
+    def __init__(self, iaxis: int, jaxis: int) -> None:
         self.axes = (iaxis, jaxis)
         super().__init__(sorted(self.axes))
 
-    def __repr__(self):
-        return "Swap(%d,%d)" % tuple(sorted(self.axes))
+    def __repr__(self) -> str:
+        first, second = sorted(self.axes)
+        return f"Swap({first:d},{second:d})"
 
 
 # }}} End symmetry operations
@@ -74,7 +91,12 @@ class CaseVecReduction:
     Reduce a set of case vectors based on symmetry.
     """
 
-    def __init__(self, vecs=None, sym_tags=None, do_reduction=True):
+    def __init__(
+        self,
+        vecs: list | None = None,
+        sym_tags: list[SymmetryOperationBase] | None = None,
+        do_reduction: bool = True,
+    ) -> None:
         """
         sym_tags is a list of SymmetryOperationBase objects.
         sym_tags is [] if no symmetry can be used.
@@ -102,9 +124,16 @@ class CaseVecReduction:
         if do_reduction:
             self.reduce()
 
-    def parse_symmetry_tags(self, tags):
+    def parse_symmetry_tags(
+        self, tags: list[SymmetryOperationBase] | None
+    ) -> tuple[np.ndarray, list[set[int]]]:
+        """Split *tags* into a per-axis flippable mask and swappable axis groups.
+
+        *tags* of ``None`` means maximum symmetry: every axis is flippable and
+        all axes form a single swappable group.
+        """
         flippable = np.zeros(self.dim)
-        swappable_groups = []
+        swappable_groups: list[set[int]] = []
 
         if tags is None:
             flippable += 1
@@ -119,55 +148,50 @@ class CaseVecReduction:
                 iaxis, jaxis = tag.axes
                 gi = None
                 gj = None
-                for gid, group in zip(range(len(swappable_groups)), swappable_groups):
+                for gid, group in enumerate(swappable_groups):
                     if iaxis in group:
                         assert gi is None
                         gi = gid
                     if jaxis in group:
                         assert gj is None
                         gj = gid
-                if gi is None:
-                    if gj is None:
-                        # New group
-                        swappable_groups.append({iaxis, jaxis})
-                    else:
-                        # Update group[gj]
-                        swappable_groups[gj].add(iaxis)
-                else:
-                    if gj is None:
-                        # Update group[gi]
-                        swappable_groups[gi].add(jaxis)
-                    else:
-                        if gi == gj:
-                            pass
-                        else:
-                            # Merge groups
-                            swappable_groups.append(
-                                set().union(swappable_groups[gi], swappable_groups[gj])
-                            )
-                            swappable_groups.remove(swappable_groups[gi])
-                            swappable_groups.remove(swappable_groups[gj])
+
+                if gi is None and gj is None:
+                    # New group
+                    swappable_groups.append({iaxis, jaxis})
+                elif gi is None:
+                    # Update group[gj]
+                    swappable_groups[gj].add(iaxis)
+                elif gj is None:
+                    # Update group[gi]
+                    swappable_groups[gi].add(jaxis)
+                elif gi != gj:
+                    # Merge groups
+                    swappable_groups.append(
+                        set().union(swappable_groups[gi], swappable_groups[gj])
+                    )
+                    swappable_groups.remove(swappable_groups[gi])
+                    swappable_groups.remove(swappable_groups[gj])
 
             else:
                 raise NotImplementedError
 
         return flippable, swappable_groups
 
-    def find_base_vecs(self):
+    def find_base_vecs(self) -> tuple[list, list[int]]:
+        """Return the symmetry representatives and their ids in the full list."""
         vecs = self.full_vecs
         base_vecs = []
         base_vec_ids = []
-        for vid, vec in zip(range(len(vecs)), vecs):
+        for vid, vec in enumerate(vecs):
             is_base = True
             # Check for flips
             for d in range(self.dim):
-                v = vec[d]
                 if not self.flippable[d]:
                     continue
-                else:
-                    if v > 0:
-                        is_base = False
-                        break
+                if vec[d] > 0:
+                    is_base = False
+                    break
             # Check for swaps
             if is_base:
                 for group in self.swappable_groups:
@@ -181,13 +205,15 @@ class CaseVecReduction:
                 base_vec_ids.append(vid)
         return base_vecs, base_vec_ids
 
-    def find_invariant_group(self, vec):
+    def find_invariant_group(
+        self, vec: Sequence[int]
+    ) -> list[SymmetryOperationBase]:
         """
         For a given case vector, within the allowed symmetry tags,
         return a generating set of its invariant group as a list of
         SymmetryOperationBase objects.
         """
-        ivgp = []
+        ivgp: list[SymmetryOperationBase] = []
         n = len(vec)
         assert n == self.dim
         for iaxis in range(n):
@@ -205,7 +231,8 @@ class CaseVecReduction:
                             break
         return ivgp
 
-    def reduce(self):
+    def reduce(self) -> None:
+        """Compute the representatives and their invariant groups."""
         self.reduced_vecs, self.reduced_vec_ids = self.find_base_vecs()
         self.reduced_invariant_groups = [
             self.find_invariant_group(v) for v in self.reduced_vecs
@@ -214,19 +241,23 @@ class CaseVecReduction:
 
     # call reduce() before calling getters
 
-    def get_reduced_vecs(self):
+    def get_reduced_vecs(self) -> list:
+        """Return the symmetry representatives."""
         assert self.reduced
         return self.reduced_vecs
 
-    def get_reduced_vec_ids(self):
+    def get_reduced_vec_ids(self) -> list[int]:
+        """Return the indices of the representatives into the full vector list."""
         assert self.reduced
         return self.reduced_vec_ids
 
-    def get_inter_box_reduction_ratio(self):
+    def get_inter_box_reduction_ratio(self) -> float:
+        """Return the fraction of case vectors that survive as representatives."""
         assert self.reduced
         return len(self.reduced_vecs) / len(self.full_vecs)
 
-    def get_intra_box_reduction_ratio(self):
+    def get_intra_box_reduction_ratio(self) -> float:
+        """Return the mean fraction of entries needed within a representative box."""
         assert self.reduced
         total_ratio = 0
         for vid in range(len(self.reduced_vecs)):
@@ -240,11 +271,13 @@ class CaseVecReduction:
             total_ratio += ratio
         return total_ratio / len(self.reduced_vecs)
 
-    def get_full_reduction_ratio(self):
+    def get_full_reduction_ratio(self) -> float:
+        """Return the combined inter-box and intra-box reduction ratio."""
         return (
             self.get_inter_box_reduction_ratio() * self.get_intra_box_reduction_ratio()
         )
 
-    def get_reduced_invariant_groups(self):
+    def get_reduced_invariant_groups(self) -> list[list[SymmetryOperationBase]]:
+        """Return the invariant group generators of each representative."""
         assert self.reduced
         return self.reduced_invariant_groups
