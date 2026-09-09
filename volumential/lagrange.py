@@ -20,13 +20,27 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
-__doc__ = """Stable Lagrange basis evaluation helpers."""
+__doc__ = """Stable Lagrange basis evaluation helpers.
+
+This module owns the barycentric (first-kind) formulation of tensor-product
+Lagrange interpolation used by the near-field tables and the volume FMM
+wranglers.  The barycentric form is what keeps high-order weights finite:
+weights are normalized in log space, so orders in the hundreds survive a
+``float32`` round trip.
+
+.. autofunction:: barycentric_lagrange_weights
+.. autofunction:: evaluate_lagrange_basis_1d
+"""
+
+from typing import Any
 
 import numpy as np
+from numpy.typing import ArrayLike
 
 
-def _validate_integer_order(order, name, minimum):
-    if isinstance(order, (bool, np.bool_)):
+def _validate_integer_order(order: Any, name: str, minimum: int) -> int:
+    """Return *order* as an :class:`int`, rejecting non-integral input."""
+    if isinstance(order, bool | np.bool_):
         raise ValueError(f"{name} must be an integer, got {order!r}")
 
     try:
@@ -42,8 +56,12 @@ def _validate_integer_order(order, name, minimum):
     return order_int
 
 
-def barycentric_lagrange_weights(nodes):
-    """Return first-kind barycentric weights for distinct interpolation nodes."""
+def barycentric_lagrange_weights(nodes: ArrayLike) -> np.ndarray:
+    """Return first-kind barycentric weights for distinct interpolation nodes.
+
+    The weights are normalized so that the largest one has unit magnitude,
+    which keeps high-order node sets representable in single precision.
+    """
 
     nodes = np.asarray(nodes, dtype=np.float64)
     if nodes.ndim != 1:
@@ -59,8 +77,19 @@ def barycentric_lagrange_weights(nodes):
     return signs * np.exp(log_abs_weights - np.max(log_abs_weights))
 
 
-def evaluate_lagrange_basis_1d(nodes, index, x, weights=None):
-    """Evaluate one Lagrange basis function with the barycentric formula."""
+def evaluate_lagrange_basis_1d(
+    nodes: ArrayLike,
+    index: int,
+    x: ArrayLike,
+    weights: ArrayLike | None = None,
+) -> np.ndarray | float:
+    """Evaluate one Lagrange basis function with the barycentric formula.
+
+    :arg index: which basis function to evaluate, in ``range(len(nodes))``.
+    :arg x: evaluation point(s); a scalar in gives a :class:`float` out.
+    :arg weights: barycentric weights from
+        :func:`barycentric_lagrange_weights`, recomputed when not given.
+    """
 
     index = _validate_integer_order(index, "index", minimum=0)
     nodes = np.asarray(nodes, dtype=np.float64)
