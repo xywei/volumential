@@ -1,20 +1,20 @@
 import numpy as np
 import pytest
 from numpy.polynomial.legendre import leggauss
-from pymbolic import var
 
 import pyopencl as cl
-
-from sumpy.point_calculus import CalculusPatch
+from pymbolic import var
 from sumpy.kernel import (
     AxisTargetDerivative,
     ExpressionKernel,
     LaplaceKernel,
     YukawaKernel,
 )
+from sumpy.point_calculus import CalculusPatch
 
 import volumential.nearfield_potential_table as npt
 from volumential.table_manager import ConstantKernel
+
 
 try:
     from _duffy_test_utils import pick_far_positive_case_id

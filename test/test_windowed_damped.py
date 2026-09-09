@@ -44,6 +44,7 @@ from volumential.rke_table_assembly import (
     damped_kernel_radial,
 )
 
+
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 ROOT_EXTENT = 2.0

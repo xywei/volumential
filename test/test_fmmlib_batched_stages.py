@@ -36,8 +36,7 @@ import numpy as np
 import pytest
 
 import pyopencl as cl
-import pyopencl.array  # noqa: F401
-
+import pyopencl.array
 from boxtree.pyfmmlib_integration import FMMLibExpansionWrangler
 
 import volumential.meshgen as mg

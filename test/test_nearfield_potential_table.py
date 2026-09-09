@@ -24,9 +24,11 @@ import os
 import sys
 
 import numpy as np
-import pyopencl as cl
 import pytest
 from numpy.polynomial.chebyshev import chebval, chebval2d, chebval3d
+
+import pyopencl as cl
+
 
 if (
     sys.platform == "darwin"
@@ -163,9 +165,9 @@ def test_modes():
 
 
 def test_sumpy_kernel_to_lambda_lambdifies_once(monkeypatch):
-    from sumpy.kernel import LaplaceKernel
-
     import sympy
+
+    from sumpy.kernel import LaplaceKernel
 
     call_count = {"n": 0}
     original_lambdify = sympy.lambdify
@@ -2671,8 +2673,6 @@ def test_arithmetic_orbit_reconstruction_q3_payload_diagnostic_row():
 
 
 def test_table_payload_serialization_excludes_nan_sentinels_for_reduced_tables():
-    import io
-
     from volumential.table_manager import (
         _deserialize_table_payload,
         _serialize_table_payload,

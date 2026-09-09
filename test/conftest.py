@@ -23,9 +23,10 @@ THE SOFTWARE.
 import glob
 import subprocess
 
-import pyopencl as cl
 import pytest
 from filelock import FileLock
+
+import pyopencl as cl
 
 # setup the ctx_factory fixture
 from pyopencl.tools import (  # noqa: F401
