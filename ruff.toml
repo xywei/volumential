@@ -11,10 +11,10 @@
 # once a file is clean is the intended workflow.
 #
 # ``ruff format`` is deliberately *not* adopted as a gate: it would reformat 76
-# of 92 files (~12k diff lines), and enabling flake8-quotes (``Q``) would rewrite
-# 448 single-quoted literals.  Either one is a tree-wide rewrite that collides
-# with every open branch, so the ``[format]`` section below only records the
-# intended style for a future coordinated reformat.
+# of 93 files (~5.6k changed lines), and enabling flake8-quotes (``Q``) would
+# rewrite 448 single-quoted literals.  Either one is a tree-wide rewrite that
+# collides with every open branch, so the ``[format]`` section below only
+# records the intended style for a future coordinated reformat.
 
 line-length = 85
 target-version = "py311"
