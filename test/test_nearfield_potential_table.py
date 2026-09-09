@@ -2869,6 +2869,150 @@ def test_record_build_routing_rejects_unknown_routings():
 # }}}
 
 
+# {{{ complex exponentials avoid cdouble_exp
+
+
+def _pymbolic_eval(expr, context):
+    import cmath
+
+    from pymbolic import evaluate
+
+    return evaluate(
+        expr,
+        {"exp": cmath.exp, "cos": cmath.cos, "sin": cmath.sin, **context},
+    )
+
+
+def test_split_complex_expression_is_exact_for_purely_imaginary():
+    import pymbolic.primitives as prim
+
+    k = prim.Variable("k")
+    r = prim.Variable("r")
+    real_part, imag_part = npt._split_complex_expression(
+        prim.Product((np.complex128(1j), k, r))
+    )
+
+    assert npt._is_structural_zero(real_part)
+    assert _pymbolic_eval(imag_part, {"k": 3.0, "r": 5.0}) == 15.0
+
+
+def test_split_complex_expression_is_exact_for_a_damped_exponent():
+    import pymbolic.primitives as prim
+
+    alpha = prim.Variable("alpha")
+    beta = prim.Variable("beta")
+    r = prim.Variable("r")
+    # the damped complex-frequency form (-alpha + i beta) * r
+    argument = prim.Product((
+        prim.Sum((
+            prim.Product((-1, alpha)),
+            prim.Product((np.complex128(1j), beta)),
+        )),
+        r,
+    ))
+    real_part, imag_part = npt._split_complex_expression(argument)
+
+    context = {"alpha": 0.7, "beta": 11.0, "r": 1.3}
+    assert _pymbolic_eval(real_part, context) == pytest.approx(-0.91)
+    assert _pymbolic_eval(imag_part, context) == pytest.approx(14.3)
+    # re + 1j*im must reproduce the original exponent exactly
+    assert _pymbolic_eval(argument, context) == pytest.approx(
+        _pymbolic_eval(real_part, context)
+        + 1j * _pymbolic_eval(imag_part, context)
+    )
+
+
+def test_complex_exponential_rewriter_preserves_the_value():
+    import pymbolic.primitives as prim
+
+    rewriter = npt.ComplexExponentialRewriter()
+    alpha = prim.Variable("alpha")
+    beta = prim.Variable("beta")
+    r = prim.Variable("r")
+
+    for argument in (
+        prim.Product((np.complex128(1j), beta, r)),
+        prim.Product((
+            prim.Sum((
+                prim.Product((-1, alpha)),
+                prim.Product((np.complex128(1j), beta)),
+            )),
+            r,
+        )),
+    ):
+        original = prim.Call(prim.Variable("exp"), (argument,))
+        rewritten = rewriter(original)
+        assert rewritten != original
+        for context in (
+            {"alpha": 0.7, "beta": 11.0, "r": 1.3},
+            {"alpha": -2.5, "beta": 0.25, "r": 0.4},
+        ):
+            assert _pymbolic_eval(rewritten, context) == pytest.approx(
+                _pymbolic_eval(original, context), rel=1e-13, abs=1e-15
+            )
+
+
+def test_complex_exponential_rewriter_leaves_real_exponents_alone():
+    import pymbolic.primitives as prim
+
+    rewriter = npt.ComplexExponentialRewriter()
+    argument = prim.Product((-1, prim.Variable("lam"), prim.Variable("r")))
+    original = prim.Call(prim.Variable("exp"), (argument,))
+
+    assert rewriter(original) == original
+
+
+def _fused_device_code(sumpy_kernel, dim, queue, *, n_entries=8, n_nodes=64):
+    import loopy as lp
+
+    table = npt.NearFieldInteractionTable(
+        quad_order=2,
+        dim=dim,
+        dtype=np.complex128,
+        sumpy_kernel=sumpy_kernel,
+        progress_bar=False,
+    )
+    program = table._get_fused_invariant_duffy_table_program(
+        queue, n_entries, n_nodes
+    )
+    return lp.generate_code_v2(program).device_code()
+
+
+def test_helmholtz_fused_duffy_code_has_no_cdouble_exp():
+    """The generated complex kernel must not call ``cdouble_exp``.
+
+    pyopencl implements it with the OpenCL ``sincos`` out-parameter builtin,
+    which is pathologically slow on the PoCL CPU driver; see
+    ``ComplexExponentialRewriter``.
+    """
+    from sumpy.kernel import HelmholtzKernel
+
+    queue = _make_build_queue_or_skip()
+    code = _fused_device_code(HelmholtzKernel(3), 3, queue)
+
+    assert "cdouble_exp" not in code
+    # nor any other complex transcendental, which pyopencl implements the
+    # same way
+    for name in ("cdouble_cos", "cdouble_sin", "cdouble_pow", "cdouble_powr"):
+        assert name not in code
+    # the phase must instead go through the real transcendentals
+    assert "cos(" in code
+    assert "sin(" in code
+
+
+def test_yukawa_fused_duffy_code_keeps_a_real_exp():
+    from sumpy.kernel import YukawaKernel
+
+    queue = _make_build_queue_or_skip()
+    code = _fused_device_code(YukawaKernel(3), 3, queue)
+
+    assert "cdouble_exp" not in code
+    assert "exp(" in code
+
+
+# }}}
+
+
 if __name__ == "__main__":
     import sys
 

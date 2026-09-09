@@ -31,7 +31,9 @@ from functools import partial
 import numpy as np
 
 import loopy as lp
+import pymbolic.primitives as prim
 import pyopencl as cl
+from pymbolic.mapper import CSECachingMapperMixin, IdentityMapper
 from pytools import memoize_method
 
 import volumential.list1_gallery as gallery
@@ -79,6 +81,169 @@ def _duffy_fallback_is_disabled():
     if value is None:
         return False
     return value.strip().lower() not in ("", "0", "false", "no", "off")
+
+
+# {{{ complex exponential -> real exp/cos/sin rewrite
+
+def _is_numeric_constant(value):
+    return isinstance(value, (int, float, complex, np.number)) and not isinstance(
+        value, (bool, np.bool_)
+    )
+
+
+def _is_structural_zero(expr):
+    return _is_numeric_constant(expr) and expr == 0
+
+
+def _is_structural_one(expr):
+    return _is_numeric_constant(expr) and expr == 1
+
+
+def _mul(left, right):
+    """``left * right`` with structural 0/1 folding and product flattening."""
+    if _is_structural_zero(left) or _is_structural_zero(right):
+        return 0
+    if _is_structural_one(left):
+        return right
+    if _is_structural_one(right):
+        return left
+    if _is_numeric_constant(left) and _is_numeric_constant(right):
+        return left * right
+
+    def _factors(expr):
+        return expr.children if isinstance(expr, prim.Product) else (expr,)
+
+    return prim.Product((*_factors(left), *_factors(right)))
+
+
+def _add(left, right):
+    """``left + right`` with structural 0 folding and sum flattening."""
+    if _is_structural_zero(left):
+        return right
+    if _is_structural_zero(right):
+        return left
+    if _is_numeric_constant(left) and _is_numeric_constant(right):
+        return left + right
+
+    def _terms(expr):
+        return expr.children if isinstance(expr, prim.Sum) else (expr,)
+
+    return prim.Sum((*_terms(left), *_terms(right)))
+
+
+def _split_complex_expression(expr):
+    """Split ``expr`` into ``(re, im)`` such that ``expr == re + 1j*im``.
+
+    The split walks sums, products and numeric constants and stops at every
+    other node, attributing it wholly to ``re``.  That makes the identity
+    ``expr == re + 1j*im`` exact by construction for *any* input, real or
+    complex: nothing here assumes that a symbol is real-valued, and a complex
+    quantity hidden inside an opaque node simply stays inside ``re``.  ``im``
+    is the structural integer ``0`` exactly when no complex numeric constant
+    was reachable through sums and products, which is the case for every
+    real-valued kernel (Laplace, Yukawa).
+    """
+    if _is_numeric_constant(expr):
+        value = complex(expr)
+        if value.imag == 0:
+            return expr, 0
+        return value.real, value.imag
+
+    if isinstance(expr, prim.Sum):
+        re_total, im_total = 0, 0
+        for child in expr.children:
+            child_re, child_im = _split_complex_expression(child)
+            re_total = _add(re_total, child_re)
+            im_total = _add(im_total, child_im)
+        return re_total, im_total
+
+    if isinstance(expr, prim.Product):
+        re_total, im_total = 1, 0
+        for child in expr.children:
+            child_re, child_im = _split_complex_expression(child)
+            # (a + ib)(c + id) = (ac - bd) + i(ad + bc)
+            new_re = _add(
+                _mul(re_total, child_re), _mul(-1, _mul(im_total, child_im))
+            )
+            new_im = _add(
+                _mul(re_total, child_im), _mul(im_total, child_re)
+            )
+            re_total, im_total = new_re, new_im
+        return re_total, im_total
+
+    return expr, 0
+
+
+class ComplexExponentialRewriter(IdentityMapper, CSECachingMapperMixin):
+    r"""Rewrite ``exp(re + 1j*im)`` as ``exp(re) * (cos(im) + 1j*sin(im))``.
+
+    pyopencl's ``pyopencl-complex.h`` implements ``cdouble_exp`` (and the
+    complex trigonometric functions) with the OpenCL ``sincos(x, &cosx)``
+    out-parameter builtin.  On the PoCL 7.0 / LLVM 19.1.7 CPU driver that
+    builtin costs roughly 200 ns per call against roughly 1.6 ns for a
+    separate ``sin(x)`` plus ``cos(x)`` -- a ~130x pathology, measured in
+    isolation and not reproduced on a second CPU OpenCL runtime on the same
+    processor.  Because the Duffy table quadrature evaluates the kernel at
+    every node, that single builtin made the 3D Helmholtz direct-table build
+    about ten times slower than the otherwise identical real-valued Yukawa
+    build at the same quadrature orders, and accounted for essentially the
+    whole gap.
+
+    Splitting the exponential keeps complex-valued kernels on real
+    ``exp``/``cos``/``sin`` calls, which the driver compiles normally.  The
+    rewrite is ``exp(a + b) = exp(a) exp(b)`` composed with Euler's formula,
+    both of which hold for complex ``a`` and ``b``, applied to an exact
+    structural split of the exponent (see
+    :func:`_split_complex_expression`), so it is valid for genuinely complex
+    exponents too -- the damped complex-frequency form ``exp((-a + 1j b) r)``
+    included -- and not only for the purely imaginary ``exp(1j k r)`` of the
+    Helmholtz kernel.  Exponents with no complex constant (Yukawa, Laplace)
+    are left untouched and keep their plain real ``exp``.
+
+    Mixes in the common-subexpression cache so a shared CSE node in the
+    post-CSE expression DAG is visited once rather than once per reference.
+    """
+
+    def map_common_subexpression_uncached(self, expr, /, *args, **kwargs):
+        return IdentityMapper.map_common_subexpression(
+            self, expr, *args, **kwargs
+        )
+
+    def map_call(self, expr, /, *args, **kwargs):
+        expr = super().map_call(expr, *args, **kwargs)
+
+        if not isinstance(expr, prim.Call):
+            return expr
+        if not (
+            isinstance(expr.function, prim.Variable)
+            and expr.function.name == "exp"
+            and len(expr.parameters) == 1
+        ):
+            return expr
+
+        (argument,) = expr.parameters
+        real_part, imag_part = _split_complex_expression(argument)
+        if _is_structural_zero(imag_part):
+            # a real exponent: leave the plain real exp() alone
+            return expr
+
+        # the phase is used by both cos and sin, so name it once
+        phase = prim.CommonSubexpression(imag_part)
+        euler = prim.Sum((
+            prim.Call(prim.Variable("cos"), (phase,)),
+            prim.Product((
+                np.complex128(1j),
+                prim.Call(prim.Variable("sin"), (phase,)),
+            )),
+        ))
+
+        if _is_structural_zero(real_part):
+            return euler
+
+        magnitude = prim.Call(prim.Variable("exp"), (real_part,))
+        return prim.Product((magnitude, euler))
+
+# }}}
 
 
 def _kernel_symmetry_meta(kernel):
@@ -1894,11 +2059,20 @@ class NearFieldInteractionTable:
         return tuple(component_names)
 
     def _get_fused_duffy_expr_maps(self):
+        # Runs last, after sumpy's own rewriters and the kernel's code
+        # transformer, so it sees the final complex constants: it turns
+        # cdouble_exp into real exp/cos/sin (see ComplexExponentialRewriter
+        # for the PoCL sincos pathology this avoids).
+        complex_exp_rewriter = ComplexExponentialRewriter()
+
         if self.integral_knl is None:
-            return []
+            return [complex_exp_rewriter]
 
         if not self._has_directional_source_wrapper():
-            return [self.integral_knl.get_code_transformer()]
+            return [
+                self.integral_knl.get_code_transformer(),
+                complex_exp_rewriter,
+            ]
 
         base_kernel = self.integral_knl
         get_base_kernel = getattr(self.integral_knl, "get_base_kernel", None)
@@ -1910,9 +2084,9 @@ class NearFieldInteractionTable:
 
         get_transform = getattr(base_kernel, "get_code_transformer", None)
         if callable(get_transform):
-            return [get_transform()]
+            return [get_transform(), complex_exp_rewriter]
 
-        return []
+        return [complex_exp_rewriter]
 
     def _prepare_loopy_kernel_for_integral_kernel(self, loopy_knl):
         """Apply kernel-specific loopy callable registrations if needed."""
@@ -3520,7 +3694,11 @@ class NearFieldInteractionTable:
         knl_insns = to_loopy_insns(
             sac.assignments.items(),
             vector_names={"dist"},
-            pymbolic_expr_maps=[self.integral_knl.get_code_transformer()],
+            pymbolic_expr_maps=[
+                self.integral_knl.get_code_transformer(),
+                # same cdouble_exp avoidance as the fused Duffy kernel
+                ComplexExponentialRewriter(),
+            ],
             retain_names=[result_name],
             complex_dtype=np.complex128,
         )

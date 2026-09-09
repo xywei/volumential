@@ -78,6 +78,24 @@ It is an environment switch rather than a `DuffyBuildConfig` field because the
 build config is hashed into the table-cache fingerprint, and an operational
 strictness policy should not invalidate cached numerical data.
 
+### Complex Exponentials in the Generated Quadrature Kernel
+
+The fused Duffy quadrature kernel rewrites every `exp(re + i*im)` into
+`exp(re) * (cos(im) + i*sin(im))` before code generation, so complex-valued
+kernels reach the device as real `exp`/`cos`/`sin` calls and never as
+`cdouble_exp`. pyopencl implements `cdouble_exp` with the OpenCL
+`sincos(x, &cosx)` out-parameter builtin, which on the PoCL 7.0 / LLVM 19.1.7
+CPU driver costs about 200 ns per call against about 1.6 ns for a separate
+`sin`/`cos` pair; since the quadrature evaluates the kernel at every Duffy
+node, that one builtin made the 3D Helmholtz direct table build roughly ten
+times slower than the otherwise identical Yukawa build. The rewrite is
+`exp(a+b) = exp(a)exp(b)` with Euler's formula over an exact structural split
+of the exponent, so it is valid for genuinely complex exponents (the damped
+`exp((-a + i b) r)` form included) and leaves real exponents untouched.
+Measured effect at 3D, `q = 3`, source box level 2: Helmholtz per
+(entry x node) cost drops from ~74 ns to ~8 ns, matching the real-valued
+Yukawa kernel, with table entries agreeing to 3e-16 relative.
+
 ## Near-Field Symmetry and Cache Format
 
 - Near-field table storage uses orbit canonicalization over
