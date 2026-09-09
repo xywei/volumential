@@ -1,3 +1,23 @@
+"""List 1 (near-field) potential evaluation from CSR tree data.
+
+This module owns the loopy kernel that adds the near-field (list 1)
+contribution to a volume potential: for every target box it walks its
+neighboring source boxes, encodes the box-center displacement into an
+interaction case id, looks the corresponding table entry up (densely, or
+through one of the ORBIT reconstruction schemes) and accumulates the scaled
+contribution.
+
+:class:`NearFieldEvalBase` holds the table-shape bookkeeping and the kernel
+scaling policy; :class:`NearFieldFromCSR` generates and runs the kernel.
+
+.. autoclass:: KernelScalingPolicy
+   :members:
+.. autoclass:: NearFieldEvalBase
+   :members:
+.. autoclass:: NearFieldFromCSR
+   :members:
+"""
+
 __copyright__ = "Copyright (C) 2018 Xiaoyu Wei"
 
 __license__ = """
@@ -18,15 +38,6 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
-"""
-
-__doc__ = """
-.. autoclass:: KernelScalingPolicy
-   :members:
-.. autoclass:: NearFieldEvalBase
-   :members:
-.. autoclass:: NearFieldFromCSR
-   :members:
 """
 
 import logging
@@ -61,14 +72,15 @@ class KernelScalingPolicy:
     notes: str
 
 
-def _array_layout_cache_token(ary, queue):
+def _array_layout_cache_token(ary, queue) -> tuple:
+    """Return a cheap identity token for an array's device memory layout."""
     if isinstance(ary, cl.array.Array):
         base_data = getattr(ary, "base_data", None)
         int_ptr = getattr(base_data, "int_ptr", None)
         if int_ptr is not None:
             return (
                 "cl",
-                int(id(queue)),
+                id(queue),
                 int(int_ptr),
                 int(getattr(ary, "offset", 0)),
                 int(ary.size),
@@ -85,7 +97,7 @@ class NearFieldEvalBase(KernelCacheWrapper):
 
     default_name = "near_field_eval_base"
 
-    def _supports_inferred_scaling(self):
+    def _supports_inferred_scaling(self) -> bool:
         return False
 
     def __init__(
@@ -206,7 +218,8 @@ class NearFieldEvalBase(KernelCacheWrapper):
 
         self._single_table_level_check_cache_key = None
 
-    def get_cache_key(self):
+    def get_cache_key(self) -> tuple:
+        """Return the loopy kernel cache key for this evaluator."""
         return (
             type(self).__name__,
             self.name,
@@ -230,18 +243,18 @@ class NearFieldFromCSR(NearFieldEvalBase):
     def _base_kernel(self):
         return self.integral_kernel.get_base_kernel()
 
-    def _is_laplace_kernel(self, dim):
+    def _is_laplace_kernel(self, dim: int) -> bool:
         from sumpy.kernel import LaplaceKernel
 
         return isinstance(self._base_kernel(), LaplaceKernel) and self.dim == dim
 
-    def _is_constant_kernel(self, dim):
+    def _is_constant_kernel(self, dim: int) -> bool:
         return self.kname in {f"CstKnl{dim}D", f"ConstantKernel{dim}D"} or (
             self._base_kernel().__class__.__name__ == "ConstantKernel"
             and self.dim == dim
         )
 
-    def _is_axis_target_derivative_of_laplace(self, dim):
+    def _is_axis_target_derivative_of_laplace(self, dim: int) -> bool:
         from sumpy.kernel import AxisTargetDerivative, LaplaceKernel
 
         return (
@@ -252,7 +265,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
             and self.dim == dim
         )
 
-    def _is_axis_source_derivative_of_laplace(self, dim):
+    def _is_axis_source_derivative_of_laplace(self, dim: int) -> bool:
         from sumpy.kernel import AxisSourceDerivative, LaplaceKernel
 
         return (
@@ -263,7 +276,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
             and self.dim == dim
         )
 
-    def _supports_inferred_scaling(self):
+    def _supports_inferred_scaling(self) -> bool:
         return (
             self._is_laplace_kernel(2)
             or self._is_laplace_kernel(3)
@@ -275,7 +288,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
             or self._is_axis_source_derivative_of_laplace(3)
         )
 
-    def _inferred_scaling_code(self):
+    def _inferred_scaling_code(self) -> str:
         if self._is_axis_target_derivative_of_laplace(2):
             logger.info("scaling for Grad(LapKnl2D)")
             return "BOX_extent / table_root_extent"
@@ -314,7 +327,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
 
         raise RuntimeError(f"no inferred scaling rule for {self.integral_kernel!r}")
 
-    def _inferred_displacement_code(self):
+    def _inferred_displacement_code(self) -> str:
         if self._is_axis_target_derivative_of_laplace(2):
             logger.info("no displacement for Grad(LapKnl2D)")
             return "0.0"
@@ -354,11 +367,13 @@ class NearFieldFromCSR(NearFieldEvalBase):
 
         raise RuntimeError(f"no inferred displacement rule for {self.integral_kernel!r}")
 
-    def _inferred_table_level_code(self):
-        logger.info("scaling from table[0] for " + self.kname)
+    def _inferred_table_level_code(self) -> str:
+        logger.info("scaling from table[0] for %s", self.kname)
         return "0.0"
 
-    def get_kernel_scaling_policy(self, box_name="sbox"):
+    def get_kernel_scaling_policy(
+        self, box_name: str = "sbox"
+    ) -> KernelScalingPolicy:
         """Return the table-level and scaling policy used by generated List 1 code.
 
         ``mode == "canonical_single_table"`` means table level 0 is reused for
@@ -436,29 +451,21 @@ class NearFieldFromCSR(NearFieldEvalBase):
             notes="Selects one cached table level per source-box level without kernel scaling.",
         )
 
-    def codegen_vec_component(self, d=None):
-        if d is None:
-            dimension = self.dim - 1
-        else:
-            dimension = d
+    def codegen_vec_component(self, d: int | None = None) -> str:
+        """Generate the code for one component of the encoded case vector."""
+        dimension = self.dim - 1 if d is None else d
         bias = float(self.extra_kwargs["case_encoding_bias"])
         # Keep encoded case ids away from integer truncation boundaries.
         # Some OpenCL stacks evaluate this expression slightly below the
         # mathematically integral value for non-dyadic box extents.
         return (
-            "("
-            + "(box_centers["
-            + str(dimension)
-            + ", target_box_id]"
-            + "- box_centers["
-            + str(dimension)
-            + ", source_box_id]"
-            + ") / sbox_extent * 4.0 + encoding_shift"
-            + f" + {bias:.17g}"
-            + ")"
+            f"((box_centers[{dimension}, target_box_id]"
+            f"- box_centers[{dimension}, source_box_id]"
+            ") / sbox_extent * 4.0 + encoding_shift"
+            f" + {bias:.17g})"
         )
 
-    def _to_host_array(self, queue, ary):
+    def _to_host_array(self, queue, ary) -> np.ndarray:
         if isinstance(ary, np.ndarray):
             return ary
         if hasattr(ary, "get"):
@@ -497,8 +504,8 @@ class NearFieldFromCSR(NearFieldEvalBase):
         worst_dim = None
         worst_raw = None
 
-        for i_tbox, target_box_id in enumerate(target_boxes_h):
-            target_box_id = int(target_box_id)
+        for i_tbox, raw_target_box_id in enumerate(target_boxes_h):
+            target_box_id = int(raw_target_box_id)
             for i_sbox in range(int(starts_h[i_tbox]), int(starts_h[i_tbox + 1])):
                 source_box_id = int(lists_h[i_sbox])
                 source_box_level = int(box_levels_h[source_box_id])
@@ -529,15 +536,14 @@ class NearFieldFromCSR(NearFieldEvalBase):
                 worst_raw,
             )
 
-    def codegen_vec_id(self):
-        dim = self.dim
+    def codegen_vec_id(self) -> str:
+        """Generate the code that encodes a case vector into a single id."""
         code = "0.0"
-        for d in range(dim):
-            code = "(" + code + ") * encoding_base"
-            code = code + "+" + self.codegen_vec_component(d)
+        for d in range(self.dim):
+            code = f"({code}) * encoding_base+{self.codegen_vec_component(d)}"
         return code
 
-    def codegen_compute_scaling(self, box_name="sbox"):
+    def codegen_compute_scaling(self, box_name: str = "sbox") -> str:
         """box_name: the name of the box whose extent is used."""
         if "kernel_scaling_code" in self.extra_kwargs:
             # user-defined scaling rule
@@ -550,12 +556,12 @@ class NearFieldFromCSR(NearFieldEvalBase):
             return self.get_kernel_scaling_policy(box_name=box_name).scaling_code
 
         if not self.extra_kwargs.get("infer_kernel_scaling", False):
-            logger.info("not scaling for " + self.kname)
+            logger.info("not scaling for %s", self.kname)
             logger.info("(using multiple tables)")
 
         return self.get_kernel_scaling_policy(box_name=box_name).scaling_code
 
-    def codegen_compute_displacement(self, box_name="sbox"):
+    def codegen_compute_displacement(self, box_name: str = "sbox") -> str:
         if "kernel_displacement_code" in self.extra_kwargs:
             # user-defined displacement rule
             assert isinstance(self.extra_kwargs["kernel_displacement_code"], str)
@@ -567,12 +573,12 @@ class NearFieldFromCSR(NearFieldEvalBase):
             return self.get_kernel_scaling_policy(box_name=box_name).displacement_code
 
         if not self.extra_kwargs.get("infer_kernel_scaling", False):
-            logger.info("no displacement for " + self.kname)
+            logger.info("no displacement for %s", self.kname)
             logger.info("(using multiple tables)")
 
         return self.get_kernel_scaling_policy(box_name=box_name).displacement_code
 
-    def codegen_get_table_level(self, box_name="sbox"):
+    def codegen_get_table_level(self, box_name: str = "sbox") -> str:
         if "kernel_scaling_code" in self.extra_kwargs:
             # Using custom scaling
             return self.get_kernel_scaling_policy(box_name=box_name).table_level_code
@@ -583,7 +589,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
 
         return self.get_kernel_scaling_policy(box_name=box_name).table_level_code
 
-    def codegen_exterior_part(self):
+    def codegen_exterior_part(self) -> str:
         """Computes the exterior contribution. This is nonzero for
         inverse-type potentials like the fractional Laplacian.
         """
@@ -592,10 +598,10 @@ class NearFieldFromCSR(NearFieldEvalBase):
         elif self.potential_kind == 2:
             return "source_coefs[target_id] * ext_nmlz"
         else:
-            raise ValueError("Unsupported potential kind %d" % self.potential_kind)
+            raise ValueError(f"Unsupported potential kind {self.potential_kind:d}")
 
     def get_kernel(self):
-
+        """Generate the loopy kernel that evaluates the list 1 contribution."""
         if self.integral_kernel.is_complex_valued:
             potential_dtype = np.complex128
         else:
@@ -1052,7 +1058,8 @@ class NearFieldFromCSR(NearFieldEvalBase):
             "{ [ tid ] : 0 <= tid < n_q_points }",
             "{ [ sbox ] : sbox_begin <= sbox < sbox_end }",
             "{ [ sid ] : 0 <= sid < n_box_sources }",
-        ] + reconstruction_domains
+            *reconstruction_domains,
+        ]
 
         lpknl = loopy.make_kernel(
             kernel_domains,
@@ -1192,8 +1199,8 @@ class NearFieldFromCSR(NearFieldEvalBase):
                     np.int32,
                 ),
                 "...",
-            ]
-            + reconstruction_args,
+                *reconstruction_args,
+            ],
             name="near_field",
             lang_version=(2018, 2),
             silenced_warnings=("write_race(write_result)",),
@@ -1204,26 +1211,27 @@ class NearFieldFromCSR(NearFieldEvalBase):
 
         return lpknl
 
-    def get_cache_key(self):
+    def get_cache_key(self) -> tuple:
+        """Return the loopy kernel cache key for this evaluator."""
         return (
             type(self).__name__,
             "kernel-v14",
             self.name,
             self.kname,
             "complex_kernel=" + str(self.integral_kernel.is_complex_valued),
-            "potential_kind=%d" % self.potential_kind,
+            f"potential_kind={self.potential_kind:d}",
             "reconstruction_kind=" + self.reconstruction_kind,
-            "n_reconstruction_transforms=%d" % self.n_reconstruction_transforms,
-            "n_reconstruction_lookup_entries=%d"
-            % self.n_reconstruction_lookup_entries,
-            "n_reconstruction_lookup_probes=%d"
-            % self.n_reconstruction_lookup_probes,
-            "n_reconstruction_sign_lookup_entries=%d"
-            % self.n_reconstruction_sign_lookup_entries,
-            "n_reconstruction_sign_lookup_probes=%d"
-            % self.n_reconstruction_sign_lookup_probes,
-            "n_arithmetic_case_orbits=%d" % self.n_arithmetic_case_orbits,
-            "list1_target_batch_size=%d" % self._target_batch_size(),
+            f"n_reconstruction_transforms={self.n_reconstruction_transforms:d}",
+            "n_reconstruction_lookup_entries="
+            f"{self.n_reconstruction_lookup_entries:d}",
+            "n_reconstruction_lookup_probes="
+            f"{self.n_reconstruction_lookup_probes:d}",
+            "n_reconstruction_sign_lookup_entries="
+            f"{self.n_reconstruction_sign_lookup_entries:d}",
+            "n_reconstruction_sign_lookup_probes="
+            f"{self.n_reconstruction_sign_lookup_probes:d}",
+            f"n_arithmetic_case_orbits={self.n_arithmetic_case_orbits:d}",
+            f"list1_target_batch_size={self._target_batch_size():d}",
             "infer_scaling=" + str(self.extra_kwargs["infer_kernel_scaling"]),
             "case_encoding_bias=" + repr(self.extra_kwargs["case_encoding_bias"]),
             "scaling_policy=" + self.codegen_compute_scaling(),
@@ -1231,13 +1239,14 @@ class NearFieldFromCSR(NearFieldEvalBase):
             "table_level_policy=" + self.codegen_get_table_level(),
         )
 
-    def _target_batch_size(self):
+    def _target_batch_size(self) -> int:
         target_batch_size = int(self.extra_kwargs.get("list1_target_batch_size", 1))
         if target_batch_size < 1:
             raise ValueError("list1_target_batch_size must be positive")
         return target_batch_size
 
     def get_optimized_kernel(self, ncpus=None):
+        """Return the transformed kernel, tagged for hardware parallelism."""
         knl = self.get_kernel()
         target_batch_size = self._target_batch_size()
         if target_batch_size > 1:
@@ -1258,6 +1267,7 @@ class NearFieldFromCSR(NearFieldEvalBase):
         return knl
 
     def __call__(self, queue, **kwargs):
+        """Evaluate the list 1 contribution and return ``(result, event)``."""
         knl = self.get_cached_optimized_kernel()
         entry_knl = knl.default_entrypoint
 
