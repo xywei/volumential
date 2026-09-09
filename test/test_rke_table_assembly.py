@@ -1,3 +1,8 @@
+"""Tests for the recursive-kernel-expansion (RKE) table assembly: truncation
+order certification, conditioning guards, and agreement with a direct
+batched build.
+"""
+
 __copyright__ = "Copyright (C) 2026 Xiaoyu Wei"
 
 __license__ = """

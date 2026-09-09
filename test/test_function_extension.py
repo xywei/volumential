@@ -1,3 +1,7 @@
+"""Accuracy and smoke tests for the harmonic, biharmonic and constant
+function extensions built on top of pytential QBX layer potentials.
+"""
+
 import os
 import sys
 

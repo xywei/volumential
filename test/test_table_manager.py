@@ -1,3 +1,8 @@
+"""Tests for the near-field table manager: cache lookup and rebuild, kernel
+parameter validation, and agreement of cached table entries with direct
+adaptive quadrature.
+"""
+
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
 __license__ = """
@@ -20,6 +25,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
+import logging
 import os
 import subprocess
 import sys
@@ -46,6 +52,9 @@ from volumential.table_manager import (
     NearFieldInteractionTableManager as NFTable,
     TableRequest,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 def get_table(queue, q_order=1, dim=2):
@@ -310,10 +319,10 @@ def drive_test_direct_quad_same_box(table_2d_order1, queue, q_order, dim=2):
         for ids in range(nft.n_q_points):
             mode = nft.get_mode(ids)
             vv = direct_quad(mode, target)
-            print(ids, it, vv)
+            logger.info("mode=%s target=%s value=%s", ids, it, vv)
             v3 += vv
 
-        print(target, v1, v2, v3)
+        logger.info("target=%s table=%s direct=%s modes=%s", target, v1, v2, v3)
         assert np.abs(v1 - v2) < 2e-6
         assert np.abs(v1 - v3) < 1e-6
 
@@ -404,10 +413,10 @@ def drive_test_direct_quad_neighbor_box(
         for ids in range(nft.n_q_points):
             mode = nft.get_mode(ids)
             vv = direct_quad(mode, target)
-            print(ids, it, vv)
+            logger.info("mode=%s target=%s value=%s", ids, it, vv)
             v3 += vv
 
-        print(target, v1, v2, v3)
+        logger.info("target=%s table=%s direct=%s modes=%s", target, v1, v2, v3)
         assert np.abs(v1 - v2) < 2e-6
         assert np.abs(v1 - v3) < 1e-6
 

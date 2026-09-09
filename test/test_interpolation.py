@@ -1,3 +1,8 @@
+"""Tests for interpolation between meshmode discretizations and the box
+tree: exactness on polynomials, convergence on non-exact data, and the
+lookup-builder helpers.
+"""
+
 __copyright__ = "Copyright (C) 2020 Xiaoyu Wei"
 
 __license__ = """

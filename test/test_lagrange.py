@@ -1,3 +1,5 @@
+"""Tests for the Lagrange interpolation weights used by the table builder."""
+
 __copyright__ = "Copyright (C) 2026 Xiaoyu Wei"
 
 __license__ = """

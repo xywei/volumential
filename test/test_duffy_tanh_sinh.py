@@ -1,3 +1,7 @@
+"""Tests that the tanh-sinh radial Duffy rules agree with the adaptive
+triangle/box baselines on singular integrands.
+"""
+
 import math
 
 import numpy as np

@@ -1,3 +1,18 @@
+"""Shared pytest configuration for the Volumential test suite.
+
+This module owns everything that the whole suite relies on:
+
+* the ``ctx_factory`` fixture (re-exported from :mod:`pyopencl.tools`), which
+  parametrizes OpenCL-using tests over the available platforms;
+* the ``--longrun`` and ``--full-accuracy`` command line options and the
+  corresponding ``longrun`` fixture / ``full_accuracy`` marker, which keep a
+  default ``pytest`` run reasonably short;
+* the xfail policy for OpenCL platforms that are known to crash;
+* the session-scoped ``table_2d_order1`` near-field table, which is expensive
+  enough that every test that needs it shares one build; and
+* the cleanup of stray table caches at the end of a session.
+"""
+
 __copyright__ = "Copyright (C) 2018 Xiaoyu Wei"
 
 __license__ = """
@@ -20,8 +35,8 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
-import glob
-import subprocess
+import contextlib
+from pathlib import Path
 
 import pytest
 from filelock import FileLock
@@ -36,18 +51,30 @@ from pyopencl.tools import (  # noqa: F401
 from volumential.table_manager import NearFieldInteractionTableManager as NFTManager
 
 
+#: Markers this suite defines, registered in :func:`pytest_configure` so that
+#: they work no matter which ini file pytest picks up.
+SUITE_MARKERS = (
+    "full_accuracy: high-cost derivative accuracy tests, skipped unless "
+    "--full-accuracy",
+)
+
 XFAIL_OPENCL_PLATFORMS = {
     # This Intel OpenCL CPU backend has been observed to core-dump on
     # volumential nearfield/FMM test paths; keep this visible as an xfail
     # until upstream/backend stability is confirmed.
-    "Intel(R) OpenCL": "known Intel OpenCL backend crash (core dump) on volumential nearfield path",
+    "Intel(R) OpenCL": (
+        "known Intel OpenCL backend crash (core dump) on volumential "
+        "nearfield path"
+    ),
 }
 
+INTEL_OPENCL_PLATFORM_NAME = "Intel(R) OpenCL"
 
 _CTX_FACTORY_XFAIL_REASON_CACHE = {}
 
 
-def _get_xfail_reason_for_ctx_factory(ctx_factory):
+def _get_xfail_reason_for_ctx_factory(ctx_factory) -> str | None:
+    """Return the xfail reason for `ctx_factory`, or None if it is usable."""
     if ctx_factory in _CTX_FACTORY_XFAIL_REASON_CACHE:
         return _CTX_FACTORY_XFAIL_REASON_CACHE[ctx_factory]
 
@@ -63,7 +90,7 @@ def _get_xfail_reason_for_ctx_factory(ctx_factory):
     return None
 
 
-def pytest_addoption(parser):
+def pytest_addoption(parser) -> None:
     """Add extra command line options.
 
     --longrun  Skip expensive tests unless told otherwise.
@@ -86,7 +113,18 @@ def pytest_addoption(parser):
     )
 
 
-def pytest_collection_modifyitems(config, items):
+def pytest_configure(config) -> None:
+    """Register this suite's markers.
+
+    ``pytest.ini`` declares them as well; registering here keeps ``--strict-
+    markers`` runs working if that file is ever folded into ``pyproject.toml``.
+    """
+    for marker in SUITE_MARKERS:
+        config.addinivalue_line("markers", marker)
+
+
+def pytest_collection_modifyitems(config, items) -> None:
+    """Apply the ``full_accuracy`` opt-in and the OpenCL platform xfails."""
     run_full_accuracy = bool(config.getoption("full_accuracy"))
 
     for item in items:
@@ -105,14 +143,15 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(pytest.mark.xfail(reason=xfail_reason, run=False))
 
 
-def _create_table_build_queue():
+def _create_table_build_queue() -> cl.CommandQueue:
+    """Return a queue for building near-field tables, preferring non-Intel."""
     try:
         platforms = cl.get_platforms()
     except cl.LogicError as exc:
         pytest.skip(f"OpenCL platforms unavailable: {exc}")
 
     for platform in platforms:
-        if platform.name == "Intel(R) OpenCL":
+        if platform.name == INTEL_OPENCL_PLATFORM_NAME:
             continue
         devices = platform.get_devices()
         if devices:
@@ -126,14 +165,22 @@ def _create_table_build_queue():
     pytest.skip("No OpenCL devices available for table build")
 
 
+def _remove_quietly(path: Path) -> None:
+    """Delete `path` if it exists, ignoring every filesystem error."""
+    with contextlib.suppress(OSError):
+        path.unlink(missing_ok=True)
+
+
 @pytest.fixture(scope="session")
 def longrun(request):
+    """Skip the requesting test unless ``--longrun`` was passed."""
     if not request.config.option.longrun:
         pytest.skip("needs --longrun option to run")
 
 
 @pytest.fixture(scope="session")
 def requires_pypvfmm(request):
+    """Skip the requesting test unless :mod:`pypvfmm` is importable."""
     try:
         import pypvfmm  # noqa: F401
     except ImportError:
@@ -142,6 +189,12 @@ def requires_pypvfmm(request):
 
 @pytest.fixture(scope="session")
 def table_2d_order1(tmp_path_factory, request):
+    """A shared 2D order-1 Laplace near-field table.
+
+    Building this table dominates the runtime of the table-manager tests, so
+    it is built once per session (once per ``pytest-xdist`` run, guarded by a
+    file lock, when workers are in play).
+    """
     worker_id = getattr(request.config, "workerinput", {}).get("workerid")
 
     if not worker_id:
@@ -150,7 +203,7 @@ def table_2d_order1(tmp_path_factory, request):
         queue = _create_table_build_queue()
         with NFTManager("nft.hdf5", progress_bar=True) as table_manager:
             table, _ = table_manager.get_table(2, "Laplace", q_order=1, queue=queue)
-        subprocess.check_call(["rm", "-f", "nft.hdf5"])
+        _remove_quietly(Path("nft.hdf5"))
         return table
 
     # get the temp directory shared by all workers
@@ -162,10 +215,9 @@ def table_2d_order1(tmp_path_factory, request):
         with NFTManager(str(fn), progress_bar=True) as table_manager:
             table, _ = table_manager.get_table(2, "Laplace", q_order=1, queue=queue)
         return table
-    return table
 
 
-def pytest_sessionfinish(session, exitstatus):
-    # remove table caches
-    for table_file in glob.glob("*.hdf5"):
-        subprocess.call(["rm", "-f", table_file])
+def pytest_sessionfinish(session, exitstatus) -> None:
+    """Remove the table caches a run may have left in the working directory."""
+    for table_file in Path.cwd().glob("*.hdf5"):
+        _remove_quietly(table_file)

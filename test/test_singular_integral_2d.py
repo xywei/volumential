@@ -1,3 +1,8 @@
+"""Tests for the singular quadrature building blocks in 2D: 1D/2D adaptive
+quadrature, the triangle-to-rectangle map, and the triangle/box rules,
+checked against Green's identities on the unit square.
+"""
+
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
 __license__ = """

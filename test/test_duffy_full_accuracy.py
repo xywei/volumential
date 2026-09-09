@@ -1,3 +1,9 @@
+"""High-cost accuracy sweeps for the batched Duffy-radial table builder.
+
+Everything here is marked ``full_accuracy`` and therefore skipped unless
+``pytest --full-accuracy`` is used.
+"""
+
 import numpy as np
 import pytest
 from numpy.polynomial.legendre import leggauss

@@ -1,3 +1,8 @@
+"""Tests for the SQLite table cache: schema versioning, migration from the
+legacy HDF5/blob layouts, corruption handling, read-only behavior and
+payload (de)serialization.
+"""
+
 import sqlite3
 
 import numpy as np

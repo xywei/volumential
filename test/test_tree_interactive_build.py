@@ -1,3 +1,8 @@
+"""Tests for interactive box-tree construction: refinement/coarsening flag
+handling and remapping, topology rebuilds from geometry, unreachable-box
+pruning and level restriction.
+"""
+
 import contextlib
 
 import numpy as np

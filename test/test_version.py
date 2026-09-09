@@ -1,3 +1,5 @@
+"""Tests for the version and kernel-revision helpers."""
+
 from volumential import version
 
 

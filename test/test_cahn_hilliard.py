@@ -1,3 +1,7 @@
+"""Accuracy tests for the Cahn-Hilliard near-field kernel: sumpy calculus-
+patch agreement and same-box table entries against adaptive quadrature.
+"""
+
 __copyright__ = "Copyright (C) 2017 Xiaoyu Wei"
 
 __license__ = """
