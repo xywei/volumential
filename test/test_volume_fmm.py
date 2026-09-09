@@ -858,126 +858,118 @@ def test_build_source_only_wrangler_rebuilds_target_to_source_mapping(monkeypatc
     np.testing.assert_array_equal(rebuilt, np.arange(3, dtype=np.int32))
 
 
-def test_looks_like_coincident_source_target_setup_matches_user_ids():
+_COINCIDENT_SOURCE_COORDS_2D = (
+    [0.2, -0.5, 0.8, 0.1],
+    [1.5, -0.2, 0.3, 1.2],
+)
+_PERTURBED_TARGET_COORDS_2D = (
+    [0.2, -0.5, 0.8, 0.1],
+    [1.5, -0.2, 0.3, 1.25],
+)
+_COINCIDENT_SOURCE_COORDS_2D_N3 = (
+    [0.1, 0.2, 0.3],
+    [-0.4, 0.5, 0.6],
+)
+
+
+def _make_coincidence_probe_tree(
+    user_source_ids, user_target_ids, source_coords, target_coords
+):
+    """Build the minimal fake tree accepted by the coincidence heuristic.
+
+    Passing `source_coords=None` omits the coordinate attributes entirely, so
+    that the heuristic has to bail out on the user-id comparison alone.
+    """
+    fields = {
+        "sources_are_targets": False,
+        "nsources": len(user_source_ids),
+        "ntargets": len(user_source_ids),
+        "user_source_ids": _FakeDeviceArray(
+            np.array(user_source_ids, dtype=np.int32)
+        ),
+        "user_target_ids": (
+            None
+            if user_target_ids is None
+            else _FakeDeviceArray(np.array(user_target_ids, dtype=np.int32))
+        ),
+    }
+    if source_coords is None:
+        return SimpleNamespace(**fields)
+
+    dim = len(source_coords)
+    sources = np.empty(dim, dtype=object)
+    targets = np.empty(dim, dtype=object)
+    for axis in range(dim):
+        sources[axis] = _FakeDeviceArray(
+            np.array(source_coords[axis], dtype=np.float64)
+        )
+        targets[axis] = _FakeDeviceArray(
+            np.array(target_coords[axis], dtype=np.float64)
+        )
+    return SimpleNamespace(
+        dimensions=dim, sources=sources, targets=targets, **fields
+    )
+
+
+@pytest.mark.parametrize(
+    (
+        "user_source_ids",
+        "user_target_ids",
+        "source_coords",
+        "target_coords",
+        "expected",
+    ),
+    [
+        (
+            [2, 0, 3, 1],
+            [2, 0, 3, 1],
+            _COINCIDENT_SOURCE_COORDS_2D,
+            _COINCIDENT_SOURCE_COORDS_2D,
+            True,
+        ),
+        (
+            [2, 0, 3, 1],
+            [2, 0, 3, 1],
+            _COINCIDENT_SOURCE_COORDS_2D,
+            _PERTURBED_TARGET_COORDS_2D,
+            False,
+        ),
+        ([0, 1, 2, 3], [3, 2, 1, 0], None, None, False),
+        (
+            [2, 0, 3, 1],
+            [14, 12, 15, 13],
+            _COINCIDENT_SOURCE_COORDS_2D,
+            _COINCIDENT_SOURCE_COORDS_2D,
+            True,
+        ),
+        (
+            [0, 1, 2],
+            None,
+            _COINCIDENT_SOURCE_COORDS_2D_N3,
+            _COINCIDENT_SOURCE_COORDS_2D_N3,
+            True,
+        ),
+    ],
+    ids=[
+        "matches_user_ids",
+        "rejects_equal_ids_mismatched_coords",
+        "rejects_mismatched_user_ids",
+        "matches_offset_target_ids",
+        "matches_without_user_target_ids",
+    ],
+)
+def test_looks_like_coincident_source_target_setup(
+    user_source_ids, user_target_ids, source_coords, target_coords, expected
+):
     from volumential import volume_fmm
 
-    tree = SimpleNamespace(
-        sources_are_targets=False,
-        nsources=4,
-        ntargets=4,
-        dimensions=2,
-        user_source_ids=_FakeDeviceArray(np.array([2, 0, 3, 1], dtype=np.int32)),
-        user_target_ids=_FakeDeviceArray(np.array([2, 0, 3, 1], dtype=np.int32)),
-        sources=np.empty(2, dtype=object),
-        targets=np.empty(2, dtype=object),
-    )
-    tree.sources[0] = _FakeDeviceArray(
-        np.array([0.2, -0.5, 0.8, 0.1], dtype=np.float64)
-    )
-    tree.sources[1] = _FakeDeviceArray(
-        np.array([1.5, -0.2, 0.3, 1.2], dtype=np.float64)
-    )
-    tree.targets[0] = _FakeDeviceArray(
-        np.array([0.2, -0.5, 0.8, 0.1], dtype=np.float64)
-    )
-    tree.targets[1] = _FakeDeviceArray(
-        np.array([1.5, -0.2, 0.3, 1.2], dtype=np.float64)
+    tree = _make_coincidence_probe_tree(
+        user_source_ids, user_target_ids, source_coords, target_coords
     )
 
-    assert volume_fmm._looks_like_coincident_source_target_setup(tree, queue=None)
+    result = volume_fmm._looks_like_coincident_source_target_setup(tree, queue=None)
 
-
-def test_looks_like_coincident_source_target_setup_rejects_equal_ids_mismatched_coords():
-    from volumential import volume_fmm
-
-    tree = SimpleNamespace(
-        sources_are_targets=False,
-        nsources=4,
-        ntargets=4,
-        dimensions=2,
-        user_source_ids=_FakeDeviceArray(np.array([2, 0, 3, 1], dtype=np.int32)),
-        user_target_ids=_FakeDeviceArray(np.array([2, 0, 3, 1], dtype=np.int32)),
-        sources=np.empty(2, dtype=object),
-        targets=np.empty(2, dtype=object),
-    )
-    tree.sources[0] = _FakeDeviceArray(
-        np.array([0.2, -0.5, 0.8, 0.1], dtype=np.float64)
-    )
-    tree.sources[1] = _FakeDeviceArray(
-        np.array([1.5, -0.2, 0.3, 1.2], dtype=np.float64)
-    )
-    tree.targets[0] = _FakeDeviceArray(
-        np.array([0.2, -0.5, 0.8, 0.1], dtype=np.float64)
-    )
-    tree.targets[1] = _FakeDeviceArray(
-        np.array([1.5, -0.2, 0.3, 1.25], dtype=np.float64)
-    )
-
-    assert not volume_fmm._looks_like_coincident_source_target_setup(tree, queue=None)
-
-
-def test_looks_like_coincident_source_target_setup_rejects_mismatched_user_ids():
-    from volumential import volume_fmm
-
-    tree = SimpleNamespace(
-        sources_are_targets=False,
-        nsources=4,
-        ntargets=4,
-        user_source_ids=_FakeDeviceArray(np.array([0, 1, 2, 3], dtype=np.int32)),
-        user_target_ids=_FakeDeviceArray(np.array([3, 2, 1, 0], dtype=np.int32)),
-    )
-
-    assert not volume_fmm._looks_like_coincident_source_target_setup(tree, queue=None)
-
-
-def test_looks_like_coincident_source_target_setup_matches_offset_target_ids():
-    from volumential import volume_fmm
-
-    tree = SimpleNamespace(
-        sources_are_targets=False,
-        nsources=4,
-        ntargets=4,
-        dimensions=2,
-        user_source_ids=_FakeDeviceArray(np.array([2, 0, 3, 1], dtype=np.int32)),
-        user_target_ids=_FakeDeviceArray(np.array([14, 12, 15, 13], dtype=np.int32)),
-        sources=np.empty(2, dtype=object),
-        targets=np.empty(2, dtype=object),
-    )
-    tree.sources[0] = _FakeDeviceArray(
-        np.array([0.2, -0.5, 0.8, 0.1], dtype=np.float64)
-    )
-    tree.sources[1] = _FakeDeviceArray(
-        np.array([1.5, -0.2, 0.3, 1.2], dtype=np.float64)
-    )
-    tree.targets[0] = _FakeDeviceArray(
-        np.array([0.2, -0.5, 0.8, 0.1], dtype=np.float64)
-    )
-    tree.targets[1] = _FakeDeviceArray(
-        np.array([1.5, -0.2, 0.3, 1.2], dtype=np.float64)
-    )
-
-    assert volume_fmm._looks_like_coincident_source_target_setup(tree, queue=None)
-
-
-def test_looks_like_coincident_source_target_setup_matches_without_user_target_ids():
-    from volumential import volume_fmm
-
-    tree = SimpleNamespace(
-        sources_are_targets=False,
-        nsources=3,
-        ntargets=3,
-        dimensions=2,
-        user_source_ids=_FakeDeviceArray(np.array([0, 1, 2], dtype=np.int32)),
-        user_target_ids=None,
-        sources=np.empty(2, dtype=object),
-        targets=np.empty(2, dtype=object),
-    )
-    tree.sources[0] = _FakeDeviceArray(np.array([0.1, 0.2, 0.3], dtype=np.float64))
-    tree.sources[1] = _FakeDeviceArray(np.array([-0.4, 0.5, 0.6], dtype=np.float64))
-    tree.targets[0] = _FakeDeviceArray(np.array([0.1, 0.2, 0.3], dtype=np.float64))
-    tree.targets[1] = _FakeDeviceArray(np.array([-0.4, 0.5, 0.6], dtype=np.float64))
-
-    assert volume_fmm._looks_like_coincident_source_target_setup(tree, queue=None)
+    assert result if expected else not result
 
 
 def test_maybe_guard_coincident_source_target_tree_warns_once(caplog, monkeypatch):
@@ -2294,6 +2286,28 @@ def _compute_helmholtz_patch_rel_residual(
         -patch.laplace(u_patch) - (wave_number * wave_number) * u_patch - rho_patch
     )
     return float(np.linalg.norm(residual) / np.linalg.norm(rho_patch))
+
+
+def _assert_split_potentials_track_reference(
+    queue, split, direct, *, rel_tol, mismatch_label
+):
+    """Assert that a split-kernel run reproduces its reference run.
+
+    `split` and `direct` are the result dicts returned by the ``_run_*_case``
+    helpers; `mismatch_label` is the leading half of the assertion message.
+    """
+    split_pot = split["potentials"].get(queue)
+    direct_pot = direct["potentials"].get(queue)
+    assert np.all(np.isfinite(split_pot))
+    assert np.all(np.isfinite(direct_pot))
+
+    rel_diff = np.linalg.norm(split_pot - direct_pot) / max(
+        1.0,
+        np.linalg.norm(direct_pot),
+    )
+    assert rel_diff < rel_tol, (
+        f"{mismatch_label} (rel_diff={rel_diff:.3e})"
+    )
 
 
 def _run_3d_helmholtz_pde_case(
@@ -4610,18 +4624,12 @@ def test_volume_fmm_2d_yukawa_split_scalar_tracks_nonsplit(tmp_path):
         helmholtz_split=False,
     )
 
-    split_pot = split["potentials"].get(queue)
-    direct_pot = direct["potentials"].get(queue)
-    assert np.all(np.isfinite(split_pot))
-    assert np.all(np.isfinite(direct_pot))
-
-    rel_diff = np.linalg.norm(split_pot - direct_pot) / max(
-        1.0,
-        np.linalg.norm(direct_pot),
-    )
-    assert rel_diff < 1.0e-4, (
-        "2D Yukawa scalar split/nonsplit mismatch is too large "
-        f"(rel_diff={rel_diff:.3e})"
+    _assert_split_potentials_track_reference(
+        queue,
+        split,
+        direct,
+        rel_tol=1.0e-4,
+        mismatch_label="2D Yukawa scalar split/nonsplit mismatch is too large",
     )
 
 
@@ -4671,18 +4679,12 @@ def test_volume_fmm_2d_helmholtz_split_scalar_tracks_nonsplit(tmp_path):
         return_state=True,
     )
 
-    split_pot = split["potentials"].get(queue)
-    direct_pot = direct["potentials"].get(queue)
-    assert np.all(np.isfinite(split_pot))
-    assert np.all(np.isfinite(direct_pot))
-
-    rel_diff = np.linalg.norm(split_pot - direct_pot) / max(
-        1.0,
-        np.linalg.norm(direct_pot),
-    )
-    assert rel_diff < 1.0e-4, (
-        "2D Helmholtz scalar split/nonsplit mismatch is too large "
-        f"(rel_diff={rel_diff:.3e})"
+    _assert_split_potentials_track_reference(
+        queue,
+        split,
+        direct,
+        rel_tol=1.0e-4,
+        mismatch_label="2D Helmholtz scalar split/nonsplit mismatch is too large",
     )
 
 
@@ -4735,18 +4737,15 @@ def test_volume_fmm_2d_yukawa_split_axis_target_derivative_tracks_nonsplit(tmp_p
         out_kernel=out_knl,
     )
 
-    split_pot = split["potentials"].get(queue)
-    direct_pot = direct["potentials"].get(queue)
-    assert np.all(np.isfinite(split_pot))
-    assert np.all(np.isfinite(direct_pot))
-
-    rel_diff = np.linalg.norm(split_pot - direct_pot) / max(
-        1.0,
-        np.linalg.norm(direct_pot),
-    )
-    assert rel_diff < 1.0e-2, (
-        "2D Yukawa target-derivative split/nonsplit mismatch is too large "
-        f"(rel_diff={rel_diff:.3e})"
+    _assert_split_potentials_track_reference(
+        queue,
+        split,
+        direct,
+        rel_tol=1.0e-2,
+        mismatch_label=(
+            "2D Yukawa target-derivative split/nonsplit mismatch is too "
+            "large"
+        ),
     )
 
 
@@ -4802,18 +4801,15 @@ def test_volume_fmm_2d_yukawa_split_axis_source_derivative_tracks_nonsplit(tmp_p
         out_kernel=out_knl,
     )
 
-    split_pot = split["potentials"].get(queue)
-    direct_pot = direct["potentials"].get(queue)
-    assert np.all(np.isfinite(split_pot))
-    assert np.all(np.isfinite(direct_pot))
-
-    rel_diff = np.linalg.norm(split_pot - direct_pot) / max(
-        1.0,
-        np.linalg.norm(direct_pot),
-    )
-    assert rel_diff < 1.0e-2, (
-        "2D Yukawa source-derivative split/nonsplit mismatch is too large "
-        f"(rel_diff={rel_diff:.3e})"
+    _assert_split_potentials_track_reference(
+        queue,
+        split,
+        direct,
+        rel_tol=1.0e-2,
+        mismatch_label=(
+            "2D Yukawa source-derivative split/nonsplit mismatch is too "
+            "large"
+        ),
     )
 
 
@@ -4872,18 +4868,15 @@ def test_volume_fmm_2d_helmholtz_split_axis_target_derivative_tracks_nonsplit(
         return_state=True,
     )
 
-    split_pot = split["potentials"].get(queue)
-    direct_pot = direct["potentials"].get(queue)
-    assert np.all(np.isfinite(split_pot))
-    assert np.all(np.isfinite(direct_pot))
-
-    rel_diff = np.linalg.norm(split_pot - direct_pot) / max(
-        1.0,
-        np.linalg.norm(direct_pot),
-    )
-    assert rel_diff < 1.0e-2, (
-        "2D Helmholtz target-derivative split/nonsplit mismatch is too large "
-        f"(rel_diff={rel_diff:.3e})"
+    _assert_split_potentials_track_reference(
+        queue,
+        split,
+        direct,
+        rel_tol=1.0e-2,
+        mismatch_label=(
+            "2D Helmholtz target-derivative split/nonsplit mismatch is too "
+            "large"
+        ),
     )
 
 
@@ -4944,18 +4937,15 @@ def test_volume_fmm_2d_helmholtz_split_axis_source_derivative_tracks_nonsplit(
         return_state=True,
     )
 
-    split_pot = split["potentials"].get(queue)
-    direct_pot = direct["potentials"].get(queue)
-    assert np.all(np.isfinite(split_pot))
-    assert np.all(np.isfinite(direct_pot))
-
-    rel_diff = np.linalg.norm(split_pot - direct_pot) / max(
-        1.0,
-        np.linalg.norm(direct_pot),
-    )
-    assert rel_diff < 1.0e-2, (
-        "2D Helmholtz source-derivative split/nonsplit mismatch is too large "
-        f"(rel_diff={rel_diff:.3e})"
+    _assert_split_potentials_track_reference(
+        queue,
+        split,
+        direct,
+        rel_tol=1.0e-2,
+        mismatch_label=(
+            "2D Helmholtz source-derivative split/nonsplit mismatch is too "
+            "large"
+        ),
     )
 
 
@@ -5014,18 +5004,15 @@ def test_volume_fmm_3d_helmholtz_split_axis_target_derivative_tracks_nonsplit(
         return_state=True,
     )
 
-    split_pot = split["potentials"].get(queue)
-    direct_pot = direct["potentials"].get(queue)
-    assert np.all(np.isfinite(split_pot))
-    assert np.all(np.isfinite(direct_pot))
-
-    rel_diff = np.linalg.norm(split_pot - direct_pot) / max(
-        1.0,
-        np.linalg.norm(direct_pot),
-    )
-    assert rel_diff < 1.0e-2, (
-        "3D Helmholtz target-derivative split/nonsplit mismatch is too large "
-        f"(rel_diff={rel_diff:.3e})"
+    _assert_split_potentials_track_reference(
+        queue,
+        split,
+        direct,
+        rel_tol=1.0e-2,
+        mismatch_label=(
+            "3D Helmholtz target-derivative split/nonsplit mismatch is too "
+            "large"
+        ),
     )
 
 
@@ -5086,18 +5073,15 @@ def test_volume_fmm_3d_helmholtz_split_axis_source_derivative_tracks_nonsplit(
         return_state=True,
     )
 
-    split_pot = split["potentials"].get(queue)
-    direct_pot = direct["potentials"].get(queue)
-    assert np.all(np.isfinite(split_pot))
-    assert np.all(np.isfinite(direct_pot))
-
-    rel_diff = np.linalg.norm(split_pot - direct_pot) / max(
-        1.0,
-        np.linalg.norm(direct_pot),
-    )
-    assert rel_diff < 1.0e-2, (
-        "3D Helmholtz source-derivative split/nonsplit mismatch is too large "
-        f"(rel_diff={rel_diff:.3e})"
+    _assert_split_potentials_track_reference(
+        queue,
+        split,
+        direct,
+        rel_tol=1.0e-2,
+        mismatch_label=(
+            "3D Helmholtz source-derivative split/nonsplit mismatch is too "
+            "large"
+        ),
     )
 
 
@@ -5158,18 +5142,15 @@ def test_volume_fmm_2d_helmholtz_split_directional_source_derivative_tracks_dire
         return_state=True,
     )
 
-    split_pot = split["potentials"].get(queue)
-    direct_pot = direct["potentials"].get(queue)
-    assert np.all(np.isfinite(split_pot))
-    assert np.all(np.isfinite(direct_pot))
-
-    rel_diff = np.linalg.norm(split_pot - direct_pot) / max(
-        1.0,
-        np.linalg.norm(direct_pot),
-    )
-    assert rel_diff < 2.0e-2, (
-        "2D Helmholtz directional-source split/direct mismatch is too large "
-        f"(rel_diff={rel_diff:.3e})"
+    _assert_split_potentials_track_reference(
+        queue,
+        split,
+        direct,
+        rel_tol=2.0e-2,
+        mismatch_label=(
+            "2D Helmholtz directional-source split/direct mismatch is too "
+            "large"
+        ),
     )
 
 
@@ -6346,18 +6327,15 @@ def test_volume_fmm_2d_yukawa_split_directional_source_derivative_tracks_direct(
         return_state=True,
     )
 
-    split_pot = split["potentials"].get(queue)
-    direct_pot = direct["potentials"].get(queue)
-    assert np.all(np.isfinite(split_pot))
-    assert np.all(np.isfinite(direct_pot))
-
-    rel_diff = np.linalg.norm(split_pot - direct_pot) / max(
-        1.0,
-        np.linalg.norm(direct_pot),
-    )
-    assert rel_diff < 2.0e-2, (
-        "2D Yukawa directional-source split/direct mismatch is too large "
-        f"(rel_diff={rel_diff:.3e})"
+    _assert_split_potentials_track_reference(
+        queue,
+        split,
+        direct,
+        rel_tol=2.0e-2,
+        mismatch_label=(
+            "2D Yukawa directional-source split/direct mismatch is too "
+            "large"
+        ),
     )
 
 
