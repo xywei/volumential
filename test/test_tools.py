@@ -27,6 +27,7 @@ import pytest
 
 import pymbolic as pmbl
 
+from volumential import box_operators, expression_eval, kernel_cache, tools
 from volumential.tools import (
     ScalarFieldExpressionEvaluation,
     clean_file,
@@ -34,6 +35,33 @@ from volumential.tools import (
     import_code,
 )
 
+
+# {{{ backwards-compatible re-exports
+
+
+@pytest.mark.parametrize(
+    ("name", "module"),
+    [
+        ("KernelCacheWrapper", kernel_cache),
+        ("ScalarFieldExpressionEvaluation", expression_eval),
+        ("BoxSpecificMap", box_operators),
+        ("DiscreteLegendreTransform", box_operators),
+        ("InverseDiscreteLegendreTransform", box_operators),
+        ("BoxSpecificReduction", box_operators),
+        ("BoxSum", box_operators),
+        ("generate_leading_order_filtering", box_operators),
+    ],
+)
+def test_tools_reexports_moved_names(name, module):
+    assert getattr(tools, name) is getattr(module, name)
+
+
+def test_tools_still_owns_its_file_helpers():
+    assert tools.clean_file.__module__ == "volumential.tools"
+    assert tools.import_code.__module__ == "volumential.tools"
+
+
+# }}} End backwards-compatible re-exports
 
 # {{{ clean_file
 
