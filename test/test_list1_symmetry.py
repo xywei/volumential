@@ -1,9 +1,10 @@
 """Focused tests for :mod:`volumential.list1_symmetry`.
 
 These pin the behavior of the symmetry-tag parser and the case-vector
-reduction so that the module can be refactored safely. They deliberately also
-pin the current (surprising) merge behavior of overlapping swap groups; see the
-``test_parse_symmetry_tags_merges_*`` cases.
+reduction so that the module can be refactored safely. They deliberately do
+*not* pin the merge path for two already-overlapping swap groups: that path is
+index-fragile in the module under test and no caller in this repository
+reaches it, so pinning it would freeze behavior that still needs a decision.
 """
 
 __copyright__ = "Copyright (C) 2026 Xiaoyu Wei"
