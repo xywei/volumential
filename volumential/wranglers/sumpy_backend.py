@@ -434,7 +434,9 @@ class FPNDSumpyExpansionWrangler(
         for kid in range(len(self.tree_indep.target_kernels)):
             kname = self.tree_indep.target_kernels[kid].__repr__()
             for lev, table in zip(
-                range(len(self.near_field_table[kname])), self.near_field_table[kname]
+                range(len(self.near_field_table[kname])),
+                self.near_field_table[kname],
+                strict=True,
             ):
                 assert table.quad_order == self.quad_order
 

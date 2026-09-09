@@ -133,8 +133,7 @@ class _HelmholtzSplitSeriesRemainderKernel(ExpressionKernel):
         from math import factorial
 
         from pymbolic import var
-        from pymbolic.primitives import Comparison, If
-        from pymbolic.primitives import make_sym_vector
+        from pymbolic.primitives import Comparison, If, make_sym_vector
         from sumpy.symbolic import pymbolic_real_norm_2
 
         dim = int(dim)

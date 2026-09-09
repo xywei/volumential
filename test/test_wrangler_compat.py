@@ -20,7 +20,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
-"""Compatibility guards for the split of ``expansion_wrangler_fpnd``.
+__doc__ = """Compatibility guards for the split of ``expansion_wrangler_fpnd``.
 
 The wrangler implementation moved into the :mod:`volumential.wranglers`
 package.  These tests pin down what callers are allowed to rely on:
