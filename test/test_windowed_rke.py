@@ -1,3 +1,8 @@
+"""Tests for the windowed recursive-kernel-expansion (RKE) tables: channel
+and remainder profiles against mpmath, the windowed assembly itself, and
+its convergence in smoothing order.
+"""
+
 __copyright__ = "Copyright (C) 2026 Xiaoyu Wei"
 
 __license__ = """

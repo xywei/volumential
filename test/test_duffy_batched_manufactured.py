@@ -1,3 +1,8 @@
+"""Manufactured-solution tests for the batched (GPU) Duffy-radial table
+builder: constant, Laplace-derivative, Helmholtz plane-wave and Yukawa
+cases whose exact box integrals are known in closed form.
+"""
+
 import numpy as np
 import pytest
 from numpy.polynomial.legendre import leggauss

@@ -1,3 +1,7 @@
+"""Tests that the near-field interaction lists cover every source box, so
+that no near-field contribution is silently dropped.
+"""
+
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
 __license__ = """

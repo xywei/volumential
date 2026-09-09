@@ -1,3 +1,17 @@
+"""Tests for the volume FMM driver.
+
+This module covers the queue-free guards and helpers in
+:mod:`volumential.volume_fmm` and :mod:`volumential.expansion_wrangler_fpnd`
+(source-field normalization, interpolation-target coverage, coincident
+source/target detection, list-1 scaling policy), and the end-to-end 2D/3D
+Laplace, Helmholtz and Yukawa runs -- including the Helmholtz/Laplace
+split path, whose results are compared against the corresponding
+non-split runs.
+
+The heaviest split-versus-nonsplit sweeps are marked ``full_accuracy``
+and only run under ``pytest --full-accuracy``.
+"""
+
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
 __license__ = """
@@ -7815,7 +7829,7 @@ def laplace_problem(ctx_factory, tmp_path_factory):
         )
         mesh.update_mesh(crtr, rratio_top, rratio_bot)
         if iloop > n_refinement_loops:
-            print("Max number of refinement loops reached.")
+            logger.warning("Max number of refinement loops reached.")
             break
 
     q_points = mesh.get_q_points()

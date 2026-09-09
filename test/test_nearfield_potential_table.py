@@ -1,3 +1,9 @@
+"""Tests for :mod:`volumential.nearfield_potential_table`: quadrature modes
+and Chebyshev remapping, the Duffy-radial build paths (including the
+batched builder and its autotuning), symmetry/orbit reduction, and the
+table payload serialization contract.
+"""
+
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
 __license__ = """
@@ -149,8 +155,6 @@ def interp_modes(q_order):
     yi = yi.flatten()
 
     val = np.zeros(xi.shape)
-    print(xi)
-    print(yi)
 
     for i in range(len(xi)):
         val[i] = interpolate_function(xi[i], yi[i])
