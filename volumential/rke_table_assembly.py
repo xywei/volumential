@@ -662,6 +662,8 @@ def _finalize_assembled_table(
 # }}}
 
 
+# {{{ classical (polynomial-channel) assembler
+
 def assemble_parameterized_table(
     queue: Any,
     cache_path: str | Path,
@@ -843,8 +845,10 @@ NearFieldInteractionTable`
     }
     return result, certificate
 
+# }}}
 
-# {{{ windowed channels
+
+# {{{ windowed channel profiles
 
 def _generalized_exponential_integral_cf(order: float, x: np.ndarray) -> np.ndarray:
     """Evaluate ``E_order(x)`` for ``x > 1`` by a stable continued fraction."""
@@ -999,6 +1003,10 @@ def _windowed_channel_kernel_func(
 
     return kernel_func
 
+# }}}
+
+
+# {{{ window declaration contract and the exact remainder
 
 def _require_o1_box_extent(box_extent: float) -> None:
     """Refuse box extents outside the O(1) range the float64 recombination
@@ -1111,6 +1119,10 @@ def windowed_remainder_profile(
 
     return remainder_radial
 
+# }}}
+
+
+# {{{ channel quadrature (Duffy node sets and order selection)
 
 def _tensor_product_gauss_points(
     q_order: int, dim: int, extent: float
@@ -1579,6 +1591,10 @@ def _validate_channel_orders(
         )
     return regular, radial
 
+# }}}
+
+
+# {{{ channel entry magnitude bounds
 
 def _channel_source_mode_sup(table: NearFieldInteractionTable) -> float:
     """Sup norm over the source box of the tensor-product source modes,
@@ -1674,6 +1690,10 @@ def _check_channel_table_values(
             "did not resolve the germ"
         )
 
+# }}}
+
+
+# {{{ channel table cache
 
 def _windowed_channel_cache_file(
     cache_path: str | Path,
@@ -1935,6 +1955,10 @@ def get_windowed_channel_table(
     table._windowed_cache_disposition = "rebuilt"
     return table
 
+# }}}
+
+
+# {{{ windowed assembler
 
 def _smooth_remainder_entry_values(
     table: NearFieldInteractionTable,
