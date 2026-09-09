@@ -24,11 +24,18 @@ __doc__ = """Timing-future adapter for the boxtree FMM driver.
 """
 
 class SumpyTimingFuture:
-    def __init__(self, queue, events):
+    """The timing handle boxtree's FMM driver expects from a wrangler stage.
+
+    Calling it waits on the stage's OpenCL events.  The elapsed time itself is
+    not collected -- the wranglers do their profiling elsewhere -- so the call
+    reports ``0.0``.
+    """
+
+    def __init__(self, queue, events) -> None:
         self.queue = queue
         self.events = [evt for evt in events if evt is not None]
 
-    def __call__(self):
+    def __call__(self) -> float:
         for evt in self.events:
             evt.wait()
         return 0.0

@@ -33,6 +33,13 @@ import numpy as np
 
 @dataclass(frozen=True)
 class HelmholtzSplitCacheAccounting:
+    """How much near-field table storage a wrangler is holding.
+
+    Reported by a wrangler's ``get_helmholtz_split_cache_accounting`` so that
+    benchmarks can compare the split against a plain (unsplit) near-field
+    table for the same problem.
+    """
+
     split_enabled: bool
     split_order: int
     parameter_count: int
@@ -47,7 +54,8 @@ class HelmholtzSplitCacheAccounting:
     uses_online_remainder: bool
 
 
-def _nearfield_table_payload_bytes(table):
+def _nearfield_table_payload_bytes(table) -> int:
+    """Bytes of table values actually stored, honoring symmetry reduction."""
     if bool(getattr(table, "table_data_is_symmetry_reduced", False)):
         if hasattr(table, "get_reduced_table_data"):
             _, values = table.get_reduced_table_data()
@@ -58,7 +66,12 @@ def _nearfield_table_payload_bytes(table):
     return int(data.nbytes)
 
 
-def _normalize_helmholtz_split_term_key(term_key):
+def _normalize_helmholtz_split_term_key(term_key) -> tuple[str, int]:
+    """Canonicalize a split term key to ``(kind, power)``.
+
+    Accepts an ``int`` power, the strings ``"constant"``, ``"power:<n>"`` and
+    ``"power_log:<n>"``, or an already-split ``(kind, power)`` tuple.
+    """
     if isinstance(term_key, tuple):
         if len(term_key) != 2:
             raise ValueError(
@@ -101,14 +114,20 @@ def _normalize_helmholtz_split_term_key(term_key):
     return (kind, ipower)
 
 
-def _format_helmholtz_split_term_key(term_key):
+def _format_helmholtz_split_term_key(term_key) -> str:
+    """Render a split term key in its ``power:<n>`` / ``power_log:<n>`` form."""
     kind, power = _normalize_helmholtz_split_term_key(term_key)
     if kind == "power":
         return f"power:{power}"
     return f"power_log:{power}"
 
 
-def _select_split_order_from_rho(rho_max, thresholds, orders):
+def _select_split_order_from_rho(rho_max, thresholds, orders) -> int:
+    """Pick the split order whose threshold bracket contains *rho_max*.
+
+    *orders* holds one more entry than *thresholds*: the last one applies
+    above every threshold.
+    """
     if len(orders) != len(thresholds) + 1:
         raise ValueError("orders must have one more element than thresholds")
 
@@ -125,7 +144,8 @@ def _select_split_order_from_rho_components(
     thresholds_real,
     thresholds_imag,
     orders,
-):
+) -> int:
+    """Split order that satisfies the real and imaginary rho brackets both."""
     order_real = _select_split_order_from_rho(rho_real, thresholds_real, orders)
     order_imag = _select_split_order_from_rho(rho_imag, thresholds_imag, orders)
     return max(order_real, order_imag)

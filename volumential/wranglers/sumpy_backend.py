@@ -36,7 +36,6 @@ import numpy as np
 
 import pyopencl as cl
 import pyopencl.array
-
 from pytools import memoize_method
 from sumpy.array_context import PyOpenCLArrayContext
 from sumpy.fmm import (
@@ -45,7 +44,10 @@ from sumpy.fmm import (
 )
 
 from volumential.expansion_wrangler_interface import (
+    BoxIndexArray,
     ExpansionWranglerInterface,
+    FMMArray,
+    StageResult,
     TreeIndependentDataForWranglerInterface,
 )
 from volumential.nearfield_potential_table import NearFieldInteractionTable
@@ -165,7 +167,7 @@ class FPNDSumpyTreeIndependentDataForWrangler(
         self_extra_kwargs=None,
         *args,
         **kwargs,
-    ):
+    ) -> "FPNDSumpyExpansionWrangler":
         tree_indep = self._for_queue(queue)
 
         return FPNDSumpyExpansionWrangler(
@@ -182,7 +184,7 @@ class FPNDSumpyTreeIndependentDataForWrangler(
         )
 
     @memoize_method
-    def p2m(self, tgt_order):
+    def p2m(self, tgt_order: int):
         from sumpy.p2e import P2EFromSingleBox
 
         return P2EFromSingleBox(
@@ -193,7 +195,7 @@ class FPNDSumpyTreeIndependentDataForWrangler(
         )
 
     @memoize_method
-    def p2l(self, tgt_order):
+    def p2l(self, tgt_order: int):
         from sumpy.p2e import P2EFromCSR
 
         return P2EFromCSR(
@@ -203,7 +205,7 @@ class FPNDSumpyTreeIndependentDataForWrangler(
             name="p2l",
         )
 
-    def opencl_fft_app(self, shape, dtype, inverse):
+    def opencl_fft_app(self, shape, dtype, inverse: bool):
         from sumpy.tools import get_opencl_fft_app
 
         return get_opencl_fft_app(self._setup_actx, shape, dtype, inverse=inverse)
@@ -906,35 +908,35 @@ class FPNDSumpyExpansionWrangler(
     def _actx(self):
         return self.tree_indep._setup_actx
 
-    def multipole_expansion_zeros(self, actx=None):
+    def multipole_expansion_zeros(self, actx=None) -> FMMArray:
         if actx is None:
             actx = self._actx
         return SumpyExpansionWrangler.multipole_expansion_zeros(self, actx)
 
-    def local_expansion_zeros(self, actx=None):
+    def local_expansion_zeros(self, actx=None) -> FMMArray:
         if actx is None:
             actx = self._actx
         return SumpyExpansionWrangler.local_expansion_zeros(self, actx)
 
-    def output_zeros(self, actx=None):
+    def output_zeros(self, actx=None) -> FMMArray:
         if actx is None:
             actx = self._actx
         return SumpyExpansionWrangler.output_zeros(self, actx)
 
-    def reorder_sources(self, source_array):
+    def reorder_sources(self, source_array: FMMArray) -> FMMArray:
         return SumpyExpansionWrangler.reorder_sources(self, source_array)
 
-    def reorder_targets(self, target_array):
+    def reorder_targets(self, target_array: FMMArray) -> FMMArray:
         if not hasattr(self, "_user_target_ids"):
             self._user_target_ids = inverse_id_map(
                 self.queue, self.tree.sorted_target_ids
             )
         return target_array.with_queue(self.queue)[self._user_target_ids]
 
-    def reorder_potentials(self, potentials):
+    def reorder_potentials(self, potentials: FMMArray) -> FMMArray:
         return SumpyExpansionWrangler.reorder_potentials(self, potentials)
 
-    def finalize_potentials(self, potentials):
+    def finalize_potentials(self, potentials: FMMArray) -> FMMArray:
         # return potentials
         return SumpyExpansionWrangler.finalize_potentials(self, self._actx, potentials)
 
@@ -942,15 +944,23 @@ class FPNDSumpyExpansionWrangler(
 
     # {{{ formation & coarsening of multipoles
 
-    def form_multipoles(self, level_start_source_box_nrs, source_boxes, src_weights):
+    def form_multipoles(
+        self,
+        level_start_source_box_nrs: BoxIndexArray,
+        source_boxes: BoxIndexArray,
+        src_weights: FMMArray,
+    ) -> StageResult:
         mpoles = SumpyExpansionWrangler.form_multipoles(
             self, self._actx, level_start_source_box_nrs, source_boxes, src_weights
         )
         return mpoles, SumpyTimingFuture(self.queue, [])
 
     def coarsen_multipoles(
-        self, level_start_source_parent_box_nrs, source_parent_boxes, mpoles
-    ):
+        self,
+        level_start_source_parent_box_nrs: BoxIndexArray,
+        source_parent_boxes: BoxIndexArray,
+        mpoles: FMMArray,
+    ) -> StageResult:
         mpoles = SumpyExpansionWrangler.coarsen_multipoles(
             self,
             self._actx,
@@ -966,15 +976,15 @@ class FPNDSumpyExpansionWrangler(
 
     def eval_direct_single_out_kernel(
         self,
-        out_pot,
+        out_pot: FMMArray,
         out_kernel,
-        target_boxes,
-        neighbor_source_boxes_starts,
-        neighbor_source_boxes_lists,
-        mode_coefs,
+        target_boxes: BoxIndexArray,
+        neighbor_source_boxes_starts: BoxIndexArray,
+        neighbor_source_boxes_lists: BoxIndexArray,
+        mode_coefs: FMMArray,
         near_field_tables=None,
         list1_extra_kwargs=None,
-    ):
+    ) -> tuple[FMMArray, object]:
 
         # NOTE: mode_coefs are similar to source_weights BUT
         # do not include quadrature weights (purely function
@@ -1201,11 +1211,11 @@ class FPNDSumpyExpansionWrangler(
 
     def eval_direct(
         self,
-        target_boxes,
-        neighbor_source_boxes_starts,
-        neighbor_source_boxes_lists,
-        mode_coefs,
-    ):
+        target_boxes: BoxIndexArray,
+        neighbor_source_boxes_starts: BoxIndexArray,
+        neighbor_source_boxes_lists: BoxIndexArray,
+        mode_coefs: FMMArray,
+    ) -> StageResult:
         pot = self.output_zeros()
         events = []
         for i in range(len(self.tree_indep.target_kernels)):
@@ -1239,12 +1249,12 @@ class FPNDSumpyExpansionWrangler(
 
     def multipole_to_local(
         self,
-        level_start_target_box_nrs,
-        target_boxes,
-        src_box_starts,
-        src_box_lists,
-        mpole_exps,
-    ):
+        level_start_target_box_nrs: BoxIndexArray,
+        target_boxes: BoxIndexArray,
+        src_box_starts: BoxIndexArray,
+        src_box_lists: BoxIndexArray,
+        mpole_exps: FMMArray,
+    ) -> StageResult:
         local_exps = SumpyExpansionWrangler.multipole_to_local(
             self,
             self._actx,
@@ -1257,8 +1267,11 @@ class FPNDSumpyExpansionWrangler(
         return local_exps, SumpyTimingFuture(self.queue, [])
 
     def eval_multipoles(
-        self, target_boxes_by_source_level, source_boxes_by_level, mpole_exps
-    ):
+        self,
+        target_boxes_by_source_level: BoxIndexArray,
+        source_boxes_by_level: BoxIndexArray,
+        mpole_exps: FMMArray,
+    ) -> StageResult:
         pot = SumpyExpansionWrangler.eval_multipoles(
             self,
             self._actx,
@@ -1270,12 +1283,12 @@ class FPNDSumpyExpansionWrangler(
 
     def form_locals(
         self,
-        level_start_target_or_target_parent_box_nrs,
-        target_or_target_parent_boxes,
-        starts,
-        lists,
-        src_weights,
-    ):
+        level_start_target_or_target_parent_box_nrs: BoxIndexArray,
+        target_or_target_parent_boxes: BoxIndexArray,
+        starts: BoxIndexArray,
+        lists: BoxIndexArray,
+        src_weights: FMMArray,
+    ) -> StageResult:
         local_exps = SumpyExpansionWrangler.form_locals(
             self,
             self._actx,
@@ -1289,10 +1302,10 @@ class FPNDSumpyExpansionWrangler(
 
     def refine_locals(
         self,
-        level_start_target_or_target_parent_box_nrs,
-        target_or_target_parent_boxes,
-        local_exps,
-    ):
+        level_start_target_or_target_parent_box_nrs: BoxIndexArray,
+        target_or_target_parent_boxes: BoxIndexArray,
+        local_exps: FMMArray,
+    ) -> StageResult:
         local_exps = SumpyExpansionWrangler.refine_locals(
             self,
             self._actx,
@@ -1302,7 +1315,12 @@ class FPNDSumpyExpansionWrangler(
         )
         return local_exps, SumpyTimingFuture(self.queue, [])
 
-    def eval_locals(self, level_start_target_box_nrs, target_boxes, local_exps):
+    def eval_locals(
+        self,
+        level_start_target_box_nrs: BoxIndexArray,
+        target_boxes: BoxIndexArray,
+        local_exps: FMMArray,
+    ) -> StageResult:
         pot = SumpyExpansionWrangler.eval_locals(
             self, self._actx, level_start_target_box_nrs, target_boxes, local_exps
         )
@@ -1313,8 +1331,12 @@ class FPNDSumpyExpansionWrangler(
     # {{{ direct evaluation of p2p (discrete) interactions
 
     def eval_direct_p2p(
-        self, target_boxes, source_box_starts, source_box_lists, src_weights
-    ):
+        self,
+        target_boxes: BoxIndexArray,
+        source_box_starts: BoxIndexArray,
+        source_box_lists: BoxIndexArray,
+        src_weights: FMMArray,
+    ) -> StageResult:
         pot = self.output_zeros(self._actx)
 
         kwargs = dict(self.extra_kwargs)

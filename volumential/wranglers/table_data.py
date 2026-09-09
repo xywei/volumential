@@ -40,7 +40,12 @@ from volumential.wranglers.orbit_generated import (
 )
 
 
-def _table_data_fingerprint(arr, sample_bytes=4096):
+def _table_data_fingerprint(arr, sample_bytes=4096) -> tuple:
+    """Cheap content fingerprint of a table array, for cache keys.
+
+    Hashes only the first and last *sample_bytes* so that keying a device
+    upload on it stays cheap for large tables.
+    """
     narr = np.asarray(arr)
     nbytes = int(narr.nbytes)
     if nbytes == 0:
@@ -57,6 +62,14 @@ def _table_data_fingerprint(arr, sample_bytes=4096):
 
 
 def _prepare_table_data_and_entry_map(table_levels):
+    """Combine per-level near-field tables into flat host arrays.
+
+    :returns: ``(table_data, mode_nmlz, exterior_mode_nmlz, entry_ids,
+        entry_scales, reconstruction_info)``, where the first three are
+        ``(n_levels, ...)`` arrays and *reconstruction_info* describes how the
+        near-field kernel is to expand the stored representatives back into
+        full table entries.
+    """
     if not table_levels:
         raise ValueError("table_levels cannot be empty")
 

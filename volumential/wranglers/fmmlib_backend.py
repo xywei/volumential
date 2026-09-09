@@ -33,7 +33,6 @@ import numpy as np
 
 import pyopencl as cl
 import pyopencl.array
-
 from boxtree.pyfmmlib_integration import (
     FMMLibExpansionWrangler,
     FMMLibTreeIndependentDataForWrangler,
@@ -48,7 +47,10 @@ from sumpy.kernel import (
 )
 
 from volumential.expansion_wrangler_interface import (
+    BoxIndexArray,
     ExpansionWranglerInterface,
+    FMMArray,
+    StageResult,
     TreeIndependentDataForWranglerInterface,
 )
 from volumential.nearfield_potential_table import NearFieldInteractionTable
@@ -132,7 +134,7 @@ class FPNDFMMLibTreeIndependentDataForWrangler(
         kernel_extra_kwargs=None,
         *args,
         **kwargs,
-    ):
+    ) -> "FPNDFMMLibExpansionWrangler":
         if source_extra_kwargs is None:
             source_extra_kwargs = {}
 
@@ -447,7 +449,7 @@ class FPNDFMMLibExpansionWrangler(
 
     # {{{ scale factor for fmmlib
 
-    def get_scale_factor(self):
+    def get_scale_factor(self) -> float:
         eqn_letter = self.tree_indep.eqn_letter
         if eqn_letter == "l" and self.dim == 2:
             scale_factor = -1 / (2 * np.pi)
@@ -467,29 +469,29 @@ class FPNDFMMLibExpansionWrangler(
 
     # {{{ data vector utilities
 
-    def multipole_expansion_zeros(self):
+    def multipole_expansion_zeros(self) -> FMMArray:
         return FMMLibExpansionWrangler.multipole_expansion_zeros(self)
 
-    def local_expansion_zeros(self):
+    def local_expansion_zeros(self) -> FMMArray:
         return FMMLibExpansionWrangler.local_expansion_zeros(self)
 
-    def output_zeros(self):
+    def output_zeros(self) -> FMMArray:
         return FMMLibExpansionWrangler.output_zeros(self)
 
-    def reorder_sources(self, source_array):
+    def reorder_sources(self, source_array: FMMArray) -> FMMArray:
         return FMMLibExpansionWrangler.reorder_sources(self, source_array)
 
-    def reorder_targets(self, target_array):
+    def reorder_targets(self, target_array: FMMArray) -> FMMArray:
         if not hasattr(self.tree, "user_target_ids"):
             self.tree.user_target_ids = inverse_id_map(
                 self.queue, self.tree.sorted_target_ids
             )
         return target_array[self.tree.user_target_ids]
 
-    def reorder_potentials(self, potentials):
+    def reorder_potentials(self, potentials: FMMArray) -> FMMArray:
         return FMMLibExpansionWrangler.reorder_potentials(self, potentials)
 
-    def finalize_potentials(self, potentials):
+    def finalize_potentials(self, potentials: FMMArray) -> FMMArray:
         # return potentials
         return FMMLibExpansionWrangler.finalize_potentials(
             self, self._fmmlib_actx, potentials
@@ -499,7 +501,12 @@ class FPNDFMMLibExpansionWrangler(
 
     # {{{ formation & coarsening of multipoles
 
-    def form_multipoles(self, level_start_source_box_nrs, source_boxes, src_weights):
+    def form_multipoles(
+        self,
+        level_start_source_box_nrs: BoxIndexArray,
+        source_boxes: BoxIndexArray,
+        src_weights: FMMArray,
+    ) -> StageResult:
         formmp_imany = self._get_batched_formmp_routine()
         if formmp_imany is not None:
             result = self._form_multipoles_batched(
@@ -519,8 +526,11 @@ class FPNDFMMLibExpansionWrangler(
         return result, None
 
     def coarsen_multipoles(
-        self, level_start_source_parent_box_nrs, source_parent_boxes, mpoles
-    ):
+        self,
+        level_start_source_parent_box_nrs: BoxIndexArray,
+        source_parent_boxes: BoxIndexArray,
+        mpoles: FMMArray,
+    ) -> StageResult:
         result = FMMLibExpansionWrangler.coarsen_multipoles(
             self,
             self._fmmlib_actx,
@@ -536,13 +546,13 @@ class FPNDFMMLibExpansionWrangler(
 
     def eval_direct_single_out_kernel(
         self,
-        out_pot,
+        out_pot: FMMArray,
         out_kernel,
-        target_boxes,
-        neighbor_source_boxes_starts,
-        neighbor_source_boxes_lists,
-        mode_coefs,
-    ):
+        target_boxes: BoxIndexArray,
+        neighbor_source_boxes_starts: BoxIndexArray,
+        neighbor_source_boxes_lists: BoxIndexArray,
+        mode_coefs: FMMArray,
+    ) -> tuple[FMMArray, object]:
 
         # NOTE: mode_coefs are similar to source_weights BUT
         # do not include quadrature weights (purely function
@@ -779,11 +789,11 @@ class FPNDFMMLibExpansionWrangler(
 
     def eval_direct(
         self,
-        target_boxes,
-        neighbor_source_boxes_starts,
-        neighbor_source_boxes_lists,
-        mode_coefs,
-    ):
+        target_boxes: BoxIndexArray,
+        neighbor_source_boxes_starts: BoxIndexArray,
+        neighbor_source_boxes_lists: BoxIndexArray,
+        mode_coefs: FMMArray,
+    ) -> StageResult:
         pot = self.output_zeros()
         if pot.dtype != object:
             pot = obj_array_1d(
@@ -821,12 +831,12 @@ class FPNDFMMLibExpansionWrangler(
 
     def multipole_to_local(
         self,
-        level_start_target_box_nrs,
-        target_boxes,
-        src_box_starts,
-        src_box_lists,
-        mpole_exps,
-    ):
+        level_start_target_box_nrs: BoxIndexArray,
+        target_boxes: BoxIndexArray,
+        src_box_starts: BoxIndexArray,
+        src_box_lists: BoxIndexArray,
+        mpole_exps: FMMArray,
+    ) -> StageResult:
         result = FMMLibExpansionWrangler.multipole_to_local(
             self,
             self._fmmlib_actx,
@@ -839,8 +849,11 @@ class FPNDFMMLibExpansionWrangler(
         return result, None
 
     def eval_multipoles(
-        self, target_boxes_by_source_level, source_boxes_by_level, mpole_exps
-    ):
+        self,
+        target_boxes_by_source_level: BoxIndexArray,
+        source_boxes_by_level: BoxIndexArray,
+        mpole_exps: FMMArray,
+    ) -> StageResult:
         result = FMMLibExpansionWrangler.eval_multipoles(
             self,
             self._fmmlib_actx,
@@ -852,12 +865,12 @@ class FPNDFMMLibExpansionWrangler(
 
     def form_locals(
         self,
-        level_start_target_or_target_parent_box_nrs,
-        target_or_target_parent_boxes,
-        starts,
-        lists,
-        src_weights,
-    ):
+        level_start_target_or_target_parent_box_nrs: BoxIndexArray,
+        target_or_target_parent_boxes: BoxIndexArray,
+        starts: BoxIndexArray,
+        lists: BoxIndexArray,
+        src_weights: FMMArray,
+    ) -> StageResult:
         result = FMMLibExpansionWrangler.form_locals(
             self,
             self._fmmlib_actx,
@@ -871,10 +884,10 @@ class FPNDFMMLibExpansionWrangler(
 
     def refine_locals(
         self,
-        level_start_target_or_target_parent_box_nrs,
-        target_or_target_parent_boxes,
-        local_exps,
-    ):
+        level_start_target_or_target_parent_box_nrs: BoxIndexArray,
+        target_or_target_parent_boxes: BoxIndexArray,
+        local_exps: FMMArray,
+    ) -> StageResult:
         result = FMMLibExpansionWrangler.refine_locals(
             self,
             self._fmmlib_actx,
@@ -884,7 +897,12 @@ class FPNDFMMLibExpansionWrangler(
         )
         return result, None
 
-    def eval_locals(self, level_start_target_box_nrs, target_boxes, local_exps):
+    def eval_locals(
+        self,
+        level_start_target_box_nrs: BoxIndexArray,
+        target_boxes: BoxIndexArray,
+        local_exps: FMMArray,
+    ) -> StageResult:
         if self._gemm_l2p_supported():
             result = self._eval_locals_gemm(
                 level_start_target_box_nrs, target_boxes, local_exps
@@ -904,8 +922,12 @@ class FPNDFMMLibExpansionWrangler(
     # {{{ direct evaluation of p2p (discrete) interactions
 
     def eval_direct_p2p(
-        self, target_boxes, source_box_starts, source_box_lists, src_weights
-    ):
+        self,
+        target_boxes: BoxIndexArray,
+        source_box_starts: BoxIndexArray,
+        source_box_lists: BoxIndexArray,
+        src_weights: FMMArray,
+    ) -> StageResult:
         result = FMMLibExpansionWrangler.eval_direct(
             self,
             self._fmmlib_actx,
@@ -919,7 +941,7 @@ class FPNDFMMLibExpansionWrangler(
     # }}} End direct evaluation of p2p interactions
 
     @staticmethod
-    def is_supported_helmknl(knl):
+    def is_supported_helmknl(knl) -> bool:
         if isinstance(knl, DirectionalSourceDerivative):
             knl = knl.inner_kernel
 
