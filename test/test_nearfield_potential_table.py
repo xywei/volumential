@@ -1645,11 +1645,12 @@ def test_duffy_radial_batched_clamps_decomposition_vertex(monkeypatch):
     assert np.allclose(target_points[:, 0], np.array([2.10, -0.10]))
 
 
-def test_duffy_radial_routes_queue_to_batched_builder_1d(monkeypatch):
+@pytest.mark.parametrize("dim", [1, 3], ids=["1d", "3d"])
+def test_duffy_radial_routes_queue_to_batched_builder_nd(monkeypatch, dim):
     table = npt.NearFieldInteractionTable(
         quad_order=2,
         build_method="DuffyRadial",
-        dim=1,
+        dim=dim,
         sumpy_kernel=object(),
         derive_kernel_func=False,
         progress_bar=False,
@@ -1658,7 +1659,7 @@ def test_duffy_radial_routes_queue_to_batched_builder_1d(monkeypatch):
     seen = {}
 
     def fail_build_normalizer_table(self, pool=None, pb=None):
-        raise AssertionError("normalizer table should not be built in 1D")
+        raise AssertionError(f"normalizer table should not be built in {dim}D")
 
     def fake_batched(
         self,
@@ -1698,64 +1699,7 @@ def test_duffy_radial_routes_queue_to_batched_builder_1d(monkeypatch):
 
     assert seen["called"]
     assert seen["queue"] is q
-    assert seen["dim"] == 1
-    assert table.last_duffy_build_timings["normalizer_s"] == 0.0
-
-
-def test_duffy_radial_routes_queue_to_batched_builder_3d(monkeypatch):
-    table = npt.NearFieldInteractionTable(
-        quad_order=2,
-        build_method="DuffyRadial",
-        dim=3,
-        sumpy_kernel=object(),
-        derive_kernel_func=False,
-        progress_bar=False,
-    )
-
-    seen = {}
-
-    def fail_build_normalizer_table(self, pool=None, pb=None):
-        raise AssertionError("normalizer table should not be built in 3D")
-
-    def fake_batched(
-        self,
-        queue,
-        radial_rule,
-        deg_theta,
-        radial_quad_order,
-        mp_dps,
-        kernel_kwargs=None,
-    ):
-        seen["queue"] = queue
-        seen["dim"] = self.dim
-        seen["called"] = True
-        self.is_built = True
-        self.last_duffy_build_timings = {
-            "invariant_info_s": 0.0,
-            "quadrature_s": 0.0,
-            "scatter_s": 0.0,
-            "total_s": 0.0,
-            "n_entries": 0,
-        }
-
-    monkeypatch.setattr(
-        npt.NearFieldInteractionTable,
-        "build_normalizer_table",
-        fail_build_normalizer_table,
-    )
-
-    monkeypatch.setattr(
-        npt.NearFieldInteractionTable,
-        "build_table_via_duffy_radial_batched",
-        fake_batched,
-    )
-
-    q = object()
-    table.build_table_via_duffy_radial(queue=q)
-
-    assert seen["called"]
-    assert seen["queue"] is q
-    assert seen["dim"] == 3
+    assert seen["dim"] == dim
     assert table.last_duffy_build_timings["normalizer_s"] == 0.0
 
 
