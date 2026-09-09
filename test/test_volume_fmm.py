@@ -29,6 +29,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+
 if (
     sys.platform == "darwin"
     and os.environ.get("VOLUMENTIAL_RUN_UNSTABLE_DARWIN_TESTS") != "1"
@@ -40,7 +41,7 @@ if (
     )
 
 import pyopencl as cl
-import pyopencl.array  # noqa: F401
+import pyopencl.array
 
 import volumential.meshgen as mg
 
@@ -153,7 +154,9 @@ def test_list1_gallery_includes_mixed_source_levels():
 
 
 def test_validate_table_box_particle_layout_accepts_q_order_layout():
-    from volumential.expansion_wrangler_fpnd import _validate_table_box_particle_layout
+    from volumential.expansion_wrangler_fpnd import (
+        _validate_table_box_particle_layout,
+    )
 
     tree = SimpleNamespace(
         box_target_counts_nonchild=_FakeDeviceArray(np.array([16, 0, 16, 16]))
@@ -169,7 +172,9 @@ def test_validate_table_box_particle_layout_accepts_q_order_layout():
 
 
 def test_validate_table_box_particle_layout_rejects_non_q_order_layout():
-    from volumential.expansion_wrangler_fpnd import _validate_table_box_particle_layout
+    from volumential.expansion_wrangler_fpnd import (
+        _validate_table_box_particle_layout,
+    )
 
     tree = SimpleNamespace(
         box_target_counts_nonchild=_FakeDeviceArray(np.array([16, 24, 16, 31]))
@@ -3684,7 +3689,11 @@ def test_list1_scaling_policy_documents_fixed_single_table_for_helmholtz():
 
 
 def test_list1_laplace_derivative_infer_scaling_is_first_order():
-    from sumpy.kernel import AxisSourceDerivative, AxisTargetDerivative, LaplaceKernel
+    from sumpy.kernel import (
+        AxisSourceDerivative,
+        AxisTargetDerivative,
+        LaplaceKernel,
+    )
 
     from volumential.list1 import NearFieldFromCSR
 
@@ -3765,7 +3774,11 @@ def test_list1_custom_scaling_policy_documents_user_code():
 
 
 def test_list1_laplace_2d_derivative_infer_scaling_has_no_log_displacement():
-    from sumpy.kernel import AxisSourceDerivative, AxisTargetDerivative, LaplaceKernel
+    from sumpy.kernel import (
+        AxisSourceDerivative,
+        AxisTargetDerivative,
+        LaplaceKernel,
+    )
 
     from volumential.list1 import NearFieldFromCSR
 
@@ -3786,7 +3799,11 @@ def test_list1_laplace_2d_derivative_infer_scaling_has_no_log_displacement():
 
 
 def test_source_kernel_derivation_preserves_source_derivatives():
-    from sumpy.kernel import AxisSourceDerivative, AxisTargetDerivative, LaplaceKernel
+    from sumpy.kernel import (
+        AxisSourceDerivative,
+        AxisTargetDerivative,
+        LaplaceKernel,
+    )
 
     from volumential.expansion_wrangler_fpnd import (
         _derive_source_kernels_from_target_kernels,
@@ -3920,7 +3937,11 @@ def test_helmholtz_split_policy_accepts_single_source_or_target_derivative_chain
 
 def test_volume_fmm_3d_laplace_source_target_derivative_antisymmetry(tmp_path):
     from sumpy.expansion import DefaultExpansionFactory
-    from sumpy.kernel import AxisSourceDerivative, AxisTargetDerivative, LaplaceKernel
+    from sumpy.kernel import (
+        AxisSourceDerivative,
+        AxisTargetDerivative,
+        LaplaceKernel,
+    )
 
     from volumential.expansion_wrangler_fpnd import (
         FPNDExpansionWrangler,
@@ -5083,7 +5104,11 @@ def test_volume_fmm_3d_helmholtz_split_axis_source_derivative_tracks_nonsplit(
 def test_volume_fmm_2d_helmholtz_split_directional_source_derivative_tracks_direct(
     tmp_path,
 ):
-    from sumpy.kernel import DirectionalSourceDerivative, HelmholtzKernel, LaplaceKernel
+    from sumpy.kernel import (
+        DirectionalSourceDerivative,
+        HelmholtzKernel,
+        LaplaceKernel,
+    )
 
     ctx = _create_non_intel_opencl_context_or_skip()
     queue = cl.CommandQueue(ctx)
@@ -5657,7 +5682,11 @@ def test_volume_fmm_2d_yukawa_split_full_accuracy_tracks_nonsplit_outputs(tmp_pa
 
 @pytest.mark.full_accuracy
 def test_volume_fmm_2d_helmholtz_split_full_accuracy_tracks_nonsplit_outputs(tmp_path):
-    from sumpy.kernel import AxisSourceDerivative, AxisTargetDerivative, HelmholtzKernel
+    from sumpy.kernel import (
+        AxisSourceDerivative,
+        AxisTargetDerivative,
+        HelmholtzKernel,
+    )
 
     ctx = _create_non_intel_opencl_context_or_skip()
     queue = cl.CommandQueue(ctx)
@@ -5814,7 +5843,11 @@ def test_volume_fmm_2d_helmholtz_split_full_accuracy_tracks_nonsplit_outputs(tmp
 def test_volume_fmm_2d_helmholtz_split_directional_source_full_accuracy_tracks_nonsplit(
     tmp_path,
 ):
-    from sumpy.kernel import DirectionalSourceDerivative, HelmholtzKernel, LaplaceKernel
+    from sumpy.kernel import (
+        DirectionalSourceDerivative,
+        HelmholtzKernel,
+        LaplaceKernel,
+    )
 
     ctx = _create_non_intel_opencl_context_or_skip()
     queue = cl.CommandQueue(ctx)
@@ -5956,7 +5989,11 @@ def test_volume_fmm_2d_yukawa_split_directional_source_full_accuracy_tracks_nons
 
 @pytest.mark.full_accuracy
 def test_volume_fmm_3d_helmholtz_split_full_accuracy_tracks_nonsplit_outputs(tmp_path):
-    from sumpy.kernel import AxisSourceDerivative, AxisTargetDerivative, HelmholtzKernel
+    from sumpy.kernel import (
+        AxisSourceDerivative,
+        AxisTargetDerivative,
+        HelmholtzKernel,
+    )
 
     ctx = _create_non_intel_opencl_context_or_skip()
     queue = cl.CommandQueue(ctx)
@@ -7441,8 +7478,8 @@ def test_volume_fmm_rejects_allow_list1_p2p_fallback_option():
 
 
 def test_volume_fmm_rejects_multi_source_full_sumpy_path(monkeypatch):
-    from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
     import volumential.volume_fmm as volume_fmm
+    from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
 
     class _MockSumpyWrangler(ExpansionWranglerInterface):
         dtype = np.float64
@@ -7474,8 +7511,8 @@ def test_volume_fmm_rejects_multi_source_full_sumpy_path(monkeypatch):
 
 @pytest.mark.parametrize("noutputs", [1, 2])
 def test_volume_fmm_direct_eval_accepts_fmmlib_plain_arrays(monkeypatch, noutputs):
-    from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
     import volumential.volume_fmm as volume_fmm
+    from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
 
     class _DummyP2P:
         def __init__(self, target_kernels, *args, **kwargs):
@@ -7834,6 +7871,7 @@ def laplace_problem(ctx_factory, tmp_path_factory):
 
     # tune max_particles_in_box to reconstruct the mesh
     from boxtree.array_context import PyOpenCLArrayContext
+
     from volumential.tree_interactive_build import build_particle_tree_from_box_tree
 
     actx = PyOpenCLArrayContext(queue)

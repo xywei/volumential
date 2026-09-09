@@ -2,7 +2,6 @@ import numpy as np
 import pytest
 
 import pyopencl as cl
-
 from boxtree import (
     make_tree_of_boxes_root,
     refine_and_coarsen_tree_of_boxes,
@@ -12,11 +11,10 @@ from boxtree import (
 from volumential.tree_interactive_build import (
     BoxTree,
     QuadratureOnBoxTree,
-    _are_adjacent,
-    _box_paths_from_topology,
-    _compute_box_flags,
     _box_keys_from_geometry,
+    _box_paths_from_topology,
     _coarsen_tree_of_boxes_compat,
+    _compute_box_flags,
     _enforce_level_restriction,
     _prune_unreachable_boxes,
     _rebuild_tob_from_geometry,

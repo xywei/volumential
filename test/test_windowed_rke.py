@@ -37,6 +37,7 @@ from volumential.rke_table_assembly import (
     windowed_remainder_profile,
 )
 
+
 WINDOW_THETA = 16.0
 ROOT_EXTENT = 2.0
 

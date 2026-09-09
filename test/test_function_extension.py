@@ -3,14 +3,14 @@ import sys
 
 import numpy as np
 import pytest
+from arraycontext import flatten, unflatten
 
 import pyopencl as cl
-from arraycontext import flatten, unflatten
-from meshmode.dof_array import DOFArray
 from meshmode.discretization import Discretization
 from meshmode.discretization.poly_element import (
     InterpolatoryQuadratureSimplexGroupFactory,
 )
+from meshmode.dof_array import DOFArray
 from pytential.array_context import PyOpenCLArrayContext
 from pytential.target import PointsTarget
 

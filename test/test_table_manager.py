@@ -28,6 +28,7 @@ from shutil import copyfile
 import numpy as np
 import pytest
 
+
 if (
     sys.platform == "darwin"
     and os.environ.get("VOLUMENTIAL_RUN_UNSTABLE_DARWIN_TESTS") != "1"
@@ -41,8 +42,10 @@ if (
 import pyopencl as cl
 
 import volumential as vm
-from volumential.table_manager import NearFieldInteractionTableManager as NFTable
-from volumential.table_manager import TableRequest
+from volumential.table_manager import (
+    NearFieldInteractionTableManager as NFTable,
+    TableRequest,
+)
 
 
 def get_table(queue, q_order=1, dim=2):

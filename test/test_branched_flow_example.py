@@ -1,7 +1,7 @@
 import importlib.util
+import sys
 from dataclasses import replace
 from pathlib import Path
-import sys
 
 import numpy as np
 import pytest

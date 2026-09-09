@@ -24,9 +24,9 @@ import sys
 
 import numpy as np
 import pytest
+from arraycontext import flatten
 
 import pyopencl as cl
-from arraycontext import flatten
 from boxtree.array_context import PyOpenCLArrayContext as BoxtreePyOpenCLArrayContext
 from meshmode.array_context import PyOpenCLArrayContext
 from meshmode.discretization import Discretization
@@ -41,8 +41,8 @@ from volumential.geometry import BoundingBoxFactory, BoxFMMGeometryFactory
 from volumential.interpolation import (
     ElementsToSourcesLookupBuilder,
     LeavesToNodesLookupBuilder,
-    _count_missing_nodes_from_leaf_starts,
     _compute_leaves_to_nodes_lookup_tol,
+    _count_missing_nodes_from_leaf_starts,
     _make_constant_array,
     interpolate_from_meshmode,
     interpolate_to_meshmode,

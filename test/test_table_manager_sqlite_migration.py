@@ -1,19 +1,20 @@
-import numpy as np
-import pytest
 import sqlite3
 
+import numpy as np
+import pytest
+
 from volumential.table_manager import (
+    TABLE_CACHE_SCHEMA_VERSION,
     ConstantKernel,
     KernelSpec,
     NearFieldInteractionTableManager as NFTable,
     TableDiscretization,
     TableRequest,
-    TABLE_CACHE_SCHEMA_VERSION,
     _coerce_sqlite_int,
-    _deserialize_table_payload,
     _deserialize_scalar,
-    _serialize_table_payload,
+    _deserialize_table_payload,
     _serialize_scalar,
+    _serialize_table_payload,
 )
 
 

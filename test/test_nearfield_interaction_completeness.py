@@ -28,6 +28,7 @@ from functools import partial
 import numpy as np
 import pytest
 
+
 if (
     sys.platform == "darwin"
     and os.environ.get("VOLUMENTIAL_RUN_UNSTABLE_DARWIN_TESTS") != "1"
@@ -39,7 +40,7 @@ if (
     )
 
 import pyopencl as cl
-import pyopencl.array  # noqa: F401
+import pyopencl.array
 
 
 def drive_test_completeness(ctx, queue, dim, q_order):
@@ -98,6 +99,7 @@ def drive_test_completeness(ctx, queue, dim, q_order):
     # TODO: use points from FieldPlotter are used as target points for better
     # visuals
     from boxtree.array_context import PyOpenCLArrayContext
+
     from volumential.tree_interactive_build import build_particle_tree_from_box_tree
 
     actx = PyOpenCLArrayContext(queue)
