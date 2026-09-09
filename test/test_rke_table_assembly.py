@@ -1,8 +1,3 @@
-"""Tests for the recursive-kernel-expansion (RKE) table assembly: truncation
-order certification, conditioning guards, and agreement with a direct
-batched build.
-"""
-
 __copyright__ = "Copyright (C) 2026 Xiaoyu Wei"
 
 __license__ = """
@@ -86,9 +81,8 @@ def test_condition_guard_rejects_ill_conditioned_assembly(tmp_path):
     [
         (2, "Yukawa", 3, 4.0, 3),
         (2, "Helmholtz", 3, 4.0, 3),
-        # the 3D cases are the two slowest tests in the whole suite
-        pytest.param(3, "Yukawa", 2, 2.0, 2, marks=pytest.mark.slow),
-        pytest.param(3, "Helmholtz", 2, 2.0, 2, marks=pytest.mark.slow),
+        (3, "Yukawa", 2, 2.0, 2),
+        (3, "Helmholtz", 2, 2.0, 2),
     ],
 )
 def test_assembled_matches_direct_batched(

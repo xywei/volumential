@@ -1,8 +1,3 @@
-"""Tests for the windowed recursive-kernel-expansion (RKE) tables: channel
-and remainder profiles against mpmath, the windowed assembly itself, and
-its convergence in smoothing order.
-"""
-
 __copyright__ = "Copyright (C) 2026 Xiaoyu Wei"
 
 __license__ = """
@@ -41,7 +36,6 @@ from volumential.rke_table_assembly import (
     windowed_channel_profile,
     windowed_remainder_profile,
 )
-
 
 WINDOW_THETA = 16.0
 ROOT_EXTENT = 2.0
@@ -216,7 +210,7 @@ def _spot_entry_ids(entry_ids, values, n_top=6, n_spread=6):
     chosen.extend(
         int(i) for i in np.linspace(0, len(entry_ids) - 1, n_spread)
     )
-    positions = sorted({int(i) for i in chosen})
+    positions = sorted(set(int(i) for i in chosen))
     return positions
 
 
@@ -237,7 +231,7 @@ def test_channel_profiles_match_mpmath(dim):
         for m in range(6):
             profile = windowed_channel_profile(dim, m, window_scale)
             values = profile(radii)
-            for radius, value in zip(radii, values, strict=True):
+            for radius, value in zip(radii, values):
                 x = mp.mpf(radius) ** 2 / (4 * mp.mpf(window_scale))
                 if dim == 2:
                     reference = (
@@ -1034,7 +1028,6 @@ def test_3d_design_edge_singular_nonconstant_mode(tmp_path):
 
 # {{{ T5: smooth-remainder order convergence
 
-@pytest.mark.slow
 def test_smooth_order_convergence(channel_cache):
     dim, q_order, level, parameter = 2, 3, 3, 32.0  # theta = 8
     probe_smooth_orders = (8, 16, 24, 32)
@@ -1091,7 +1084,6 @@ def test_smooth_order_convergence(channel_cache):
 
 # {{{ T6: complex squared frequency (damped Helmholtz)
 
-@pytest.mark.slow
 def test_complex_zeta_damped_helmholtz(channel_cache):
     import scipy.special as sps
 
@@ -1212,7 +1204,6 @@ def test_p_star_knob_at_design_theta(channel_cache):
     assert deviations[6] < 1e-5, deviations
 
 
-@pytest.mark.slow
 def test_high_theta_helmholtz_scalar_parity(channel_cache):
     """Queue-free absolute parity for Helmholtz at the design edge
     theta = Theta (the Yukawa counterpart is the absolute bound in
