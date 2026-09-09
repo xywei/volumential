@@ -84,7 +84,7 @@ def _make_legendre_table_without_cl(q_order, dim):
     elif dim == 3:
         q_points = [(x, y, z) for x in nodes for y in nodes for z in nodes]
     else:
-        raise NotImplementedError("dimension %d not supported" % dim)
+        raise NotImplementedError(f"dimension {dim} not supported")
 
     table.q_points = np.asarray(q_points, dtype=np.float64)
     return table
@@ -101,7 +101,7 @@ def _precomputed_legendre_q_points(q_order, dim):
     elif dim == 3:
         q_points = [(x, y, z) for x in nodes for y in nodes for z in nodes]
     else:
-        raise NotImplementedError("dimension %d not supported" % dim)
+        raise NotImplementedError(f"dimension {dim} not supported")
 
     return np.asarray(q_points, dtype=np.float64)
 
@@ -235,7 +235,7 @@ def cheb_eval(dim, coefs, coords):
     elif dim == 3:
         return chebval3d(coords[0], coords[1], coords[2], coefs)
     else:
-        raise NotImplementedError("dimension %d not supported" % dim)
+        raise NotImplementedError(f"dimension {dim} not supported")
 
 
 def drive_test_modes_cheb_coeffs(dim, q, cheb_order):
@@ -1463,7 +1463,7 @@ def test_mode_remap_is_elementwise_for_vectorized_inputs():
     y = np.array([0.4, 0.5], dtype=np.float64)
 
     scalar_vals = np.array(
-        [mode(float(ix), float(iy)) for ix, iy in zip(x, y)],
+        [mode(float(ix), float(iy)) for ix, iy in zip(x, y, strict=True)],
         dtype=np.float64,
     )
     vector_vals = mode(x, y)

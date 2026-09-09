@@ -146,7 +146,7 @@ def drive_test_from_meshmode_interpolation(
     )
     boxgeo = boxfmm_fac(queue)
     lookup_fac = ElementsToSourcesLookupBuilder(cl_ctx, tree=boxgeo.tree, discr=discr)
-    lookup, evt = lookup_fac(arr_ctx)
+    lookup, _evt = lookup_fac(arr_ctx)
 
     if test_case == "exact":
         # algebraically exact interpolation
@@ -217,7 +217,7 @@ def drive_test_to_meshmode_interpolation(
     )
     boxgeo = boxfmm_fac(queue)
     lookup_fac = LeavesToNodesLookupBuilder(cl_ctx, trav=boxgeo.trav, discr=discr)
-    lookup, evt = lookup_fac(arr_ctx)
+    lookup, _evt = lookup_fac(arr_ctx)
 
     if test_case == "exact":
         # algebraically exact interpolation
@@ -401,7 +401,7 @@ def test_make_constant_array_accepts_queue_less_reference(ctx_factory):
 
 
 def test_interpolate_to_meshmode_forwards_prebuilt_lookup(ctx_factory, monkeypatch):
-    import volumential.volume_fmm as volume_fmm
+    from volumential import volume_fmm
 
     cl_ctx = ctx_factory()
     queue = cl.CommandQueue(cl_ctx)

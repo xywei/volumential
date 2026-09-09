@@ -1,4 +1,4 @@
-import volumential.version as version
+from volumential import version
 
 
 def test_fallback_kernel_revision_is_stable():

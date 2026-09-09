@@ -1,3 +1,12 @@
+"""Exact-agreement tests for the batched far-field stages of
+FPNDFMMLibExpansionWrangler (batched P2M via ``*formmp_imany`` and
+GEMM-based L2P) against the inherited per-box implementations from
+:mod:`boxtree.pyfmmlib_integration`.
+
+These stages do not touch near-field tables, so the wrangler is built with a
+minimal stand-in table object (an established pattern in this test suite).
+"""
+
 __copyright__ = "Copyright (C) 2026 Xiaoyu Wei"
 
 __license__ = """
@@ -18,15 +27,6 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
-"""
-
-"""Exact-agreement tests for the batched far-field stages of
-FPNDFMMLibExpansionWrangler (batched P2M via ``*formmp_imany`` and
-GEMM-based L2P) against the inherited per-box implementations from
-:mod:`boxtree.pyfmmlib_integration`.
-
-These stages do not touch near-field tables, so the wrangler is built with a
-minimal stand-in table object (an established pattern in this test suite).
 """
 
 import logging

@@ -71,15 +71,15 @@ def assembled_yukawa(tmp_path_factory):
 
 
 def _register(manager, table, certificate, **overrides):
-    kwargs = dict(
-        source_box_level=LEVEL,
-        provenance={
+    kwargs = {
+        "source_box_level": LEVEL,
+        "provenance": {
             "kind": "windowed_rke_assembly",
             "window_theta": WINDOW_THETA,
             "condition_number": certificate["condition_number"],
         },
-        lam=LAM,
-    )
+        "lam": LAM,
+    }
     kwargs.update(overrides)
     return manager.register_external_table(
         DIM, "Yukawa", Q_ORDER, table, **kwargs
@@ -146,11 +146,10 @@ def test_load_rejects_tampered_payload_checksum(tmp_path, assembled_yukawa):
 
     with NearFieldInteractionTableManager(
         str(cache), root_extent=ROOT_EXTENT
-    ) as manager:
-        with pytest.raises(KeyError, match="checksum"):
-            manager.load_saved_table(
-                DIM, "Yukawa", Q_ORDER, source_box_level=LEVEL, lam=LAM
-            )
+    ) as manager, pytest.raises(KeyError, match="checksum"):
+        manager.load_saved_table(
+            DIM, "Yukawa", Q_ORDER, source_box_level=LEVEL, lam=LAM
+        )
 
 
 def test_register_validates_geometry(tmp_path, assembled_yukawa):
@@ -170,9 +169,8 @@ def test_register_validates_geometry(tmp_path, assembled_yukawa):
 
     with NearFieldInteractionTableManager(
         str(tmp_path / "other-root.sqlite"), root_extent=0.5 * ROOT_EXTENT
-    ) as manager:
-        with pytest.raises(ValueError, match="extent"):
-            _register(manager, table, certificate)
+    ) as manager, pytest.raises(ValueError, match="extent"):
+        _register(manager, table, certificate)
 
 
 def test_register_requires_kernel_parameter(tmp_path, assembled_yukawa):
@@ -180,11 +178,10 @@ def test_register_requires_kernel_parameter(tmp_path, assembled_yukawa):
     cache = tmp_path / "registered.sqlite"
     with NearFieldInteractionTableManager(
         str(cache), root_extent=ROOT_EXTENT
-    ) as manager:
-        with pytest.raises(TypeError, match="lam"):
-            manager.register_external_table(
-                DIM, "Yukawa", Q_ORDER, table, source_box_level=LEVEL
-            )
+    ) as manager, pytest.raises(TypeError, match="lam"):
+        manager.register_external_table(
+            DIM, "Yukawa", Q_ORDER, table, source_box_level=LEVEL
+        )
 
 
 def test_register_rejects_non_scalar_provenance(tmp_path, assembled_yukawa):
@@ -192,12 +189,11 @@ def test_register_rejects_non_scalar_provenance(tmp_path, assembled_yukawa):
     cache = tmp_path / "registered.sqlite"
     with NearFieldInteractionTableManager(
         str(cache), root_extent=ROOT_EXTENT
-    ) as manager:
-        with pytest.raises(TypeError):
-            _register(
-                manager, table, certificate,
-                provenance={"bad": np.zeros(3)},
-            )
+    ) as manager, pytest.raises(TypeError):
+        _register(
+            manager, table, certificate,
+            provenance={"bad": np.zeros(3)},
+        )
 
 
 def test_register_rejects_non_finite_payload(tmp_path, assembled_yukawa):
@@ -212,9 +208,8 @@ def test_register_rejects_non_finite_payload(tmp_path, assembled_yukawa):
     cache = tmp_path / "registered.sqlite"
     with NearFieldInteractionTableManager(
         str(cache), root_extent=ROOT_EXTENT
-    ) as manager:
-        with pytest.raises(ValueError, match="non-finite"):
-            _register(manager, poisoned, certificate)
+    ) as manager, pytest.raises(ValueError, match="non-finite"):
+        _register(manager, poisoned, certificate)
 
 
 def test_register_rejects_unsafe_dtype_narrowing(tmp_path):
@@ -238,12 +233,11 @@ def test_register_rejects_unsafe_dtype_narrowing(tmp_path):
     # default manager dtype is float64: complex payload must be refused
     with NearFieldInteractionTableManager(
         str(cache), root_extent=ROOT_EXTENT
-    ) as manager:
-        with pytest.raises(ValueError, match="dtype"):
-            manager.register_external_table(
-                DIM, "Yukawa", Q_ORDER, complex_table,
-                source_box_level=LEVEL, lam=LAM,
-            )
+    ) as manager, pytest.raises(ValueError, match="dtype"):
+        manager.register_external_table(
+            DIM, "Yukawa", Q_ORDER, complex_table,
+            source_box_level=LEVEL, lam=LAM,
+        )
 
 
 def test_register_refused_in_read_only_mode(tmp_path, assembled_yukawa):
@@ -255,9 +249,8 @@ def test_register_refused_in_read_only_mode(tmp_path, assembled_yukawa):
         _register(manager, table, certificate)
     with NearFieldInteractionTableManager(
         str(cache), root_extent=ROOT_EXTENT, read_only=True
-    ) as manager:
-        with pytest.raises(RuntimeError, match="read-only"):
-            _register(manager, table, certificate)
+    ) as manager, pytest.raises(RuntimeError, match="read-only"):
+        _register(manager, table, certificate)
 
 
 def test_registered_slot_can_be_overwritten(tmp_path, assembled_yukawa):

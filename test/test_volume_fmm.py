@@ -446,8 +446,8 @@ def test_rebuild_tob_from_geometry_restores_unit_level_edges():
     bad_edges_before = 0
     for parent in range(tob.nboxes):
         plevel = int(levels[parent])
-        for child in tob.box_child_ids[:, parent]:
-            child = int(child)
+        for raw_child in tob.box_child_ids[:, parent]:
+            child = int(raw_child)
             if child != 0 and int(levels[child]) != plevel + 1:
                 bad_edges_before += 1
 
@@ -459,8 +459,8 @@ def test_rebuild_tob_from_geometry_restores_unit_level_edges():
     bad_edges_after = 0
     for parent in range(repaired.nboxes):
         plevel = int(repaired_levels[parent])
-        for child in repaired.box_child_ids[:, parent]:
-            child = int(child)
+        for raw_child in repaired.box_child_ids[:, parent]:
+            child = int(raw_child)
             if child != 0 and int(repaired_levels[child]) != plevel + 1:
                 bad_edges_after += 1
 
@@ -585,7 +585,7 @@ def test_ensure_interpolation_target_coverage_accepts_empty_array():
 def test_ensure_interpolation_target_coverage_accepts_empty_device_like_array(
     monkeypatch,
 ):
-    import volumential.volume_fmm as volume_fmm
+    from volumential import volume_fmm
 
     class _EmptyDeviceLike:
         size = 0
@@ -657,7 +657,7 @@ def test_compute_interpolation_lookup_tol_handles_missing_tree_nlevels():
 
 
 def test_build_box_mode_to_source_ids_raises_on_unmatched_nodes(monkeypatch):
-    import volumential.volume_fmm as volume_fmm
+    from volumential import volume_fmm
 
     monkeypatch.setattr(volume_fmm.cl.array, "to_device", lambda queue, ary: ary)
 
@@ -691,7 +691,7 @@ def test_build_box_mode_to_source_ids_raises_on_unmatched_nodes(monkeypatch):
 
 
 def test_build_box_mode_to_source_ids_accepts_float32_roundoff(monkeypatch):
-    import volumential.volume_fmm as volume_fmm
+    from volumential import volume_fmm
 
     monkeypatch.setattr(volume_fmm.cl.array, "to_device", lambda queue, ary: ary)
 
@@ -731,7 +731,7 @@ def test_build_box_mode_to_source_ids_accepts_float32_roundoff(monkeypatch):
 
 
 def test_build_source_only_wrangler_preserves_self_extra_kwargs(monkeypatch):
-    import volumential.volume_fmm as volume_fmm
+    from volumential import volume_fmm
 
     class _DummyBoxtreeActx:
         def __init__(self, queue):
@@ -798,7 +798,7 @@ def test_build_source_only_wrangler_preserves_self_extra_kwargs(monkeypatch):
 
 
 def test_build_source_only_wrangler_rebuilds_target_to_source_mapping(monkeypatch):
-    import volumential.volume_fmm as volume_fmm
+    from volumential import volume_fmm
 
     class _DummyBoxtreeActx:
         def __init__(self, queue):
@@ -859,7 +859,7 @@ def test_build_source_only_wrangler_rebuilds_target_to_source_mapping(monkeypatc
 
 
 def test_looks_like_coincident_source_target_setup_matches_user_ids():
-    import volumential.volume_fmm as volume_fmm
+    from volumential import volume_fmm
 
     tree = SimpleNamespace(
         sources_are_targets=False,
@@ -888,7 +888,7 @@ def test_looks_like_coincident_source_target_setup_matches_user_ids():
 
 
 def test_looks_like_coincident_source_target_setup_rejects_equal_ids_mismatched_coords():
-    import volumential.volume_fmm as volume_fmm
+    from volumential import volume_fmm
 
     tree = SimpleNamespace(
         sources_are_targets=False,
@@ -917,7 +917,7 @@ def test_looks_like_coincident_source_target_setup_rejects_equal_ids_mismatched_
 
 
 def test_looks_like_coincident_source_target_setup_rejects_mismatched_user_ids():
-    import volumential.volume_fmm as volume_fmm
+    from volumential import volume_fmm
 
     tree = SimpleNamespace(
         sources_are_targets=False,
@@ -931,7 +931,7 @@ def test_looks_like_coincident_source_target_setup_rejects_mismatched_user_ids()
 
 
 def test_looks_like_coincident_source_target_setup_matches_offset_target_ids():
-    import volumential.volume_fmm as volume_fmm
+    from volumential import volume_fmm
 
     tree = SimpleNamespace(
         sources_are_targets=False,
@@ -960,7 +960,7 @@ def test_looks_like_coincident_source_target_setup_matches_offset_target_ids():
 
 
 def test_looks_like_coincident_source_target_setup_matches_without_user_target_ids():
-    import volumential.volume_fmm as volume_fmm
+    from volumential import volume_fmm
 
     tree = SimpleNamespace(
         sources_are_targets=False,
@@ -981,7 +981,7 @@ def test_looks_like_coincident_source_target_setup_matches_without_user_target_i
 
 
 def test_maybe_guard_coincident_source_target_tree_warns_once(caplog, monkeypatch):
-    import volumential.volume_fmm as volume_fmm
+    from volumential import volume_fmm
 
     monkeypatch.delenv("VOLUMENTIAL_STRICT_SOURCE_TARGET_TREE", raising=False)
     monkeypatch.setattr(volume_fmm, "_COINCIDENT_TREE_WARNING_EMITTED", False)
@@ -1012,7 +1012,7 @@ def test_maybe_guard_coincident_source_target_tree_warns_once(caplog, monkeypatc
 
 
 def test_maybe_guard_coincident_source_target_tree_strict_mode(monkeypatch):
-    import volumential.volume_fmm as volume_fmm
+    from volumential import volume_fmm
 
     monkeypatch.setenv("VOLUMENTIAL_STRICT_SOURCE_TARGET_TREE", "1")
     monkeypatch.setattr(volume_fmm, "_COINCIDENT_TREE_WARNING_EMITTED", False)
@@ -1309,12 +1309,12 @@ def _get_laplace_2d_dx_table(
             return table
 
         tables = []
-        for source_box_level in range(max_source_box_level + 1):
+        for level in range(max_source_box_level + 1):
             table, _ = tm.get_table(
                 2,
                 "Laplace-Dx",
                 q_order,
-                source_box_level=source_box_level,
+                source_box_level=level,
                 force_recompute=False,
                 queue=queue,
                 build_config=build_config,
@@ -1366,12 +1366,12 @@ def _get_yukawa_2d_dx_table(
             return table
 
         tables = []
-        for source_box_level in range(max_source_box_level + 1):
+        for level in range(max_source_box_level + 1):
             table, _ = tm.get_table(
                 2,
                 "Yukawa-Dx",
                 q_order,
-                source_box_level=source_box_level,
+                source_box_level=level,
                 force_recompute=False,
                 queue=queue,
                 build_config=build_config,
@@ -1429,12 +1429,12 @@ def _get_laplace_2d_axis_source_derivative_table(
             return table
 
         tables = []
-        for source_box_level in range(max_source_box_level + 1):
+        for level in range(max_source_box_level + 1):
             table, _ = tm.get_table(
                 2,
                 kernel_type,
                 q_order,
-                source_box_level=source_box_level,
+                source_box_level=level,
                 force_recompute=False,
                 queue=queue,
                 build_config=build_config,
@@ -1494,12 +1494,12 @@ def _get_yukawa_2d_axis_source_derivative_table(
             return table
 
         tables = []
-        for source_box_level in range(max_source_box_level + 1):
+        for level in range(max_source_box_level + 1):
             table, _ = tm.get_table(
                 2,
                 kernel_type,
                 q_order,
-                source_box_level=source_box_level,
+                source_box_level=level,
                 force_recompute=False,
                 queue=queue,
                 build_config=build_config,
@@ -2074,7 +2074,7 @@ def _build_directional_parameter_values(out_kernel, source_direction):
         }
     else:
         direction_vec = np.asarray(source_direction, dtype=np.float64)
-        direction_by_name = {name: direction_vec for name in dir_names}
+        direction_by_name = dict.fromkeys(dir_names, direction_vec)
 
     dim = int(out_kernel.dim)
     for dir_name in dir_names:
@@ -7478,7 +7478,7 @@ def test_volume_fmm_rejects_allow_list1_p2p_fallback_option():
 
 
 def test_volume_fmm_rejects_multi_source_full_sumpy_path(monkeypatch):
-    import volumential.volume_fmm as volume_fmm
+    from volumential import volume_fmm
     from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
 
     class _MockSumpyWrangler(ExpansionWranglerInterface):
@@ -7511,7 +7511,7 @@ def test_volume_fmm_rejects_multi_source_full_sumpy_path(monkeypatch):
 
 @pytest.mark.parametrize("noutputs", [1, 2])
 def test_volume_fmm_direct_eval_accepts_fmmlib_plain_arrays(monkeypatch, noutputs):
-    import volumential.volume_fmm as volume_fmm
+    from volumential import volume_fmm
     from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
 
     class _DummyP2P:
@@ -7828,7 +7828,11 @@ def laplace_problem(ctx_factory, tmp_path_factory):
         crtr = np.array(
             [
                 np.abs(source_field(c) * m)
-                for (c, m) in zip(mesh.get_cell_centers(), mesh.get_cell_measures())
+                for (c, m) in zip(
+                    mesh.get_cell_centers(),
+                    mesh.get_cell_measures(),
+                    strict=True,
+                )
             ]
         )
         mesh.update_mesh(crtr, rratio_top, rratio_bot)
