@@ -20,6 +20,14 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
+__doc__ = """Host-side tests for :mod:`volumential.tools`.
+
+Covers the backwards-compatible re-export surface left behind by the split of
+the old grab-bag module, the two file/module helpers it still owns, and the
+host-side (device-free) parts of the box filters and the scalar-field
+expression evaluator.
+"""
+
 import sys
 
 import numpy as np

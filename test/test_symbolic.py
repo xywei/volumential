@@ -20,6 +20,12 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
+__doc__ = """Tests for :mod:`volumential.symbolic`.
+
+Covers the generated OpenCL math-function wrappers, the symbolic Laplacian,
+the :mod:`loopy` call mangler and the evaluator factory.
+"""
+
 import numpy as np
 import pytest
 
