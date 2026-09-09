@@ -142,6 +142,12 @@ class HelmholtzSplitCorrectionMixin:
         src_func=None,
         _split_out_kernel=None,
     ) -> StageResult:
+        """Near-field correction that the Helmholtz split leaves to be added.
+
+        With ``helmholtz_split`` off this is a no-op returning zeros.  Otherwise
+        it sums the per-term table contributions, the series remainder and the
+        smooth correction for the active target kernels.
+        """
         if not self.helmholtz_split:
             return self.output_zeros(), SumpyTimingFuture(self.queue, [])
 

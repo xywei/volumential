@@ -135,6 +135,7 @@ class FPNDFMMLibTreeIndependentDataForWrangler(
         *args,
         **kwargs,
     ) -> "FPNDFMMLibExpansionWrangler":
+        """Build a queue-bound :class:`FPNDFMMLibExpansionWrangler` for *tree*."""
         if source_extra_kwargs is None:
             source_extra_kwargs = {}
 
@@ -450,6 +451,7 @@ class FPNDFMMLibExpansionWrangler(
     # {{{ scale factor for fmmlib
 
     def get_scale_factor(self) -> float:
+        """Factor that brings pyfmmlib's kernel normalization to sumpy's."""
         eqn_letter = self.tree_indep.eqn_letter
         if eqn_letter == "l" and self.dim == 2:
             scale_factor = -1 / (2 * np.pi)
@@ -470,18 +472,23 @@ class FPNDFMMLibExpansionWrangler(
     # {{{ data vector utilities
 
     def multipole_expansion_zeros(self) -> FMMArray:
+        """Zeroed multipole-expansion storage for every box."""
         return FMMLibExpansionWrangler.multipole_expansion_zeros(self)
 
     def local_expansion_zeros(self) -> FMMArray:
+        """Zeroed local-expansion storage for every box."""
         return FMMLibExpansionWrangler.local_expansion_zeros(self)
 
     def output_zeros(self) -> FMMArray:
+        """Zeroed potential storage for every target."""
         return FMMLibExpansionWrangler.output_zeros(self)
 
     def reorder_sources(self, source_array: FMMArray) -> FMMArray:
+        """Return *source_array*, given in user order, in tree source order."""
         return FMMLibExpansionWrangler.reorder_sources(self, source_array)
 
     def reorder_targets(self, target_array: FMMArray) -> FMMArray:
+        """Return *target_array* permuted by the tree's target ordering."""
         if not hasattr(self.tree, "user_target_ids"):
             self.tree.user_target_ids = inverse_id_map(
                 self.queue, self.tree.sorted_target_ids
@@ -489,10 +496,12 @@ class FPNDFMMLibExpansionWrangler(
         return target_array[self.tree.user_target_ids]
 
     def reorder_potentials(self, potentials: FMMArray) -> FMMArray:
+        """Return *potentials*, given in tree order, in user target order."""
         return FMMLibExpansionWrangler.reorder_potentials(self, potentials)
 
     def finalize_potentials(self, potentials: FMMArray) -> FMMArray:
         # return potentials
+        """Apply pyfmmlib's global scaling to the reordered *potentials*."""
         return FMMLibExpansionWrangler.finalize_potentials(
             self, self._fmmlib_actx, potentials
         )
@@ -507,6 +516,7 @@ class FPNDFMMLibExpansionWrangler(
         source_boxes: BoxIndexArray,
         src_weights: FMMArray,
     ) -> StageResult:
+        """P2M, through the batched pyfmmlib entry point where it is available."""
         formmp_imany = self._get_batched_formmp_routine()
         if formmp_imany is not None:
             result = self._form_multipoles_batched(
@@ -531,6 +541,7 @@ class FPNDFMMLibExpansionWrangler(
         source_parent_boxes: BoxIndexArray,
         mpoles: FMMArray,
     ) -> StageResult:
+        """M2M: accumulate child multipole expansions into their parents."""
         result = FMMLibExpansionWrangler.coarsen_multipoles(
             self,
             self._fmmlib_actx,
@@ -553,11 +564,15 @@ class FPNDFMMLibExpansionWrangler(
         neighbor_source_boxes_lists: BoxIndexArray,
         mode_coefs: FMMArray,
     ) -> tuple[FMMArray, object]:
+        """Near-field (list 1) contribution to *out_pot* for one target kernel.
+
+        The interaction is read out of the precomputed tables instead of being
+        evaluated point by point.  Returns ``(out_pot, event)``.
+        """
 
         # NOTE: mode_coefs are similar to source_weights BUT
         # do not include quadrature weights (purely function
         # expansiona coefficients)
-
         tree = self.device_tree
         output_is_device = isinstance(out_pot, cl.array.Array)
 
@@ -571,11 +586,6 @@ class FPNDFMMLibExpansionWrangler(
         neighbor_source_boxes_starts = to_device(neighbor_source_boxes_starts)
         neighbor_source_boxes_lists = to_device(neighbor_source_boxes_lists)
         mode_coefs = to_device(mode_coefs)
-
-        if 0:
-            print("Returns range for list1")
-            out_pot[:] = np.arange(len(out_pot))
-            return out_pot, None
 
         kname = out_kernel.__repr__()
 
@@ -794,6 +804,7 @@ class FPNDFMMLibExpansionWrangler(
         neighbor_source_boxes_lists: BoxIndexArray,
         mode_coefs: FMMArray,
     ) -> StageResult:
+        """Near-field stage: one table-based pass per target kernel."""
         pot = self.output_zeros()
         if pot.dtype != object:
             pot = obj_array_1d(
@@ -837,6 +848,7 @@ class FPNDFMMLibExpansionWrangler(
         src_box_lists: BoxIndexArray,
         mpole_exps: FMMArray,
     ) -> StageResult:
+        """M2L: translate list-2 multipole expansions into local expansions."""
         result = FMMLibExpansionWrangler.multipole_to_local(
             self,
             self._fmmlib_actx,
@@ -854,6 +866,7 @@ class FPNDFMMLibExpansionWrangler(
         source_boxes_by_level: BoxIndexArray,
         mpole_exps: FMMArray,
     ) -> StageResult:
+        """M2P: evaluate list-3 multipole expansions at the targets."""
         result = FMMLibExpansionWrangler.eval_multipoles(
             self,
             self._fmmlib_actx,
@@ -871,6 +884,7 @@ class FPNDFMMLibExpansionWrangler(
         lists: BoxIndexArray,
         src_weights: FMMArray,
     ) -> StageResult:
+        """P2L: form local expansions from the list-4 sources."""
         result = FMMLibExpansionWrangler.form_locals(
             self,
             self._fmmlib_actx,
@@ -888,6 +902,7 @@ class FPNDFMMLibExpansionWrangler(
         target_or_target_parent_boxes: BoxIndexArray,
         local_exps: FMMArray,
     ) -> StageResult:
+        """L2L: push each parent's local expansion down to its children."""
         result = FMMLibExpansionWrangler.refine_locals(
             self,
             self._fmmlib_actx,
@@ -903,6 +918,7 @@ class FPNDFMMLibExpansionWrangler(
         target_boxes: BoxIndexArray,
         local_exps: FMMArray,
     ) -> StageResult:
+        """L2P, through the batched GEMM path when the level layout allows it."""
         if self._gemm_l2p_supported():
             result = self._eval_locals_gemm(
                 level_start_target_box_nrs, target_boxes, local_exps
@@ -928,6 +944,7 @@ class FPNDFMMLibExpansionWrangler(
         source_box_lists: BoxIndexArray,
         src_weights: FMMArray,
     ) -> StageResult:
+        """Near-field stage done as pyfmmlib's plain P2P, bypassing the tables."""
         result = FMMLibExpansionWrangler.eval_direct(
             self,
             self._fmmlib_actx,
@@ -942,6 +959,7 @@ class FPNDFMMLibExpansionWrangler(
 
     @staticmethod
     def is_supported_helmknl(knl) -> bool:
+        """Whether pyfmmlib covers *knl*: 2D/3D Laplace or Helmholtz."""
         if isinstance(knl, DirectionalSourceDerivative):
             knl = knl.inner_kernel
 

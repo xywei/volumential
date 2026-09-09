@@ -57,7 +57,7 @@ class _RadialPowerKernel(ExpressionKernel):
         )
 
     @property
-    def is_complex_valued(self):
+    def is_complex_valued(self) -> bool:
         return False
 
     def __getinitargs__(self):
@@ -91,7 +91,7 @@ class _RadialPowerLogKernel(ExpressionKernel):
         )
 
     @property
-    def is_complex_valued(self):
+    def is_complex_valued(self) -> bool:
         return False
 
     def __getinitargs__(self):
@@ -203,7 +203,7 @@ class _HelmholtzSplitSeriesRemainderKernel(ExpressionKernel):
         )
 
     @property
-    def is_complex_valued(self):
+    def is_complex_valued(self) -> bool:
         return True
 
     def __getinitargs__(self):
