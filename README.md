@@ -64,7 +64,9 @@ Near-field tables
 - `rke_table_assembly.py`: certified RKE assembly of fixed-parameter tables.
 - `singular_integral_2d.py`: 2D Duffy-transform singular quadrature
   (`box_quad`).
-- `list1.py`: deprecated table-lookup scheme generator, kept for compatibility.
+- `list1.py`: the on-device List 1 near-field evaluators
+  (`KernelScalingPolicy`, `NearFieldEvalBase`, `NearFieldFromCSR`) that read
+  table data through the CSR interaction lists.
 
 Volume FMM
 
@@ -73,9 +75,9 @@ Volume FMM
 - `expansion_wrangler_interface.py`: the wrangler interface and the
   tree-independent data it needs.
 - `expansion_wrangler_fpnd.py`: the FPND wranglers (sumpy and FMMLib backends)
-  and the near-field Helmholtz split. These two modules are being reorganized
-  into a `volumential/wranglers/` subpackage; the current module paths stay
-  importable through compatibility re-exports.
+  and the near-field Helmholtz split. This module is being reorganized into a
+  `volumential/wranglers/` subpackage; the current module path stays importable
+  through compatibility re-exports.
 
 Fields, sources and post-processing
 
