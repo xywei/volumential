@@ -95,6 +95,8 @@ Support
 - `opcounters.py`: explicit operation counters for benchmark drivers.
 - `__init__.py`, `version.py`: public surface (`__all__`), version and the
   kernel revision used in cache keys.
+- `qbfem/`: a 2019 finite-element experiment that nothing else in the tree
+  imports; it is kept only for reference and is not part of the supported API.
 
 Debug tip: when validating source-node evaluations, set
 `VOLUMENTIAL_STRICT_SOURCE_TARGET_TREE=1` to fail fast if a traversal is built

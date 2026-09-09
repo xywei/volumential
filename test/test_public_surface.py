@@ -31,6 +31,9 @@ import pytest
 
 import volumential
 import volumential.version
+from volumential.nearfield_potential_table import NearFieldInteractionTable
+from volumential.singular_integral_2d import box_quad
+from volumential.table_manager import NearFieldInteractionTableManager
 
 
 EXPECTED_TOP_LEVEL_NAMES = (
@@ -58,10 +61,6 @@ def test_exported_name_resolves(name):
 
 
 def test_reexports_match_their_defining_modules():
-    from volumential.nearfield_potential_table import NearFieldInteractionTable
-    from volumential.singular_integral_2d import box_quad
-    from volumential.table_manager import NearFieldInteractionTableManager
-
     assert volumential.NearFieldInteractionTable is NearFieldInteractionTable
     assert (
         volumential.NearFieldInteractionTableManager
