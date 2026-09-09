@@ -126,11 +126,66 @@ def test_legacy_names_are_the_same_objects_as_in_the_package():
     )
 
 
+def test_every_legacy_name_is_the_package_object_itself():
+    """The shim must re-export, never re-implement.
+
+    ``logger`` is the one exception: the shim keeps a logger of its own so that
+    ``volumential.expansion_wrangler_fpnd`` stays a usable logger name.
+    """
+    import sys
+
+    import volumential.expansion_wrangler_fpnd as legacy
+
+    rebound = []
+    for name in LEGACY_NAMES:
+        if name == "logger":
+            continue
+        obj = getattr(legacy, name)
+        home = getattr(obj, "__module__", None)
+        if home is None or not home.startswith("volumential.wranglers"):
+            continue
+        if getattr(sys.modules[home], name, None) is not obj:
+            rebound.append(f"{name} ({home})")
+    assert not rebound, f"shim rebinds instead of re-exporting: {rebound}"
+
+
 def test_package_public_api():
     import volumential.wranglers as wr
 
     for name in wr.__all__:
         assert hasattr(wr, name), f"{name} is advertised in __all__ but missing"
+
+
+def test_no_mixin_attribute_is_shadowed_or_shadowing():
+    """The split is only inert while the mixins collide with nobody.
+
+    A mixin sits between :class:`ExpansionWranglerInterface` and the sumpy or
+    fmmlib base wrangler.  If a name it defines ever also appears earlier in
+    the MRO (the interface) or later (the backend base), the method that runs
+    stops being the one that ran before the split.
+    """
+    from volumential.wranglers import (
+        FPNDFMMLibExpansionWrangler,
+        FPNDSumpyExpansionWrangler,
+    )
+
+    problems = []
+    for cls in (FPNDSumpyExpansionWrangler, FPNDFMMLibExpansionWrangler):
+        mro = cls.__mro__
+        for pos, entry in enumerate(mro):
+            if not entry.__name__.endswith("Mixin"):
+                continue
+            for name in vars(entry):
+                if name.startswith("__"):
+                    continue
+                others = [
+                    other.__name__
+                    for i, other in enumerate(mro)
+                    if i != pos and name in vars(other)
+                ]
+                if others:
+                    problems.append(f"{cls.__name__}.{name}: also on {others}")
+    assert not problems, f"mixin name collisions in the MRO: {problems}"
 
 
 def test_default_aliases_track_the_sumpy_backend():
