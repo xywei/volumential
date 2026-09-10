@@ -109,7 +109,12 @@ arguments. A kernel argument counts as real only if its *declared* dtype is
 real: `HelmholtzKernel(dim, allow_evanescent=True)` declares a `complex128`
 wave number, and an argument declared with no dtype at all
 (`KernelArgument(lp.ValueArg("k"))`, which loopy leaves as `<auto/runtime>`
-and which accepts a complex value at run time) is likewise not proven real. Ordinary
+and which accepts a complex value at run time) is likewise not proven real.
+A phase that is provably *integer* -- every node an integer constant or an
+argument declared with an integer dtype -- also keeps its `cdouble_exp`: the C
+`cos`/`sin` overload chosen for an integer argument is not ours to predict,
+and a single-precision one would cost an order-one phase error past `2**24`,
+where the complex exponential carries the precision explicitly. Ordinary
 Helmholtz and Yukawa pass and are rewritten as above.
 
 Measured effect at 3D, `q = 3`, source box level 2: Helmholtz per

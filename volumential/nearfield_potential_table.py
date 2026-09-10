@@ -256,6 +256,40 @@ def _is_known_real(expr, unproven_names=frozenset()):
     return False
 
 
+def _is_known_integer(expr, integer_names=frozenset()):
+    """Whether *expr* provably evaluates in integer arithmetic.
+
+    The mirror image of :func:`_is_known_real`, and conservative in the
+    same direction: an expression this cannot classify answers *False*,
+    because the caller uses a *True* here to decline a rewrite.
+    """
+    if _is_numeric_constant(expr):
+        return isinstance(expr, int | np.integer)
+
+    if isinstance(expr, prim.CommonSubexpression):
+        return _is_known_integer(expr.child, integer_names)
+
+    if isinstance(expr, prim.Variable):
+        return expr.name in integer_names
+
+    if isinstance(expr, prim.Sum | prim.Product):
+        return all(
+            _is_known_integer(child, integer_names) for child in expr.children
+        )
+
+    if isinstance(expr, prim.Power):
+        return _is_known_integer(
+            expr.base, integer_names
+        ) and _is_known_integer(expr.exponent, integer_names)
+
+    return False
+
+
+def _kernel_arg_names_with_integer_dtype(kernel):
+    """Names of *kernel*'s runtime arguments declared with an integer dtype."""
+    return _kernel_arg_names_by_dtype_kind(kernel, np.integer)
+
+
 def _kernel_arg_names_not_known_real(kernel):
     """Names of *kernel*'s runtime arguments that are not provably real.
 
@@ -274,12 +308,28 @@ def _kernel_arg_names_not_known_real(kernel):
     absent, inferred, or of a kind this function does not recognize has to
     be treated as potentially complex.
     """
+    return _kernel_arg_names_by_dtype_kind(
+        kernel, (np.floating, np.integer), match=False
+    )
+
+
+def _kernel_arg_names_by_dtype_kind(kernel, kinds, *, match=True):
+    """Kernel argument names whose declared dtype is (not) one of *kinds*.
+
+    ``loopy`` wraps dtypes in :class:`loopy.types.NumpyType`, and leaves an
+    undeclared one as :class:`loopy.types.AutoType`, which carries no numpy
+    dtype at all -- so an argument declared ``lp.ValueArg("k")`` matches
+    nothing and lands in the *not*-matching set.
+    """
     if kernel is None:
         return frozenset()
 
     get_args = getattr(kernel, "get_args", None)
     if get_args is None:
         return frozenset()
+
+    if not isinstance(kinds, tuple):
+        kinds = (kinds,)
 
     names = set()
     for kernel_arg in get_args():
@@ -289,18 +339,15 @@ def _kernel_arg_names_not_known_real(kernel):
             continue
 
         dtype = getattr(loopy_arg, "dtype", None)
-        # loopy wraps dtypes in loopy.types.NumpyType; loopy.types.AutoType
-        # (the "<auto/runtime>" placeholder) carries no numpy dtype at all
         dtype = getattr(dtype, "numpy_dtype", dtype)
         try:
-            is_real = dtype is not None and bool(
-                np.issubdtype(dtype, np.floating)
-                or np.issubdtype(dtype, np.integer)
+            matches = dtype is not None and any(
+                np.issubdtype(dtype, kind) for kind in kinds
             )
         except TypeError:
-            is_real = False
+            matches = False
 
-        if not is_real:
+        if matches is match:
             names.add(name)
 
     return frozenset(names)
@@ -361,9 +408,11 @@ class ComplexExponentialRewriter(CSECachingMapperMixin, IdentityMapper):
     :meth:`map_common_subexpression_uncached` -- is never reached.
     """
 
-    def __init__(self, unproven_arg_names=frozenset()):
+    def __init__(self, unproven_arg_names=frozenset(),
+                 integer_arg_names=frozenset()):
         super().__init__()
         self.unproven_arg_names = frozenset(unproven_arg_names)
+        self.integer_arg_names = frozenset(integer_arg_names)
 
     def map_common_subexpression_uncached(self, expr, /, *args, **kwargs):
         return IdentityMapper.map_common_subexpression(
@@ -386,6 +435,14 @@ class ComplexExponentialRewriter(CSECachingMapperMixin, IdentityMapper):
         real_part, imag_part = _split_complex_expression(argument)
         if _is_structural_zero(imag_part):
             # a real exponent: leave the plain real exp() alone
+            return expr
+
+        if _is_known_integer(imag_part, self.integer_arg_names):
+            # An integer phase would reach cos/sin as an integer, where the
+            # cdouble_exp it replaces evaluated it as a double.  The C
+            # overload resolution is then not ours to predict, and a single
+            # precision one costs an O(1) phase error above 2**24.  Keep
+            # the exponential, which carries the precision explicitly.
             return expr
 
         if not _is_known_real(imag_part, self.unproven_arg_names):
@@ -2233,7 +2290,8 @@ class NearFieldInteractionTable:
         # for the PoCL sincos pathology this avoids).  Exponents that reach a
         # complex-valued kernel argument are left as cdouble_exp.
         complex_exp_rewriter = ComplexExponentialRewriter(
-            _kernel_arg_names_not_known_real(self.integral_knl)
+            _kernel_arg_names_not_known_real(self.integral_knl),
+            _kernel_arg_names_with_integer_dtype(self.integral_knl),
         )
 
         if self.integral_knl is None:
@@ -3869,7 +3927,8 @@ class NearFieldInteractionTable:
                 self.integral_knl.get_code_transformer(),
                 # same cdouble_exp avoidance as the fused Duffy kernel
                 ComplexExponentialRewriter(
-                    _kernel_arg_names_not_known_real(self.integral_knl)
+                    _kernel_arg_names_not_known_real(self.integral_knl),
+                    _kernel_arg_names_with_integer_dtype(self.integral_knl),
                 ),
             ],
             retain_names=[result_name],

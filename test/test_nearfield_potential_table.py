@@ -3065,6 +3065,55 @@ def test_kernel_arg_names_not_known_real_follows_the_declared_dtype():
     ) == frozenset({"k"})
 
 
+def test_an_integer_only_phase_keeps_its_complex_exponential():
+    """``exp(1j*n)`` with an integer ``n`` must not become ``cos(n)``.
+
+    ``cdouble_exp`` evaluates the phase as a double.  Handed an integer,
+    the C ``cos``/``sin`` overload resolution is not ours to predict, and
+    a single-precision one costs an order-one phase error past ``2**24``.
+    """
+    import loopy as lp
+    import numpy as _np
+    import pymbolic.primitives as prim
+    from sumpy.kernel import KernelArgument
+
+    class _IntegerArgKernel:
+        @staticmethod
+        def get_args():
+            return [KernelArgument(lp.ValueArg("n", _np.int32))]
+
+    kernel = _IntegerArgKernel()
+    # an integer argument is real, so the realness guard alone lets it pass
+    assert npt._kernel_arg_names_not_known_real(kernel) == frozenset()
+    integer_names = npt._kernel_arg_names_with_integer_dtype(kernel)
+    assert integer_names == frozenset({"n"})
+
+    n = prim.Variable("n")
+    assert npt._is_known_integer(n, integer_names)
+    assert npt._is_known_integer(prim.Product((3, n)), integer_names)
+    assert npt._is_known_integer(prim.Power(n, 2), integer_names)
+    # a float anywhere makes it a floating phase again
+    assert not npt._is_known_integer(
+        prim.Product((3.0, n)), integer_names
+    )
+    assert not npt._is_known_integer(n, frozenset())
+
+    original = prim.Call(
+        prim.Variable("exp"), (prim.Product((np.complex128(1j), n)),)
+    )
+    assert npt.ComplexExponentialRewriter(
+        frozenset(), integer_names
+    )(original) == original
+    # ... while a floating phase over the same argument is still rewritten
+    floating = prim.Call(
+        prim.Variable("exp"),
+        (prim.Product((np.complex128(1j), n, prim.Variable("r"))),),
+    )
+    assert npt.ComplexExponentialRewriter(
+        frozenset(), integer_names
+    )(floating) != floating
+
+
 def test_an_inferred_argument_dtype_counts_as_potentially_complex():
     """``lp.ValueArg("k")`` has no dtype, and accepts a complex value.
 
