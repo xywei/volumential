@@ -31,11 +31,147 @@ directly:
   the executed node builders and the actual build routing),
   special-function evaluations by function, near-field point pairs per
   solve, split-remainder series lengths, and table-apply FMA counts.  They
-  are computed after the timed phases, so timings are unaffected.
+  are computed after the timed phases, so timings are unaffected;
+* per-phase shares (experiment E6): the ``ops_phase_*`` and ``s_phase_*``
+  columns decompose one end-to-end solve, and the run's setup, into the
+  phases of :data:`volumential.phase_profile.SOLVE_PHASES`.  See the
+  counting rules below.
 
 The repeat phase alternates strategies within each repeat index so slow host
 drift affects both curves equally.  This is a timing benchmark: full mode
 must run on an otherwise quiet host.
+
+Per-phase counting rules (E6)
+-----------------------------
+
+The phases of one solve are the FMM stage graph plus the two near-field
+phases, exactly as :func:`volumential.volume_fmm.drive_volume_fmm` runs
+them.  Operations and seconds are counted phase by phase under these rules,
+and the component shares the manuscript quotes (table / far field /
+remainder / recombination) follow by division within one column.
+
+*Far field.*  ``ops_phase_far_*`` are *coefficient touches*: one multiply-add
+against one expansion coefficient, summed over the executed traversal's own
+interaction lists at the executed wrangler's own per-level expansion sizes
+(:func:`volumential.opcounters.fmm_stage_operation_counts`).  Nothing is a
+constant and nothing is a machine-instruction count: sumpy may execute a
+translation with fewer operations than its dense coefficient count, so these
+are a structural decomposition of the stage graph, not a hardware estimate.
+Both strategies run the identical far field — same traversal, same kernel,
+same FMM order, same expansion classes — so the far-field counts carry no
+strategy suffix.
+
+*Near-field table apply.*  ``ops_phase_nearfield_table_apply_*`` is one
+fused multiply-add per near-field (target point, source quadrature point)
+pair per applied table.  The direct path applies one table; the online split
+path applies the base table in this phase and its ``p-1`` retained-channel
+tables in the correction phase below, so its total is ``p`` times the
+direct path's, which is the identity the ``ops_split_table_fmas_per_solve``
+column already reports.  The count is *dtype blind*, matching the
+pre-existing ``ops_*`` columns: this driver runs a complex128 source
+function, and a retained-channel apply of a real-valued term kernel is
+dispatched twice (real part, imaginary part) inside one counted apply, so
+the executed List 1 launch count of the correction phase is twice
+``ops_phase_split_correction_extra_table_fmas / N_nf``.  Do not read these
+columns as launch counts.
+
+*Split correction.*  The online split path's correction phase is *not* the
+series remainder alone, and the cost model's ``Delta W`` (kb:
+paper1-ops-cost-model, "The online-mode break-even, restated in ops")
+understates what the implementation executes in three ways, all recorded
+separately here rather than folded away:
+
+1. the retained-channel table applies happen inside this phase, at
+   ``ops_phase_split_correction_extra_table_fmas`` FMAs;
+2. when the smooth quadrature order exceeds ``q`` the remainder P2P does
+   *not* run on the base quadrature nodes.  The wrangler rebuilds an
+   interpolated smooth source set of
+   ``ops_phase_split_smooth_sources_per_box`` points per active box
+   (``_build_helmholtz_split_smooth_correction_sources``), so the executed
+   pair count ``ops_phase_split_correction_remainder_pair_evals`` exceeds
+   the model's ``N_nf`` by ``(q_smooth/q)**d``.  The rebuild itself costs
+   ``ops_phase_split_correction_smooth_interp_fmas`` interpolation FMAs
+   *per solve*, priced as the axis-by-axis tensor-product contraction the
+   implementation performs and not as a dense ``q_smooth**d`` by ``q**d``
+   matrix apply (:func:`_tensor_product_interp_fmas`);
+3. each 2D single-table ``power_log`` term runs an additional near-field
+   P2P pass for its ``beta`` contribution when the auto-config's
+   ``power_log_single_table_beta_mode`` is ``p2p``, counted at
+   ``ops_phase_split_correction_beta_p2p_pair_evals``.
+
+``ops_phase_split_correction_remainder_term_evals`` multiplies the pair count
+by the *generated* remainder kernel's term count, read off the expression
+rather than taken as the series length: in 2D the kernel emits a constant, one
+``r**(2n)`` term for every ``n = 1 .. nmax``, and a second ``r**(2n) log r``
+term for every ``n >= p``, so ``nmax`` alone undercounts it by roughly a factor
+of two.  The count depends on the parameter, so
+``ops_phase_split_correction_remainder_terms_per_pair`` is the *mean* over the
+run's parameters -- the same set the profiled seconds beside it average over --
+and ``ops_phase_split_correction_remainder_terms_by_parameter`` keeps the
+per-parameter counts unaveraged.
+
+``ops_phase_split_correction_remainder_term_evals`` (and therefore
+``ops_phase_split_correction_rke`` and ``ops_phase_solve_total_rke``) uses
+the *mean* of ``ops_split_series_nmax_per_parameter`` over the run's
+parameters, because the profiled seconds it sits beside are likewise means
+over the same parameter set.  The per-parameter series lengths stay
+available, unaveraged, in the pre-existing column.
+
+The pre-existing ``ops_split_remainder_*`` columns keep their published
+meaning (the model's ``N_nf``-based count) and are not touched.
+
+``ops_phase_split_correction_status`` records why a correction count is
+blank when the wrangler cannot be interrogated.  A blank there propagates:
+``ops_phase_split_correction_rke`` and ``ops_phase_solve_total_rke`` go
+blank too, and ``break_even_phases.csv`` then withholds the whole
+strategy's ``ops_share`` column rather than dividing the surviving phases
+by their own sum, which would report a confident share of a denominator
+that is missing the dominant phase.
+
+*Recombination.*  Windowed recombination is a per-*parameter setup* cost
+(``p_star`` FMAs per assembled entry), never a per-solve cost, and this
+driver provisions no windowed family at all: both
+``ops_phase_recombination_per_solve`` and
+``ops_phase_setup_recombination_flops`` are therefore 0 here, meaning zero
+recombination work was executed, not "unmeasured".
+
+*Setup.*  ``ops_phase_setup_direct_table_build`` and
+``ops_phase_setup_channel_family_build`` are the singular-quadrature node
+evaluations of the two cold builds; their seconds are the cold-build and
+warm cache-load times the table manager's own timing hooks record.  These
+are a *different currency* from the per-solve counts above -- whole kernel
+or channel evaluations inside a Duffy rule, not multiply-adds -- so setup
+and solve operation counts must never be added or shared against each
+other.  The long-format ``break_even_phases.csv`` states the currency of
+every row in its ``ops_unit`` column, and setup rows carry no
+``ops_share`` for exactly this reason.
+
+*Reading the far-field seconds.*  ``s_phase_far_multipole_to_local_*`` is
+the one phase whose seconds routinely fail to track its operation count,
+and the reason is environmental rather than structural.  When sumpy's M2L
+uses its FFT-accelerated translation and pyvkfft is unavailable, the loopy
+FFT backend is invoked through an uncached ``TranslationUnit.__call__``
+(``sumpy.tools.run_opencl_fft``), which pays a translation-unit
+compilation on *every* solve; the run then emits ``VkFFT not found`` and
+``DirectCallUncachedWarning`` and the M2L phase can dominate the profiled
+solve while its coefficient-touch count does not.  Check the run log
+before quoting a far-field time share, and quote the operation share
+instead when those warnings are present.  The converse also occurs and is
+not a defect: on a uniform tree List 3 and List 4 are empty, so
+``ops_phase_far_eval_multipoles`` and ``ops_phase_far_form_locals`` are 0
+while their seconds are not, because the wrangler still launches a kernel
+over an empty interaction list.  A zero operation count means zero
+counted work, never zero elapsed time.
+
+*Seconds.*  ``s_phase_*`` are means over dedicated, phase-instrumented
+solves run *after* every timed phase, so no reported timing column is
+perturbed by the instrumentation.  Profiling synchronizes the command queue
+at every phase boundary, so a profiled solve is slower than an unprofiled
+one; ``s_phase_solve_total_*`` reports the profiled total next to the
+unprofiled ``*_solve_mean_s`` so the overhead is visible and the shares can
+be read as shares of the profiled total.  ``s_phase_other_*`` is the
+residual (reordering, finalization, host bookkeeping) and is non-negative
+by construction.
 """
 
 from __future__ import annotations
@@ -59,9 +195,14 @@ from split_parameter_sweep import (  # noqa: E402
     _gaussian_source_host,
     _prepare_direct_tables,
     _prepare_rke_channels,
+    _remainder_terms_per_pair,
     _select_opencl_device,
     _split_channel_build_config,
+    _split_correction_operation_counts,
     _split_smooth_quad_order,
+    # re-exported: named by the counting rule in this module's docstring and
+    # exercised through this module's namespace by the driver's tests
+    _tensor_product_interp_fmas,  # noqa: F401
     _yukawa_reference_build_config,
 )
 
@@ -133,6 +274,120 @@ SUMMARY_FIELDS = (
     "ops_split_remainder_pair_evals_per_solve",
     "ops_split_remainder_term_flops_per_solve_per_parameter",
 )
+
+# {{{ per-phase columns (E6)
+
+#: Strategy suffixes of the per-phase columns.  ``rke`` is the online split
+#: strategy, matching the existing ``rke_*`` timing columns.
+PHASE_STRATEGIES = ("direct", "rke")
+
+#: Far-field stage names, without the ``far_`` phase prefix.
+PHASE_FAR_STAGES = (
+    "form_multipoles",
+    "coarsen_multipoles",
+    "multipole_to_local",
+    "eval_multipoles",
+    "form_locals",
+    "refine_locals",
+    "eval_locals",
+)
+
+#: Phases whose seconds are reported per strategy.
+PHASE_SECOND_NAMES = (
+    *(f"far_{stage}" for stage in PHASE_FAR_STAGES),
+    "far_total",
+    "nearfield_table_apply",
+    "split_correction",
+    "other",
+    "solve_total",
+)
+
+PHASE_OPS_FIELDS = (
+    "phase_counting_rule",
+    "phase_profile_repeat_count",
+    "phase_profile_solves_per_strategy",
+    "phase_profile_nested_phases",
+    *(f"ops_phase_far_{stage}" for stage in PHASE_FAR_STAGES),
+    "ops_phase_far_total",
+    "ops_phase_fmm_multipole_coefficients_by_level",
+    "ops_phase_fmm_local_coefficients_by_level",
+    "ops_phase_nearfield_table_apply_direct",
+    "ops_phase_nearfield_table_apply_rke",
+    "ops_phase_split_correction_rke",
+    "ops_phase_split_correction_extra_table_fmas",
+    "ops_phase_split_correction_remainder_pair_evals",
+    "ops_phase_split_correction_remainder_term_evals",
+    "ops_phase_split_correction_remainder_terms_per_pair",
+    "ops_phase_split_correction_remainder_terms_by_parameter",
+    "ops_phase_split_correction_beta_p2p_pair_evals",
+    "ops_phase_split_correction_smooth_interp_fmas",
+    "ops_phase_split_smooth_sources_per_box",
+    "ops_phase_split_correction_status",
+    "ops_phase_recombination_per_solve",
+    "ops_phase_solve_total_direct",
+    "ops_phase_solve_total_rke",
+    "ops_phase_setup_direct_table_build",
+    "ops_phase_setup_channel_family_build",
+    "ops_phase_setup_recombination_flops",
+)
+
+PHASE_SECONDS_FIELDS = (
+    *(
+        f"s_phase_{name}_{strategy}"
+        for strategy in PHASE_STRATEGIES
+        for name in PHASE_SECOND_NAMES
+    ),
+    "s_phase_setup_direct_table_build",
+    "s_phase_setup_direct_table_cache_load",
+    "s_phase_setup_channel_family_build",
+    "s_phase_setup_channel_family_cache_load",
+    "s_phase_setup_recombination",
+)
+
+SUMMARY_FIELDS = SUMMARY_FIELDS + PHASE_OPS_FIELDS + PHASE_SECONDS_FIELDS
+
+#: Long-format companion CSV: one row per (scope, strategy, phase), so the
+#: component shares are a division inside a single row rather than a pivot
+#: over the wide summary row.
+PHASE_FIELDS = (
+    "mode",
+    "kernel",
+    "direct_provisioning",
+    "scope",
+    "strategy",
+    "phase",
+    "unit",
+    "ops_unit",
+    "ops",
+    "seconds",
+    "ops_share",
+    "seconds_share",
+)
+
+#: What the ``ops`` column counts in each scope.  Solve and setup rows are
+#: in *different* currencies and must never be added together: a solve row
+#: counts coefficient touches, table FMAs, series-term and pair evaluations
+#: (all "one multiply-add against one datum"), while a setup row counts
+#: singular-quadrature node evaluations of a table build, which are whole
+#: kernel or channel evaluations.
+PHASE_OPS_UNITS = {
+    "solve": "coefficient_touches_fmas_and_pair_evals",
+    "setup": "singular_quadrature_node_evals",
+}
+
+#: Identifies the counting-rule revision the ``ops_phase_*`` columns follow,
+#: so a consumer can tell two executions of different rules apart.
+PHASE_COUNTING_RULE = (
+    "e6-v3:far=dense_coefficient_touches_from_traversal_and_expansion_sizes;"
+    "nearfield=fma_per_nearfield_pair_per_applied_table_dtype_blind;"
+    "split_correction=extra_table_fmas"
+    "+remainder_pair_evals*mean_generated_remainder_term_count"
+    "+beta_p2p_pair_evals+smooth_interp_fmas;"
+    "smooth_interp=tensor_product_axis_by_axis_not_dense;"
+    "recombination=0_per_solve_and_no_windowed_family_in_this_driver"
+)
+
+# }}}
 
 
 def _solve_wall_s(queue, traversal, wrangler, weighted_sources, source_vals):
@@ -313,6 +568,396 @@ def _operation_counters(
     }
 
 
+# {{{ per-phase operation counts and timings (E6)
+
+def _phase_operation_counts(
+    *,
+    queue,
+    traversal,
+    direct_wrangler,
+    rke_wrangler,
+    q_order,
+    smooth_quad_order,
+    nmax_by_parameter,
+    split_table_count,
+    rke_wranglers=None,
+):
+    """Per-phase operation counts of one end-to-end solve (E6).
+
+    See the module docstring for the counting rules.  The far-field counts
+    are strategy independent because both paths run the identical
+    traversal, kernel, FMM order and expansion classes; only the near-field
+    phases differ.
+    """
+    import volumential.opcounters as opcounters
+
+    far = opcounters.fmm_stage_operation_counts_from_traversal(
+        queue, traversal, direct_wrangler
+    )
+    multipole, local = opcounters.expansion_coefficient_counts(direct_wrangler)
+    nearfield_pairs = opcounters.nearfield_point_pairs(queue, traversal)
+
+    correction = _split_correction_operation_counts(
+        queue=queue,
+        traversal=traversal,
+        wrangler=rke_wrangler,
+        q_order=q_order,
+        smooth_quad_order=smooth_quad_order,
+    )
+
+    # The generated remainder kernel's own term count, not the series
+    # length: in 2D it emits a constant plus a power term per index plus a
+    # power-log term per index at or above the split order, so nmax alone
+    # undercounts it by roughly a factor of two.  _split_correction_
+    # operation_counts reads it off the expression; fall back to the
+    # series length only if it could not be interrogated, and say so.
+    # Averaged over the same parameter set as the profiled seconds these
+    # counts sit beside: the term count depends on the parameter through
+    # the series length, so pricing every parameter at the first one's
+    # count would put an operation numerator and a timing denominator from
+    # different sweeps in the same share.
+    terms_per_parameter = []
+    for wrangler in rke_wranglers or [rke_wrangler]:
+        try:
+            terms_per_parameter.append(
+                float(_remainder_terms_per_pair(wrangler))
+            )
+        except Exception:  # noqa: BLE001 - falls back below, never guessed
+            terms_per_parameter = []
+            break
+
+    if terms_per_parameter:
+        terms_per_pair = float(np.mean(terms_per_parameter))
+    else:
+        terms_per_pair = correction.get("remainder_terms_per_pair", "")
+    if terms_per_pair == "":
+        terms_per_pair = (
+            float(np.mean(nmax_by_parameter)) if nmax_by_parameter else 0.0
+        )
+    remainder_pairs = correction["remainder_pair_evals"]
+    if remainder_pairs == "":
+        remainder_term_evals = ""
+        correction_total = ""
+        rke_solve_total = ""
+    else:
+        remainder_term_evals = float(remainder_pairs) * float(terms_per_pair)
+        correction_total = (
+            float(correction["extra_table_fmas"])
+            + remainder_term_evals
+            + float(correction["beta_p2p_pair_evals"])
+            + float(correction["smooth_interp_fmas"])
+        )
+        rke_solve_total = (
+            float(far["far_total"]) + float(nearfield_pairs) + correction_total
+        )
+
+    columns = {
+        "phase_counting_rule": PHASE_COUNTING_RULE,
+        "ops_phase_far_total": far["far_total"],
+        "ops_phase_fmm_multipole_coefficients_by_level": ";".join(
+            str(count) for count in multipole
+        ),
+        "ops_phase_fmm_local_coefficients_by_level": ";".join(
+            str(count) for count in local
+        ),
+        "ops_phase_nearfield_table_apply_direct": nearfield_pairs,
+        # the split path applies the base table in this phase; its retained
+        # channels are applied in the correction phase and counted there
+        "ops_phase_nearfield_table_apply_rke": nearfield_pairs,
+        "ops_phase_split_correction_rke": correction_total,
+        "ops_phase_split_correction_extra_table_fmas": (
+            correction["extra_table_fmas"]
+        ),
+        "ops_phase_split_correction_remainder_pair_evals": remainder_pairs,
+        "ops_phase_split_correction_remainder_term_evals": (
+            remainder_term_evals
+        ),
+        "ops_phase_split_correction_remainder_terms_per_pair": (
+            terms_per_pair
+        ),
+        "ops_phase_split_correction_remainder_terms_by_parameter": ";".join(
+            f"{terms:g}" for terms in terms_per_parameter
+        ),
+        "ops_phase_split_correction_beta_p2p_pair_evals": (
+            correction["beta_p2p_pair_evals"]
+        ),
+        "ops_phase_split_correction_smooth_interp_fmas": (
+            correction["smooth_interp_fmas"]
+        ),
+        "ops_phase_split_smooth_sources_per_box": (
+            correction["smooth_sources_per_box"]
+        ),
+        "ops_phase_split_correction_status": correction["status"],
+        # windowed recombination is a per-parameter setup cost and this
+        # driver provisions no windowed family: zero executed, not unknown
+        "ops_phase_recombination_per_solve": 0,
+        "ops_phase_setup_recombination_flops": 0,
+        "ops_phase_solve_total_direct": (
+            int(far["far_total"]) + int(nearfield_pairs)
+        ),
+        "ops_phase_solve_total_rke": rke_solve_total,
+    }
+    for stage in PHASE_FAR_STAGES:
+        columns[f"ops_phase_far_{stage}"] = far[stage]
+
+    # consistency check against the published p-times-direct identity: the
+    # base apply plus the correction's extra applies must be p table applies
+    if correction["extra_table_fmas"] != "":
+        expected = int(split_table_count) * int(nearfield_pairs)
+        executed = int(nearfield_pairs) + int(correction["extra_table_fmas"])
+        if executed != expected:
+            columns["ops_phase_split_correction_status"] = (
+                f"{correction['status']};"
+                f"table_apply_mismatch:executed={executed},"
+                f"ops_split_table_fmas_per_solve={expected}"
+            )
+    return columns
+
+
+def _profile_solve_phases(
+    *, queue, traversal, paths, parameters, repeat_count
+):
+    """Run dedicated phase-instrumented solves, one profile per strategy.
+
+    These solves are extra work run after every timed phase; they never
+    enter the cumulative cost curves or the ``*_solve_mean_s`` columns.
+    """
+    from volumential.phase_profile import PhaseProfile, profiling
+
+    profiles = {}
+    solve_totals = {}
+    solve_counts = {}
+    for strategy in PHASE_STRATEGIES:
+        profile = PhaseProfile(sync=queue.finish)
+        total_s = 0.0
+        n_solves = 0
+        for parameter in parameters:
+            path = paths[parameter]
+            for _ in range(repeat_count):
+                with profiling(profile):
+                    _, wall_s = _solve_wall_s(
+                        queue,
+                        traversal,
+                        path[strategy],
+                        path["weighted_sources"],
+                        path["source_vals"],
+                    )
+                total_s += wall_s
+                n_solves += 1
+        profiles[strategy] = profile
+        solve_totals[strategy] = total_s
+        solve_counts[strategy] = n_solves
+    return profiles, solve_totals, solve_counts
+
+
+def _phase_second_columns(*, profiles, solve_totals, solve_counts):
+    """Mean per-solve seconds per phase and strategy, plus the residual."""
+    from volumential.phase_profile import FAR_FIELD_PHASES
+
+    columns = {}
+    nested = set()
+    for strategy in PHASE_STRATEGIES:
+        profile = profiles[strategy]
+        nested |= set(profile.nested_names)
+        n_solves = max(int(solve_counts[strategy]), 1)
+        solve_total = float(solve_totals[strategy]) / n_solves
+
+        far_total = 0.0
+        for name in FAR_FIELD_PHASES:
+            seconds = profile.seconds(name) / n_solves
+            far_total += seconds
+            columns[f"s_phase_{name}_{strategy}"] = seconds
+        columns[f"s_phase_far_total_{strategy}"] = far_total
+
+        recorded = far_total
+        for name in ("nearfield_table_apply", "split_correction"):
+            seconds = profile.seconds(name) / n_solves
+            recorded += seconds
+            columns[f"s_phase_{name}_{strategy}"] = seconds
+
+        columns[f"s_phase_other_{strategy}"] = solve_total - recorded
+        columns[f"s_phase_solve_total_{strategy}"] = solve_total
+
+    columns["phase_profile_nested_phases"] = ";".join(sorted(nested))
+    columns["phase_profile_solves_per_strategy"] = ";".join(
+        f"{strategy}:{solve_counts[strategy]}"
+        for strategy in PHASE_STRATEGIES
+    )
+    return columns
+
+
+def _phase_rows(summary_row):
+    """Long-format phase rows derived from a finished summary row.
+
+    An operation share is emitted only when every phase that is supposed to
+    carry a count actually carries one.  ``other`` is unpriced by design (it
+    is the seconds residual and has no operation count), but a *priced*
+    phase that came back blank -- which is what
+    :func:`_split_correction_operation_counts` writes when it cannot
+    interrogate the wrangler -- means the remaining counts are not a
+    partition of the solve.  Dividing them by their own sum would then
+    present a confident share of the wrong denominator, so in that case the
+    whole strategy's ``ops_share`` column is left empty instead and the
+    blank ``ops`` cell says why.
+    """
+    rows = []
+    shared = {
+        "mode": summary_row["mode"],
+        "kernel": summary_row["kernel"],
+        "direct_provisioning": summary_row["direct_provisioning"],
+    }
+
+    def _number(value):
+        if value == "" or value is None:
+            return None
+        return float(value)
+
+    for strategy in PHASE_STRATEGIES:
+        # (phase, ops, seconds, priced): "priced" phases must all carry a
+        # number for the operation shares to be a partition
+        entries = []
+        for stage in PHASE_FAR_STAGES:
+            entries.append(
+                (
+                    f"far_{stage}",
+                    summary_row[f"ops_phase_far_{stage}"],
+                    summary_row[f"s_phase_far_{stage}_{strategy}"],
+                    True,
+                )
+            )
+        entries.append(
+            (
+                "nearfield_table_apply",
+                summary_row[f"ops_phase_nearfield_table_apply_{strategy}"],
+                summary_row[f"s_phase_nearfield_table_apply_{strategy}"],
+                True,
+            )
+        )
+        entries.append(
+            (
+                "split_correction",
+                (
+                    summary_row["ops_phase_split_correction_rke"]
+                    if strategy == "rke"
+                    else 0
+                ),
+                summary_row[f"s_phase_split_correction_{strategy}"],
+                True,
+            )
+        )
+        entries.append(
+            (
+                "recombination",
+                summary_row["ops_phase_recombination_per_solve"],
+                0.0,
+                True,
+            )
+        )
+        entries.append(
+            ("other", "", summary_row[f"s_phase_other_{strategy}"], False)
+        )
+
+        ops_values = [_number(ops) for _, ops, _, _ in entries]
+        partition_is_complete = all(
+            value is not None
+            for value, (_, _, _, priced) in zip(
+                ops_values, entries, strict=True
+            )
+            if priced
+        )
+        ops_total = sum(value for value in ops_values if value is not None)
+        seconds_total = float(
+            summary_row[f"s_phase_solve_total_{strategy}"]
+        )
+        for (phase, ops, seconds, _priced), ops_value in zip(
+            entries, ops_values, strict=True
+        ):
+            rows.append(
+                {
+                    **shared,
+                    "scope": "solve",
+                    "strategy": strategy,
+                    "phase": phase,
+                    "unit": "per_solve",
+                    "ops_unit": PHASE_OPS_UNITS["solve"],
+                    "ops": ops,
+                    "seconds": seconds,
+                    "ops_share": (
+                        ops_value / ops_total
+                        if partition_is_complete
+                        and ops_value is not None
+                        and ops_total > 0.0
+                        else ""
+                    ),
+                    "seconds_share": (
+                        float(seconds) / seconds_total
+                        if seconds_total > 0.0
+                        else ""
+                    ),
+                }
+            )
+
+    setup_entries = (
+        (
+            "direct",
+            "direct_table_build",
+            summary_row["ops_phase_setup_direct_table_build"],
+            summary_row["s_phase_setup_direct_table_build"],
+        ),
+        (
+            "direct",
+            "direct_table_cache_load",
+            "",
+            summary_row["s_phase_setup_direct_table_cache_load"],
+        ),
+        (
+            "rke",
+            "channel_family_build",
+            summary_row["ops_phase_setup_channel_family_build"],
+            summary_row["s_phase_setup_channel_family_build"],
+        ),
+        (
+            "rke",
+            "channel_family_cache_load",
+            "",
+            summary_row["s_phase_setup_channel_family_cache_load"],
+        ),
+        (
+            "rke",
+            "recombination",
+            summary_row["ops_phase_setup_recombination_flops"],
+            summary_row["s_phase_setup_recombination"],
+        ),
+    )
+    for strategy in PHASE_STRATEGIES:
+        entries = [
+            entry for entry in setup_entries if entry[0] == strategy
+        ]
+        seconds_total = sum(float(entry[3]) for entry in entries)
+        for _, phase, ops, seconds in entries:
+            rows.append(
+                {
+                    **shared,
+                    "scope": "setup",
+                    "strategy": strategy,
+                    "phase": phase,
+                    "unit": "per_run",
+                    "ops_unit": PHASE_OPS_UNITS["setup"],
+                    "ops": ops,
+                    "seconds": seconds,
+                    "ops_share": "",
+                    "seconds_share": (
+                        float(seconds) / seconds_total
+                        if seconds_total > 0.0
+                        else ""
+                    ),
+                }
+            )
+    return rows
+
+# }}}
+
+
 def run_validation(
     *,
     mode: str,
@@ -327,6 +972,7 @@ def run_validation(
     repeat_count: int,
     warmup_count: int,
     direct_provisioning: str = "eager",
+    phase_repeat_count: int = 0,
 ):
     import pyopencl as cl
 
@@ -354,6 +1000,7 @@ def run_validation(
     # levels; lazy: only the level the priced workload touches)
     direct_tables = {}
     direct_build_total_s = 0.0
+    direct_load_total_s = 0.0
     for parameter in parameters:
         table, costs = _prepare_direct_tables(
             kernel="Yukawa",
@@ -367,6 +1014,7 @@ def run_validation(
         )
         direct_tables[parameter] = table
         direct_build_total_s += costs["build_s"]
+        direct_load_total_s += costs["load_s"]
         print(
             f"direct cold build lam={parameter:g}: {costs['build_s']:.1f} s",
             flush=True,
@@ -390,6 +1038,7 @@ def run_validation(
         split_smooth_quad_order=smooth_quad_order,
     )
     rke_build_total_s = rke_costs["build_s"]
+    rke_load_total_s = rke_costs["load_s"]
     print(f"rke cold build (p={split_order}): {rke_build_total_s:.1f} s",
           flush=True)
 
@@ -566,6 +1215,84 @@ def run_validation(
         flush=True,
     )
 
+    # per-phase shares (E6): analytic phase counts, then dedicated
+    # phase-instrumented solves.  Both run after every timed phase, so no
+    # reported timing column is perturbed by the instrumentation.
+    nmax_by_parameter = [
+        int(value)
+        for value in str(
+            operation_counters["ops_split_series_nmax_per_parameter"]
+        ).split(";")
+        if value
+    ]
+    phase_columns = _phase_operation_counts(
+        queue=queue,
+        traversal=traversal,
+        direct_wrangler=paths[parameters[0]]["direct"],
+        rke_wrangler=paths[parameters[0]]["rke"],
+        # every parameter's wrangler, because the generated remainder term
+        # count depends on the parameter and the profiled seconds these
+        # counts sit beside are a mean over the same set
+        rke_wranglers=[paths[parameter]["rke"] for parameter in parameters],
+        q_order=q_order,
+        smooth_quad_order=smooth_quad_order,
+        nmax_by_parameter=nmax_by_parameter,
+        split_table_count=operation_counters["ops_split_table_count"],
+    )
+    phase_columns.update(
+        {
+            "phase_profile_repeat_count": phase_repeat_count,
+            "ops_phase_setup_direct_table_build": (
+                operation_counters["ops_direct_singular_node_evals"]
+            ),
+            "ops_phase_setup_channel_family_build": (
+                operation_counters["ops_rke_channel_singular_node_evals"]
+            ),
+            "s_phase_setup_direct_table_build": direct_build_total_s,
+            "s_phase_setup_direct_table_cache_load": direct_load_total_s,
+            "s_phase_setup_channel_family_build": rke_build_total_s,
+            "s_phase_setup_channel_family_cache_load": rke_load_total_s,
+            # no windowed family is provisioned by this driver
+            "s_phase_setup_recombination": 0.0,
+        }
+    )
+    if phase_repeat_count > 0:
+        profiles, profile_totals, profile_counts = _profile_solve_phases(
+            queue=queue,
+            traversal=traversal,
+            paths=paths,
+            parameters=parameters,
+            repeat_count=phase_repeat_count,
+        )
+        phase_columns.update(
+            _phase_second_columns(
+                profiles=profiles,
+                solve_totals=profile_totals,
+                solve_counts=profile_counts,
+            )
+        )
+        print(
+            "phase shares (profiled solve, ops / s): "
+            + "; ".join(
+                f"{strategy} far "
+                f"{phase_columns['ops_phase_far_total']} / "
+                f"{phase_columns[f's_phase_far_total_{strategy}']:.4f} s, "
+                "table "
+                f"{phase_columns[f'ops_phase_nearfield_table_apply_{strategy}']}"
+                " / "
+                f"{phase_columns[f's_phase_nearfield_table_apply_{strategy}']:.4f}"
+                " s, correction "
+                f"{phase_columns[f's_phase_split_correction_{strategy}']:.4f} s"
+                for strategy in PHASE_STRATEGIES
+            ),
+            flush=True,
+        )
+    else:
+        for field in PHASE_SECONDS_FIELDS:
+            phase_columns.setdefault(field, "")
+        phase_columns.setdefault("phase_profile_nested_phases", "")
+        phase_columns.setdefault("phase_profile_solves_per_strategy", "")
+
     summary_row = {
         "mode": mode,
         "kernel": "Yukawa",
@@ -610,6 +1337,7 @@ def run_validation(
         "benchmark_total_s": time.perf_counter() - benchmark_start,
         "direct_provisioning": direct_provisioning,
         **operation_counters,
+        **phase_columns,
     }
     return solve_rows, summary_row
 
@@ -647,6 +1375,15 @@ def main() -> int:
         "'lazy' builds only the leaf level the priced workload touches "
         "(the executed lazy baseline of experiment E3)",
     )
+    parser.add_argument(
+        "--phase-repeat-count",
+        type=int,
+        help="dedicated phase-instrumented solves per parameter and "
+        "strategy for the E6 per-phase shares (default: 2 in smoke mode, 5 "
+        "in full mode).  These run after every timed phase and never enter "
+        "the cost curves; 0 disables phase timing and leaves the s_phase_* "
+        "columns empty while keeping the ops_phase_* counts",
+    )
     args = parser.parse_args()
 
     smoke = args.mode == "smoke"
@@ -663,6 +1400,11 @@ def main() -> int:
     if repeat_count is None:
         repeat_count = 6 if smoke else 400
     warmup_count = 1 if smoke else 2
+    phase_repeat_count = args.phase_repeat_count
+    if phase_repeat_count is None:
+        phase_repeat_count = 2 if smoke else 5
+    if phase_repeat_count < 0:
+        raise ValueError("--phase-repeat-count must be >= 0")
 
     solve_rows, summary_row = run_validation(
         mode=args.mode,
@@ -677,12 +1419,19 @@ def main() -> int:
         repeat_count=repeat_count,
         warmup_count=warmup_count,
         direct_provisioning=args.direct_provisioning,
+        phase_repeat_count=phase_repeat_count,
     )
 
     _write_csv(args.out_dir / "break_even_solves.csv", SOLVE_FIELDS, solve_rows)
     _write_csv(
         args.out_dir / "break_even_summary.csv", SUMMARY_FIELDS, [summary_row]
     )
+    if phase_repeat_count > 0:
+        _write_csv(
+            args.out_dir / "break_even_phases.csv",
+            PHASE_FIELDS,
+            _phase_rows(summary_row),
+        )
     print(
         "measured break-even repeat: "
         f"{summary_row['measured_break_even_repeat']} "

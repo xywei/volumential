@@ -45,6 +45,85 @@ from typing import Any
 import numpy as np
 
 
+# {{{ per-phase share columns (E6)
+
+#: Far-field FMM stage names, matching
+#: :data:`volumential.opcounters.FMM_FAR_FIELD_STAGES`.
+PHASE_FAR_STAGES = (
+    "form_multipoles",
+    "coarsen_multipoles",
+    "multipole_to_local",
+    "eval_multipoles",
+    "form_locals",
+    "refine_locals",
+    "eval_locals",
+)
+
+#: Timed phases reported per path, aggregated over the far-field stages.
+PHASE_TIMED_NAMES = (
+    "far_total",
+    "nearfield_table_apply",
+    "split_correction",
+    "other",
+    "solve_total",
+)
+
+#: Path prefixes: the fixed-parameter direct reference and the split path.
+PHASE_PATHS = ("reference", "split")
+
+#: Operation counts of the split path's correction phase, all produced by
+#: :func:`_split_correction_operation_counts`, the same function
+#: ``benchmarks/break_even_validation.py`` uses, so the two E6 artifacts
+#: cannot drift apart.  Without them the ``ops_phase_*`` columns would be a
+#: far-field decomposition plus one base near-field pair count and could not
+#: be summed into a solve total: the correction phase is the split
+#: strategy's dominant near-field cost.
+PHASE_CORRECTION_OPS_NAMES = (
+    "ops_phase_split_correction_extra_table_fmas",
+    "ops_phase_split_correction_remainder_pair_evals",
+    "ops_phase_split_correction_remainder_term_evals",
+    "ops_phase_split_correction_remainder_terms_per_pair",
+    "ops_phase_split_correction_beta_p2p_pair_evals",
+    "ops_phase_split_correction_smooth_interp_fmas",
+    "ops_phase_split_smooth_sources_per_box",
+    "ops_phase_split_correction_status",
+    "ops_phase_split_correction_total",
+)
+
+PHASE_FIELDS = (
+    "phase_profile_repeat_count",
+    "phase_counting_rule",
+    *(f"ops_phase_far_{stage}" for stage in PHASE_FAR_STAGES),
+    "ops_phase_far_total",
+    "ops_phase_nearfield_point_pairs_per_solve",
+    *PHASE_CORRECTION_OPS_NAMES,
+    *(f"ops_phase_solve_total_{path}" for path in PHASE_PATHS),
+    *(
+        f"s_phase_{name}_{path}"
+        for path in PHASE_PATHS
+        for name in PHASE_TIMED_NAMES
+    ),
+)
+
+#: Identifies the counting-rule revision the ``ops_phase_*`` columns follow,
+#: so a consumer can tell two executions of different rules apart.  Kept
+#: identical to ``break_even_validation``'s, because the counts come from
+#: the same functions.
+PHASE_COUNTING_RULE = (
+    "e6-v3:far=dense_coefficient_touches_from_traversal_and_expansion_sizes;"
+    "nearfield=fma_per_nearfield_pair_per_applied_table_dtype_blind;"
+    "split_correction=extra_table_fmas"
+    "+remainder_pair_evals*generated_remainder_term_count"
+    "+beta_p2p_pair_evals+smooth_interp_fmas;"
+    "smooth_interp=tensor_product_axis_by_axis_not_dense"
+)
+
+#: Value written into every per-phase column when phase profiling is off.
+PHASE_UNMEASURED = ""
+
+# }}}
+
+
 FIELDS = (
     "case_id",
     "mode",
@@ -165,6 +244,28 @@ FIELDS = (
     "fmm_expansion_radius",
     "far_field_status",
     "implied_reference_norm",
+    # per-phase shares of one end-to-end solve (E6), opt-in through
+    # --phase-repeat-count.  Off by default, so a run that does not ask for
+    # them emits these columns empty and is otherwise unchanged.  Counting
+    # rules and the split-correction caveats are documented in
+    # benchmarks/break_even_validation.py, which owns the primary E6
+    # artifact, and the counts here come from the same functions under the
+    # same phase_counting_rule tag; here the far field is reported as one
+    # aggregate in the seconds columns because the per-stage breakdown is
+    # the same traversal in every row.  The "_reference" suffix is the
+    # row's fixed-parameter direct reference path; "_split" is the row's
+    # own table_strategy path -- the online split evaluator on online_split
+    # rows, and the windowed-assembled table (which rides the unchanged
+    # direct warm path, so it records neither split_correction seconds nor
+    # correction operations) on windowed_assembled rows.
+    #
+    # ops_phase_solve_total_{reference,split} are per-path operation
+    # totals, so an operation share is a division inside one row.  The
+    # split path's total includes the correction phase; a blank
+    # ops_phase_split_correction_* means the wrangler could not be
+    # interrogated (see ops_phase_split_correction_status) and the split
+    # total is withheld rather than reported without its dominant phase.
+    *PHASE_FIELDS,
 )
 
 
@@ -947,6 +1048,7 @@ def _run_path(
     split_smooth_quad_order: int | None = None,
     repeat_count: int,
     dim: int = 2,
+    phase_repeat_count: int = 0,
 ):
     from volumential.volume_fmm import drive_volume_fmm
 
@@ -1084,7 +1186,474 @@ def _run_path(
                 "isolated_warm_python_scalar_coefficients"
             )
 
+    timing.update(
+        _phase_measurements(
+            queue=queue,
+            traversal=traversal,
+            wrangler=wrangler,
+            solve=solve,
+            phase_repeat_count=phase_repeat_count,
+            split=split,
+            q_order=q_order,
+            split_order=split_order,
+            split_smooth_quad_order=split_smooth_quad_order,
+        )
+    )
+
     return potential.get(queue), timing, wrangler
+
+
+def _tensor_product_interp_fmas(*, dim: int, q: int, q_smooth: int) -> int:
+    """FMAs of one box's smooth-quadrature interpolation, as executed.
+
+    ``_interpolate_box_values_to_smooth_quad`` applies the 1D barycentric
+    matrix one axis at a time (``interp_mat @ v @ interp_mat.T`` in 2D, the
+    optimized ``einsum`` path in 3D), so the cost is the tensor-product sum
+    ``sum_{k=1..d} q_smooth**k * q**(d-k+1)`` and *not* the dense
+    ``q_smooth**d * q**d`` a matrix-free reading would suggest.  At the
+    production configuration (``d = 2``, ``q = 4``, ``q_smooth = 8``) this
+    is 384 per box against 1024 dense, a factor of 2.67.
+    """
+    dim = int(dim)
+    q = int(q)
+    q_smooth = int(q_smooth)
+    return int(
+        sum(q_smooth ** (axis + 1) * q ** (dim - axis) for axis in range(dim))
+    )
+
+
+def _remainder_terms_per_pair(wrangler) -> int:
+    """Terms the split remainder kernel evaluates at each near-field pair.
+
+    Counted from the *generated* expression, not from a formula: the
+    series length ``nmax`` is not the term count.  In 2D
+    ``_HelmholtzSplitSeriesRemainderKernel`` emits a constant, one
+    ``r**(2n)`` term for every ``n = 1 .. nmax``, and a second
+    ``r**(2n) log r`` term for every ``n >= split_order`` -- roughly twice
+    ``nmax``.  In 3D it emits one ``r**(n-1)`` term per retained ``n``,
+    skipping the even powers the tables extract.  Deriving the multiplier
+    from the expression means a change to either branch cannot leave this
+    count stale.
+    """
+    import pymbolic.primitives as prim
+
+    kernel = wrangler._get_helmholtz_split_remainder_kernel()
+    expression = kernel.expression
+    while True:
+        # unwrap whatever the kernel-wrapper chain put around it
+        inner = getattr(expression, "expression", None)
+        if inner is None or inner is expression:
+            break
+        expression = inner
+
+    def _count(expr):
+        if isinstance(expr, prim.Sum):
+            return sum(_count(child) for child in expr.children)
+        # the 3D branch starts from a literal ``expr = 0`` that pymbolic
+        # keeps as a Sum child; it is not an evaluated term
+        if isinstance(expr, int | float | complex | np.number) and expr == 0:
+            return 0
+        return 1
+
+    return int(_count(expression))
+
+
+def _split_correction_operation_counts(
+    *, queue, traversal, wrangler, q_order, smooth_quad_order
+):
+    """Executed operation counts of the online split correction phase.
+
+    The correction phase runs, in this order (see
+    ``FPNDSumpyExpansionWrangler.eval_direct_helmholtz_split_correction``):
+    an optional interpolated smooth-source rebuild, one near-field P2P for
+    the series remainder, and, per retained term, one table apply plus (for
+    2D single-table ``power_log`` terms under the ``p2p`` beta mode) one
+    further near-field P2P.  Every count below is read off the executed
+    wrangler and traversal, so it prices what ran rather than the symbolic
+    ``Delta W`` of the cost model.
+
+    Two conventions are inherited from the pre-existing ``ops_*`` columns
+    and are worth stating because they make these counts *lower bounds* on
+    executed kernel launches rather than launch counts:
+
+    * a table apply is priced at one FMA per near-field pair per applied
+      table, blind to the arithmetic dtype.  This driver runs a complex128
+      source function, and ``_eval_direct_helmholtz_split_term_table``
+      dispatches a real-valued term kernel once for the real part and once
+      for the imaginary part, so each retained channel executes *two* List 1
+      passes for the one apply counted here.  Counting it once is what keeps
+      ``base + extra == ops_split_table_fmas_per_solve``, the published
+      ``p``-times-direct identity, and it prices the two strategies on the
+      same dtype-blind footing;
+    * the smooth-source rebuild is priced by
+      :func:`_tensor_product_interp_fmas`, i.e. as the axis-by-axis
+      contraction the implementation performs.
+
+    :returns: a dict of counts plus a ``status`` string; on any failure to
+        interrogate the wrangler the counts are ``""`` and ``status``
+        carries the exception, so an implementation change shows up as a
+        blank rather than as a wrong number.
+    """
+    import volumential.opcounters as opcounters
+    from volumential.expansion_wrangler_fpnd import (
+        _normalize_helmholtz_split_term_key,
+    )
+
+    blank = {
+        "extra_table_fmas": "",
+        "remainder_pair_evals": "",
+        "beta_p2p_pair_evals": "",
+        "smooth_interp_fmas": "",
+        "smooth_sources_per_box": "",
+        "remainder_terms_per_pair": "",
+        "status": "",
+    }
+
+    try:
+        tree = traversal.tree
+        dim = int(tree.dimensions)
+        n_quad_points = int(q_order) ** dim
+
+        split_order = int(wrangler.helmholtz_split_order)
+        use_series_remainder_path = split_order > 1 or (
+            split_order == 1
+            and not wrangler.helmholtz_split_order1_legacy_subtraction
+        )
+        smooth_order = (
+            None if smooth_quad_order is None else int(smooth_quad_order)
+        )
+        use_interp_smooth_quad = (
+            smooth_order is not None and smooth_order > int(q_order)
+        )
+
+        if use_interp_smooth_quad:
+            interp_data = wrangler._get_helmholtz_split_smooth_interp_data(
+                smooth_order,
+                allow_node_overlap=use_series_remainder_path,
+            )
+            smooth_sources_per_box = int(interp_data["n_smooth_points"])
+        else:
+            smooth_sources_per_box = n_quad_points
+
+        box_source_counts = np.asarray(
+            tree.box_source_counts_nonchild.get(queue), dtype=np.int64
+        )
+        smooth_counts = np.where(
+            box_source_counts > 0, smooth_sources_per_box, 0
+        ).astype(np.int64)
+        remainder_pair_evals = opcounters.nearfield_point_pairs_from_counts(
+            target_boxes=traversal.target_boxes.get(queue),
+            neighbor_source_boxes_starts=(
+                traversal.neighbor_source_boxes_starts.get(queue)
+            ),
+            neighbor_source_boxes_lists=(
+                traversal.neighbor_source_boxes_lists.get(queue)
+            ),
+            box_target_counts_nonchild=(
+                tree.box_target_counts_nonchild.get(queue)
+            ),
+            box_source_counts_nonchild=smooth_counts,
+        )
+
+        # exclude_self: on the base-quadrature path the correction keeps
+        # target_to_source and passes the tree's own exclude_self flag, so
+        # the P2P skips each target's own source.  The interpolated path
+        # pops target_to_source and passes False.  Counting the skipped
+        # diagonal would overstate the remainder, and the beta P2P below,
+        # by one pair per target.
+        excluded_self_pairs = 0
+        if not use_interp_smooth_quad and getattr(
+            getattr(wrangler, "tree_indep", None), "exclude_self", False
+        ):
+            excluded_self_pairs = int(
+                np.sum(
+                    np.asarray(
+                        tree.box_target_counts_nonchild.get(queue),
+                        dtype=np.int64,
+                    )[np.asarray(traversal.target_boxes.get(queue))]
+                )
+            )
+        remainder_pair_evals = max(
+            0, int(remainder_pair_evals) - excluded_self_pairs
+        )
+
+        if use_interp_smooth_quad:
+            n_active_source_boxes = int(np.count_nonzero(box_source_counts))
+            smooth_interp_fmas = (
+                n_active_source_boxes
+                * _tensor_product_interp_fmas(
+                    dim=dim, q=int(q_order), q_smooth=int(smooth_order)
+                )
+            )
+        else:
+            smooth_interp_fmas = 0
+
+        nearfield_pairs = opcounters.nearfield_point_pairs(queue, traversal)
+        beta_mode = (
+            str(
+                wrangler._helmholtz_split_auto_config.get(
+                    "power_log_single_table_beta_mode", "p2p"
+                )
+            )
+            .strip()
+            .lower()
+        )
+        extra_table_applies = 0
+        beta_p2p_passes = 0
+        for term_key, _kernel, _coeff in wrangler._helmholtz_split_extra_terms():
+            term_tables = wrangler._get_helmholtz_split_term_tables(term_key)
+            n_term_tables = (
+                len(term_tables) if isinstance(term_tables, list) else 1
+            )
+            extra_table_applies += 1
+            term_kind, _term_power = _normalize_helmholtz_split_term_key(
+                term_key
+            )
+            if dim == 2 and term_kind == "power_log" and n_term_tables == 1:
+                if beta_mode == "p2p":
+                    beta_p2p_passes += 1
+                else:
+                    # the "table" beta mode applies one more table instead
+                    extra_table_applies += 1
+
+        return {
+            "extra_table_fmas": extra_table_applies * nearfield_pairs,
+            "remainder_pair_evals": remainder_pair_evals,
+            "beta_p2p_pair_evals": beta_p2p_passes * remainder_pair_evals,
+            "smooth_interp_fmas": smooth_interp_fmas,
+            "smooth_sources_per_box": smooth_sources_per_box,
+            "remainder_terms_per_pair": _remainder_terms_per_pair(wrangler),
+            "status": (
+                "interpolated_smooth_quadrature"
+                if use_interp_smooth_quad
+                else "base_quadrature"
+            ),
+        }
+    except Exception as exc:  # noqa: BLE001 - recorded, never guessed around
+        return {**blank, "status": f"unavailable:{type(exc).__name__}: {exc}"}
+
+
+def _phase_correction_op_columns(
+    *, queue, traversal, wrangler, split, q_order, split_order,
+    split_smooth_quad_order,
+):
+    """The ``ops_phase_split_correction_*`` columns of one path.
+
+    A path that runs no online split correction -- the direct reference,
+    and the windowed-assembled path, which rides the unchanged direct warm
+    path -- reports a structural zero with an explicit status, so a blank
+    always means "could not be counted" and never "there was none".
+    """
+    zero = {
+        "ops_phase_split_correction_extra_table_fmas": 0,
+        "ops_phase_split_correction_remainder_pair_evals": 0,
+        "ops_phase_split_correction_remainder_term_evals": 0,
+        "ops_phase_split_correction_remainder_terms_per_pair": 0,
+        "ops_phase_split_correction_beta_p2p_pair_evals": 0,
+        "ops_phase_split_correction_smooth_interp_fmas": 0,
+        "ops_phase_split_smooth_sources_per_box": 0,
+        "ops_phase_split_correction_status": "no_split_correction",
+        "ops_phase_split_correction_total": 0,
+    }
+    if not split or q_order is None:
+        return zero
+
+    correction = _split_correction_operation_counts(
+        queue=queue,
+        traversal=traversal,
+        wrangler=wrangler,
+        q_order=q_order,
+        smooth_quad_order=split_smooth_quad_order,
+    )
+    remainder_pairs = correction["remainder_pair_evals"]
+    terms_per_pair = correction.get("remainder_terms_per_pair", "")
+    if remainder_pairs == "":
+        # the wrangler could not be interrogated: every count that depends
+        # on it, and the solve total that would swallow it, stay blank
+        return {
+            f"ops_phase_split_correction_{name}": correction.get(name, "")
+            for name in (
+                "extra_table_fmas", "remainder_pair_evals",
+                "beta_p2p_pair_evals", "smooth_interp_fmas",
+                "remainder_terms_per_pair", "status",
+            )
+        } | {
+            "ops_phase_split_correction_remainder_term_evals": "",
+            "ops_phase_split_smooth_sources_per_box": (
+                correction["smooth_sources_per_box"]
+            ),
+            "ops_phase_split_correction_total": "",
+        }
+
+    if terms_per_pair == "":
+        # the remainder kernel could not be interrogated, so the term count
+        # this multiplies by is unknown; the same policy as a blank pair
+        # count applies
+        return {
+            **zero,
+            "ops_phase_split_correction_status": correction["status"],
+            "ops_phase_split_correction_total": "",
+        }
+
+    remainder_term_evals = float(remainder_pairs) * float(terms_per_pair)
+    total = (
+        float(correction["extra_table_fmas"])
+        + remainder_term_evals
+        + float(correction["beta_p2p_pair_evals"])
+        + float(correction["smooth_interp_fmas"])
+    )
+    return {
+        "ops_phase_split_correction_extra_table_fmas": (
+            correction["extra_table_fmas"]
+        ),
+        "ops_phase_split_correction_remainder_pair_evals": remainder_pairs,
+        "ops_phase_split_correction_remainder_term_evals": (
+            remainder_term_evals
+        ),
+        "ops_phase_split_correction_remainder_terms_per_pair": (
+            terms_per_pair
+        ),
+        "ops_phase_split_correction_beta_p2p_pair_evals": (
+            correction["beta_p2p_pair_evals"]
+        ),
+        "ops_phase_split_correction_smooth_interp_fmas": (
+            correction["smooth_interp_fmas"]
+        ),
+        "ops_phase_split_smooth_sources_per_box": (
+            correction["smooth_sources_per_box"]
+        ),
+        "ops_phase_split_correction_status": correction["status"],
+        "ops_phase_split_correction_total": total,
+    }
+
+
+def _phase_measurements(
+    *,
+    queue,
+    traversal,
+    wrangler,
+    solve,
+    phase_repeat_count: int,
+    split: bool = False,
+    q_order: int | None = None,
+    split_order: int = 1,
+    split_smooth_quad_order: int | None = None,
+):
+    """Per-phase operation counts and seconds of one end-to-end solve (E6).
+
+    Runs ``phase_repeat_count`` extra, phase-instrumented solves *after*
+    every timed phase, so no reported timing column is perturbed.  Phase
+    profiling synchronizes the command queue at every phase boundary, which
+    makes a profiled solve slower than an unprofiled one; the profiled total
+    is reported next to the shares so the perturbation stays visible.  With
+    ``phase_repeat_count == 0`` nothing runs and every phase value is left
+    unmeasured.
+
+    Counting rules are those of ``benchmarks/break_even_validation.py``,
+    literally: the far-field counts are dense coefficient touches derived
+    from the executed traversal and expansion sizes, the near-field pair
+    count is one fused multiply-add per (target point, source quadrature
+    point) pair per applied table, and the split path's correction counts
+    come from :func:`_split_correction_operation_counts`, the same function
+    that driver calls.  Both are recorded under the same
+    :data:`PHASE_COUNTING_RULE` tag.
+
+    ``ops_phase_solve_total_*`` is therefore a genuine per-path total: far
+    field plus the base near-field apply, plus, on an online-split path, the
+    correction phase -- the retained-channel applies, the series remainder
+    over its (possibly interpolated) smooth source set, the ``power_log``
+    beta P2P, and the smooth-source rebuild.  On a path that runs no online
+    split (``split=False``: the direct reference, and the
+    windowed-assembled path, which rides the unchanged direct warm path) the
+    correction counts are a structural 0, not a blank.
+    """
+    measurements = {
+        "phase_profile_repeat_count": phase_repeat_count,
+        "phase_counting_rule": PHASE_UNMEASURED,
+        "ops_phase_far_total": PHASE_UNMEASURED,
+        "ops_phase_nearfield_point_pairs_per_solve": PHASE_UNMEASURED,
+        "ops_phase_solve_total": PHASE_UNMEASURED,
+        **{
+            name: PHASE_UNMEASURED for name in PHASE_CORRECTION_OPS_NAMES
+        },
+        **{
+            f"ops_phase_far_{stage}": PHASE_UNMEASURED
+            for stage in PHASE_FAR_STAGES
+        },
+        **{
+            f"s_phase_{name}": PHASE_UNMEASURED
+            for name in PHASE_TIMED_NAMES
+        },
+    }
+    if phase_repeat_count <= 0:
+        return measurements
+
+    import volumential.opcounters as opcounters
+    from volumential.phase_profile import (
+        FAR_FIELD_PHASES,
+        PhaseProfile,
+        profiling,
+    )
+
+    far = opcounters.fmm_stage_operation_counts_from_traversal(
+        queue, traversal, wrangler
+    )
+    measurements["ops_phase_far_total"] = far["far_total"]
+    for stage in PHASE_FAR_STAGES:
+        measurements[f"ops_phase_far_{stage}"] = far[stage]
+    nearfield_pairs = opcounters.nearfield_point_pairs(queue, traversal)
+    measurements["ops_phase_nearfield_point_pairs_per_solve"] = nearfield_pairs
+    measurements["phase_counting_rule"] = PHASE_COUNTING_RULE
+    measurements.update(
+        _phase_correction_op_columns(
+            queue=queue,
+            traversal=traversal,
+            wrangler=wrangler,
+            split=split,
+            q_order=q_order,
+            split_order=split_order,
+            split_smooth_quad_order=split_smooth_quad_order,
+        )
+    )
+    correction_total = measurements["ops_phase_split_correction_total"]
+    if correction_total != PHASE_UNMEASURED:
+        measurements["ops_phase_solve_total"] = (
+            float(far["far_total"])
+            + float(nearfield_pairs)
+            + float(correction_total)
+        )
+
+    profile = PhaseProfile(sync=queue.finish)
+    solve_total_s = 0.0
+    for _ in range(phase_repeat_count):
+        queue.finish()
+        start = time.perf_counter()
+        with profiling(profile):
+            solve()
+        queue.finish()
+        solve_total_s += time.perf_counter() - start
+
+    solve_total_s /= phase_repeat_count
+    far_total_s = sum(
+        profile.seconds(name) for name in FAR_FIELD_PHASES
+    ) / phase_repeat_count
+    table_s = (
+        profile.seconds("nearfield_table_apply") / phase_repeat_count
+    )
+    correction_s = profile.seconds("split_correction") / phase_repeat_count
+    measurements.update(
+        {
+            "s_phase_far_total": far_total_s,
+            "s_phase_nearfield_table_apply": table_s,
+            "s_phase_split_correction": correction_s,
+            "s_phase_other": solve_total_s
+            - far_total_s
+            - table_s
+            - correction_s,
+            "s_phase_solve_total": solve_total_s,
+        }
+    )
+    return measurements
 
 
 def _get_direct_table(
@@ -1656,6 +2225,7 @@ def _run_windowed_strategy(
     classical_probe_tolerance: float,
     direct_build_config,
     repeat_count: int,
+    phase_repeat_count: int,
     source_weights,
     q_points,
     coords_host,
@@ -1868,6 +2438,7 @@ def _run_windowed_strategy(
             split=False,
             split_order=1,
             repeat_count=repeat_count,
+            phase_repeat_count=phase_repeat_count,
         )
         windowed_values, windowed_timing, _ = _run_path(
             ctx=ctx,
@@ -1885,6 +2456,7 @@ def _run_windowed_strategy(
             split=False,
             split_order=1,
             repeat_count=repeat_count,
+            phase_repeat_count=phase_repeat_count,
         )
 
         diff = windowed_values - reference_values
@@ -1908,6 +2480,14 @@ def _run_windowed_strategy(
                 "windowed_table_apply_mean_s": windowed_timing[
                     "table_apply_mean_s"
                 ],
+                # on a windowed_assembled row the row's strategy path is the
+                # assembled table, which rides the unchanged direct warm
+                # evaluator, so its split_correction phase is empty by
+                # construction
+                **_phase_row_columns(
+                    reference_timing=reference_timing,
+                    split_timing=windowed_timing,
+                ),
             }
         )
         row["implied_reference_norm"] = _implied_reference_norm(
@@ -2149,6 +2729,46 @@ def _validate_yukawa_order_convergence(rows: list[dict[str, Any]]) -> None:
             )
 
 
+def _phase_row_columns(*, reference_timing, split_timing):
+    """Map the two paths' phase measurements onto the row's phase columns.
+
+    The operation counts describe the shared traversal and are therefore
+    taken from whichever path measured them; the seconds are per path.  A
+    row whose run did not ask for phase profiling gets every column empty.
+    """
+    by_path = {"reference": reference_timing, "split": split_timing}
+    columns = {
+        "phase_profile_repeat_count": reference_timing.get(
+            "phase_profile_repeat_count", PHASE_UNMEASURED
+        ),
+    }
+    for name in ("phase_counting_rule",
+                 "ops_phase_far_total",
+                 "ops_phase_nearfield_point_pairs_per_solve",
+                 *(f"ops_phase_far_{stage}" for stage in PHASE_FAR_STAGES)):
+        value = PHASE_UNMEASURED
+        for timing in (reference_timing, split_timing):
+            candidate = timing.get(name, PHASE_UNMEASURED)
+            if candidate != PHASE_UNMEASURED:
+                value = candidate
+                break
+        columns[name] = value
+    # the correction phase belongs to the split path alone, so unlike the
+    # shared far-field counts above these are read from that path only
+    for name in PHASE_CORRECTION_OPS_NAMES:
+        columns[name] = split_timing.get(name, PHASE_UNMEASURED)
+    for path, timing in by_path.items():
+        columns[f"ops_phase_solve_total_{path}"] = timing.get(
+            "ops_phase_solve_total", PHASE_UNMEASURED
+        )
+    for path, timing in by_path.items():
+        for name in PHASE_TIMED_NAMES:
+            columns[f"s_phase_{name}_{path}"] = timing.get(
+                f"s_phase_{name}", PHASE_UNMEASURED
+            )
+    return columns
+
+
 def _row_from_result(
     *,
     mode: str,
@@ -2217,6 +2837,9 @@ def _row_from_result(
         "online_remainder_s": split_timing["smooth_residual_mean_s"],
         "online_remainder_time_kind": split_timing["smooth_residual_time_kind"],
         "split_term_keys": _split_term_keys(accounting),
+        **_phase_row_columns(
+            reference_timing=reference_timing, split_timing=split_timing
+        ),
         **{
             key: value
             for key, value in accounting_dict.items()
@@ -2276,6 +2899,7 @@ def run_benchmark(
     direct_levels: list[int],
     repeat_count: int,
     dim: int = 2,
+    phase_repeat_count: int = 0,
     power_log_beta_mode: str = "p2p",
     windowed_thetas: list[float] | None = None,
     window_theta: float = DEFAULT_WINDOW_THETA,
@@ -2332,6 +2956,8 @@ def run_benchmark(
         )
     if repeat_count < 1:
         raise ValueError("repeat_count must be >= 1")
+    if phase_repeat_count < 0:
+        raise ValueError("phase_repeat_count must be >= 0")
     if len(set(split_orders)) != len(split_orders):
         raise ValueError("split_orders must be unique")
     if nlevels not in direct_levels:
@@ -2447,6 +3073,7 @@ def run_benchmark(
                 split=False,
                 split_order=1,
                 repeat_count=repeat_count,
+                phase_repeat_count=phase_repeat_count,
             )
             parameter_cases.append(
                 {
@@ -2525,6 +3152,7 @@ def run_benchmark(
                     split_auto_config=split_auto_config,
                     split_smooth_quad_order=smooth_quad_order,
                     repeat_count=repeat_count,
+                    phase_repeat_count=phase_repeat_count,
                 )
                 accounting = split_wrangler.get_helmholtz_split_cache_accounting(
                     parameter_count=len(parameters)
@@ -2603,6 +3231,7 @@ def run_benchmark(
                     classical_probe_tolerance=classical_probe_tolerance,
                     direct_build_config=direct_build_config,
                     repeat_count=repeat_count,
+                    phase_repeat_count=phase_repeat_count,
                     source_weights=source_weights,
                     q_points=q_points,
                     coords_host=coords_host,
@@ -2689,6 +3318,17 @@ def main() -> int:
         "--repeat-count",
         type=int,
         help="number of timed applications per parameter",
+    )
+    parser.add_argument(
+        "--phase-repeat-count",
+        type=int,
+        default=0,
+        help="extra phase-instrumented solves per row for the E6 per-phase "
+        "share columns (default 0, i.e. off: the ops_phase_*/s_phase_* "
+        "columns stay empty and the run is otherwise unchanged).  These "
+        "solves run after every timed phase and never enter a timing "
+        "column; profiling synchronizes the queue at each phase boundary, "
+        "so s_phase_solve_total_* exceeds the unprofiled solve mean",
     )
     parser.add_argument(
         "--windowed-thetas",
@@ -2804,6 +3444,8 @@ def main() -> int:
     )
     if repeat_count < 1:
         parser.error("--repeat-count must be >= 1")
+    if args.phase_repeat_count < 0:
+        parser.error("--phase-repeat-count must be >= 0")
 
     if args.direct_levels:
         direct_levels = _parse_csv_levels(args.direct_levels)
@@ -2856,6 +3498,7 @@ def main() -> int:
             yukawa_lam=yukawa_lam,
             direct_levels=direct_levels,
             repeat_count=repeat_count,
+            phase_repeat_count=args.phase_repeat_count,
             power_log_beta_mode=args.power_log_beta_mode,
             windowed_thetas=windowed_thetas,
             window_theta=args.window_theta,

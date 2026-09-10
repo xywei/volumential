@@ -1311,3 +1311,318 @@ def test_keller_segel_endpoint_planner_avoids_short_terminal_step():
     assert quantized_below_floor == pytest.approx((0.001, False, True))
 
     assert module._plan_time_step(0.0015, 0.0012, 0.001, 2.0) is None
+
+
+# {{{ per-phase share columns of the split-parameter sweep (E6)
+
+def test_sweep_phase_columns_are_appended_and_unique():
+    module = _load_benchmark("split_parameter_sweep")
+    fields = list(module.FIELDS)
+    assert len(fields) == len(set(fields))
+    last_pre_e6 = fields.index("classical_probe_s")
+    for name in module.PHASE_FIELDS:
+        assert fields.index(name) > last_pre_e6
+    for name in module.PHASE_FIELDS:
+        assert name.startswith(("ops_phase_", "s_phase_", "phase_"))
+
+
+def test_sweep_phase_measurements_are_inert_when_disabled():
+    module = _load_benchmark("split_parameter_sweep")
+
+    def _explode():  # pragma: no cover - must never be called
+        raise AssertionError("no solve may run when phase profiling is off")
+
+    measurements = module._phase_measurements(
+        queue=None,
+        traversal=None,
+        wrangler=None,
+        solve=_explode,
+        phase_repeat_count=0,
+    )
+    assert measurements["phase_profile_repeat_count"] == 0
+    for key, value in measurements.items():
+        if key != "phase_profile_repeat_count":
+            assert value == module.PHASE_UNMEASURED
+
+
+def test_sweep_phase_row_columns_map_both_paths():
+    module = _load_benchmark("split_parameter_sweep")
+    reference = module._phase_measurements(
+        queue=None, traversal=None, wrangler=None, solve=None,
+        phase_repeat_count=0,
+    )
+    split = dict(reference)
+    reference["ops_phase_far_total"] = 1700
+    reference["s_phase_solve_total"] = 0.5
+    split["s_phase_solve_total"] = 2.0
+    split["s_phase_split_correction"] = 1.5
+
+    columns = module._phase_row_columns(
+        reference_timing=reference, split_timing=split
+    )
+    assert set(columns) == set(module.PHASE_FIELDS)
+    # the shared traversal's counts are taken from whichever path has them
+    assert columns["ops_phase_far_total"] == 1700
+    assert columns["s_phase_solve_total_reference"] == 0.5
+    assert columns["s_phase_solve_total_split"] == 2.0
+    assert columns["s_phase_split_correction_split"] == 1.5
+    assert columns["s_phase_split_correction_reference"] == (
+        module.PHASE_UNMEASURED
+    )
+
+
+def test_excluded_self_pairs_are_not_counted_in_the_remainder():
+    """``exclude_self`` skips each target's own source; the count must too.
+
+    On the base-quadrature path the correction keeps ``target_to_source``
+    and passes the tree's ``exclude_self``, so the P2P skips the diagonal.
+    Counting it overstates the remainder, and the beta P2P with it.
+    """
+    import numpy as _np
+
+    sweep = _load_benchmark("split_parameter_sweep")
+
+    class _Dev:
+        def __init__(self, array):
+            self._array = _np.asarray(array)
+
+        def get(self, queue=None):
+            return self._array
+
+    # per_box must equal q_order**dim, since the remainder runs on the
+    # smooth source set, which is the base quadrature here
+    n_boxes, q_order, per_box = 4, 2, 4
+    counts = _np.full(n_boxes, per_box, dtype=_np.int64)
+    starts = _np.arange(n_boxes + 1, dtype=_np.int64)
+    lists = _np.arange(n_boxes, dtype=_np.int64)
+
+    class _Tree:
+        dimensions = 2
+        box_source_counts_nonchild = _Dev(counts)
+        box_target_counts_nonchild = _Dev(counts)
+
+    class _Traversal:
+        tree = _Tree()
+        target_boxes = _Dev(_np.arange(n_boxes, dtype=_np.int64))
+        neighbor_source_boxes_starts = _Dev(starts)
+        neighbor_source_boxes_lists = _Dev(lists)
+
+    class _TreeIndep:
+        def __init__(self, exclude_self):
+            self.exclude_self = exclude_self
+
+    class _Wrangler:
+        helmholtz_split_order = 1
+        helmholtz_split_order1_legacy_subtraction = False
+        _helmholtz_split_auto_config = {}
+
+        def __init__(self, exclude_self):
+            self.tree_indep = _TreeIndep(exclude_self)
+
+        def _helmholtz_split_extra_terms(self):
+            return []
+
+        def _get_helmholtz_split_remainder_kernel(self):
+            from volumential.expansion_wrangler_fpnd import (
+                _HelmholtzSplitSeriesRemainderKernel,
+            )
+            return _HelmholtzSplitSeriesRemainderKernel(2, 4.0, 0.0, 1, 3)
+
+    def _count(exclude_self):
+        return sweep._split_correction_operation_counts(
+            queue=None,
+            traversal=_Traversal(),
+            wrangler=_Wrangler(exclude_self),
+            q_order=q_order,
+            smooth_quad_order=None,
+        )
+
+    kept = _count(False)
+    skipped = _count(True)
+    # the helper swallows any interrogation failure into `status`; surface
+    # it rather than comparing against a blank
+    assert not str(kept["status"]).startswith("unavailable"), kept["status"]
+    assert not str(skipped["status"]).startswith("unavailable"), (
+        skipped["status"]
+    )
+
+    # every box neighbours only itself here: 4 boxes x 5 targets x 5 sources
+    assert kept["remainder_pair_evals"] == n_boxes * per_box * per_box
+    # ... minus one skipped diagonal per target
+    assert skipped["remainder_pair_evals"] == (
+        n_boxes * per_box * per_box - n_boxes * per_box
+    )
+    assert kept["status"] == "base_quadrature"
+
+
+def test_remainder_terms_are_counted_from_the_generated_expression():
+    """The multiplier is the kernel's term count, not the series length.
+
+    In 2D ``_HelmholtzSplitSeriesRemainderKernel`` emits a constant, one
+    ``r**(2n)`` term for every ``n = 1 .. nmax``, and a second
+    ``r**(2n) log r`` term for every ``n >= split_order``, so ``nmax``
+    alone undercounts the remainder by roughly a factor of two.
+    """
+    from volumential.expansion_wrangler_fpnd import (
+        _HelmholtzSplitSeriesRemainderKernel,
+    )
+
+    sweep = _load_benchmark("split_parameter_sweep")
+
+    class _Wrangler:
+        def __init__(self, kernel):
+            self._kernel = kernel
+
+        def _get_helmholtz_split_remainder_kernel(self):
+            return self._kernel
+
+    for split_order, nmax in ((1, 4), (2, 6), (3, 9)):
+        kernel = _HelmholtzSplitSeriesRemainderKernel(
+            2, 4.0, 0.0, split_order, nmax
+        )
+        counted = sweep._remainder_terms_per_pair(_Wrangler(kernel))
+        # 1 constant + nmax power terms + one log term per n >= p
+        expected = 1 + nmax + (nmax - split_order + 1)
+        assert counted == expected, (split_order, nmax, counted, expected)
+        assert counted > nmax
+
+    # 3D drops the even powers the tables extract, so it is not 2n either
+    for split_order, nmax in ((1, 5), (3, 9)):
+        kernel = _HelmholtzSplitSeriesRemainderKernel(
+            3, 4.0, 0.0, split_order, nmax
+        )
+        counted = sweep._remainder_terms_per_pair(_Wrangler(kernel))
+        max_extracted_n = 2 * max(0, split_order - 1)
+        expected = sum(
+            1 for n in range(1, nmax + 1)
+            if not (n % 2 == 0 and n <= max_extracted_n)
+        )
+        assert counted == expected, (split_order, nmax, counted, expected)
+
+
+def test_sweep_correction_counts_come_from_the_break_even_function():
+    """The two E6 artifacts must not be able to disagree.
+
+    The sweep's split-correction operation counts are produced by the same
+    ``_split_correction_operation_counts`` the break-even driver calls, and
+    both drivers stamp the same ``phase_counting_rule``.
+    """
+    sweep = _load_benchmark("split_parameter_sweep")
+    break_even = _load_benchmark("break_even_validation")
+
+    assert (
+        break_even._split_correction_operation_counts
+        is sweep._split_correction_operation_counts
+    )
+    assert (
+        break_even._tensor_product_interp_fmas
+        is sweep._tensor_product_interp_fmas
+    )
+    # The two rules differ in exactly two documented ways: only the
+    # break-even driver can state the recombination clause (the sweep does
+    # provision windowed families), and only it averages the remainder term
+    # count, because the sweep's rows are one parameter each.
+    assert sweep.PHASE_COUNTING_RULE.startswith("e6-v3:")
+    assert break_even.PHASE_COUNTING_RULE.startswith("e6-v3:")
+    assert break_even.PHASE_COUNTING_RULE == (
+        sweep.PHASE_COUNTING_RULE.replace(
+            "*generated_remainder_term_count",
+            "*mean_generated_remainder_term_count",
+        )
+        + ";recombination=0_per_solve_and_no_windowed_family_in_this_driver"
+    )
+    # the remainder multiplier is the generated term count, not nmax
+    assert "generated_remainder_term_count" in sweep.PHASE_COUNTING_RULE
+    assert "nmax" not in sweep.PHASE_COUNTING_RULE
+    assert "nmax" not in break_even.PHASE_COUNTING_RULE
+
+
+def test_sweep_non_split_paths_report_a_structural_zero_correction():
+    """A blank must mean "not counted", never "there was none".
+
+    The direct reference path, and the windowed-assembled path that rides
+    the unchanged direct warm path, execute no split correction at all.
+    """
+    sweep = _load_benchmark("split_parameter_sweep")
+
+    columns = sweep._phase_correction_op_columns(
+        queue=None, traversal=None, wrangler=None, split=False,
+        q_order=4, split_order=2, split_smooth_quad_order=None,
+    )
+    assert set(columns) == set(sweep.PHASE_CORRECTION_OPS_NAMES)
+    assert columns["ops_phase_split_correction_status"] == "no_split_correction"
+    for name in sweep.PHASE_CORRECTION_OPS_NAMES:
+        if name != "ops_phase_split_correction_status":
+            assert columns[name] == 0
+
+
+def test_sweep_withholds_the_split_total_when_the_wrangler_is_opaque():
+    """An uninterrogable wrangler blanks the correction *and* the total.
+
+    Reporting a solve total that silently omits the correction phase would
+    be worse than reporting nothing, since the correction is the split
+    strategy's dominant near-field cost.
+    """
+    sweep = _load_benchmark("split_parameter_sweep")
+
+    columns = sweep._phase_correction_op_columns(
+        queue=None, traversal=None, wrangler=object(), split=True,
+        q_order=4, split_order=2, split_smooth_quad_order=None,
+    )
+    assert columns["ops_phase_split_correction_status"].startswith(
+        "unavailable:"
+    )
+    assert columns["ops_phase_split_correction_total"] == ""
+    assert columns["ops_phase_split_correction_remainder_pair_evals"] == ""
+
+    # ... and the blank propagates to the per-path total
+    measurements = dict.fromkeys(
+        sweep.PHASE_CORRECTION_OPS_NAMES, sweep.PHASE_UNMEASURED
+    )
+    measurements["ops_phase_solve_total"] = sweep.PHASE_UNMEASURED
+    row = sweep._phase_row_columns(
+        reference_timing=measurements, split_timing=measurements
+    )
+    assert row["ops_phase_solve_total_split"] == sweep.PHASE_UNMEASURED
+
+
+def test_sweep_phase_row_columns_take_correction_from_the_split_path_only():
+    sweep = _load_benchmark("split_parameter_sweep")
+    reference = sweep._phase_measurements(
+        queue=None, traversal=None, wrangler=None, solve=None,
+        phase_repeat_count=0,
+    )
+    split = dict(reference)
+    for index, name in enumerate(sweep.PHASE_CORRECTION_OPS_NAMES):
+        split[name] = index
+        # the reference path carries a decoy that must never be picked up
+        reference[name] = "reference-decoy"
+    split["ops_phase_solve_total"] = 9999
+    reference["ops_phase_solve_total"] = 1111
+
+    columns = sweep._phase_row_columns(
+        reference_timing=reference, split_timing=split
+    )
+    for index, name in enumerate(sweep.PHASE_CORRECTION_OPS_NAMES):
+        assert columns[name] == index
+    assert columns["ops_phase_solve_total_split"] == 9999
+    assert columns["ops_phase_solve_total_reference"] == 1111
+
+
+def test_sweep_phase_row_columns_are_empty_for_an_unprofiled_run():
+    module = _load_benchmark("split_parameter_sweep")
+    unmeasured = module._phase_measurements(
+        queue=None, traversal=None, wrangler=None, solve=None,
+        phase_repeat_count=0,
+    )
+    columns = module._phase_row_columns(
+        reference_timing=unmeasured, split_timing=unmeasured
+    )
+    assert columns["phase_profile_repeat_count"] == 0
+    assert all(
+        value == module.PHASE_UNMEASURED
+        for key, value in columns.items()
+        if key != "phase_profile_repeat_count"
+    )
+
+# }}}
