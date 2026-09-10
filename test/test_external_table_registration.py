@@ -344,6 +344,118 @@ def test_load_rejects_corrupted_payload_metadata(
         )
 
 
+@pytest.mark.parametrize("column", [
+    "case_encoding_base",
+    "case_encoding_shift",
+])
+def test_load_rejects_corrupted_record_columns(
+        tmp_path, assembled_yukawa, column):
+    """The case encoding lives in the record, not the payload.
+
+    The loader rebuilds ``table.case_encode`` from ``case_encoding_base``
+    and ``case_encoding_shift``, and symmetry-reduced reconstruction maps
+    interaction cases through it, so an in-range mutation there
+    reconstructs entries from the wrong cases while the payload digest
+    still verifies.
+
+    (``n_q_points`` and ``n_pairs`` are in the digest too, but a
+    pre-existing assertion in the payload loader catches those first, so
+    they are not parametrized here.)
+    """
+    table, certificate = assembled_yukawa
+    cache = tmp_path / "registered.sqlite"
+    with NearFieldInteractionTableManager(
+        str(cache), root_extent=ROOT_EXTENT
+    ) as manager:
+        _register(manager, table, certificate)
+
+    conn = sqlite3.connect(str(cache))
+    conn.execute(f"UPDATE nearfield_cache SET {column}={column}+1")
+    conn.commit()
+    conn.close()
+
+    with NearFieldInteractionTableManager(
+        str(cache), root_extent=ROOT_EXTENT
+    ) as manager, pytest.raises(KeyError, match="checksum"):
+        manager.load_saved_table(
+            DIM, "Yukawa", Q_ORDER, source_box_level=LEVEL, lam=LAM
+        )
+
+
+def test_a_helmholtz_table_registers_and_reloads(tmp_path):
+    """The cache kwargs of a Helmholtz registration carry a live
+    ``sumpy_knl`` kernel object, which is reconstruction-only and never
+    stored.  The registration digest has to skip it exactly as the kwargs
+    writer does, or every windowed Helmholtz row fails to provision.
+    """
+    from sumpy.kernel import HelmholtzKernel
+
+    from volumential.rke_table_assembly import (
+        assemble_windowed_parameterized_table,
+    )
+
+    channel_cache = tmp_path / "chan.sqlite"
+    helmholtz_k = 4.0 / BOX_EXTENT
+    table, certificate = assemble_windowed_parameterized_table(
+        channel_cache,
+        DIM,
+        "Helmholtz",
+        Q_ORDER,
+        helmholtz_k,
+        source_box_level=LEVEL,
+        root_extent=ROOT_EXTENT,
+        window_theta=WINDOW_THETA,
+        p_star=4,
+    )
+
+    knl = HelmholtzKernel(DIM)
+    cache = tmp_path / "registered.sqlite"
+    with NearFieldInteractionTableManager(
+        str(cache), root_extent=ROOT_EXTENT, dtype=np.complex128,
+    ) as manager:
+        manager.register_external_table(
+            DIM, "Helmholtz-Reference", Q_ORDER, table,
+            source_box_level=LEVEL,
+            provenance={
+                "kind": "windowed_rke_assembly",
+                "condition_number": certificate["condition_number"],
+            },
+            sumpy_knl=knl,
+            **{knl.helmholtz_k_name: helmholtz_k},
+        )
+
+    with NearFieldInteractionTableManager(
+        str(cache), root_extent=ROOT_EXTENT, dtype=np.complex128,
+    ) as manager:
+        loaded = manager.load_saved_table(
+            DIM, "Helmholtz-Reference", Q_ORDER,
+            source_box_level=LEVEL,
+            sumpy_knl=knl,
+            **{knl.helmholtz_k_name: helmholtz_k},
+        )
+
+    assert loaded.build_method == EXTERNAL_TABLE_BUILD_METHOD
+    entry_ids, values = table.get_reduced_table_data()
+    loaded_ids, loaded_values = loaded.get_reduced_table_data()
+    assert np.array_equal(np.asarray(loaded_ids), np.asarray(entry_ids))
+    assert np.array_equal(np.asarray(loaded_values), np.asarray(values))
+
+
+def _record_fields(**overrides):
+    fields = {
+        "n_q_points": 4,
+        "quad_order": 2,
+        "n_pairs": 16,
+        "source_box_extent": BOX_EXTENT,
+        "case_encoding_base": 3,
+        "case_encoding_shift": 1,
+        "build_method": EXTERNAL_TABLE_BUILD_METHOD,
+        "kernel_type_cached": "inverse_distance",
+    }
+    fields.update(overrides)
+    return fields
+
+
 def test_load_rejects_a_retargeted_kernel_parameter(
         tmp_path, assembled_yukawa):
     """The digest binds the payload to the identity it was registered
@@ -423,6 +535,7 @@ def test_identity_checksum_round_trips_the_stored_representation():
         q_order = 2
         source_box_level = 2
 
+    record = _record_fields()
     live = {
         "lam": 8.0 / 3.0,
         "provenance_p_star": 4,
@@ -436,8 +549,8 @@ def test_identity_checksum_round_trips_the_stored_representation():
         key: _deserialize_scalar(*_serialize_scalar(value))
         for key, value in live.items()
     }
-    assert _external_identity_checksum(_Request, stored) == (
-        _external_identity_checksum(_Request, live)
+    assert _external_identity_checksum(_Request, stored, record) == (
+        _external_identity_checksum(_Request, live, record)
     )
 
     # ... and every identifying field actually enters it
@@ -450,16 +563,41 @@ def test_identity_checksum_round_trips_the_stored_representation():
     ):
         tampered = dict(stored)
         tampered[key] = changed
-        assert _external_identity_checksum(_Request, tampered) != (
-            _external_identity_checksum(_Request, stored)
+        assert _external_identity_checksum(_Request, tampered, record) != (
+            _external_identity_checksum(_Request, stored, record)
         )
+
+    # ... and so does every checksummed record column
+    for name in ("case_encoding_base", "case_encoding_shift", "n_q_points",
+                 "quad_order", "n_pairs", "source_box_extent",
+                 "build_method", "kernel_type_cached"):
+        tampered_record = dict(record)
+        value = tampered_record[name]
+        tampered_record[name] = (
+            f"{value}-x" if isinstance(value, str) else value + 1
+        )
+        assert _external_identity_checksum(
+            _Request, stored, tampered_record
+        ) != _external_identity_checksum(_Request, stored, record)
+
+    # a reconstruction-only object among the cache kwargs is skipped, not
+    # hashed and not a TypeError: _store_record_kwargs drops it too, so
+    # the loader never sees it
+    from sumpy.kernel import HelmholtzKernel
+
+    with_kernel = dict(stored)
+    with_kernel["sumpy_knl"] = HelmholtzKernel(2)
+    with_kernel["nothing"] = None
+    assert _external_identity_checksum(_Request, with_kernel, record) == (
+        _external_identity_checksum(_Request, stored, record)
+    )
 
     # the checksum slot itself is not hashed, and neither is a missing key
     # confused with an empty one
     without = {k: v for k, v in stored.items()
                if k != "external_payload_checksum"}
-    assert _external_identity_checksum(_Request, without) == (
-        _external_identity_checksum(_Request, stored)
+    assert _external_identity_checksum(_Request, without, record) == (
+        _external_identity_checksum(_Request, stored, record)
     )
 
 

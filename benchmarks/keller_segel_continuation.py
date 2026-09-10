@@ -2151,6 +2151,27 @@ def main() -> int:
         parser.error("theta-max must lie strictly between zero and one")
     if any(mass_factor <= 0.0 for mass_factor in args.mass_factors):
         parser.error("mass factors must be positive")
+    if any(not math.isfinite(factor) for factor in args.mass_factors):
+        parser.error("mass factors must be finite")
+    # The driver's contract is a matched sub/supercritical pair: the mass
+    # is mass_factor * 8pi, so the regime is decided by the factor alone,
+    # and _apply_pair_outcome silently skips any group that is not exactly
+    # one of each.  Without this, "--mass-factors 0.8 0.9 1.1" runs every
+    # expensive continuation and then leaves each row with
+    # pair_outcome_pass == 0 and an empty separation, indistinguishable
+    # from a genuine pair failure.
+    if len(args.mass_factors) != 2:
+        parser.error(
+            "--mass-factors must be exactly two factors, one subcritical "
+            "and one supercritical (the matched-pair contract)"
+        )
+    if not (
+        min(args.mass_factors) < 1.0 < max(args.mass_factors)
+    ):
+        parser.error(
+            "--mass-factors must bracket the 8pi reference: one factor "
+            "below 1 and one above (a factor of exactly 1 is neither)"
+        )
     if args.profile_scale <= 0.0:
         parser.error("profile-scale must be positive")
     if not (math.isfinite(args.window_theta) and args.window_theta > 0.0):

@@ -365,21 +365,47 @@ def _external_payload_checksum(payload):
 _CHECKSUM_EXCLUDED_KWARGS = frozenset({"external_payload_checksum"})
 
 
-def _external_identity_checksum(table_request, cache_kwargs):
+#: Record columns the registration digest binds the payload to.  The
+#: case encoding is the load-bearing pair: the loader rebuilds
+#: ``table.case_encode`` from ``case_encoding_base`` and
+#: ``case_encoding_shift``, and symmetry-reduced reconstruction maps
+#: interaction cases through it, so an in-range mutation there
+#: reconstructs entries from the wrong cases.  The shape and extent
+#: columns ride along for the same reason.
+_CHECKSUMMED_RECORD_FIELDS = (
+    "n_q_points",
+    "quad_order",
+    "n_pairs",
+    "source_box_extent",
+    "case_encoding_base",
+    "case_encoding_shift",
+    "build_method",
+    "kernel_type_cached",
+)
+
+
+def _external_identity_checksum(table_request, cache_kwargs, record_fields):
     """Digest of the identity an external payload is registered *under*.
 
     The payload digest alone protects the numbers; it says nothing about
     which request they answer.  The kernel parameters (``lam``, a
-    Helmholtz ``k``, ...) live in ``nearfield_cache_kwargs``, outside the
-    payload, and the loader compares them against the *request*: corrupt a
+    Helmholtz ``k``, ...) live in ``nearfield_cache_kwargs``, and the case
+    encoding lives in the record columns -- both outside the payload, and
+    the loader compares the parameters against the *request*: corrupt a
     stored ``lam`` from A to B and a request for B matches, the payload
     still verifies, and the table assembled for A is evaluated as B.
 
-    Hashed in the canonical ``(value_type, value_text)`` form the kwargs
+    Hashed in the canonical ``(value_type, value_text)`` form the values
     are stored in, so the digest computed here at registration and the one
-    recomputed from the deserialized row at load are identical by
-    construction -- ``repr`` round-trips a float64, and the int, bool, str
-    and complex forms round-trip exactly too.
+    recomputed from the stored row at load are identical by construction
+    -- ``repr`` round-trips a float64, and the int, bool, str and complex
+    forms round-trip exactly too.
+
+    Values ``_store_record_kwargs`` would not store are skipped exactly as
+    it skips them: ``None``, and anything ``_serialize_scalar`` refuses.
+    A caller may legitimately pass a reconstruction-only object such as a
+    ``sumpy_knl`` kernel among the cache kwargs; it never reaches the
+    table, so it must not reach the digest either.
     """
     import hashlib
 
@@ -391,20 +417,38 @@ def _external_identity_checksum(table_request, cache_kwargs):
         ("source_box_level", table_request.source_box_level),
     ):
         digest.update(f"{label}\0{value}\0".encode())
+
+    for name in _CHECKSUMMED_RECORD_FIELDS:
+        value = record_fields[name]
+        if value is None:
+            digest.update(f"{name}\0none\0\0".encode())
+            continue
+        value_type, value_text = _serialize_scalar(value)
+        digest.update(f"{name}\0{value_type}\0{value_text!s}\0".encode())
+
     for key in sorted(cache_kwargs):
         if key in _CHECKSUM_EXCLUDED_KWARGS:
             continue
-        value_type, value_text = _serialize_scalar(cache_kwargs[key])
-        digest.update(f"{key}\0{value_type}\0{value_text}\0".encode())
+        value = cache_kwargs[key]
+        if value is None:
+            continue
+        try:
+            value_type, value_text = _serialize_scalar(value)
+        except TypeError:
+            # not storable, so the loader never sees it: the digest must
+            # not depend on it either
+            continue
+        digest.update(f"{key}\0{value_type}\0{value_text!s}\0".encode())
     return digest.hexdigest()
 
 
-def _external_registration_checksum(payload, table_request, cache_kwargs):
+def _external_registration_checksum(
+        payload, table_request, cache_kwargs, record_fields):
     """The stored ``external_payload_checksum``: the payload digest bound
     to the identity it was registered under."""
     return (
         f"{_external_payload_checksum(payload)}"
-        f":{_external_identity_checksum(table_request, cache_kwargs)}"
+        f":{_external_identity_checksum(table_request, cache_kwargs, record_fields)}"
     )
 
 
@@ -1896,7 +1940,10 @@ class NearFieldInteractionTableManager:
             # request comparison below against a table assembled for a
             # different parameter.
             computed_checksum = _external_registration_checksum(
-                payload, table_request, loaded_kwargs
+                payload,
+                table_request,
+                loaded_kwargs,
+                {name: record[name] for name in _CHECKSUMMED_RECORD_FIELDS},
             )
             if computed_checksum != stored_payload_checksum:
                 raise KeyError(
@@ -2510,7 +2557,21 @@ assemble_windowed_parameterized_table`) under the standard
         # re-labelling the table.
         cache_kwargs["external_payload_checksum"] = (
             _external_registration_checksum(
-                payload, table_request, cache_kwargs
+                payload,
+                table_request,
+                cache_kwargs,
+                {
+                    "n_q_points": int(table.n_q_points),
+                    "quad_order": int(table.quad_order),
+                    "n_pairs": int(table.n_pairs),
+                    # SQLite REAL round-trips a float64 exactly, but the
+                    # column is only float when what goes in is
+                    "source_box_extent": float(expected_extent),
+                    "case_encoding_base": base,
+                    "case_encoding_shift": shift,
+                    "build_method": EXTERNAL_TABLE_BUILD_METHOD,
+                    "kernel_type_cached": kernel_bundle.kernel_scale_type,
+                },
             )
         )
 

@@ -103,6 +103,45 @@ def _windowed_row(sweep, **overrides):
     return row
 
 
+@pytest.mark.parametrize("theta", [1.0, 8.0])
+@pytest.mark.parametrize("rel_l2", [float("nan"), float("inf")])
+def test_windowed_rows_reject_a_nonfinite_error_at_every_theta(
+        sweep, theta, rel_l2):
+    """The agreement tolerance is scoped to small theta; finiteness is
+    not.  A large-theta windowed row with a nan or inf error was written
+    as valid evidence, and the far-field report main() prints after the
+    write is Helmholtz-only, so nothing else caught a Yukawa row.
+    """
+    with pytest.raises(RuntimeError, match="non-finite error"):
+        sweep._validate_windowed_rows(
+            [_windowed_row(sweep, theta=theta, rel_l2_error=rel_l2)]
+        )
+
+
+@pytest.mark.parametrize("mode", ["smoke", "full"])
+@pytest.mark.parametrize("kernel", ["Yukawa", "Helmholtz"])
+@pytest.mark.parametrize("rel_l2", [float("nan"), float("inf")])
+def test_online_split_rows_reject_a_nonfinite_error_outside_the_scope(
+        sweep, mode, kernel, rel_l2):
+    """The convergence ratios are scoped to full-mode Yukawa; finiteness
+    is not -- and inside the scope, nan makes the ratio comparisons
+    False rather than raising.
+    """
+    row = {field: "" for field in sweep.FIELDS}
+    row.update({
+        "case_id": f"{kernel.lower()}2d-p2",
+        "mode": mode,
+        "kernel": kernel,
+        "dim": 2,
+        "parameter_value": 4.0,
+        "split_order": 2,
+        "table_strategy": "online_split",
+        "rel_l2_error": rel_l2,
+    })
+    with pytest.raises(RuntimeError, match="non-finite error"):
+        sweep._validate_yukawa_order_convergence([row])
+
+
 def test_windowed_row_validation_passes_clean_rows(sweep):
     sweep._validate_windowed_rows(
         [
@@ -1270,6 +1309,66 @@ def test_ks_main_rejects_a_bad_window_theta(ks, tmp_path, monkeypatch,
         capsys.readouterr().err
     )
     assert not (tmp_path / "never-created").exists()
+
+
+@pytest.mark.parametrize(("factors", "message"), [
+    (["0.8", "0.9", "1.1"], "exactly two factors"),
+    (["0.85"], "exactly two factors"),
+    (["0.8", "0.9"], "must bracket the 8pi reference"),
+    (["1.1", "1.2"], "must bracket the 8pi reference"),
+    (["1.0", "1.2"], "must bracket the 8pi reference"),
+    (["nan", "1.2"], "must be finite"),
+])
+def test_ks_main_requires_a_matched_mass_pair(
+        ks, tmp_path, monkeypatch, capsys, factors, message):
+    """The mass is ``mass_factor * 8pi``, so the factor alone decides the
+    regime, and ``_apply_pair_outcome`` silently skips any group that is
+    not exactly one subcritical and one supercritical row.  Without this
+    check every expensive continuation runs and then leaves
+    ``pair_outcome_pass == 0`` with an empty separation, which is
+    indistinguishable from a genuine pair failure.
+    """
+    monkeypatch.setattr(
+        ks.sys,
+        "argv",
+        [
+            "keller_segel_continuation.py",
+            "--mass-factors", *factors,
+            "--out-dir", str(tmp_path / "never-created"),
+        ],
+    )
+    with pytest.raises(SystemExit) as exited:
+        ks.main()
+
+    assert exited.value.code == 2
+    assert message in capsys.readouterr().err
+    assert not (tmp_path / "never-created").exists()
+
+
+def test_ks_main_accepts_the_committed_mass_pair(
+        ks, tmp_path, monkeypatch, capsys):
+    """The shipped default pair must survive the new check.
+
+    Driven by giving the run a *different* invalid argument: reaching the
+    --cfl message proves the default --mass-factors passed the gate above
+    it, without running a continuation.
+    """
+    monkeypatch.setattr(
+        ks.sys,
+        "argv",
+        [
+            "keller_segel_continuation.py",
+            "--cfl=0",
+            "--out-dir", str(tmp_path / "never-created"),
+        ],
+    )
+    with pytest.raises(SystemExit):
+        ks.main()
+
+    stderr = capsys.readouterr().err
+    assert "--cfl must be finite and positive" in stderr
+    # the usage block names every option, so look for the check's message
+    assert "--mass-factors must be" not in stderr
 
 
 @pytest.mark.parametrize("bad", ["0", "-0.5", "nan", "inf"])

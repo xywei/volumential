@@ -2445,7 +2445,14 @@ def _run_windowed_strategy(
             row["windowed_assemble_s"] = time.perf_counter() - assemble_start
             rows.append(row)
             continue
-        except (ValueError, RuntimeError, NotImplementedError) as exc:
+        except (
+            ValueError, RuntimeError, NotImplementedError, KeyError,
+            # a per-theta assembly can still have to rebuild a channel of
+            # the family, and that is an .npz cache write
+            OSError,
+            # sqlite3's exceptions descend from Exception, not OSError
+            sqlite3.Error,
+        ) as exc:
             row["windowed_status"] = "failed"
             row["windowed_refusal"] = f"{type(exc).__name__}: {exc}"
             row["windowed_assemble_s"] = time.perf_counter() - assemble_start
@@ -2672,6 +2679,18 @@ def _validate_windowed_rows(rows: list[dict[str, Any]]) -> None:
                 f"{row['case_id']} (theta={theta:g} <= Theta="
                 f"{window_theta:g}): {row['windowed_refusal']}"
             )
+        if status == "ok" and solved:
+            # Finiteness is not part of the small-theta scope
+            # restriction: a nan or inf mismatch is a failed solve at
+            # every theta, and the tolerance below would otherwise let a
+            # large-theta row into the CSV as valid evidence.
+            rel_l2 = float(row["rel_l2_error"])
+            if not math.isfinite(rel_l2):
+                raise RuntimeError(
+                    "windowed-assembled evaluator path produced a "
+                    f"non-finite error for {row['case_id']}: "
+                    f"rel_l2_error={rel_l2}"
+                )
         if (
             status == "ok"
             and solved
@@ -2849,9 +2868,25 @@ YUKAWA_ORDER_IMPROVEMENT_GATE = {2: 1.0e-3, 3: 1.0e-1}
 def _validate_yukawa_order_convergence(rows: list[dict[str, Any]]) -> None:
     errors_by_parameter: dict[tuple[int, float], dict[int, float]] = {}
     for row in rows:
-        if row["mode"] != "full" or row["kernel"] != "Yukawa":
-            continue
         if row.get("table_strategy", "online_split") != "online_split":
+            continue
+
+        # Finiteness first, and for *every* online-split row: a nan or inf
+        # error is a failed solve whatever the mode or kernel, and the
+        # scope filters below would otherwise let a smoke row carry one
+        # into the CSV with a successful exit -- while inside the scope,
+        # nan makes the ratio comparisons False rather than raising.  The
+        # far-field resolution report main() prints after the write is
+        # Helmholtz-only, so nothing else catches a Yukawa row.  Only the
+        # convergence *ratios* are scoped.
+        error = float(row["rel_l2_error"])
+        if not math.isfinite(error):
+            raise RuntimeError(
+                "online-split solve produced a non-finite error for "
+                f"{row['case_id']}: rel_l2_error={error}"
+            )
+
+        if row["mode"] != "full" or row["kernel"] != "Yukawa":
             continue
         key = (int(row["dim"]), float(row["parameter_value"]))
         errors_by_parameter.setdefault(key, {})[
