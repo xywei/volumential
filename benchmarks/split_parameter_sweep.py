@@ -539,14 +539,27 @@ def _configure_logging() -> None:
     )
 
 
-def _table_build_routing(tables) -> str:
-    """The distinct recorded DuffyRadial routings of ``tables``, ';'-joined."""
+def _table_build_routing_counts(tables) -> dict[str, int]:
+    """How many of ``tables`` were produced by each recorded routing.
+
+    Eager provisioning can land on more than one routing across levels and
+    parameters -- one batched invocation succeeding while another falls back
+    -- and the two routings have different per-entry node counts, so a cost
+    model that prices the whole set has to know how many tables each routing
+    owns rather than sampling one of them.
+    """
     import volumential.opcounters as opcounters
 
-    routings = sorted({
-        opcounters.direct_build_routing(table) for table in tables
-    })
-    return ";".join(routings)
+    counts: dict[str, int] = {}
+    for table in tables:
+        routing = opcounters.direct_build_routing(table)
+        counts[routing] = counts.get(routing, 0) + 1
+    return counts
+
+
+def _table_build_routing(tables) -> str:
+    """The distinct recorded DuffyRadial routings of ``tables``, ';'-joined."""
+    return ";".join(sorted(_table_build_routing_counts(tables)))
 
 
 def _clear_sqlite_cache(path: Path) -> None:
@@ -1785,6 +1798,11 @@ def _prepare_direct_tables(
         # the routing recorded by the builder and carried through the cache
         # round trip (these tables are the warm, cache-loaded ones)
         "build_routing": _table_build_routing(warm_tables.values()),
+        # ... and per routing, so a caller pricing every provisioned table
+        # can weight the routings instead of sampling one of them
+        "build_routing_counts": _table_build_routing_counts(
+            warm_tables.values()
+        ),
     }
 
 

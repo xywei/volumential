@@ -351,6 +351,25 @@ def choose_truncation_order(
     )
 
 
+def _clear_inherited_build_routing(table) -> None:
+    """Drop the DuffyRadial build routing a deep copy inherited from its base.
+
+    Both assemblers build their result as ``copy.deepcopy(base)`` and then
+    overwrite the table data, so the copy would otherwise keep the base
+    Laplace channel table's ``build_routing`` -- ``"batched"`` or
+    ``"scalar-fallback"`` -- and a reloaded assembled table would claim its
+    values came from Duffy quadrature that never touched them.  No
+    :data:`~volumential.nearfield_potential_table.DUFFY_BUILD_ROUTINGS` value
+    describes an RKE assembly, so clear the pair to *None*; the serializer
+    then omits both keys and
+    :func:`volumential.opcounters.direct_build_routing` reports ``unknown``,
+    which is the honest answer for data no DuffyRadial builder produced.
+    """
+    for attr in ("build_routing", "build_fallback_reason"):
+        if hasattr(table, attr):
+            setattr(table, attr, None)
+
+
 def _basis_l1_norms(table) -> np.ndarray:
     """Numerically computed L1 norms of the source basis functions on the
     source box, used to convert kernel-space bounds to entry bounds."""
@@ -645,6 +664,7 @@ NearFieldInteractionTable`
     for identity_attr in ("integral_knl", "kernel_func", "kernel_type_cached"):
         if hasattr(result, identity_attr):
             setattr(result, identity_attr, None)
+    _clear_inherited_build_routing(result)
     result._data = None
     result.set_reduced_table_data(entry_ids, values.astype(result_dtype))
     result.is_built = True
@@ -1942,6 +1962,7 @@ def _assemble_windowed_for_zeta(
     for identity_attr in ("integral_knl", "kernel_func", "kernel_type_cached"):
         if hasattr(result, identity_attr):
             setattr(result, identity_attr, None)
+    _clear_inherited_build_routing(result)
     result._data = None
     result.set_reduced_table_data(entry_ids, values.astype(result_dtype))
     result.is_built = True
