@@ -1878,6 +1878,18 @@ class NearFieldInteractionTableManager:
         loaded_kwargs = self._load_record_kwargs(table_request)
 
         stored_payload_checksum = loaded_kwargs.get("external_payload_checksum")
+        if (
+            stored_payload_checksum is None
+            and stored_build_method == EXTERNAL_TABLE_BUILD_METHOD
+        ):
+            # Every external registration writes this row, so its absence
+            # on an ExternalAssembly record is a damaged cache, not a
+            # legacy record to accept unchecked -- and accepting it
+            # unchecked is exactly the hole the checksum exists to close.
+            raise KeyError(
+                "externally registered table is missing its payload "
+                "checksum; discarding the cached data"
+            )
         if stored_payload_checksum is not None:
             # Recomputed from the row as stored, not from the request, so a
             # corrupted kernel parameter fails here rather than passing the
@@ -2435,10 +2447,25 @@ assemble_windowed_parameterized_table`) under the standard
         _checksum_ids, checksum_values = _payload_checksum_arrays(payload)
         if np.asarray(checksum_values).size == 0:
             raise ValueError("cannot register a table with no entry data")
-        if not np.all(np.isfinite(np.asarray(checksum_values))):
-            raise ValueError(
-                "cannot register a table with non-finite entry data"
-            )
+        # Every floating array of the payload, not only the entry values:
+        # the List 1 evaluator also consumes q_points and the two
+        # normalizer arrays, so a table with finite entries and one nan
+        # normalizer would register, checksum cleanly, and produce
+        # non-finite solves on every reload with no build step left to
+        # catch it.
+        entry_value_key = (
+            "reduced_data" if "reduced_data" in payload else "data"
+        )
+        for name in sorted(payload):
+            array = np.asarray(payload[name])
+            if array.dtype.kind not in "fc":
+                continue
+            if not np.all(np.isfinite(array)):
+                raise ValueError(
+                    "cannot register a table with non-finite "
+                    + ("entry data" if name == entry_value_key
+                       else f"values in '{name}'")
+                )
 
         distinct_numbers = set()
         for vec in table.interaction_case_vecs:

@@ -556,6 +556,69 @@ def test_register_rejects_non_finite_payload(tmp_path, assembled_yukawa):
         _register(manager, poisoned, certificate)
 
 
+@pytest.mark.parametrize("poisoned_array", [
+    "mode_normalizers",
+    "kernel_exterior_normalizers",
+    "q_points",
+])
+def test_register_rejects_a_non_finite_auxiliary_array(
+        tmp_path, assembled_yukawa, poisoned_array):
+    """Finiteness is checked across the payload, not only the entries.
+
+    The List 1 evaluator also consumes ``q_points`` and the two
+    normalizer arrays, so a table with finite entries and one nan
+    normalizer used to register, checksum cleanly, and then produce
+    non-finite solves on every reload with no build step left to catch
+    it.
+    """
+    import copy
+
+    table, certificate = assembled_yukawa
+    poisoned = copy.deepcopy(table)
+    array = np.array(getattr(poisoned, poisoned_array), dtype=np.float64)
+    flat = array.reshape(-1)
+    flat[0] = np.nan
+    setattr(poisoned, poisoned_array, flat.reshape(array.shape))
+
+    cache = tmp_path / "registered.sqlite"
+    with NearFieldInteractionTableManager(
+        str(cache), root_extent=ROOT_EXTENT
+    ) as manager, pytest.raises(
+        ValueError, match=f"non-finite values in '{poisoned_array}'"
+    ):
+        _register(manager, poisoned, certificate)
+
+
+def test_load_rejects_an_external_record_without_a_checksum(
+        tmp_path, assembled_yukawa):
+    """Every external registration writes the checksum row, so its
+    absence on an ExternalAssembly record is a damaged cache -- not a
+    legacy record to accept unchecked, which is the hole the checksum
+    exists to close.
+    """
+    table, certificate = assembled_yukawa
+    cache = tmp_path / "registered.sqlite"
+    with NearFieldInteractionTableManager(
+        str(cache), root_extent=ROOT_EXTENT
+    ) as manager:
+        _register(manager, table, certificate)
+
+    conn = sqlite3.connect(str(cache))
+    conn.execute(
+        "DELETE FROM nearfield_cache_kwargs "
+        "WHERE key='external_payload_checksum'"
+    )
+    conn.commit()
+    conn.close()
+
+    with NearFieldInteractionTableManager(
+        str(cache), root_extent=ROOT_EXTENT
+    ) as manager, pytest.raises(KeyError, match="missing its payload"):
+        manager.load_saved_table(
+            DIM, "Yukawa", Q_ORDER, source_box_level=LEVEL, lam=LAM
+        )
+
+
 def test_register_rejects_unsafe_dtype_narrowing(tmp_path):
     from volumential.rke_table_assembly import (
         assemble_windowed_parameterized_table,
