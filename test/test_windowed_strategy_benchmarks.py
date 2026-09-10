@@ -1006,6 +1006,82 @@ def test_a_recomputed_reload_still_reports_the_reload_time(
     assert info["load_s"] > 0.0
 
 
+@pytest.mark.parametrize("exc", [
+    ValueError("unusable channel order"),
+    OSError("channel cache is unwritable"),
+    sqlite3.OperationalError("database is locked"),
+])
+def test_a_failed_channel_family_is_an_outcome_not_an_exception(
+        ks, tmp_path, monkeypatch, exc):
+    """Under --strategy windowed the direct baseline has already run when
+    the one-off channel family is built, and main() writes every CSV only
+    after both runs return, so an escaping exception discarded the
+    baseline's measurements too.
+    """
+    import time as _time
+
+    def explode(*args, **kwargs):
+        _time.sleep(1.0e-3)
+        raise exc
+
+    monkeypatch.setattr(ks, "_prepare_windowed_channel_family", explode)
+
+    build_s, failure = ks._prepare_windowed_family_or_failure(
+        tmp_path / "family.sqlite", 2, 3, 4.0, 16.0, 4
+    )
+
+    assert failure is not None
+    assert type(exc).__name__ in failure
+    assert str(exc) in failure
+    assert "windowed channel family" in failure
+    # the time it burned before failing is reported, not discarded
+    assert build_s > 0.0
+
+
+def test_a_successful_channel_family_reports_its_build_seconds(
+        ks, tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        ks, "_prepare_windowed_channel_family", lambda *a, **k: 2.5
+    )
+
+    build_s, failure = ks._prepare_windowed_family_or_failure(
+        tmp_path / "family.sqlite", 2, 3, 4.0, 16.0, 4
+    )
+
+    assert failure is None
+    assert build_s == pytest.approx(2.5)
+
+
+def test_the_family_failure_outcome_charges_no_phase_twice(ks):
+    """The step loop adds assemble/register/load into
+    windowed_strategy_total_s, and the family's own seconds are already
+    reported in windowed_channel_build_s.
+    """
+    info = ks._windowed_family_failure_info("windowed channel family: boom")
+
+    assert info["status"] == "failed"
+    assert info["detail"] == "windowed channel family: boom"
+    assert info["assemble_s"] == 0.0
+    assert info["register_s"] == 0.0
+    assert info["load_s"] == 0.0
+    # the same keys the per-step provisioning helper returns, so the step
+    # loop's failure branch reads it without a special case
+    _table, provisioned = ks._provision_windowed_yukawa_table(
+        None,
+        # a coverage refusal is the cheapest way to get a populated info
+        # dict out of the real helper
+        Path("/nonexistent/family.sqlite"),
+        Path("/nonexistent/registered.sqlite"),
+        2,
+        1.0e6,
+        3,
+        4.0,
+        16.0,
+        4,
+    )
+    assert set(info) == set(provisioned)
+
+
 def test_compare_checkpoints_matches_shared_times_only(ks):
     weights = np.full(4, 0.25)
     baseline = {

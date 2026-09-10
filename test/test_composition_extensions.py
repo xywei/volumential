@@ -478,6 +478,54 @@ def test_registration_failures_become_a_failed_row(
     assert not issubclass(sqlite3.Error, OSError)
 
 
+@pytest.mark.parametrize("exc", [
+    ValueError("unusable channel order"),
+    OSError("channel cache is unwritable"),
+    sqlite3.OperationalError("database is locked"),
+])
+def test_channel_family_failures_become_a_failed_row(
+    composition, tmp_path, monkeypatch, exc
+):
+    """The family build is provisioning too.
+
+    It used to sit outside the ``refused``/``failed`` handling, so an
+    unusable channel order or an unwritable cache aborted the whole
+    composition run instead of returning a failed windowed row.
+    """
+    def _raise(**kwargs):
+        raise exc
+
+    monkeypatch.setattr(composition, "_prepare_windowed_family", _raise)
+
+    row = composition._run_windowed_composition(
+        None, **_windowed_kwargs_2d(tmp_path)
+    )
+
+    assert row["windowed_status"] == "failed"
+    assert type(exc).__name__ in row["windowed_refusal"]
+    assert "windowed channel family" in row["windowed_refusal"]
+    assert "_tables" not in row
+
+
+def test_a_channel_family_refusal_stays_refused(
+    composition, tmp_path, monkeypatch
+):
+    """A certificate refusal stays 'refused', wherever it is raised."""
+    from volumential.rke_table_assembly import RKEWindowCoverageError
+
+    def _raise(**kwargs):
+        raise RKEWindowCoverageError("theta outside the declaration")
+
+    monkeypatch.setattr(composition, "_prepare_windowed_family", _raise)
+
+    row = composition._run_windowed_composition(
+        None, **_windowed_kwargs_2d(tmp_path)
+    )
+
+    assert row["windowed_status"] == "refused"
+    assert "RKEWindowCoverageError" in row["windowed_refusal"]
+
+
 def test_partial_registration_metrics_reach_the_failed_row(
     composition, tmp_path, monkeypatch
 ):
@@ -507,5 +555,151 @@ def test_partial_registration_metrics_reach_the_failed_row(
     assert row["windowed_register_payload_bytes"] == 8000
     assert row["windowed_table_count"] == 0
 
+
+# }}}
+
+# {{{ case ids, argument validation and the CSV/gate ordering
+
+def test_case_id_reproduces_the_committed_yukawa_ids(composition):
+    assert composition._case_id("Yukawa", 3, 2, 1, 2.0, "p1") == (
+        "yukawa2d-q3-l2-a1-lam2-p1"
+    )
+    assert composition._case_id("Yukawa", 4, 4, 2, 8.0, "p3") == (
+        "yukawa2d-q4-l4-a2-lam8-p3"
+    )
+    assert composition._case_id("Helmholtz", 3, 2, 1, 4.0, "windowed") == (
+        "helmholtz2d-q3-l2-a1-k4-windowed"
+    )
+    with pytest.raises(ValueError, match="unknown kernel"):
+        composition._case_id("Stokes", 3, 2, 1, 2.0, "p1")
+
+
+def test_case_id_separates_parameters_beyond_six_digits(composition):
+    """Two parameters that differ in the eighth digit need distinct ids.
+
+    ``%g`` renders both as ``1`` at the default six significant digits, so
+    tooling keyed on ``case_id`` merged or overwrote two independently
+    measured rows.
+    """
+    close = (1.0000001, 1.0000002)
+    ids = {
+        composition._case_id("Yukawa", 3, 2, 1, parameter, "p2")
+        for parameter in close
+    }
+    assert len(ids) == len(close)
+    # ... while the committed round-valued ids are byte-identical
+    assert composition._case_id("Yukawa", 3, 2, 1, 2.0, "p1") == (
+        "yukawa2d-q3-l2-a1-lam2-p1"
+    )
+
+
+@pytest.mark.parametrize(("option", "value", "message"), [
+    ("--window-theta", "inf", "--window-theta must be finite and positive"),
+    ("--window-theta", "0", "--window-theta must be finite and positive"),
+    ("--window-theta", "-1", "--window-theta must be finite and positive"),
+    ("--window-theta", "1e-200", "--window-theta is too small"),
+    ("--windowed-p-star", "0", "--windowed-p-star must be >= 1"),
+    ("--windowed-chan-orders", "0,61",
+     "--windowed-chan-orders must both be >= 1"),
+])
+def test_main_rejects_bad_windowed_arguments_before_touching_a_device(
+    composition, tmp_path, monkeypatch, capsys, option, value, message
+):
+    """Every windowed argument check runs before device selection.
+
+    An infinite Theta passes a bare positivity test and is only refused by
+    the channel builder, after the geometry and every direct and
+    online-split table of the first case have been built.
+    """
+    monkeypatch.setattr(
+        composition,
+        "_select_opencl_device",
+        lambda *a, **k: pytest.fail("device selection must not be reached"),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "adaptive_split_composition.py",
+            "--include-windowed",
+            f"{option}={value}",
+            "--out", str(tmp_path / "never-written.csv"),
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exited:
+        composition.main()
+
+    assert exited.value.code == 2
+    assert message in capsys.readouterr().err
+    assert not (tmp_path / "never-written.csv").exists()
+
+
+def test_main_writes_the_csv_before_running_the_failure_gates(
+    composition, tmp_path, monkeypatch
+):
+    """Converting provisioning problems into failed rows only preserves a
+    long run's measurements if the CSV is written before the gates raise.
+    The 3D twin already writes first.
+    """
+    out = tmp_path / "composition.csv"
+    failed_row = _windowed_row(
+        composition,
+        windowed_status="failed",
+        windowed_refusal="RuntimeError: boom",
+    )
+
+    monkeypatch.setattr(
+        composition, "_select_opencl_device", lambda *a, **k: None
+    )
+    monkeypatch.setattr(composition.cl, "Context", lambda devices: None)
+    monkeypatch.setattr(composition.cl, "CommandQueue", lambda ctx: None)
+    monkeypatch.setattr(
+        composition, "run_case", lambda *a, **k: [failed_row]
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "adaptive_split_composition.py",
+            "--include-windowed",
+            "--out", str(out),
+            "--cache-dir", str(tmp_path / "cache"),
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="windowed assembly failed"):
+        composition.main()
+
+    # the gate still fires, but the measurements survive it
+    assert out.exists()
+    assert failed_row["case_id"] in out.read_text()
+
+
+def test_online_split_rows_reject_a_nonfinite_mismatch_outside_the_scope(
+    composition,
+):
+    """The convergence ratios are scoped to full-mode high-accuracy
+    Yukawa; finiteness is not.  A smoke, default-policy or Helmholtz row
+    with a nan or inf mismatch used to reach the CSV as successful
+    numerical evidence, and inside the scope nan made the ratio
+    comparisons False rather than raising.
+    """
+    for overrides in (
+        {"mode": "smoke", "quadrature_policy": "default"},
+        {"kernel": "Helmholtz"},
+        {},
+    ):
+        for value in (float("nan"), float("inf")):
+            with pytest.raises(RuntimeError, match="non-finite mismatch"):
+                composition._validate_split_order_convergence(
+                    [
+                        _online_row(
+                            composition,
+                            rke_vs_direct_weighted_rel_l2=value,
+                            **overrides,
+                        )
+                    ]
+                )
 
 # }}}

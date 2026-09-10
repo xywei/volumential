@@ -2148,6 +2148,12 @@ def _register_and_load_windowed_table(
     # charges the reload's wall time to registration while reporting a
     # zero payload for work that completed.  The partial metrics ride on
     # the exception under a name the caller looks for.
+    #
+    # The reload's own wall time counts too: a get_table() that raises
+    # after a long read, and a reload that completes but is rejected below
+    # for not being a pure cache hit, both spent time every caller copies
+    # into its failed row.  The instrumented load_s is only available when
+    # the capture completed, so this clock is the fallback.
     partial_transfer = {
         "register_s": register_s,
         "register_payload_bytes": register_payload_bytes,
@@ -2155,6 +2161,7 @@ def _register_and_load_windowed_table(
         "load_payload_bytes": 0,
     }
 
+    load_start = time.perf_counter()
     try:
         with _capture_table_get_timings() as load_records:
             with NearFieldInteractionTableManager(
@@ -2169,17 +2176,25 @@ def _register_and_load_windowed_table(
                     queue=queue,
                     **get_kwargs,
                 )
+        partial_transfer["load_s"] = time.perf_counter() - load_start
         if is_recomputed:
             raise RuntimeError(
                 "registered windowed table did not load as a pure cache hit"
             )
         load_summary = _summarize_table_get_timings(load_records)
+        partial_transfer["load_s"] = load_summary["load_s"]
+        partial_transfer["load_payload_bytes"] = load_summary[
+            "cache_payload_bytes"
+        ]
         if load_summary["build_count"] or load_summary["load_count"] != 1:
             raise RuntimeError(
                 "registered windowed table load pass was not a single pure "
                 "load"
             )
     except BaseException as exc:
+        if not partial_transfer["load_s"]:
+            # nothing instrumented got recorded: fall back to the clock
+            partial_transfer["load_s"] = time.perf_counter() - load_start
         with contextlib.suppress(AttributeError):
             exc.partial_windowed_transfer = dict(partial_transfer)
         raise

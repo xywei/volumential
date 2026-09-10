@@ -191,6 +191,34 @@ FULL_SPLIT_ORDERS = (2, 3)
 
 KERNEL_PARAMETER_TAGS = {"Yukawa": "lam", "Helmholtz": "k"}
 
+
+def _case_id(
+    kernel: str,
+    q_order: int,
+    initial_nlevels: int,
+    adapt_steps: int,
+    parameter: float,
+    suffix: str,
+) -> str:
+    """The committed 2D case-id shape, generalized over kernels.
+
+    Yukawa online-split ids are unchanged from the committed artifact
+    (``yukawa2d-q3-l2-a1-lam2-p1``).
+    """
+    if kernel not in KERNEL_PARAMETER_TAGS:
+        raise ValueError(f"unknown kernel: {kernel}")
+    parameter_tag = KERNEL_PARAMETER_TAGS[kernel]
+    return (
+        f"{kernel.lower()}2d-q{q_order}-l{initial_nlevels}-"
+        # ``.17g`` round-trips a float64, so two parameters that differ
+        # beyond the sixth significant digit cannot collide on one case id
+        # and have their rows merged by tooling keyed on it.  This is the
+        # same precision the registered-cache filenames use, and it leaves
+        # the committed ids untouched: %g strips trailing zeros, so 2.0 is
+        # still "2".  Same helper shape as the 3D twin.
+        f"a{adapt_steps}-{parameter_tag}{parameter:.17g}-{suffix}"
+    )
+
 # Full-mode split-order convergence gates under the high-accuracy policy
 # (E5), calibrated like the split-parameter sweep's Yukawa gate: with the
 # quadrature floor lifted, p=2 must improve on p=1 by three orders of
@@ -379,35 +407,93 @@ def _run_windowed_composition(
         "windowed_register_payload_bytes": 0,
     }
 
-    channel_build_s = 0.0
-    was_cold = False
-    for level in source_levels:
-        family = _prepare_windowed_family(
-            cache_path=family_cache,
-            q_order=q_order,
-            source_box_level=int(level),
-            window_theta=window_theta,
-            p_star=windowed_p_star,
-            chan_regular_order=windowed_chan_orders[0],
-            chan_radial_order=windowed_chan_orders[1],
-            root_extent=tree_root_extent,
-        )
-        channel_build_s += family["build_s"]
-        was_cold = was_cold or family["was_cold"]
-    result["windowed_channel_build_s"] = channel_build_s
-    result["windowed_channel_build_was_cold"] = int(was_cold)
+    # Every provisioning phase -- the per-level channel family, the
+    # per-level assembly, and the register/reload round trip -- runs under
+    # one taxonomy.  Only the assembly and the transfer used to be
+    # covered, so an unusable channel order or a cache I/O error inside the
+    # family build aborted _run_windowed_composition instead of emitting
+    # the promised failed row; since main writes the CSV only after every
+    # case completes, that also discarded the earlier cases' measurements.
+    # Mirrors the 3D twin.
+    stage_label = "windowed channel family"
+    stage_bucket = "windowed_channel_build_s"
+    stage_start = time.perf_counter()
 
-    parameter_tag = f"{parameter:.17g}".replace("-", "m").replace(".", "p")
-    tables = []
-    condition_numbers = []
+    def _refused_or_failed(status, exc):
+        """Record a provisioning failure as a row instead of raising."""
+        result["windowed_status"] = status
+        result["windowed_refusal"] = (
+            f"{stage_label}: {type(exc).__name__}: {exc}"
+        )
+        # A register/reload call that got as far as registering attaches
+        # what it completed; use that instead of charging the whole
+        # combined call to registration with a zero payload.
+        partial = getattr(exc, "partial_windowed_transfer", None)
+        if partial is not None:
+            result["windowed_register_s"] = (
+                float(result["windowed_register_s"])
+                + float(partial["register_s"])
+            )
+            result["windowed_register_payload_bytes"] = (
+                int(result["windowed_register_payload_bytes"])
+                + int(partial["register_payload_bytes"])
+            )
+            result["windowed_table_load_s"] = (
+                float(result["windowed_table_load_s"])
+                + float(partial["load_s"])
+            )
+            return result
+
+        # otherwise charge the partial time to whichever phase was running
+        result[stage_bucket] = float(result[stage_bucket]) + (
+            time.perf_counter() - stage_start
+        )
+        return result
+
+    tables: list[Any] = []
+    condition_numbers: list[float] = []
     smooth_quad_orders: dict[str, int] = {}
     assemble_s = 0.0
     register_s = 0.0
     load_s = 0.0
     register_payload_bytes = 0
-    for level in source_levels:
-        assemble_start = time.perf_counter()
-        try:
+
+    try:
+        channel_build_s = 0.0
+        was_cold = False
+        for level in source_levels:
+            # Restart the stage clock per level: result[stage_bucket]
+            # already holds the completed levels, and the failure handler
+            # *adds* the partial time, so a shared start would count them
+            # twice.
+            stage_label = f"windowed channel family, level {int(level)}"
+            stage_start = time.perf_counter()
+            family = _prepare_windowed_family(
+                cache_path=family_cache,
+                q_order=q_order,
+                source_box_level=int(level),
+                window_theta=window_theta,
+                p_star=windowed_p_star,
+                chan_regular_order=windowed_chan_orders[0],
+                chan_radial_order=windowed_chan_orders[1],
+                root_extent=tree_root_extent,
+            )
+            channel_build_s += family["build_s"]
+            was_cold = was_cold or family["was_cold"]
+            # Published per level, like the register/load accumulators
+            # below: a later level's failure returns this dict as the
+            # failed row, and a cold family build that already happened is
+            # part of the provisioning evidence.
+            result["windowed_channel_build_s"] = channel_build_s
+            result["windowed_channel_build_was_cold"] = int(was_cold)
+
+        parameter_tag = (
+            f"{parameter:.17g}".replace("-", "m").replace(".", "p")
+        )
+        for level in source_levels:
+            stage_label = f"level {int(level)}"
+            stage_bucket = "windowed_assemble_s"
+            stage_start = time.perf_counter()
             assembled_table, certificate = (
                 assemble_windowed_parameterized_table(
                     family_cache,
@@ -423,37 +509,20 @@ def _run_windowed_composition(
                     chan_radial_order=windowed_chan_orders[1],
                 )
             )
-        except (RKEWindowCoverageError, RKEWindowConditioningError) as exc:
-            result["windowed_status"] = "refused"
-            result["windowed_refusal"] = (
-                f"level {int(level)}: {type(exc).__name__}: {exc}"
+            assemble_s += time.perf_counter() - stage_start
+            result["windowed_assemble_s"] = assemble_s
+            condition_numbers.append(float(certificate["condition_number"]))
+            smooth_quad_orders[str(int(level))] = int(
+                certificate["smooth_quad_order"]
             )
-            result["windowed_assemble_s"] = (
-                assemble_s + time.perf_counter() - assemble_start
-            )
-            return result
-        except (ValueError, RuntimeError, NotImplementedError) as exc:
-            result["windowed_status"] = "failed"
-            result["windowed_refusal"] = (
-                f"level {int(level)}: {type(exc).__name__}: {exc}"
-            )
-            result["windowed_assemble_s"] = (
-                assemble_s + time.perf_counter() - assemble_start
-            )
-            return result
-        assemble_s += time.perf_counter() - assemble_start
-        condition_numbers.append(float(certificate["condition_number"]))
-        smooth_quad_orders[str(int(level))] = int(
-            certificate["smooth_quad_order"]
-        )
 
-        registered_cache = cache_dir / (
-            f"composition-windowed-registered-{kernel.lower()}-"
-            f"q{q_order}-l{initial_nlevels}-a{adapt_steps}-"
-            f"parameter{parameter_tag}-lev{int(level)}.sqlite"
-        )
-        register_start = time.perf_counter()
-        try:
+            registered_cache = cache_dir / (
+                f"composition-windowed-registered-{kernel.lower()}-"
+                f"q{q_order}-l{initial_nlevels}-a{adapt_steps}-"
+                f"parameter{parameter_tag}-lev{int(level)}.sqlite"
+            )
+            stage_bucket = "windowed_register_s"
+            stage_start = time.perf_counter()
             loaded_table, transfer = _register_and_load_windowed_table(
                 queue=queue,
                 cache_path=registered_cache,
@@ -465,40 +534,31 @@ def _run_windowed_composition(
                 certificate=certificate,
                 root_extent=tree_root_extent,
             )
-        except (
-            ValueError, RuntimeError, NotImplementedError, OSError, KeyError,
-            # sqlite3's exceptions descend from Exception, not OSError, and
-            # this phase is a SQLite round trip
-            sqlite3.Error,
-        ) as exc:
-            # Registration and the pure-cache reload belong to the same
-            # taxonomy as the assembly above.  main() writes the CSV only
-            # after every case completes, so an exception escaping here
-            # discards every measurement already taken, not just this row.
-            result["windowed_status"] = "failed"
-            result["windowed_refusal"] = (
-                f"level {int(level)}: {type(exc).__name__}: {exc}"
-            )
-            result["windowed_assemble_s"] = assemble_s
-            # whatever the helper got through before it raised
-            partial = getattr(exc, "partial_windowed_transfer", None)
-            if partial is not None:
-                register_s += float(partial["register_s"])
-                load_s += float(partial["load_s"])
-                register_payload_bytes += int(
-                    partial["register_payload_bytes"]
-                )
-            else:
-                register_s += time.perf_counter() - register_start
+            tables.append(loaded_table)
+            register_s += transfer["register_s"]
+            load_s += transfer["load_s"]
+            register_payload_bytes += int(transfer["register_payload_bytes"])
+            # Publish every accumulated metric, not just the register time:
+            # a later level's failure returns this dict as the failed row,
+            # and the work already done is exactly the per-level
+            # provisioning evidence that path exists to preserve.
             result["windowed_register_s"] = register_s
             result["windowed_table_load_s"] = load_s
             result["windowed_register_payload_bytes"] = register_payload_bytes
             result["windowed_table_count"] = len(tables)
-            return result
-        tables.append(loaded_table)
-        register_s += transfer["register_s"]
-        load_s += transfer["load_s"]
-        register_payload_bytes += int(transfer["register_payload_bytes"])
+    except (RKEWindowCoverageError, RKEWindowConditioningError) as exc:
+        # a certificate refusal: the declaration does not cover this row
+        return _refused_or_failed("refused", exc)
+    except (
+        ValueError, RuntimeError, NotImplementedError, OSError, KeyError,
+        # sqlite3's exceptions descend from Exception, not OSError, so a
+        # locked, read-only, full or corrupt table cache would otherwise
+        # escape the taxonomy exactly like the cases above
+        sqlite3.Error,
+    ) as exc:
+        # anything else that provisioning can raise, including a cache I/O
+        # error and a rejected registration
+        return _refused_or_failed("failed", exc)
 
     result.update(
         {
@@ -582,9 +642,25 @@ def _validate_split_order_convergence(rows: list[dict[str, Any]]) -> None:
     lifted (the committed default-policy run could not)."""
     errors: dict[tuple[str, float], dict[int, float]] = {}
     for row in rows:
-        if row["mode"] != "full" or row["kernel"] != "Yukawa":
-            continue
         if row.get("table_strategy", "online_split") != "online_split":
+            continue
+
+        # Finiteness first, and for *every* online-split row: a nan or inf
+        # mismatch is a failed solve whatever the mode, kernel or
+        # quadrature policy, and the scope filters below would otherwise
+        # let a smoke, default-policy or Helmholtz row carry it into the
+        # CSV with a successful exit -- and even inside the scope, nan
+        # makes the ratio comparisons False rather than raising.  Only the
+        # convergence *ratios* are scoped.  Same rule as the 3D twin.
+        mismatch = float(row["rke_vs_direct_weighted_rel_l2"])
+        if not math.isfinite(mismatch):
+            raise RuntimeError(
+                "2D composition online-split solve produced a non-finite "
+                f"mismatch for {row['case_id']}: "
+                f"rke_vs_direct_weighted_rel_l2={mismatch}"
+            )
+
+        if row["mode"] != "full" or row["kernel"] != "Yukawa":
             continue
         if row.get("quadrature_policy") != "high-accuracy":
             continue
@@ -688,7 +764,7 @@ def run_case(
             direct_cache_path = cache_dir / (
                 f"composition-direct-{kernel.lower()}-q{q_order}-"
                 f"l{initial_nlevels}-a{adapt_steps}-"
-                f"{parameter_tag}{parameter:g}.sqlite"
+                f"{parameter_tag}{parameter:.17g}.sqlite"
             )
             _clear_sqlite_cache(direct_cache_path)
 
@@ -820,10 +896,13 @@ def run_case(
 
                 rows.append(
                     {
-                        "case_id": (
-                            f"{kernel.lower()}2d-q{q_order}-l{initial_nlevels}-"
-                            f"a{adapt_steps}-{parameter_tag}{parameter:g}-"
-                            f"p{split_order}"
+                        "case_id": _case_id(
+                            kernel,
+                            q_order,
+                            initial_nlevels,
+                            adapt_steps,
+                            parameter,
+                            f"p{split_order}",
                         ),
                         **common_columns,
                         "kernel": kernel,
@@ -907,9 +986,13 @@ def run_case(
             windowed_tables = windowed.pop("_tables", None)
 
             row = {
-                "case_id": (
-                    f"{kernel.lower()}2d-q{q_order}-l{initial_nlevels}-"
-                    f"a{adapt_steps}-{parameter_tag}{parameter:g}-windowed"
+                "case_id": _case_id(
+                    kernel,
+                    q_order,
+                    initial_nlevels,
+                    adapt_steps,
+                    parameter,
+                    "windowed",
                 ),
                 **common_columns,
                 "kernel": kernel,
@@ -1084,10 +1167,6 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    device = _select_opencl_device(cl, args.backend)
-    ctx = cl.Context([device])
-    queue = cl.CommandQueue(ctx)
-
     cases = SMOKE_CASES if args.mode == "smoke" else FULL_CASES
     parameters = args.parameters
     if parameters is None:
@@ -1115,11 +1194,38 @@ def main() -> int:
             parser.error(
                 "--windowed-chan-orders must be a 'regular,radial' pair"
             )
+        if any(part < 1 for part in parts):
+            # the assembler refuses these, but only after the geometry and
+            # every direct and online-split table have been built
+            parser.error("--windowed-chan-orders must both be >= 1")
         windowed_chan_orders = (parts[0], parts[1])
     if args.windowed_p_star < 1:
         parser.error("--windowed-p-star must be >= 1")
-    if not (args.window_theta > 0.0):
-        parser.error("--window-theta must be positive")
+    if not (args.window_theta > 0.0) or not math.isfinite(args.window_theta):
+        # an infinite declaration passes a bare positivity test, then runs
+        # the whole direct and online-split setup before the channel
+        # builder rejects it
+        parser.error("--window-theta must be finite and positive")
+
+    # get_windowed_channel_table forms (box_extent / Theta)**2, and the
+    # assembler already requires an O(1) box extent (1e-3 .. 1e3), so
+    # checking the largest allowed extent bounds every level.  A Theta
+    # small enough to overflow that raises OverflowError, which no failure
+    # taxonomy covers, after all the direct and online-split work.
+    try:
+        window_scale = (1.0e3 / args.window_theta) ** 2
+    except OverflowError:
+        window_scale = math.inf
+    if not math.isfinite(window_scale):
+        parser.error(
+            "--window-theta is too small: the window scale "
+            "(box_extent / Theta)**2 overflows float64 for the supported "
+            "O(1) source-box extents"
+        )
+
+    device = _select_opencl_device(cl, args.backend)
+    ctx = cl.Context([device])
+    queue = cl.CommandQueue(ctx)
 
     args.cache_dir.mkdir(parents=True, exist_ok=True)
     rows = []
@@ -1143,9 +1249,15 @@ def main() -> int:
                 windowed_chan_orders=windowed_chan_orders,
             )
         )
+    # The gates run *after* the CSV is written, not before.  Converting a
+    # provisioning problem into a failed row exists so a long run keeps the
+    # measurements of every case that already succeeded; raising before
+    # write_csv would discard exactly those, which is the same trap the
+    # split-parameter sweep avoids by collecting failure messages and
+    # reporting them after its write.  The 3D twin already does this.
+    write_csv(args.out, rows)
     _validate_windowed_composition_rows(rows)
     _validate_split_order_convergence(rows)
-    write_csv(args.out, rows)
     return 0
 
 

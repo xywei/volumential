@@ -632,6 +632,54 @@ def _prepare_windowed_channel_family(
     return time.perf_counter() - start
 
 
+def _windowed_family_failure_info(detail: str) -> dict[str, Any]:
+    """The per-step provisioning outcome a failed channel family produces.
+
+    Every phase time is zero because none of them ran: the family build's
+    own seconds are reported in ``windowed_channel_build_s``, and the step
+    loop *adds* these three into ``windowed_strategy_total_s``, so
+    repeating the family time here would double-count it.
+    """
+    return {
+        "status": "failed",
+        "detail": detail,
+        "assemble_s": 0.0,
+        "register_s": 0.0,
+        "load_s": 0.0,
+        "condition_number": "",
+    }
+
+
+def _prepare_windowed_family_or_failure(
+        cache_path, q_order, level, root_extent, window_theta, p_star):
+    """``(build_s, failure_detail_or_None)``: the one-off channel family,
+    with its failures returned rather than raised.
+
+    Under ``--strategy windowed`` the direct baseline run has already
+    completed when this executes, and ``main()`` writes every CSV only
+    after both runs return, so an escaping exception discards the
+    baseline's measurements as well as this run's.  The caller turns the
+    detail into the same ``failed`` provisioning outcome a per-step
+    assembly failure produces -- and never solves against whatever stale
+    family the cache happens to hold.
+    """
+    start = time.perf_counter()
+    try:
+        return _prepare_windowed_channel_family(
+            cache_path, q_order, level, root_extent, window_theta, p_star
+        ), None
+    except (
+        ValueError, RuntimeError, NotImplementedError, TypeError,
+        OSError, KeyError,
+        # sqlite3's exceptions descend from Exception, not OSError
+        sqlite3.Error,
+    ) as exc:
+        return (
+            time.perf_counter() - start,
+            f"windowed channel family: {type(exc).__name__}: {exc}",
+        )
+
+
 def _provision_windowed_yukawa_table(
         queue, family_cache_path, registered_cache_path, q_order, lam, level,
         root_extent, window_theta, p_star):
@@ -1024,20 +1072,38 @@ def run_case(
     )
 
     windowed_channel_build_s = 0.0
+    # Set when the one-off channel-family build fails.  The direct baseline
+    # run has already completed by the time this executes and main() writes
+    # every CSV only after both runs return, so letting the exception escape
+    # run_case would discard the baseline's measurements as well as this
+    # run's.  The step loop turns it into the same "failed" provisioning
+    # outcome a per-step assembly failure produces, which is a complete
+    # summary with zero steps, n_windowed_failed=1 and an inadmissible
+    # verdict -- and never a solve against whatever stale family the cache
+    # happens to hold.
+    windowed_family_failure: str | None = None
     if windowed:
         print(
             f"[{case_id}] building windowed channel family "
             f"(Theta={window_theta:g}, p*={windowed_p_star})",
             flush=True,
         )
-        windowed_channel_build_s = _prepare_windowed_channel_family(
-            windowed_family_cache,
-            q_order,
-            leaf_level,
-            root_extent,
-            window_theta,
-            windowed_p_star,
+        windowed_channel_build_s, windowed_family_failure = (
+            _prepare_windowed_family_or_failure(
+                windowed_family_cache,
+                q_order,
+                leaf_level,
+                root_extent,
+                window_theta,
+                windowed_p_star,
+            )
         )
+        if windowed_family_failure is not None:
+            print(
+                f"[{case_id}] windowed channel family build failed: "
+                f"{windowed_family_failure}",
+                flush=True,
+            )
 
     rke_base_table = None
     split_term_tables = None
@@ -1277,17 +1343,28 @@ def run_case(
         windowed_wrangler = None
         windowed_wrangler_build_s = 0.0
         if windowed:
-            windowed_table, windowed_info = _provision_windowed_yukawa_table(
-                queue,
-                windowed_family_cache,
-                windowed_registered_cache,
-                q_order,
-                lam,
-                leaf_level,
-                root_extent,
-                window_theta,
-                windowed_p_star,
-            )
+            if windowed_family_failure is not None:
+                # the family the per-step assembly would read never got
+                # built; its seconds are already in
+                # windowed_channel_build_s
+                windowed_table = None
+                windowed_info = _windowed_family_failure_info(
+                    windowed_family_failure
+                )
+            else:
+                windowed_table, windowed_info = (
+                    _provision_windowed_yukawa_table(
+                        queue,
+                        windowed_family_cache,
+                        windowed_registered_cache,
+                        q_order,
+                        lam,
+                        leaf_level,
+                        root_extent,
+                        window_theta,
+                        windowed_p_star,
+                    )
+                )
             if windowed_info["status"] != "ok":
                 if windowed_info["status"] == "refused":
                     n_windowed_refused += 1

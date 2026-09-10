@@ -1033,7 +1033,10 @@ def test_register_and_load_attaches_what_it_completed(tmp_path, monkeypatch):
     partial = failed.value.partial_windowed_transfer
     assert partial["register_payload_bytes"] == 8000
     assert partial["register_s"] >= 0.0
-    assert partial["load_s"] == 0.0
+    # the reload consumed wall time before it raised, and all three
+    # windowed callers copy this into their failed rows
+    assert partial["load_s"] > 0.0
+    assert partial["load_payload_bytes"] == 0
 
 
 @pytest.mark.parametrize("tiny", ["1e-308", "1e-200"])
