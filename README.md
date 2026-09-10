@@ -97,11 +97,16 @@ The rewrite is exact in value but not in conditioning once the *phase* `im`
 can itself be complex: for `z = x + i y`, `cos z` and `sin z` both grow like
 `exp(|y|)/2` while `exp(i z)` decays like `exp(-y)`, so Euler's formula turns
 a decaying exponential into a cancelling difference of two large terms.
-Exponents that reach a kernel argument declared complex — the wave number of
-`HelmholtzKernel(dim, allow_evanescent=True)` is the case that exists in
-sumpy — therefore keep their `cdouble_exp`, which evaluates the decaying
-result directly. Ordinary Helmholtz declares a real `k` and is rewritten as
-above.
+A phase that is not *provably* real therefore keeps its `cdouble_exp`, which
+evaluates the decaying result directly. The test is positive rather than a
+search for complex arguments, because the split hands any node it does not
+walk into — a post-CSE `CommonSubexpression`, say — to the real part
+wholesale, so `exp(1j*CSE((3+40j)*r))` has a complex phase without naming a
+complex argument anywhere. A phase passes only if every node in it is a real
+constant, a variable not declared complex by the kernel (the wave number of
+`HelmholtzKernel(dim, allow_evanescent=True)` is), an arithmetic combination
+of those, or a call to a function that is real for real arguments. Ordinary
+Helmholtz and Yukawa pass and are rewritten as above.
 
 Measured effect at 3D, `q = 3`, source box level 2: Helmholtz per
 (entry x node) cost drops from ~74 ns to ~8 ns, matching the real-valued

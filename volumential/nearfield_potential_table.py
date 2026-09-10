@@ -34,7 +34,6 @@ import loopy as lp
 import pymbolic.primitives as prim
 import pyopencl as cl
 from pymbolic.mapper import CSECachingMapperMixin, IdentityMapper
-from pymbolic.mapper.dependency import CachedDependencyMapper
 from pytools import memoize_method
 
 import volumential.list1_gallery as gallery
@@ -175,6 +174,88 @@ def _split_complex_expression(expr):
     return expr, 0
 
 
+#: Functions whose result is real whenever every argument is real.  These
+#: are the C/OpenCL elementary functions loopy emits for a float64 argument;
+#: a function *not* listed here -- ``hankel1`` and the other complex special
+#: functions above all -- makes :func:`_is_known_real` answer *False*, which
+#: is the conservative answer.  A negative argument to ``sqrt`` or ``log``
+#: gives NaN in float64 rather than a complex value, so it stays real here.
+_REAL_VALUED_FUNCTIONS = frozenset({
+    "abs", "acos", "acosh", "asin", "asinh", "atan", "atan2", "atanh",
+    "cbrt", "ceil", "copysign", "cos", "cosh", "erf", "erfc", "exp",
+    "expm1", "fabs", "floor", "fmax", "fmin", "fmod", "hypot", "log",
+    "log10", "log1p", "log2", "max", "min", "pow", "remainder", "rint",
+    "round", "rsqrt", "sin", "sinh", "sqrt", "tan", "tanh", "trunc",
+})
+
+
+def _is_known_real(expr, complex_names=frozenset()):
+    """Whether *expr* can be *proved* real-valued, node by node.
+
+    The guard on the Euler rewrite has to be positive rather than a
+    blocklist.  :func:`_split_complex_expression` attributes every node it
+    does not walk into -- a :class:`~pymbolic.primitives.CommonSubexpression`
+    among them, and the fused Duffy expressions are post-CSE -- wholly to
+    the real part, so an exponent such as ``exp(1j*CSE((3 + 40j)*r))`` has
+    no complex-typed *dependency* yet still yields a complex phase.  Asking
+    "does this touch a complex argument?" would pass it; asking "is every
+    node here provably real?" does not.
+
+    *complex_names* are the kernel argument names declared complex (see
+    :func:`_complex_valued_kernel_arg_names`).  Unrecognized node types
+    answer *False*: a rewrite declined costs the ``cdouble_exp`` speedup,
+    a rewrite wrongly allowed costs every digit of the result.
+    """
+    if _is_numeric_constant(expr):
+        return complex(expr).imag == 0
+
+    if isinstance(expr, prim.CommonSubexpression):
+        return _is_known_real(expr.child, complex_names)
+
+    if isinstance(expr, prim.Variable):
+        # SpatialConstant and friends subclass Variable
+        return expr.name not in complex_names
+
+    if isinstance(expr, prim.Subscript):
+        return _is_known_real(expr.aggregate, complex_names) and all(
+            _is_known_real(index, complex_names)
+            for index in (
+                expr.index
+                if isinstance(expr.index, tuple)
+                else (expr.index,)
+            )
+        )
+
+    if isinstance(expr, prim.Sum | prim.Product):
+        return all(
+            _is_known_real(child, complex_names) for child in expr.children
+        )
+
+    if isinstance(expr, prim.Quotient | prim.FloorDiv | prim.Remainder):
+        return _is_known_real(
+            expr.numerator, complex_names
+        ) and _is_known_real(expr.denominator, complex_names)
+
+    if isinstance(expr, prim.Power):
+        return _is_known_real(expr.base, complex_names) and _is_known_real(
+            expr.exponent, complex_names
+        )
+
+    if isinstance(expr, prim.Call):
+        function = expr.function
+        if not (
+            isinstance(function, prim.Variable)
+            and function.name in _REAL_VALUED_FUNCTIONS
+        ):
+            return False
+        return all(
+            _is_known_real(parameter, complex_names)
+            for parameter in expr.parameters
+        )
+
+    return False
+
+
 def _complex_valued_kernel_arg_names(kernel):
     """Names of *kernel*'s runtime arguments that may carry complex values.
 
@@ -249,10 +330,17 @@ class ComplexExponentialRewriter(CSECachingMapperMixin, IdentityMapper):
     terms: severe relative error for moderate :math:`|y|` and overflow to
     infinity or NaN beyond that.  A complex exponent is not hypothetical --
     ``HelmholtzKernel(dim, allow_evanescent=True)`` declares its wave number
-    ``k`` as ``complex128`` -- so exponents that reach any complex-valued
-    kernel argument keep their ``cdouble_exp``, which evaluates the decaying
-    result directly and stably.  *complex_arg_names* carries those argument
-    names; see :func:`_complex_valued_kernel_arg_names`.
+    ``k`` as ``complex128`` -- so a phase that is not *provably* real keeps
+    its ``cdouble_exp``, which evaluates the decaying result directly and
+    stably.  The test is :func:`_is_known_real`, a positive node-by-node
+    proof rather than a search for complex dependencies: the fused Duffy
+    expressions are post-CSE, and
+    :func:`_split_complex_expression` hands an opaque
+    :class:`~pymbolic.primitives.CommonSubexpression` to the real part
+    wholesale, so a phase can be complex without naming a complex argument
+    anywhere the split can see.  *complex_arg_names* names the kernel
+    arguments declared complex; see
+    :func:`_complex_valued_kernel_arg_names`.
 
     Mixes in the common-subexpression cache so a shared CSE node in the
     post-CSE expression DAG is visited once rather than once per reference.
@@ -266,17 +354,6 @@ class ComplexExponentialRewriter(CSECachingMapperMixin, IdentityMapper):
     def __init__(self, complex_arg_names=frozenset()):
         super().__init__()
         self.complex_arg_names = frozenset(complex_arg_names)
-        self._dependency_mapper = CachedDependencyMapper(composite_leaves=False)
-
-    def _may_be_complex_valued(self, expr):
-        """Whether *expr* can evaluate to a complex number at run time."""
-        if not self.complex_arg_names:
-            return False
-
-        return any(
-            getattr(dependency, "name", None) in self.complex_arg_names
-            for dependency in self._dependency_mapper(expr)
-        )
 
     def map_common_subexpression_uncached(self, expr, /, *args, **kwargs):
         return IdentityMapper.map_common_subexpression(
@@ -296,15 +373,16 @@ class ComplexExponentialRewriter(CSECachingMapperMixin, IdentityMapper):
             return expr
 
         (argument,) = expr.parameters
-        if self._may_be_complex_valued(argument):
-            # The phase is not known to be real (an evanescent Helmholtz wave
-            # number, say).  cos/sin of a complex phase both blow up like
-            # exp(|imag|) and then cancel; cdouble_exp stays stable.
-            return expr
-
         real_part, imag_part = _split_complex_expression(argument)
         if _is_structural_zero(imag_part):
             # a real exponent: leave the plain real exp() alone
+            return expr
+
+        if not _is_known_real(imag_part, self.complex_arg_names):
+            # The phase is not *provably* real -- an evanescent Helmholtz
+            # wave number, or any node this module cannot reason about.
+            # cos/sin of a complex phase both blow up like exp(|imag|) and
+            # then cancel; cdouble_exp stays stable, so keep it.
             return expr
 
         # the phase is used by both cos and sin, so name it once

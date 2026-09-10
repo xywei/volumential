@@ -3101,6 +3101,107 @@ def test_complex_exponential_rewriter_keeps_a_possibly_complex_phase():
     assert not np.isfinite(euler(phase))
 
 
+def test_is_known_real_proves_the_shapes_the_duffy_builder_produces():
+    """The real Helmholtz/Yukawa phase must pass the guard, node for node.
+
+    The shape below is the exponent the fused Duffy builder actually hands
+    the rewriter for ``HelmholtzKernel(3)`` (captured from
+    ``_get_fused_invariant_duffy_table_program``): a wave number times a
+    CSE-wrapped ``sqrt`` of a CSE-wrapped sum of squared coordinate
+    differences.
+    """
+    import pymbolic.primitives as prim
+
+    coords = prim.CommonSubexpression(
+        prim.Sum(tuple(
+            prim.Power(prim.Variable(f"d{axis}"), 2) for axis in range(3)
+        ))
+    )
+    radius = prim.CommonSubexpression(
+        prim.Call(prim.Variable("sqrt"), (coords,))
+    )
+    phase = prim.Product((prim.Variable("k"), radius))
+
+    assert npt._is_known_real(phase)
+    assert npt._is_known_real(phase, frozenset({"lam"}))
+    # ... and not once k is a complex-valued kernel argument
+    assert not npt._is_known_real(phase, frozenset({"k"}))
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        # a complex constant hidden behind an opaque CSE: no complex-typed
+        # dependency anywhere, yet the phase is complex.  The fused Duffy
+        # expressions are post-CSE, so this is the shape that matters.
+        lambda prim: prim.CommonSubexpression(
+            prim.Product((np.complex128(3.0 + 40.0j), prim.Variable("r")))
+        ),
+        # a function this module cannot prove real-valued
+        lambda prim: prim.Call(
+            prim.Variable("hankel1"), (0, prim.Variable("r"))
+        ),
+        # an unrecognized node type
+        lambda prim: prim.If(
+            prim.Variable("c"), prim.Variable("a"), prim.Variable("b")
+        ),
+    ],
+)
+def test_an_opaque_phase_is_not_proved_real_and_keeps_its_exp(build):
+    import pymbolic.primitives as prim
+
+    inner = build(prim)
+    assert not npt._is_known_real(inner)
+
+    # ... so exp(1j * inner) keeps its complex exponential
+    original = prim.Call(
+        prim.Variable("exp"),
+        (prim.Product((np.complex128(1j), inner)),),
+    )
+    assert npt.ComplexExponentialRewriter()(original) == original
+
+
+def test_a_visible_complex_constant_is_split_and_still_rewritten():
+    """The guard must not over-refuse: a *walked* complex constant is safe.
+
+    ``exp(1j * (3 + 40j) * r)`` is ``exp(-40r) * (cos(3r) + 1j sin(3r))``.
+    The split separates the constant, so both the magnitude and the phase
+    are real and the rewrite is well conditioned -- unlike the CSE-wrapped
+    form above, where the same constant is invisible to the split.
+    """
+    import cmath
+
+    import pymbolic.primitives as prim
+
+    argument = prim.Product((
+        np.complex128(1j),
+        np.complex128(3.0 + 40.0j),
+        prim.Variable("r"),
+    ))
+    original = prim.Call(prim.Variable("exp"), (argument,))
+    rewritten = npt.ComplexExponentialRewriter()(original)
+    assert rewritten != original
+
+    for r in (0.4, 1.3, 12.0):
+        assert _pymbolic_eval(rewritten, {"r": r}) == pytest.approx(
+            cmath.exp(1j * (3.0 + 40.0j) * r), rel=1e-13, abs=1e-300
+        )
+
+
+def test_the_opaque_cse_phase_would_have_cancelled_to_zero():
+    """Why the case above matters: the numbers, not just the type argument."""
+    def euler(phase):
+        with np.errstate(over="ignore", invalid="ignore"):
+            return np.cos(phase) + 1j * np.sin(phase)
+
+    # exp(1j * ((3+40j) * r)) at r = 12, the value the rewrite would have
+    # replaced with cos + 1j*sin of the same complex phase
+    phase = np.complex128(3.0 + 40.0j) * 12.0
+    assert abs(np.exp(1j * phase)) < 1e-200
+    assert np.exp(1j * phase) != 0
+    assert euler(phase) == 0
+
+
 def test_evanescent_helmholtz_fused_duffy_code_keeps_cdouble_exp():
     from sumpy.kernel import HelmholtzKernel
 
