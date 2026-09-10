@@ -215,7 +215,7 @@ def _complex_valued_kernel_arg_names(kernel):
     return frozenset(names)
 
 
-class ComplexExponentialRewriter(IdentityMapper, CSECachingMapperMixin):
+class ComplexExponentialRewriter(CSECachingMapperMixin, IdentityMapper):
     r"""Rewrite ``exp(re + 1j*im)`` as ``exp(re) * (cos(im) + 1j*sin(im))``.
 
     pyopencl's ``pyopencl-complex.h`` implements ``cdouble_exp`` (and the
@@ -256,6 +256,11 @@ class ComplexExponentialRewriter(IdentityMapper, CSECachingMapperMixin):
 
     Mixes in the common-subexpression cache so a shared CSE node in the
     post-CSE expression DAG is visited once rather than once per reference.
+    :class:`~pymbolic.mapper.CSECachingMapperMixin` has to come *first* in
+    the bases: both it and :class:`~pymbolic.mapper.IdentityMapper` define
+    ``map_common_subexpression``, so with the other order the MRO picks the
+    uncached one and the cache -- and therefore
+    :meth:`map_common_subexpression_uncached` -- is never reached.
     """
 
     def __init__(self, complex_arg_names=frozenset()):

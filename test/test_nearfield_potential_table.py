@@ -3010,6 +3010,43 @@ def test_yukawa_fused_duffy_code_keeps_a_real_exp():
     assert "exp(" in code
 
 
+def test_complex_exponential_rewriter_visits_a_shared_cse_once():
+    """The CSE cache must actually be in the MRO.
+
+    Both ``CSECachingMapperMixin`` and ``IdentityMapper`` define
+    ``map_common_subexpression``; with the mixin second the uncached
+    ``IdentityMapper`` method wins and a shared node in the post-CSE DAG is
+    rebuilt once per reference.
+    """
+    import pymbolic.primitives as prim
+    from pymbolic.mapper import CSECachingMapperMixin, IdentityMapper
+
+    bases = npt.ComplexExponentialRewriter.__mro__
+    assert bases.index(CSECachingMapperMixin) < bases.index(IdentityMapper)
+    assert (
+        npt.ComplexExponentialRewriter.map_common_subexpression.__qualname__
+        == "CSECachingMapperMixin.map_common_subexpression"
+    )
+
+    visits = []
+
+    class _CountingRewriter(npt.ComplexExponentialRewriter):
+        def map_common_subexpression_uncached(self, expr, /, *args, **kwargs):
+            visits.append(expr)
+            return super().map_common_subexpression_uncached(
+                expr, *args, **kwargs
+            )
+
+    # one CSE object referenced three times, as sumpy's global CSE leaves it
+    shared = prim.CommonSubexpression(
+        prim.Product((prim.Variable("k"), prim.Variable("r")))
+    )
+    expr = prim.Sum((shared, shared, prim.Product((2, shared))))
+
+    _CountingRewriter()(expr)
+    assert len(visits) == 1
+
+
 def test_complex_valued_kernel_arg_names_follows_the_declared_dtype():
     from sumpy.kernel import HelmholtzKernel, LaplaceKernel, YukawaKernel
 
