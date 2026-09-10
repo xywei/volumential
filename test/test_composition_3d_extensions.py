@@ -570,6 +570,138 @@ def test_valid_split_orders_pass_through(composition3d):
     ) == tuple(composition3d.FULL_SPLIT_ORDERS)
 
 
+def _windowed_kwargs(tmp_path):
+    return dict(
+        cache_dir=tmp_path,
+        kernel="Yukawa",
+        q_order=2,
+        initial_nlevels=3,
+        adapt_steps=1,
+        parameter=2.0,
+        source_levels=[3],
+        tree_root_extent=2.0,
+        window_theta=16.0,
+        windowed_p_star=4,
+        windowed_chan_orders=(20, 61),
+    )
+
+
+@pytest.mark.parametrize(
+    ("failing", "exc", "status"),
+    [
+        ("_prepare_windowed_family", ValueError("bad channel order"), "failed"),
+        ("_prepare_windowed_family", OSError("cache is unreadable"), "failed"),
+        (
+            "_register_and_load_windowed_table",
+            RuntimeError("registration refused"),
+            "failed",
+        ),
+    ],
+)
+def test_windowed_provisioning_failures_become_rows(
+    composition3d, tmp_path, monkeypatch, failing, exc, status
+):
+    """Provisioning must emit a failed row, never abort the whole run.
+
+    ``main`` writes the CSV only after every case completes, so an
+    exception escaping here also discards the measurements of every case
+    that already finished.  Only the assembly call used to be covered.
+    """
+    def _raise(*args, **kwargs):
+        raise exc
+
+    monkeypatch.setattr(composition3d, failing, _raise)
+    if failing != "_prepare_windowed_family":
+        # get the run as far as the failing step: the assembler is imported
+        # from its own module inside the function under test
+        import volumential.rke_table_assembly as rke
+
+        monkeypatch.setattr(
+            rke,
+            "assemble_windowed_parameterized_table",
+            lambda *a, **k: (object(), {
+                "condition_number": 1.0, "smooth_quad_order": 4,
+            }),
+        )
+        monkeypatch.setattr(
+            composition3d,
+            "_prepare_windowed_family",
+            lambda **k: {"build_s": 0.0, "was_cold": False},
+        )
+
+    row = composition3d._run_windowed_composition(
+        None, **_windowed_kwargs(tmp_path)
+    )
+
+    assert row["windowed_status"] == status
+    assert type(exc).__name__ in row["windowed_refusal"]
+    assert str(exc) in row["windowed_refusal"]
+    assert "_tables" not in row
+
+
+def test_windowed_channel_refusal_is_classified_as_refused(
+    composition3d, tmp_path, monkeypatch
+):
+    """A certificate refusal stays 'refused', wherever it is raised."""
+    from volumential.rke_table_assembly import RKEWindowCoverageError
+
+    def _raise(**kwargs):
+        raise RKEWindowCoverageError("theta outside the declaration")
+
+    monkeypatch.setattr(composition3d, "_prepare_windowed_family", _raise)
+    row = composition3d._run_windowed_composition(
+        None, **_windowed_kwargs(tmp_path)
+    )
+
+    assert row["windowed_status"] == "refused"
+    assert "RKEWindowCoverageError" in row["windowed_refusal"]
+
+
+def test_committed_helmholtz_parameters_are_resolved_at_the_fixed_order(
+    composition3d,
+):
+    """The guard must accept every configuration the driver ships with.
+
+    Each mode's cases are paired with that mode's parameters, which is how
+    ``main`` dispatches them: smoke runs q=2 against k=2, full runs q=3
+    against k up to 8.  (q=2 with k=8 would *not* be resolved -- it needs
+    order 10 against a floor of 8 -- but the driver never pairs them.)
+    """
+    for cases, parameters in (
+        (composition3d.SMOKE_CASES, composition3d.SMOKE_PARAMETERS),
+        (composition3d.FULL_CASES, composition3d.FULL_PARAMETERS),
+    ):
+        for q_order, _initial_nlevels, _adapt_steps in cases:
+            composition3d._require_resolved_fmm_order(
+                ("Helmholtz", "Yukawa"), parameters, max(8, 4 * q_order)
+            )
+
+    # the pairing the driver does not do is genuinely underresolved, so the
+    # guard is not vacuous on the shipped values
+    with pytest.raises(ValueError, match="needs FMM order 10"):
+        composition3d._require_resolved_fmm_order(
+            ("Helmholtz",), composition3d.FULL_PARAMETERS, max(8, 4 * 2)
+        )
+
+
+def test_underresolved_helmholtz_parameters_are_refused(composition3d):
+    """A wave number the fixed order cannot resolve must not run.
+
+    The direct-table and split paths share one FMM here, so an
+    underresolved far field diverges in both and the reported path
+    mismatch stays small while both numbers are wrong.
+    """
+    with pytest.raises(ValueError, match="needs FMM order"):
+        composition3d._require_resolved_fmm_order(
+            ("Helmholtz",), (64.0,), max(8, 4 * 2)
+        )
+    # Yukawa is resolved at the floor whatever its decay rate, so the same
+    # value is fine when no Helmholtz row is requested
+    composition3d._require_resolved_fmm_order(
+        ("Yukawa",), (64.0,), max(8, 4 * 2)
+    )
+
+
 def test_shared_windowed_helpers_reject_unsupported_dimensions():
     """Both shared helpers refuse a dimension they have no geometry for.
 

@@ -79,6 +79,7 @@ from split_parameter_sweep import (  # noqa: E402
     WINDOWED_SMALL_THETA_AGREEMENT,
     WINDOWED_SMALL_THETA_MAX,
     _capture_table_get_timings,
+    _resolved_fmm_order,
     _clear_sqlite_cache,
     _coords_host,
     _gaussian_source_host,
@@ -525,36 +526,62 @@ def _run_windowed_composition(
         "windowed_register_payload_bytes": 0,
     }
 
-    channel_build_s = 0.0
-    was_cold = False
-    for level in source_levels:
-        family = _prepare_windowed_family(
-            cache_path=family_cache,
-            q_order=q_order,
-            source_box_level=int(level),
-            window_theta=window_theta,
-            p_star=windowed_p_star,
-            chan_regular_order=windowed_chan_orders[0],
-            chan_radial_order=windowed_chan_orders[1],
-            root_extent=tree_root_extent,
-            dim=3,
-        )
-        channel_build_s += family["build_s"]
-        was_cold = was_cold or family["was_cold"]
-    result["windowed_channel_build_s"] = channel_build_s
-    result["windowed_channel_build_was_cold"] = int(was_cold)
+    # Every step that provisions the windowed path -- the channel family,
+    # the per-level assembly, and the register/reload round trip -- runs
+    # under one taxonomy.  Only the assembly used to be covered, so an
+    # unusable channel order, a cache I/O error or a channel build failure
+    # aborted _run_windowed_composition instead of emitting the promised
+    # failed row; since main writes the CSV only after every case
+    # completes, that also discarded the earlier cases' measurements.
+    stage_label = "windowed channel family"
+    stage_bucket = "windowed_channel_build_s"
+    stage_start = time.perf_counter()
 
-    parameter_tag = f"{parameter:.17g}".replace("-", "m").replace(".", "p")
-    tables = []
-    condition_numbers = []
+    def _refused_or_failed(status, exc):
+        """Record a provisioning failure as a row instead of raising."""
+        result["windowed_status"] = status
+        result["windowed_refusal"] = (
+            f"{stage_label}: {type(exc).__name__}: {exc}"
+        )
+        # charge the partial time to whichever phase was running
+        result[stage_bucket] = float(result[stage_bucket]) + (
+            time.perf_counter() - stage_start
+        )
+        return result
+
+    tables: list[Any] = []
+    condition_numbers: list[float] = []
     smooth_quad_orders: dict[str, int] = {}
     assemble_s = 0.0
     register_s = 0.0
     load_s = 0.0
     register_payload_bytes = 0
-    for level in source_levels:
-        assemble_start = time.perf_counter()
-        try:
+
+    try:
+        channel_build_s = 0.0
+        was_cold = False
+        for level in source_levels:
+            family = _prepare_windowed_family(
+                cache_path=family_cache,
+                q_order=q_order,
+                source_box_level=int(level),
+                window_theta=window_theta,
+                p_star=windowed_p_star,
+                chan_regular_order=windowed_chan_orders[0],
+                chan_radial_order=windowed_chan_orders[1],
+                root_extent=tree_root_extent,
+                dim=3,
+            )
+            channel_build_s += family["build_s"]
+            was_cold = was_cold or family["was_cold"]
+        result["windowed_channel_build_s"] = channel_build_s
+        result["windowed_channel_build_was_cold"] = int(was_cold)
+
+        parameter_tag = f"{parameter:.17g}".replace("-", "m").replace(".", "p")
+        for level in source_levels:
+            stage_label = f"level {int(level)}"
+            stage_bucket = "windowed_assemble_s"
+            stage_start = time.perf_counter()
             assembled_table, certificate = (
                 assemble_windowed_parameterized_table(
                     family_cache,
@@ -570,51 +597,46 @@ def _run_windowed_composition(
                     chan_radial_order=windowed_chan_orders[1],
                 )
             )
-        except (RKEWindowCoverageError, RKEWindowConditioningError) as exc:
-            result["windowed_status"] = "refused"
-            result["windowed_refusal"] = (
-                f"level {int(level)}: {type(exc).__name__}: {exc}"
+            assemble_s += time.perf_counter() - stage_start
+            result["windowed_assemble_s"] = assemble_s
+            condition_numbers.append(float(certificate["condition_number"]))
+            smooth_quad_orders[str(int(level))] = int(
+                certificate["smooth_quad_order"]
             )
-            result["windowed_assemble_s"] = (
-                assemble_s + time.perf_counter() - assemble_start
-            )
-            return result
-        except (ValueError, RuntimeError, NotImplementedError) as exc:
-            result["windowed_status"] = "failed"
-            result["windowed_refusal"] = (
-                f"level {int(level)}: {type(exc).__name__}: {exc}"
-            )
-            result["windowed_assemble_s"] = (
-                assemble_s + time.perf_counter() - assemble_start
-            )
-            return result
-        assemble_s += time.perf_counter() - assemble_start
-        condition_numbers.append(float(certificate["condition_number"]))
-        smooth_quad_orders[str(int(level))] = int(
-            certificate["smooth_quad_order"]
-        )
 
-        registered_cache = cache_dir / (
-            f"composition3d-windowed-registered-{kernel.lower()}-"
-            f"q{q_order}-l{initial_nlevels}-a{adapt_steps}-"
-            f"parameter{parameter_tag}-lev{int(level)}.sqlite"
-        )
-        loaded_table, transfer = _register_and_load_windowed_table(
-            queue=queue,
-            cache_path=registered_cache,
-            kernel=kernel,
-            q_order=q_order,
-            parameter=parameter,
-            source_box_level=int(level),
-            table=assembled_table,
-            certificate=certificate,
-            root_extent=tree_root_extent,
-            dim=3,
-        )
-        tables.append(loaded_table)
-        register_s += transfer["register_s"]
-        load_s += transfer["load_s"]
-        register_payload_bytes += int(transfer["register_payload_bytes"])
+            registered_cache = cache_dir / (
+                f"composition3d-windowed-registered-{kernel.lower()}-"
+                f"q{q_order}-l{initial_nlevels}-a{adapt_steps}-"
+                f"parameter{parameter_tag}-lev{int(level)}.sqlite"
+            )
+            stage_bucket = "windowed_register_s"
+            stage_start = time.perf_counter()
+            loaded_table, transfer = _register_and_load_windowed_table(
+                queue=queue,
+                cache_path=registered_cache,
+                kernel=kernel,
+                q_order=q_order,
+                parameter=parameter,
+                source_box_level=int(level),
+                table=assembled_table,
+                certificate=certificate,
+                root_extent=tree_root_extent,
+                dim=3,
+            )
+            tables.append(loaded_table)
+            register_s += transfer["register_s"]
+            load_s += transfer["load_s"]
+            register_payload_bytes += int(transfer["register_payload_bytes"])
+            result["windowed_register_s"] = register_s
+    except (RKEWindowCoverageError, RKEWindowConditioningError) as exc:
+        # a certificate refusal: the declaration does not cover this row
+        return _refused_or_failed("refused", exc)
+    except (
+        ValueError, RuntimeError, NotImplementedError, OSError, KeyError
+    ) as exc:
+        # anything else that provisioning can raise, including a cache I/O
+        # error and a rejected registration
+        return _refused_or_failed("failed", exc)
 
     result.update(
         {
@@ -739,6 +761,40 @@ def _validate_split_order_convergence(rows: list[dict[str, Any]]) -> None:
                 )
 
 
+def _require_resolved_fmm_order(kernels, parameters, fmm_order):
+    """Refuse a Helmholtz parameter this driver's fixed FMM order cannot resolve.
+
+    Unlike ``split_parameter_sweep``'s windowed ladder, every row here shares
+    one parameter-independent ``fmm_order``.  That is fine for Yukawa, whose
+    far field decays and whose expansions are resolved at the floor, and for
+    the committed Helmholtz parameters; it is not fine for an arbitrary
+    ``--parameters`` value.  An underresolved oscillatory far field is
+    especially treacherous *here*, because the direct-table and the
+    split/windowed paths run the identical FMM: they diverge together and
+    the path mismatch this driver reports stays reassuringly small while
+    both numbers are wrong.
+
+    Rather than let the order float per parameter -- which would mix orders
+    inside one row set and is exactly what ``run_benchmark`` refuses for its
+    own fixed-parameter sweep -- refuse the parameter and say what order it
+    would need.
+    """
+    if "Helmholtz" not in kernels:
+        return
+
+    for parameter in parameters:
+        required = _resolved_fmm_order(3, parameter, floor=fmm_order)
+        if required > fmm_order:
+            raise ValueError(
+                f"Helmholtz k={parameter:g} needs FMM order {required} to "
+                f"resolve its far field, but this driver runs every row at "
+                f"the fixed order {fmm_order}; both the direct and the split "
+                "path would be underresolved together and their mismatch "
+                "would understate the error. Raise --q-order (the order is "
+                "max(8, 4*q)) or use a smaller wave number."
+            )
+
+
 def _validated_parameters(parameters):
     """Kernel parameters of one sweep, checked before anything expensive.
 
@@ -820,6 +876,7 @@ def run_case(
     source_levels = _populated_source_levels(queue, tree, traversal)
 
     fmm_order = max(8, 4 * q_order)
+    _require_resolved_fmm_order(kernels, parameters, fmm_order)
     weights_host = q_weights.get(queue)
     source_values_host = _gaussian_source_host(_coords_host(queue, q_points))
     tree_root_extent = float(tree.root_extent)
