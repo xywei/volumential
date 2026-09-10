@@ -67,6 +67,11 @@ routing at all (a payload written before routing was recorded, so its
 provenance cannot be verified), is refused with an
 `UnverifiedBuildRoutingError` naming the table and the remedy — rebuild it
 with `force_recompute=True`, or unset the switch to accept the cached data.
+Externally assembled tables (`build_method = ExternalAssembly`, e.g. a
+registered windowed RKE assembly) are exempt: they were never a DuffyRadial
+build, which is why the assemblers clear the routing, and their provenance is
+carried by the build method, the provenance kind and the payload checksum the
+load path verifies.
 Without that, a strict campaign whose cache had already been warmed would load
 and use exactly the data the switch exists to refuse.
 It is an environment switch rather than a `DuffyBuildConfig` field because the

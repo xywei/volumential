@@ -256,7 +256,7 @@ class UnverifiedBuildRoutingError(RuntimeError):
     """A cached table's recorded build routing is refused by strict mode."""
 
 
-def _refuse_unverified_build_routing(table, table_request):
+def _refuse_unverified_build_routing(table, table_request, build_method=None):
     """Refuse a cached table whose routing strict mode would not have produced.
 
     ``VOLUMENTIAL_DUFFY_NO_FALLBACK`` turns the batched-to-scalar Duffy
@@ -269,12 +269,26 @@ def _refuse_unverified_build_routing(table, table_request):
 
     ``unknown`` (a payload written before the routing was recorded) is
     refused too: strict mode's contract is that every table in the campaign
-    has a verified provenance, and an unrecorded one cannot be vouched for.
-    Both cases name the remedy, since the operator's options -- rebuild, or
-    accept the table by unsetting the switch -- are a judgement call and not
-    ours to make silently.
+    has a verified provenance, and an unrecorded Duffy build cannot be
+    vouched for.  Both cases name the remedy, since the operator's options --
+    rebuild, or accept the table by unsetting the switch -- are a judgement
+    call and not ours to make silently.
+
+    An :data:`EXTERNAL_TABLE_BUILD_METHOD` record is exempt, and this is not
+    a loophole.  The switch governs one specific substitution: a batched
+    DuffyRadial build silently becoming a scalar one.  An externally
+    assembled table was not produced by DuffyRadial at all, which is exactly
+    why the assemblers clear ``build_routing``; its provenance is carried by
+    ``build_method``, ``provenance_kind`` and the payload checksum the load
+    path already verifies, not by a routing field that does not apply.
+    Without the exemption strict mode would reject every windowed RKE
+    assembly on reload, which is the documented ``--include-windowed``
+    campaign flow.
     """
     if not _duffy_fallback_is_disabled():
+        return
+
+    if build_method == EXTERNAL_TABLE_BUILD_METHOD:
         return
 
     import volumential.opcounters as opcounters
@@ -1753,7 +1767,9 @@ class NearFieldInteractionTableManager:
         except (OSError, EOFError, TypeError, ValueError, zipfile.BadZipFile) as exc:
             raise KeyError("table cache payload is corrupted") from exc
 
-        _refuse_unverified_build_routing(table, table_request)
+        _refuse_unverified_build_routing(
+            table, table_request, stored_build_method
+        )
 
         assert table.n_q_points == record["n_q_points"]
         assert table.n_pairs == record["n_pairs"]

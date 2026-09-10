@@ -187,6 +187,55 @@ def test_series_assembly_does_not_inherit_the_channel_build_routing(tmp_path):
     assert opcounters.direct_build_routing(loaded) == "unknown"
 
 
+def test_strict_mode_still_loads_a_registered_external_assembly(
+    tmp_path, assembled_yukawa, monkeypatch
+):
+    """The no-fallback switch must not reject externally assembled tables.
+
+    It governs one substitution: a batched DuffyRadial build silently
+    becoming a scalar one.  An assembled table was never a DuffyRadial
+    build -- which is why the assemblers clear ``build_routing`` -- so its
+    ``unknown`` routing is structural, not a missing record.  Its
+    provenance is the ``ExternalAssembly`` build method, the provenance
+    kind and the payload checksum the load path verifies.  Rejecting it
+    would break the documented ``--include-windowed`` campaign flow, which
+    is what sets this switch in the first place.
+    """
+    from volumential.nearfield_potential_table import DUFFY_NO_FALLBACK_ENV_VAR
+
+    table, certificate = assembled_yukawa
+    cache = tmp_path / "registered-strict.sqlite"
+    with NearFieldInteractionTableManager(
+        str(cache), root_extent=ROOT_EXTENT
+    ) as manager:
+        _register(manager, table, certificate)
+
+    monkeypatch.setenv(DUFFY_NO_FALLBACK_ENV_VAR, "1")
+    with NearFieldInteractionTableManager(
+        str(cache), root_extent=ROOT_EXTENT
+    ) as manager:
+        loaded, is_recomputed = manager.get_table(
+            DIM, "Yukawa", Q_ORDER, source_box_level=LEVEL, lam=LAM
+        )
+
+    assert not is_recomputed
+    assert loaded.build_method == EXTERNAL_TABLE_BUILD_METHOD
+    assert loaded.build_routing is None
+
+    # the exemption is keyed on the build method, not on the routing being
+    # unknown: an ordinary Duffy payload with the same unknown routing is
+    # still refused
+    from volumential.table_manager import (
+        _refuse_unverified_build_routing,
+        UnverifiedBuildRoutingError,
+    )
+    from volumential.table_manager import TableRequest
+
+    request = TableRequest.from_args(DIM, "Yukawa", Q_ORDER, LEVEL)
+    with pytest.raises(UnverifiedBuildRoutingError):
+        _refuse_unverified_build_routing(loaded, request, "DuffyRadial")
+
+
 def test_windowed_assembly_clears_the_build_routing_too(assembled_yukawa):
     """The windowed base is a skeleton table, so it has nothing to inherit
     today; the assembled result must still report no DuffyRadial routing so
