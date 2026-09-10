@@ -43,6 +43,7 @@ import csv
 import json
 import math
 import sys
+import sqlite3
 import time
 from pathlib import Path
 from typing import Any
@@ -685,40 +686,59 @@ def _provision_windowed_yukawa_table(
     info["assemble_s"] = time.perf_counter() - start
     info["condition_number"] = float(certificate["condition_number"])
 
+    # Registration and the pure-cache reload are provisioning too, and this
+    # helper's contract is that unexpected provisioning errors come back as
+    # info["status"] == "failed".  The caller records n_windowed_failed and
+    # writes its CSV only once this returns, so an escaping SQLite, I/O or
+    # checksum error would abort the whole continuation and lose the
+    # diagnostic outcome rather than reporting it.
     register_start = time.perf_counter()
-    with NearFieldInteractionTableManager(
-        str(registered_cache_path), root_extent=float(root_extent),
-        queue=queue,
-    ) as table_manager:
-        table_manager.register_external_table(
-            2,
-            "Yukawa",
-            q_order,
-            table,
-            source_box_level=int(level),
-            provenance={
-                "kind": "windowed_rke_assembly",
-                "window_theta": float(window_theta),
-                "p_star": int(p_star),
-                "condition_number": float(certificate["condition_number"]),
-            },
-            lam=float(lam),
-        )
-    info["register_s"] = time.perf_counter() - register_start
-
-    load_start = time.perf_counter()
-    with NearFieldInteractionTableManager(
-        str(registered_cache_path), root_extent=float(root_extent),
-        queue=queue,
-    ) as table_manager:
-        loaded_table, is_recomputed = table_manager.get_table(
-            2,
-            "Yukawa",
-            q_order,
-            source_box_level=int(level),
+    try:
+        with NearFieldInteractionTableManager(
+            str(registered_cache_path), root_extent=float(root_extent),
             queue=queue,
-            lam=float(lam),
-        )
+        ) as table_manager:
+            table_manager.register_external_table(
+                2,
+                "Yukawa",
+                q_order,
+                table,
+                source_box_level=int(level),
+                provenance={
+                    "kind": "windowed_rke_assembly",
+                    "window_theta": float(window_theta),
+                    "p_star": int(p_star),
+                    "condition_number": float(
+                        certificate["condition_number"]
+                    ),
+                },
+                lam=float(lam),
+            )
+        info["register_s"] = time.perf_counter() - register_start
+
+        load_start = time.perf_counter()
+        with NearFieldInteractionTableManager(
+            str(registered_cache_path), root_extent=float(root_extent),
+            queue=queue,
+        ) as table_manager:
+            loaded_table, is_recomputed = table_manager.get_table(
+                2,
+                "Yukawa",
+                q_order,
+                source_box_level=int(level),
+                queue=queue,
+                lam=float(lam),
+            )
+    except (
+        ValueError, RuntimeError, NotImplementedError, TypeError,
+        OSError, KeyError,
+        # sqlite3's exceptions descend from Exception, not OSError
+        sqlite3.Error,
+    ) as exc:
+        info["status"] = "failed"
+        info["detail"] = f"{type(exc).__name__}: {exc}"
+        info.setdefault("register_s", time.perf_counter() - register_start)
+        return None, info
     if is_recomputed:
         info["status"] = "failed"
         info["detail"] = (
@@ -2047,6 +2067,14 @@ def main() -> int:
         parser.error("mass factors must be positive")
     if args.profile_scale <= 0.0:
         parser.error("profile-scale must be positive")
+    if not (math.isfinite(args.window_theta) and args.window_theta > 0.0):
+        # run_case() forms (leaf_extent / Theta)**2 for the windowed
+        # strategy, so a zero raises ZeroDivisionError -- and only after
+        # the geometry and the fixed-table setup are underway.  A negative
+        # Theta certifies a meaningless declaration and fails later still.
+        parser.error("--window-theta must be finite and positive")
+    if args.windowed_p_star < 1:
+        parser.error("--windowed-p-star must be >= 1")
 
     import pyopencl as cl
 

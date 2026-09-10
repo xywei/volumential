@@ -25,6 +25,7 @@ THE SOFTWARE.
 """
 
 import importlib.util
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -368,3 +369,110 @@ def test_kernel_parameter_tags(composition):
         "Yukawa": "lam",
         "Helmholtz": "k",
     }
+
+
+# {{{ windowed provisioning failure taxonomy
+
+
+def _windowed_kwargs_2d(tmp_path):
+    return {
+        "cache_dir": tmp_path,
+        "kernel": "Yukawa",
+        "q_order": 2,
+        "initial_nlevels": 3,
+        "adapt_steps": 1,
+        "parameter": 2.0,
+        "source_levels": [3],
+        "tree_root_extent": 2.0,
+        "window_theta": 16.0,
+        "windowed_p_star": 4,
+        "windowed_chan_orders": (48, 61),
+    }
+
+
+def _stub_windowed_assembly(composition, monkeypatch):
+    import volumential.rke_table_assembly as rke
+
+    monkeypatch.setattr(
+        composition,
+        "_prepare_windowed_family",
+        lambda **k: {"build_s": 0.0, "was_cold": False},
+    )
+    monkeypatch.setattr(
+        rke,
+        "assemble_windowed_parameterized_table",
+        lambda *a, **k: (object(), {
+            "condition_number": 2.0, "smooth_quad_order": 4,
+        }),
+    )
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        RuntimeError("registration refused"),
+        OSError("cache is unwritable"),
+        sqlite3.OperationalError("database is locked"),
+    ],
+)
+def test_registration_failures_become_a_failed_row(
+    composition, tmp_path, monkeypatch, exc
+):
+    """Registration and reload belong to the assembly's taxonomy.
+
+    ``main()`` writes the CSV only after every case completes, so an
+    exception escaping here discards every measurement already taken, not
+    just this row's.
+    """
+    _stub_windowed_assembly(composition, monkeypatch)
+
+    def _raise(**kwargs):
+        raise exc
+
+    monkeypatch.setattr(
+        composition, "_register_and_load_windowed_table", _raise
+    )
+
+    row = composition._run_windowed_composition(
+        None, **_windowed_kwargs_2d(tmp_path)
+    )
+
+    assert row["windowed_status"] == "failed"
+    assert type(exc).__name__ in row["windowed_refusal"]
+    assert str(exc) in row["windowed_refusal"]
+    assert "_tables" not in row
+    # sqlite3's exceptions are the ones an OSError-only handler misses
+    assert not issubclass(sqlite3.Error, OSError)
+
+
+def test_partial_registration_metrics_reach_the_failed_row(
+    composition, tmp_path, monkeypatch
+):
+    """Registration that completed before the reload failed is reported."""
+    _stub_windowed_assembly(composition, monkeypatch)
+
+    def _register_then_fail(**kwargs):
+        exc = RuntimeError("cache reopen failed")
+        exc.partial_windowed_transfer = {
+            "register_s": 4.0,
+            "register_payload_bytes": 8000,
+            "load_s": 0.0,
+            "load_payload_bytes": 0,
+        }
+        raise exc
+
+    monkeypatch.setattr(
+        composition, "_register_and_load_windowed_table", _register_then_fail
+    )
+
+    row = composition._run_windowed_composition(
+        None, **_windowed_kwargs_2d(tmp_path)
+    )
+
+    assert row["windowed_status"] == "failed"
+    assert row["windowed_register_s"] == pytest.approx(4.0)
+    assert row["windowed_register_payload_bytes"] == 8000
+    assert row["windowed_table_count"] == 0
+
+
+# }}}

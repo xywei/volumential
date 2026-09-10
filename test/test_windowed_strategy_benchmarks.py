@@ -869,3 +869,50 @@ def test_step_and_summary_field_tuples_are_consistent(ks):
         assert name in ks.SUMMARY_FIELDS
 
 # }}}
+
+
+@pytest.mark.parametrize("bad", ["0", "-1.5", "nan", "inf"])
+def test_ks_main_rejects_a_bad_window_theta(ks, tmp_path, monkeypatch,
+                                            capsys, bad):
+    """``run_case`` forms ``(leaf_extent / Theta)**2`` for the windowed
+    strategy, so a zero raises ``ZeroDivisionError`` -- and only once the
+    geometry and the fixed-table setup are underway.  A negative Theta
+    certifies a meaningless declaration and fails later still.
+    """
+    monkeypatch.setattr(
+        ks.sys,
+        "argv",
+        [
+            "keller_segel_continuation.py",
+            "--strategy", "windowed",
+            f"--window-theta={bad}",
+            "--out-dir", str(tmp_path / "never-created"),
+        ],
+    )
+    with pytest.raises(SystemExit) as exited:
+        ks.main()
+
+    assert exited.value.code == 2
+    assert "--window-theta must be finite and positive" in (
+        capsys.readouterr().err
+    )
+    assert not (tmp_path / "never-created").exists()
+
+
+def test_ks_main_rejects_a_nonpositive_windowed_p_star(ks, tmp_path,
+                                                       monkeypatch, capsys):
+    monkeypatch.setattr(
+        ks.sys,
+        "argv",
+        [
+            "keller_segel_continuation.py",
+            "--strategy", "windowed",
+            "--windowed-p-star=0",
+            "--out-dir", str(tmp_path / "never-created"),
+        ],
+    )
+    with pytest.raises(SystemExit) as exited:
+        ks.main()
+
+    assert exited.value.code == 2
+    assert "--windowed-p-star must be >= 1" in capsys.readouterr().err

@@ -44,6 +44,7 @@ import argparse
 import csv
 import json
 import sys
+import sqlite3
 import time
 from pathlib import Path
 from typing import Any
@@ -450,17 +451,49 @@ def _run_windowed_composition(
             f"q{q_order}-l{initial_nlevels}-a{adapt_steps}-"
             f"parameter{parameter_tag}-lev{int(level)}.sqlite"
         )
-        loaded_table, transfer = _register_and_load_windowed_table(
-            queue=queue,
-            cache_path=registered_cache,
-            kernel=kernel,
-            q_order=q_order,
-            parameter=parameter,
-            source_box_level=int(level),
-            table=assembled_table,
-            certificate=certificate,
-            root_extent=tree_root_extent,
-        )
+        register_start = time.perf_counter()
+        try:
+            loaded_table, transfer = _register_and_load_windowed_table(
+                queue=queue,
+                cache_path=registered_cache,
+                kernel=kernel,
+                q_order=q_order,
+                parameter=parameter,
+                source_box_level=int(level),
+                table=assembled_table,
+                certificate=certificate,
+                root_extent=tree_root_extent,
+            )
+        except (
+            ValueError, RuntimeError, NotImplementedError, OSError, KeyError,
+            # sqlite3's exceptions descend from Exception, not OSError, and
+            # this phase is a SQLite round trip
+            sqlite3.Error,
+        ) as exc:
+            # Registration and the pure-cache reload belong to the same
+            # taxonomy as the assembly above.  main() writes the CSV only
+            # after every case completes, so an exception escaping here
+            # discards every measurement already taken, not just this row.
+            result["windowed_status"] = "failed"
+            result["windowed_refusal"] = (
+                f"level {int(level)}: {type(exc).__name__}: {exc}"
+            )
+            result["windowed_assemble_s"] = assemble_s
+            # whatever the helper got through before it raised
+            partial = getattr(exc, "partial_windowed_transfer", None)
+            if partial is not None:
+                register_s += float(partial["register_s"])
+                load_s += float(partial["load_s"])
+                register_payload_bytes += int(
+                    partial["register_payload_bytes"]
+                )
+            else:
+                register_s += time.perf_counter() - register_start
+            result["windowed_register_s"] = register_s
+            result["windowed_table_load_s"] = load_s
+            result["windowed_register_payload_bytes"] = register_payload_bytes
+            result["windowed_table_count"] = len(tables)
+            return result
         tables.append(loaded_table)
         register_s += transfer["register_s"]
         load_s += transfer["load_s"]

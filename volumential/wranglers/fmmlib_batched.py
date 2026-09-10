@@ -176,10 +176,21 @@ class FMMLibBatchedStagesMixin:
         return None, None
 
     def _l2p_level_layout_ok(self, lev, boxes, counts, ref_offsets):
-        """Verify (on a sample of boxes) that every target box on level
-        *lev* shares the same target-node layout relative to its center.
-        This holds for volumential's tensor-product node placement; if it is
-        violated, the caller falls back to the per-box reference loop.
+        """Verify that *every* target box on level *lev* shares the same
+        target-node layout relative to its center.
+
+        This holds for volumential's tensor-product node placement; if it
+        is violated, the caller falls back to the per-box reference loop.
+
+        Every box, not a sample: :meth:`_eval_locals_gemm` applies the
+        reference box's matrix to all of them, so a box with the right
+        target *count* but a different layout would have its local
+        potential evaluated at the wrong offsets, silently and with no
+        fallback.  The check is one vectorized pass over the level's
+        target coordinates, which are already in host memory
+        (:meth:`_get_targets` slices a memoized array), against a GEMM
+        that carries an expansion-coefficient dimension on top of the same
+        targets -- so it is far below the work it guards.
         """
         nref = ref_offsets.shape[1]
         if not (counts == nref).all():
@@ -188,20 +199,21 @@ class FMMLibBatchedStagesMixin:
         box_size = self.tree.root_extent * 2.0 ** (-lev)
         tol = self._L2P_OFFSET_RTOL * box_size
 
-        nboxes = len(boxes)
-        sample = np.unique(
-            np.asarray([0, nboxes // 3, (2 * nboxes) // 3, nboxes - 1])
+        boxes = np.asarray(boxes)
+        # (nboxes, nref) indices into the flat target array: every box on
+        # this level holds exactly nref contiguous targets
+        starts = np.asarray(self.box_target_starts())[boxes]
+        index = starts[:, np.newaxis] + np.arange(nref)[np.newaxis, :]
+
+        targets = self._get_targets(slice(None))
+        # (dim, nboxes, nref) minus (dim, nboxes, 1)
+        offsets = (
+            targets[:, index]
+            - self.tree.box_centers[:, boxes][:, :, np.newaxis]
         )
-        for i in sample:
-            tgt_ibox = boxes[i]
-            pslice = self._get_target_slice(tgt_ibox)
-            offsets = (
-                self._get_targets(pslice)
-                - self.tree.box_centers[:, tgt_ibox].reshape(-1, 1)
-            )
-            if np.abs(offsets - ref_offsets).max() >= tol:
-                return False
-        return True
+        return bool(
+            np.abs(offsets - ref_offsets[:, np.newaxis, :]).max() < tol
+        )
 
     @memoize_method
     def _l2p_matrix(self, lev, ref_ibox):
