@@ -274,8 +274,8 @@ def test_field_set_is_unique_and_carries_far_field_columns(sweep):
     # The historical 106 columns keep their positions and the five E1b
     # columns sit immediately after them.  Pinned by index rather than as
     # "the last five", so a later PR appending its own columns -- #134's
-    # PHASE_FIELDS do -- does not silently move the boundary this is
-    # guarding.
+    # PHASE_FIELDS and #137's direct_build_routing both do -- does not
+    # silently move the boundary this is guarding.
     assert sweep.FIELDS.index("fmm_order_rule") == 106
     assert sweep.FIELDS[106:111] == (
         "fmm_order_rule",
