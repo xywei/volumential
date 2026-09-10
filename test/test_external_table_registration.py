@@ -441,6 +441,75 @@ def test_a_helmholtz_table_registers_and_reloads(tmp_path):
     assert np.array_equal(np.asarray(loaded_values), np.asarray(values))
 
 
+def test_a_failed_kwargs_write_leaves_the_previous_entry_intact(
+        tmp_path, assembled_yukawa, monkeypatch):
+    """The record and its kwargs are one entry.
+
+    ``__exit__`` commits unconditionally, so a failure between the record
+    upsert and the kwargs write used to commit the new payload with the
+    old (or no) checksum rows -- destroying a valid cached entry and
+    reloading as corruption.  Both writes are scoped by a SAVEPOINT.
+    """
+    table, certificate = assembled_yukawa
+    cache = tmp_path / "registered.sqlite"
+    with NearFieldInteractionTableManager(
+        str(cache), root_extent=ROOT_EXTENT
+    ) as manager:
+        _register(manager, table, certificate)
+
+    conn = sqlite3.connect(str(cache))
+    (before,) = conn.execute("SELECT payload FROM nearfield_cache").fetchone()
+    (checksum_before,) = conn.execute(
+        "SELECT value_text FROM nearfield_cache_kwargs "
+        "WHERE key='external_payload_checksum'"
+    ).fetchone()
+    conn.close()
+
+    def _explode(self, table_request, cache_kwargs):
+        # fail the way the finding describes: after the writer's opening
+        # DELETE, so the entry is left with its checksum rows gone
+        self.datafile.execute(
+            "DELETE FROM nearfield_cache_kwargs WHERE dim=? AND "
+            "kernel_type=? AND q_order=? AND source_box_level=?",
+            (
+                table_request.dim,
+                table_request.kernel_type,
+                table_request.q_order,
+                table_request.source_box_level,
+            ),
+        )
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(
+        NearFieldInteractionTableManager, "_store_record_kwargs", _explode
+    )
+
+    with NearFieldInteractionTableManager(
+        str(cache), root_extent=ROOT_EXTENT
+    ) as manager, pytest.raises(sqlite3.OperationalError):
+        _register(manager, table, certificate, lam=1.5 * LAM)
+
+    conn = sqlite3.connect(str(cache))
+    (after,) = conn.execute("SELECT payload FROM nearfield_cache").fetchone()
+    (checksum_after,) = conn.execute(
+        "SELECT value_text FROM nearfield_cache_kwargs "
+        "WHERE key='external_payload_checksum'"
+    ).fetchone()
+    conn.close()
+    assert after == before
+    assert checksum_after == checksum_before
+
+    # ... and the entry the slot held is still loadable
+    monkeypatch.undo()
+    with NearFieldInteractionTableManager(
+        str(cache), root_extent=ROOT_EXTENT
+    ) as manager:
+        loaded = manager.load_saved_table(
+            DIM, "Yukawa", Q_ORDER, source_box_level=LEVEL, lam=LAM
+        )
+    assert loaded.build_method == EXTERNAL_TABLE_BUILD_METHOD
+
+
 def _record_fields(**overrides):
     fields = {
         "n_q_points": 4,

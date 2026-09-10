@@ -2575,6 +2575,39 @@ assemble_windowed_parameterized_table`) under the standard
             )
         )
 
+        # The record and its kwargs are one entry: a payload committed
+        # without its checksum rows destroys whatever valid entry the slot
+        # held and reloads as corruption, and __exit__ commits
+        # unconditionally, so a failure between the two writes would be
+        # committed on the way out.  SAVEPOINT scopes both, and the
+        # rollback restores the previous entry intact.
+        self.datafile.execute("SAVEPOINT volumential_register_external")
+        try:
+            self._write_external_record(record_values)
+            self._store_record_kwargs(table_request, cache_kwargs)
+        except BaseException:
+            self.datafile.execute(
+                "ROLLBACK TO SAVEPOINT volumential_register_external"
+            )
+            self.datafile.execute(
+                "RELEASE SAVEPOINT volumential_register_external"
+            )
+            raise
+        self.datafile.execute(
+            "RELEASE SAVEPOINT volumential_register_external"
+        )
+        self.datafile.commit()
+
+        self.last_register_timings = {
+            "total_s": time.perf_counter() - t_register_start,
+            "payload_bytes": len(payload_blob),
+        }
+
+        return table_request
+
+    def _write_external_record(self, record_values):
+        """The record upsert alone; the caller scopes it together with the
+        kwargs write so the pair is atomic."""
         self.datafile.execute(
             """
             INSERT INTO nearfield_cache (
@@ -2600,15 +2633,6 @@ assemble_windowed_parameterized_table`) under the standard
             """,
             record_values,
         )
-        self._store_record_kwargs(table_request, cache_kwargs)
-        self.datafile.commit()
-
-        self.last_register_timings = {
-            "total_s": time.perf_counter() - t_register_start,
-            "payload_bytes": len(payload_blob),
-        }
-
-        return table_request
 
 
 # }}} End table dataset manager class

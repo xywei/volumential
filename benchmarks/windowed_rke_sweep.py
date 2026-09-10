@@ -30,14 +30,17 @@ sweepable via ``--chan-orders``; the classical and direct reference builds do
 not depend on them and are computed once per ``(dim, kernel, parameter)``.
 
 Damped complex-frequency rows (``--complex-phases``, experiment E8) sweep
-squared-frequency points ``zeta = mu^2 exp(i pi f)`` at phase fractions
+squared-frequency points ``zeta = mu^2 exp(-i pi f)`` at phase fractions
 ``f`` strictly between the Yukawa ray (``f = 0``) and the Helmholtz ray
 (``f = 1``), assembled through
 :func:`~volumential.rke_table_assembly.assemble_windowed_damped_table` from
 the *same real channel family* as the real rows.  Their direct reference is
 the scalar-node-set Duffy quadrature of the selected-branch kernel
 (outgoing lower-half-plane square root, exactly the branch contract of the
-assembler), evaluated separately for the real and imaginary parts at both
+assembler -- which is why the path is swept through the lower half plane:
+the selected root is then the outgoing continuation at every sampled
+phase, rather than an incoming wave that flips branch at ``f = 1``),
+evaluated separately for the real and imaginary parts at both
 direct policies, so the rows carry the same certificate, policy-floor, and
 deviation columns as the real rows plus the phase.  Classical assembly has
 no complex-parameter path and is recorded as skipped on those rows.
@@ -200,6 +203,47 @@ def _exact_float_token(value: float) -> str:
 def _parameter_identity_token(value: float) -> str:
     """Readable parameter prefix plus an exact collision-free identity."""
     return f"{float(value):g}-{_exact_float_token(value)}"
+
+
+def _damped_zeta(mu: float, phase_fraction: float) -> complex:
+    """The E8 squared frequency ``zeta = mu^2 exp(-i pi f)``.
+
+    The *lower* half plane, so the branch the assembler and the reference
+    both select -- :func:`~volumential.rke_table_assembly.
+    _selected_decay_root`, which takes ``Re >= 0`` and ``Im <= 0`` on the
+    imaginary axis -- is the outgoing continuation at every sampled phase.
+    Sampling ``exp(+i pi f)`` instead puts the selected root in the upper
+    half plane, i.e. ``exp(-decay r) = exp(-a r) exp(-i b r)``: an
+    *incoming* wave, which then flips discontinuously to the outgoing
+    ``-i k`` at the ``f = 1`` endpoint, so the sweep would measure a path
+    that changes branch halfway through.  The endpoints are unchanged
+    (both are real), and every interior point moves to its conjugate,
+    under which the assembled entries, the direct reference and therefore
+    every measured column are conjugate-symmetric.
+    """
+    return complex((float(mu) ** 2) * np.exp(-1j * np.pi * float(phase_fraction)))
+
+
+def _damped_case_id(
+    dim: int,
+    mu: float,
+    phase_fraction: float,
+    chan_tag: str,
+    p_star: int,
+    smooth_order: int,
+) -> str:
+    """Case id of one damped row.
+
+    Both the frequency and the phase carry the exact identity token: two
+    phases agreeing in the default six significant digits would otherwise
+    collide on one id with every other field equal.
+    """
+    return (
+        f"damped{int(dim)}d-mu{_parameter_identity_token(mu)}"
+        f"-phi{_parameter_identity_token(phase_fraction)}"
+        f"-{chan_tag}"
+        f"-p{int(p_star)}-s{int(smooth_order)}"
+    )
 
 
 def _classical_cache_path(
@@ -1526,11 +1570,8 @@ def run_sweep(
         # phase-0 and phase-1 edges), so they are emitted once per dim.
         for mu in dim_mus if complex_phases else []:
             theta = float(mu) * box_extent
-            mu_tag = _parameter_identity_token(mu)
             for phase_fraction in complex_phases:
-                zeta = complex(
-                    (mu * mu) * np.exp(1j * np.pi * phase_fraction)
-                )
+                zeta = _damped_zeta(mu, phase_fraction)
 
                 policy_results = []
                 for policy_index, (regular, radial) in enumerate(
@@ -1628,11 +1669,13 @@ def run_sweep(
                             row = {key: "" for key in FIELDS}
                             row.update(
                                 {
-                                    "case_id": (
-                                        f"damped{dim}d-mu{mu_tag}"
-                                        f"-phi{phase_fraction:g}"
-                                        f"-{chan_tag}"
-                                        f"-p{p_star}-s{smooth_order}"
+                                    "case_id": _damped_case_id(
+                                        dim,
+                                        mu,
+                                        phase_fraction,
+                                        chan_tag,
+                                        p_star,
+                                        smooth_order,
                                     ),
                                     "mode": mode,
                                     "dim": dim,

@@ -172,9 +172,11 @@ counts confirm or refute the analytic cost model in situ. Run the two policies
 as separate metadata-wrapped invocations with distinct cache directories.
 
 The windowed sweep accepts `--complex-phases` to add damped complex-frequency
-rows at `zeta = Theta^2 exp(i pi f)` for each requested fraction `f` in
+rows at `zeta = Theta^2 exp(-i pi f)` for each requested fraction `f` in
 `(0, 1)` (the bare flag defaults to `0.25,0.5,0.75`; the endpoints are the real
-Yukawa and Helmholtz rays the sweep already covers). Damped rows use the same
+Yukawa and Helmholtz rays the sweep already covers). The path runs through the
+lower half plane so the assembler's selected square root is the outgoing
+branch at every sampled phase, continuous with the `-i k` endpoint. Damped rows use the same
 real channel family and carry every real-row certificate and deviation column
 plus `zeta_phase_fraction`, `zeta_real`, and `zeta_imag`; the direct reference
 applies the selected-branch kernel's real and imaginary parts separately at

@@ -1131,6 +1131,71 @@ def _windowed_sweep_windowed_kwargs(tmp_path):
     }
 
 
+def test_damped_phases_sweep_the_outgoing_half_plane():
+    """The E8 path must stay on the branch the assembler selects.
+
+    ``_selected_decay_root`` takes ``Re >= 0`` and, on the imaginary axis,
+    ``Im <= 0`` -- the outgoing ``-i k``.  Sampling ``zeta = mu^2 e^{+i pi
+    f}`` puts the selected root in the upper half plane, i.e. the incoming
+    ``exp(-i b r)``, which flips discontinuously to outgoing at ``f = 1``.
+    The conjugate path is continuous with that endpoint.
+    """
+    import numpy as np
+
+    from volumential.rke_table_assembly import _selected_decay_root
+
+    module = _load_benchmark("windowed_rke_sweep")
+    mu = 8.0
+    for fraction in (0.05, 0.25, 0.5, 0.75, 0.95):
+        root = _selected_decay_root(module._damped_zeta(mu, fraction))
+        assert root.real > 0.0
+        # decaying and *outgoing*: exp(-root r) = exp(-a r) exp(+i b r)
+        assert root.imag < 0.0
+
+        # the conjugate path is the incoming one the sweep must not take
+        incoming = complex((mu * mu) * np.exp(1j * np.pi * fraction))
+        assert _selected_decay_root(incoming).imag > 0.0
+
+    # the endpoints stay exactly where they were: both are real
+    assert module._damped_zeta(mu, 0.0).imag == 0.0
+    assert module._damped_zeta(mu, 0.0).real > 0.0
+    assert module._damped_zeta(mu, 1.0).real < 0.0
+
+    # continuous into the Helmholtz endpoint, where the selector pins -i k
+    endpoint = _selected_decay_root(complex(-mu * mu))
+    approaching = _selected_decay_root(
+        module._damped_zeta(mu, 1.0 - 1.0e-9)
+    )
+    assert abs(approaching - endpoint) < 1.0e-6 * mu
+    assert endpoint.imag < 0.0
+    # ... which the +i pi path is not
+    assert abs(
+        _selected_decay_root(
+            complex((mu * mu) * np.exp(1j * np.pi * (1.0 - 1.0e-9)))
+        ) - endpoint
+    ) > mu
+
+
+def test_damped_case_ids_keep_close_phases_apart():
+    """Two phases agreeing in the default six significant digits used to
+    collide on one case id with every other field equal, so tooling keyed
+    on it merged or overwrote independently measured rows."""
+    module = _load_benchmark("windowed_rke_sweep")
+    ids = {
+        module._damped_case_id(2, 8.0, phase, "c20r61", 4, 6)
+        for phase in (0.50000001, 0.50000002)
+    }
+    assert len(ids) == 2
+    # the same readable-prefix-plus-exact-hex identity the mu token uses,
+    # so the phase can no longer collide where mu could not
+    assert "-phi0.5-0x" in module._damped_case_id(
+        2, 8.0, 0.5, "c20r61", 4, 6
+    )
+    assert module._damped_case_id(3, 8.0, 0.5, "c20r61", 4, 6).startswith(
+        "damped3d-mu8-0x"
+    )
+
+
 @pytest.mark.parametrize(("error_name", "expected_status"), [
     ("RKEWindowCoverageError", "refused"),
     ("RKEWindowConditioningError", "refused"),
