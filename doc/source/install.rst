@@ -51,10 +51,24 @@ Add the FMMLib backend with
 
 .. code-block:: bash
 
-   uv sync --active --extra fmmlib
+   uv pip install --active \
+       "pyfmmlib @ git+https://github.com/inducer/pyfmmlib.git"
 
-which builds ``pyfmmlib`` from source so that OpenMP and the batched
-``formmp`` wrappers are available.
+which builds ``pyfmmlib`` from upstream ``main``, where OpenMP and the batched
+``formmp`` wrappers live. Both need a host with ``gfortran`` and ``ninja``.
+
+.. note::
+
+   Not ``uv sync --extra fmmlib``. Unlike the inducer-stack packages above,
+   ``pyfmmlib`` has no ``tool.uv.sources`` entry, so the ``fmmlib`` extra
+   resolves its declared ``pyfmmlib>=2024.1`` to the PyPI ``2024.1.1``
+   release -- which has neither feature, and
+   ``FPNDFMMLibExpansionWrangler`` then falls back to its serial per-box
+   path without complaining, making any FMMLib timing misleading.
+   Pull request 135 adds the Git source on ``main``; once that has landed
+   here, ``uv sync --active --extra fmmlib`` becomes the recipe and this
+   note can go. ``DEVELOPMENT.md`` carries the verification commands that
+   confirm which build you got.
 
 Select an OpenCL Platform
 -------------------------
