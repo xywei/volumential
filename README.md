@@ -103,14 +103,17 @@ search for complex arguments, because the split hands any node it does not
 walk into — a post-CSE `CommonSubexpression`, say — to the real part
 wholesale, so `exp(1j*CSE((3+40j)*r))` has a complex phase without naming a
 complex argument anywhere. A phase passes only if every node in it is a
-double-precision real: a real-*typed* constant (a `complex128(0j)` does not qualify: its type
+double-precision real: a real-typed constant at least as wide as a double
+(a `float32` literal narrows the operation just as a `complex128(0j)` widens
+it) (a `complex128(0j)` does not qualify: its type
 promotes the operation, so `sqrt(x + 0j)` can come back imaginary), a
 variable the kernel does not leave unproven (a `float32` argument counts as
 unproven, because the rewrite would pick the single-precision `cos`/`sin`
 overloads where `cdouble_exp` promoted to double), an arithmetic combination
-of those, or a call to a function that is real for real arguments. The global
-scaling constant is rewritten under the same guard, since it is evaluated
-inside both quadrature loops. A kernel argument counts as real only if its *declared* dtype is
+of those, or a call to a function that is real for real arguments. The magnitude `exp(re)` is held to the same proof as the
+phase, since it too becomes a bare real call. The global scaling constant is
+rewritten under the same guard, since it is evaluated inside both quadrature
+loops. A kernel argument counts as real only if its *declared* dtype is
 real: `HelmholtzKernel(dim, allow_evanescent=True)` declares a `complex128`
 wave number, and an argument declared with no dtype at all
 (`KernelArgument(lp.ValueArg("k"))`, which loopy leaves as `<auto/runtime>`

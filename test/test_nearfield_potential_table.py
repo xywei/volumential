@@ -3298,6 +3298,66 @@ def test_splitting_a_product_chain_stays_linear():
     ) == pytest.approx(expected)
 
 
+def test_narrow_float_constants_are_not_proof_of_a_double_phase():
+    """``np.float32(0.1)`` narrows the operation just as complex widens it."""
+    import pymbolic.primitives as prim
+
+    n = prim.Variable("n")
+
+    assert npt._is_known_real(0.1)          # Python float is a double
+    assert npt._is_known_real(np.float64(0.1))
+    assert npt._is_known_real(3)            # integers are exact
+    assert npt._is_known_real(np.int32(3))
+    assert not npt._is_known_real(np.float32(0.1))
+    assert not npt._is_known_real(np.float16(0.1))
+    assert not npt._is_known_real(prim.Product((np.float32(0.1), n)))
+
+    original = prim.Call(
+        prim.Variable("exp"),
+        (prim.Product((np.complex128(1j), np.float32(0.1), n)),),
+    )
+    assert npt.ComplexExponentialRewriter()(original) == original
+    # the same expression at double precision is rewritten
+    widened = prim.Call(
+        prim.Variable("exp"),
+        (prim.Product((np.complex128(1j), np.float64(0.1), n)),),
+    )
+    assert npt.ComplexExponentialRewriter()(widened) != widened
+
+
+def test_the_magnitude_is_held_to_the_same_precision_proof():
+    """``exp(re)`` must be a double too, not only the phase.
+
+    With ``a`` float32 and ``k`` float64, the phase passes but the
+    magnitude would be emitted as a single-precision ``exp``, where
+    ``cdouble_exp`` promoted the whole exponent -- enough to underflow
+    ``exp(-200)`` to zero.
+    """
+    import pymbolic.primitives as prim
+
+    a = prim.Variable("a")
+    k = prim.Variable("k")
+    argument = prim.Sum((
+        prim.Product((-1, a)),
+        prim.Product((np.complex128(1j), k)),
+    ))
+    original = prim.Call(prim.Variable("exp"), (argument,))
+
+    # nothing unproven: both parts are double, so the rewrite happens
+    assert npt.ComplexExponentialRewriter()(original) != original
+
+    # a narrow magnitude declines it, even though the phase is fine
+    narrow_magnitude = npt.ComplexExponentialRewriter(frozenset({"a"}))
+    assert narrow_magnitude(original) == original
+
+    # ... and a purely imaginary exponent has no magnitude to prove, so an
+    # unproven name that does not appear in it is irrelevant
+    purely_imaginary = prim.Call(
+        prim.Variable("exp"), (prim.Product((np.complex128(1j), k)),)
+    )
+    assert narrow_magnitude(purely_imaginary) != purely_imaginary
+
+
 def test_an_inferred_argument_dtype_counts_as_potentially_complex():
     """``lp.ValueArg("k")`` has no dtype, and accepts a complex value.
 

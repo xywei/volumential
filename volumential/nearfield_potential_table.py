@@ -230,11 +230,16 @@ def _is_known_real(expr, unproven_names=frozenset()):
     speedup, a rewrite wrongly allowed costs every digit of the result.
     """
     if _is_numeric_constant(expr):
-        # The *type*, not the value: a complex-typed constant promotes the
+        # The *type*, not the value.  A complex-typed constant promotes the
         # whole operation, so exp(1j*sqrt(x + complex128(0j))) becomes a
         # cdouble_sqrt whose result can be imaginary even though the
-        # constant's own imaginary part is zero.
+        # constant's own imaginary part is zero.  A float32 constant
+        # narrows it instead, putting the phase in a float CSE and picking
+        # the single-precision cos/sin, where cdouble_exp had worked in
+        # double.  Python's int and float, and numpy's integers, are fine.
         if isinstance(expr, complex | np.complexfloating):
+            return False
+        if isinstance(expr, np.floating) and expr.dtype.itemsize < 8:
             return False
         return complex(expr).imag == 0
 
@@ -539,6 +544,17 @@ class ComplexExponentialRewriter(CSECachingMapperMixin, IdentityMapper):
             # wave number, or any node this module cannot reason about.
             # cos/sin of a complex phase both blow up like exp(|imag|) and
             # then cancel; cdouble_exp stays stable, so keep it.
+            return expr
+
+        if not _is_structural_zero(real_part) and not _is_known_real(
+            real_part, self.unproven_arg_names
+        ):
+            # The magnitude becomes a bare exp(real_part).  Held to the
+            # same proof as the phase: a narrow real there picks the
+            # single-precision exp where cdouble_exp promoted the whole
+            # exponent, which underflows exp(-200) to zero, and a complex
+            # one would be a cdouble_exp anyway, so declining costs
+            # nothing.
             return expr
 
         # the phase is used by both cos and sin, so name it once
