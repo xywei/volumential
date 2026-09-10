@@ -47,14 +47,18 @@ def _fallback_kernel_revision() -> str:
 
     rel_paths = [
         "version.py",
-        "tools.py",
         "volume_fmm.py",
         "list1.py",
         "nearfield_potential_table.py",
-        # Kept for the installed layouts that still ship it: since the wrangler
-        # split this is a re-export shim, so on its own it no longer moves the
-        # token when wrangler code changes.  The modules below are what does.
+        # Two re-export shims, kept for the installed layouts that still ship
+        # them.  Neither defines generated-kernel code any more, so on its own
+        # neither moves the token when that code changes; the implementation
+        # modules each shim now fronts are listed with it.
         "expansion_wrangler_fpnd.py",
+        "tools.py",
+        "kernel_cache.py",
+        "expression_eval.py",
+        "box_operators.py",
     ]
     # Sorted so the digest does not depend on directory iteration order.
     rel_paths += sorted(

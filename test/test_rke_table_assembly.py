@@ -195,3 +195,32 @@ def test_classical_assembly_validation_order_is_queue_free(tmp_path):
     with pytest.raises(NotImplementedError, match="only 2D and 3D"):
         assemble_parameterized_table(None, cache, 4, "Yukawa", 2, 1.0)
     assert not cache.exists()
+
+
+def test_public_annotations_resolve_at_runtime():
+    """``typing.get_type_hints`` must not raise on the typed RKE API.
+
+    ``from __future__ import annotations`` makes every annotation a string,
+    so a name that exists only under ``TYPE_CHECKING`` turns any
+    introspection of these signatures -- a documentation build, a runtime
+    validator, an IDE's runtime inspector -- into a ``NameError``.
+    """
+    import typing
+
+    import volumential.rke_table_assembly as rke
+
+    # the aliases the annotations name must exist at import time
+    assert rke._AssemblyResult is not None
+    assert rke._RadialProfile is not None
+
+    resolved = 0
+    for name in rke.__all__:
+        member = getattr(rke, name)
+        if not callable(member) or isinstance(member, type):
+            continue
+        hints = typing.get_type_hints(member)
+        assert hints, f"{name} advertises no resolvable annotations"
+        resolved += 1
+
+    # every non-exception entry point in __all__
+    assert resolved >= 7

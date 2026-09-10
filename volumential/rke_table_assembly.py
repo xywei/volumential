@@ -68,6 +68,7 @@ import logging
 import operator
 import os
 import uuid
+from collections.abc import Callable, Iterable, Sequence
 from itertools import pairwise, permutations, product
 from math import lgamma
 from pathlib import Path
@@ -78,15 +79,20 @@ import numpy as np
 from volumential import opcounters
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable, Sequence
-
     from volumential.nearfield_potential_table import NearFieldInteractionTable
+else:
+    # A runtime stand-in, so ``typing.get_type_hints`` can resolve this
+    # module's annotations.  The real class is only useful to a type
+    # checker, and importing it here would make every assembly import pull
+    # in the table module.  ``Iterable`` and ``Sequence`` above are imported
+    # at runtime for the same reason -- they are free, being stdlib ABCs.
+    NearFieldInteractionTable = Any
 
-    # Radial profile callable: accepts a scalar or an array of radii and
-    # returns the same shape (a float/complex scalar for scalar input).
-    _RadialProfile = Callable[[Any], Any]
-    # ``(table, certificate)`` as returned by every assembler entry point.
-    _AssemblyResult = tuple[NearFieldInteractionTable, dict[str, Any]]
+#: Radial profile callable: accepts a scalar or an array of radii and
+#: returns the same shape (a float/complex scalar for scalar input).
+_RadialProfile = Callable[[Any], Any]
+#: ``(table, certificate)`` as returned by every assembler entry point.
+_AssemblyResult = tuple[NearFieldInteractionTable, dict[str, Any]]
 
 #: Relative slack on the declared-window coverage test.  The declaration
 #: certifies the *closed* disk ``|zeta| <= (Theta/b)**2``, so a local theta
