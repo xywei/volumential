@@ -1,3 +1,7 @@
+"""Accuracy tests for the 2D Laplace near-field kernel: sumpy calculus-patch
+agreement and same-box table entries against adaptive quadrature.
+"""
+
 
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
@@ -21,11 +25,16 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
+import logging
+
 import numpy as np
 
 from sumpy.point_calculus import CalculusPatch
 
 import volumential.nearfield_potential_table as npt
+
+
+logger = logging.getLogger(__name__)
 
 
 # Directly evaluate volume integrals on a calculus patch to
@@ -64,7 +73,8 @@ def test_patch_laplace():
 
         lap = patch.laplace(f_values)
 
-        print(center, size, len(patch.x), lap)
+        logger.info("center=%s size=%s npoints=%s lap=%s",
+                    center, size, len(patch.x), lap)
 
         assert np.max(np.abs(lap - 1)) < 1e-4
 
@@ -78,7 +88,7 @@ def direct_quad(source_func, target_point):
 
     import volumential.singular_integral_2d as squad
 
-    integral, error = squad.box_quad(
+    integral, _error = squad.box_quad(
         func=integrand, a=0, b=1, c=0, d=1, singular_point=target_point, maxiter=1000
     )
 
@@ -120,12 +130,10 @@ def test_laplace_same_box_on_patch(longrun):
 
         lap = patch.laplace(f_values)
 
-        print("patch_order", patch_order)
-        print(r, center, size, len(patch.x))
-        print("x", patch.x)
-        print("y", patch.y)
-        print("f_vals", f_values)
-        print("lap", lap)
+        logger.info("patch_order=%s rep=%s center=%s size=%s npoints=%s",
+                    patch_order, r, center, size, len(patch.x))
+        logger.info("x=%s y=%s f_vals=%s lap=%s",
+                    patch.x, patch.y, f_values, lap)
 
         assert max(abs(lap + 1)) < 0.1
 
@@ -148,10 +156,9 @@ def test_laplace_same_box_on_patch(longrun):
 
         lap = patch.laplace(f_values)
 
-        print(r, center, size, len(patch.x))
-        print("x", patch.x)
-        print("y", patch.y)
-        print("f_vals", f_values)
-        print("lap", lap)
+        logger.info("rep=%s center=%s size=%s npoints=%s",
+                    r, center, size, len(patch.x))
+        logger.info("x=%s y=%s f_vals=%s lap=%s",
+                    patch.x, patch.y, f_values, lap)
 
         assert max(abs(lap)) < 0.1

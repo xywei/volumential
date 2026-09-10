@@ -173,7 +173,7 @@ def test_kernel_build_configs_mirror_the_sweep_policy(composition):
 
 
 def _windowed_row(composition, **overrides):
-    row = {field: "" for field in composition.FIELDS}
+    row = dict.fromkeys(composition.FIELDS, "")
     row.update(
         {
             "case_id": "yukawa2d-q3-l2-a1-lam2-windowed",
@@ -259,7 +259,7 @@ def test_windowed_composition_gates_small_theta_agreement(composition):
 
 
 def _online_row(composition, **overrides):
-    row = {field: "" for field in composition.FIELDS}
+    row = dict.fromkeys(composition.FIELDS, "")
     row.update(
         {
             "case_id": "yukawa2d-q4-l4-a2-lam8-p2",

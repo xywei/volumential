@@ -1,3 +1,7 @@
+"""Accuracy tests for the Cahn-Hilliard near-field kernel: sumpy calculus-
+patch agreement and same-box table entries against adaptive quadrature.
+"""
+
 __copyright__ = "Copyright (C) 2017 Xiaoyu Wei"
 
 __license__ = """
@@ -87,7 +91,7 @@ def direct_quad(source_func, target_point):
 
     import volumential.singular_integral_2d as squad
 
-    integral, error = squad.box_quad(
+    integral, _error = squad.box_quad(
         func=integrand, a=0, b=1, c=0, d=1, singular_point=target_point, maxiter=100
     )
 

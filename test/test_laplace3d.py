@@ -1,3 +1,5 @@
+"""Accuracy test for the 3D Laplace kernel on a sumpy calculus patch."""
+
 
 __copyright__ = "Copyright (C) 2018 Xiaoyu Wei"
 

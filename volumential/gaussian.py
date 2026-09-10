@@ -37,9 +37,11 @@ class GaussianComponent:
 
     @property
     def dim(self) -> int:
+        """Spatial dimension of this component."""
         return len(self.center)
 
     def as_metadata(self) -> dict[str, Any]:
+        """Return a JSON-friendly description of this component."""
         return {
             "amplitude": self.amplitude,
             "center": list(self.center),
@@ -65,9 +67,11 @@ class GaussianMixture:
 
     @property
     def dim(self) -> int:
+        """Common spatial dimension of the mixture's components."""
         return self.components[0].dim
 
     def as_metadata(self) -> dict[str, Any]:
+        """Return a JSON-friendly description of this mixture."""
         return {
             "name": self.name,
             "dim": self.dim,
@@ -91,6 +95,7 @@ def default_overlapping_gaussian_mixture(dim: int = 3) -> GaussianMixture:
 
 
 def _as_points(points: np.ndarray, dim: int | None = None) -> np.ndarray:
+    """Return *points* as a contiguous ``(npoints, dim)`` array."""
     points = np.asarray(points, dtype=np.float64)
     if points.ndim != 2:
         raise ValueError("points must have shape (npoints, dim) or (dim, npoints)")
@@ -108,6 +113,7 @@ def _as_points(points: np.ndarray, dim: int | None = None) -> np.ndarray:
 
 
 def _as_bbox(bbox: np.ndarray, dim: int | None = None) -> np.ndarray:
+    """Return *bbox* as a validated contiguous ``(dim, 2)`` array."""
     bbox = np.asarray(bbox, dtype=np.float64)
     if bbox.ndim != 2 or bbox.shape[1] != 2:
         raise ValueError("bbox must have shape (dim, 2)")
@@ -292,10 +298,12 @@ def laplace3d_gaussian_potential(
 
 
 def _component_shape_mass(component: GaussianComponent) -> float:
+    """Return the full-space integral of a unit-amplitude Gaussian shape."""
     return (math.pi / component.alpha) ** (component.dim / 2.0)
 
 
 def _component_box_shape_mass(component: GaussianComponent, bbox: np.ndarray) -> float:
+    """Return the in-box integral of a unit-amplitude Gaussian shape."""
     sqrt_alpha = math.sqrt(component.alpha)
     factor = math.sqrt(math.pi) / (2.0 * sqrt_alpha)
     integral = 1.0
@@ -366,6 +374,8 @@ def gaussian_mixture_tail_report(
 
 @dataclass(frozen=True)
 class SliceGrid:
+    """A 2D Cartesian grid embedded in a 3D box, with its axis metadata."""
+
     points: np.ndarray
     shape: tuple[int, int]
     axes: tuple[int, int]
@@ -456,8 +466,8 @@ def nearest_axis_slice(
     }
 
     if fields is not None:
-        for name, values in fields.items():
-            values = np.asarray(values)
+        for name, raw_values in fields.items():
+            values = np.asarray(raw_values)
             if values.shape[0] != points.shape[0]:
                 raise ValueError(f"field {name!r} does not match the point count")
             result[name] = values[indices]
@@ -466,6 +476,7 @@ def nearest_axis_slice(
 
 
 def _host_array(value: Any) -> np.ndarray:
+    """Return *value* as a host :class:`numpy.ndarray`, transferring if needed."""
     if hasattr(value, "get"):
         return np.asarray(value.get())
     return np.asarray(value)
@@ -491,6 +502,7 @@ def mesh_leaf_box_arrays(mesh: Any) -> dict[str, np.ndarray]:
 
 
 def _json_safe(value: Any) -> Any:
+    """Recursively convert NumPy values to JSON-serializable Python values."""
     if isinstance(value, np.ndarray):
         return _json_safe(value.tolist())
     if isinstance(value, np.generic):
@@ -501,7 +513,7 @@ def _json_safe(value: Any) -> Any:
         return value
     if isinstance(value, dict):
         return {str(key): _json_safe(val) for key, val in value.items()}
-    if isinstance(value, (list, tuple)):
+    if isinstance(value, list | tuple):
         return [_json_safe(val) for val in value]
     return value
 

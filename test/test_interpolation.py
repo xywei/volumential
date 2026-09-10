@@ -1,3 +1,8 @@
+"""Tests for interpolation between meshmode discretizations and the box
+tree: exactness on polynomials, convergence on non-exact data, and the
+lookup-builder helpers.
+"""
+
 __copyright__ = "Copyright (C) 2020 Xiaoyu Wei"
 
 __license__ = """
@@ -24,9 +29,9 @@ import sys
 
 import numpy as np
 import pytest
+from arraycontext import flatten
 
 import pyopencl as cl
-from arraycontext import flatten
 from boxtree.array_context import PyOpenCLArrayContext as BoxtreePyOpenCLArrayContext
 from meshmode.array_context import PyOpenCLArrayContext
 from meshmode.discretization import Discretization
@@ -41,8 +46,8 @@ from volumential.geometry import BoundingBoxFactory, BoxFMMGeometryFactory
 from volumential.interpolation import (
     ElementsToSourcesLookupBuilder,
     LeavesToNodesLookupBuilder,
-    _count_missing_nodes_from_leaf_starts,
     _compute_leaves_to_nodes_lookup_tol,
+    _count_missing_nodes_from_leaf_starts,
     _make_constant_array,
     interpolate_from_meshmode,
     interpolate_to_meshmode,
@@ -146,7 +151,7 @@ def drive_test_from_meshmode_interpolation(
     )
     boxgeo = boxfmm_fac(queue)
     lookup_fac = ElementsToSourcesLookupBuilder(cl_ctx, tree=boxgeo.tree, discr=discr)
-    lookup, evt = lookup_fac(arr_ctx)
+    lookup, _evt = lookup_fac(arr_ctx)
 
     if test_case == "exact":
         # algebraically exact interpolation
@@ -217,7 +222,7 @@ def drive_test_to_meshmode_interpolation(
     )
     boxgeo = boxfmm_fac(queue)
     lookup_fac = LeavesToNodesLookupBuilder(cl_ctx, trav=boxgeo.trav, discr=discr)
-    lookup, evt = lookup_fac(arr_ctx)
+    lookup, _evt = lookup_fac(arr_ctx)
 
     if test_case == "exact":
         # algebraically exact interpolation
@@ -401,7 +406,7 @@ def test_make_constant_array_accepts_queue_less_reference(ctx_factory):
 
 
 def test_interpolate_to_meshmode_forwards_prebuilt_lookup(ctx_factory, monkeypatch):
-    import volumential.volume_fmm as volume_fmm
+    from volumential import volume_fmm
 
     cl_ctx = ctx_factory()
     queue = cl.CommandQueue(cl_ctx)
@@ -565,6 +570,7 @@ def test_from_meshmode_interpolation_3d_nonexact(ctx_factory, params):
         [9, 7, 2, 10],
     ],
 )
+@pytest.mark.slow
 def test_to_meshmode_interpolation_3d_exact(ctx_factory, params):
     cl_ctx = ctx_factory()
     queue = cl.CommandQueue(cl_ctx)

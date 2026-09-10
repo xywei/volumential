@@ -1,3 +1,10 @@
+"""Version and kernel-revision metadata for :mod:`volumential`.
+
+This module owns the package version tuple and its text form, plus the
+revision token that is mixed into generated-kernel cache keys so that cached
+:mod:`loopy` binaries are not reused across source changes.
+"""
+
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
 __license__ = """
@@ -27,7 +34,7 @@ from hashlib import blake2b
 from pathlib import Path
 
 
-def _fallback_kernel_revision():
+def _fallback_kernel_revision() -> str:
     """Return a deterministic fingerprint for cache invalidation.
 
     Built artifacts installed outside of a git checkout do not carry a runtime
@@ -38,14 +45,28 @@ def _fallback_kernel_revision():
     source_root = Path(__file__).resolve().parent
     fingerprint = blake2b(digest_size=12)
 
-    for rel_path in (
+    rel_paths = [
         "version.py",
-        "tools.py",
         "volume_fmm.py",
         "list1.py",
         "nearfield_potential_table.py",
+        # Two re-export shims, kept for the installed layouts that still ship
+        # them.  Neither defines generated-kernel code any more, so on its own
+        # neither moves the token when that code changes; the implementation
+        # modules each shim now fronts are listed with it.
         "expansion_wrangler_fpnd.py",
-    ):
+        "tools.py",
+        "kernel_cache.py",
+        "expression_eval.py",
+        "box_operators.py",
+    ]
+    # Sorted so the digest does not depend on directory iteration order.
+    rel_paths += sorted(
+        f"wranglers/{module_path.name}"
+        for module_path in (source_root / "wranglers").glob("*.py")
+    )
+
+    for rel_path in rel_paths:
         try:
             payload = (source_root / rel_path).read_bytes()
         except OSError:
@@ -58,7 +79,7 @@ def _fallback_kernel_revision():
     return f"nogit-{fingerprint.hexdigest()}"
 
 
-def _resolve_git_revision():
+def _resolve_git_revision() -> str | None:
     if os.environ.get("AKPYTHON_EXEC_FROM_WITHIN_WITHIN_SETUP_PY") is not None:
         # We're just being exec'd by setup.py. We can't import anything.
         return None
@@ -77,6 +98,14 @@ def _resolve_git_revision():
 _git_rev = _resolve_git_revision()
 
 # }}}
+
+__all__ = [
+    "KERNEL_VERSION",
+    "LOOPY_LANG_VERSION",
+    "VERSION",
+    "VERSION_STATUS",
+    "VERSION_TEXT",
+]
 
 VERSION = (2017, 1)
 VERSION_STATUS = "a0"

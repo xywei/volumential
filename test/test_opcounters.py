@@ -40,6 +40,7 @@ from volumential.rke_table_assembly import (
     windowed_remainder_profile,
 )
 
+
 ROOT_EXTENT = 2.0
 WINDOW_THETA = 16.0
 
@@ -67,9 +68,8 @@ def test_counting_context_collects_and_nests():
 
 def test_counting_context_recovers_after_exception():
     counters = oc.OpCounters()
-    with pytest.raises(RuntimeError):
-        with oc.counting(counters):
-            raise RuntimeError("boom")
+    with pytest.raises(RuntimeError), oc.counting(counters):
+        raise RuntimeError("boom")
     oc.add(oc.SMOOTH_NODES, "tensor_gauss", 3)
     assert counters.total(oc.SMOOTH_NODES) == 0
 
@@ -90,9 +90,8 @@ def test_by_function_listing_is_sorted_and_compact():
 
 
 def test_counting_rejects_non_counter():
-    with pytest.raises(ValueError):
-        with oc.counting({}):
-            pass
+    with pytest.raises(ValueError), oc.counting({}):
+        pass
 
 # }}}
 

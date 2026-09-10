@@ -1,19 +1,25 @@
-import numpy as np
-import pytest
+"""Tests for the SQLite table cache: schema versioning, migration from the
+legacy HDF5/blob layouts, corruption handling, read-only behavior and
+payload (de)serialization.
+"""
+
 import sqlite3
 
+import numpy as np
+import pytest
+
 from volumential.table_manager import (
+    TABLE_CACHE_SCHEMA_VERSION,
     ConstantKernel,
     KernelSpec,
     NearFieldInteractionTableManager as NFTable,
     TableDiscretization,
     TableRequest,
-    TABLE_CACHE_SCHEMA_VERSION,
     _coerce_sqlite_int,
-    _deserialize_table_payload,
     _deserialize_scalar,
-    _serialize_table_payload,
+    _deserialize_table_payload,
     _serialize_scalar,
+    _serialize_table_payload,
 )
 
 
@@ -363,14 +369,16 @@ def test_get_table_recompute_skips_python_kernel_lookup_for_sumpy(
 def test_get_table_rejects_legacy_knl_func_kwarg(tmp_path):
     filename = tmp_path / "cache.sqlite"
 
-    with NFTable(str(filename), progress_bar=False) as table_manager:
-        with pytest.raises(TypeError, match="knl_func has been removed"):
-            table_manager.get_table(
-                2,
-                "Laplace",
-                q_order=1,
-                knl_func=lambda x, y: x + y,
-            )
+    with (
+        NFTable(str(filename), progress_bar=False) as table_manager,
+        pytest.raises(TypeError, match="knl_func has been removed"),
+    ):
+        table_manager.get_table(
+            2,
+            "Laplace",
+            q_order=1,
+            knl_func=lambda x, y: x + y,
+        )
 
 
 def test_coerce_sqlite_int_accepts_int32_blob():
@@ -509,9 +517,11 @@ def test_incompatible_future_schema_version_rejected(tmp_path):
         )
         db.commit()
 
-    with pytest.raises(RuntimeError, match="incompatible schema version"):
-        with NFTable(str(filename), read_only=True, progress_bar=False):
-            pass
+    with (
+        pytest.raises(RuntimeError, match="incompatible schema version"),
+        NFTable(str(filename), read_only=True, progress_bar=False),
+    ):
+        pass
 
 
 def test_symmetry_reduced_payload_roundtrip_uses_sparse_arrays():
@@ -856,9 +866,11 @@ def test_unversioned_cache_rows_rejected_in_read_only_mode(tmp_path):
         db.execute("DELETE FROM nearfield_cache_meta WHERE key='schema_version'")
         db.commit()
 
-    with pytest.raises(RuntimeError, match="missing schema_version"):
-        with NFTable(str(filename), read_only=True, progress_bar=False):
-            pass
+    with (
+        pytest.raises(RuntimeError, match="missing schema_version"),
+        NFTable(str(filename), read_only=True, progress_bar=False),
+    ):
+        pass
 
 
 def test_get_table_loads_using_stored_build_method_when_unspecified(tmp_path):

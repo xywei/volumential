@@ -1,3 +1,9 @@
+"""Tests for :mod:`volumential.nearfield_potential_table`: quadrature modes
+and Chebyshev remapping, the Duffy-radial build paths (including the
+batched builder and its autotuning), symmetry/orbit reduction, and the
+table payload serialization contract.
+"""
+
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
 __license__ = """
@@ -24,9 +30,11 @@ import os
 import sys
 
 import numpy as np
-import pyopencl as cl
 import pytest
 from numpy.polynomial.chebyshev import chebval, chebval2d, chebval3d
+
+import pyopencl as cl
+
 
 if (
     sys.platform == "darwin"
@@ -82,7 +90,7 @@ def _make_legendre_table_without_cl(q_order, dim):
     elif dim == 3:
         q_points = [(x, y, z) for x in nodes for y in nodes for z in nodes]
     else:
-        raise NotImplementedError("dimension %d not supported" % dim)
+        raise NotImplementedError(f"dimension {dim} not supported")
 
     table.q_points = np.asarray(q_points, dtype=np.float64)
     return table
@@ -99,15 +107,21 @@ def _precomputed_legendre_q_points(q_order, dim):
     elif dim == 3:
         q_points = [(x, y, z) for x in nodes for y in nodes for z in nodes]
     else:
-        raise NotImplementedError("dimension %d not supported" % dim)
+        raise NotImplementedError(f"dimension {dim} not supported")
 
     return np.asarray(q_points, dtype=np.float64)
 
 
-def test_const_order_1():
+def _check_constant_kernel_table_entries(quad_order, expected_entry_value):
+    """Build a constant-kernel 2D table and check every entry's value.
+
+    The two ``test_const_order_*`` cases differ only in `quad_order` and the
+    resulting entry value; they stay separate tests because the order-2 build
+    is expensive enough to keep behind ``--longrun``.
+    """
     queue = _make_build_queue_or_skip()
     table = npt.NearFieldInteractionTable(
-        quad_order=1,
+        quad_order=quad_order,
         kernel_func=npt.constant_one,
         kernel_type="const",
         sumpy_kernel=ConstantKernel(2),
@@ -115,21 +129,15 @@ def test_const_order_1():
     )
     table.build_table(queue=queue)
     for entry_id in range(len(table.data)):
-        assert np.allclose(table.get_entry_data(entry_id), 1)
+        assert np.allclose(table.get_entry_data(entry_id), expected_entry_value)
+
+
+def test_const_order_1():
+    _check_constant_kernel_table_entries(1, 1)
 
 
 def test_const_order_2(longrun):
-    queue = _make_build_queue_or_skip()
-    table = npt.NearFieldInteractionTable(
-        quad_order=2,
-        kernel_func=npt.constant_one,
-        kernel_type="const",
-        sumpy_kernel=ConstantKernel(2),
-        progress_bar=False,
-    )
-    table.build_table(queue=queue)
-    for entry_id in range(len(table.data)):
-        assert np.allclose(table.get_entry_data(entry_id), 0.25)
+    _check_constant_kernel_table_entries(2, 0.25)
 
 
 def interp_modes(q_order):
@@ -147,8 +155,6 @@ def interp_modes(q_order):
     yi = yi.flatten()
 
     val = np.zeros(xi.shape)
-    print(xi)
-    print(yi)
 
     for i in range(len(xi)):
         val[i] = interpolate_function(xi[i], yi[i])
@@ -163,9 +169,9 @@ def test_modes():
 
 
 def test_sumpy_kernel_to_lambda_lambdifies_once(monkeypatch):
-    from sumpy.kernel import LaplaceKernel
-
     import sympy
+
+    from sumpy.kernel import LaplaceKernel
 
     call_count = {"n": 0}
     original_lambdify = sympy.lambdify
@@ -233,7 +239,7 @@ def cheb_eval(dim, coefs, coords):
     elif dim == 3:
         return chebval3d(coords[0], coords[1], coords[2], coefs)
     else:
-        raise NotImplementedError("dimension %d not supported" % dim)
+        raise NotImplementedError(f"dimension {dim} not supported")
 
 
 def drive_test_modes_cheb_coeffs(dim, q, cheb_order):
@@ -1461,7 +1467,7 @@ def test_mode_remap_is_elementwise_for_vectorized_inputs():
     y = np.array([0.4, 0.5], dtype=np.float64)
 
     scalar_vals = np.array(
-        [mode(float(ix), float(iy)) for ix, iy in zip(x, y)],
+        [mode(float(ix), float(iy)) for ix, iy in zip(x, y, strict=True)],
         dtype=np.float64,
     )
     vector_vals = mode(x, y)
@@ -1643,11 +1649,12 @@ def test_duffy_radial_batched_clamps_decomposition_vertex(monkeypatch):
     assert np.allclose(target_points[:, 0], np.array([2.10, -0.10]))
 
 
-def test_duffy_radial_routes_queue_to_batched_builder_1d(monkeypatch):
+@pytest.mark.parametrize("dim", [1, 3], ids=["1d", "3d"])
+def test_duffy_radial_routes_queue_to_batched_builder_nd(monkeypatch, dim):
     table = npt.NearFieldInteractionTable(
         quad_order=2,
         build_method="DuffyRadial",
-        dim=1,
+        dim=dim,
         sumpy_kernel=object(),
         derive_kernel_func=False,
         progress_bar=False,
@@ -1656,7 +1663,7 @@ def test_duffy_radial_routes_queue_to_batched_builder_1d(monkeypatch):
     seen = {}
 
     def fail_build_normalizer_table(self, pool=None, pb=None):
-        raise AssertionError("normalizer table should not be built in 1D")
+        raise AssertionError(f"normalizer table should not be built in {dim}D")
 
     def fake_batched(
         self,
@@ -1696,64 +1703,7 @@ def test_duffy_radial_routes_queue_to_batched_builder_1d(monkeypatch):
 
     assert seen["called"]
     assert seen["queue"] is q
-    assert seen["dim"] == 1
-    assert table.last_duffy_build_timings["normalizer_s"] == 0.0
-
-
-def test_duffy_radial_routes_queue_to_batched_builder_3d(monkeypatch):
-    table = npt.NearFieldInteractionTable(
-        quad_order=2,
-        build_method="DuffyRadial",
-        dim=3,
-        sumpy_kernel=object(),
-        derive_kernel_func=False,
-        progress_bar=False,
-    )
-
-    seen = {}
-
-    def fail_build_normalizer_table(self, pool=None, pb=None):
-        raise AssertionError("normalizer table should not be built in 3D")
-
-    def fake_batched(
-        self,
-        queue,
-        radial_rule,
-        deg_theta,
-        radial_quad_order,
-        mp_dps,
-        kernel_kwargs=None,
-    ):
-        seen["queue"] = queue
-        seen["dim"] = self.dim
-        seen["called"] = True
-        self.is_built = True
-        self.last_duffy_build_timings = {
-            "invariant_info_s": 0.0,
-            "quadrature_s": 0.0,
-            "scatter_s": 0.0,
-            "total_s": 0.0,
-            "n_entries": 0,
-        }
-
-    monkeypatch.setattr(
-        npt.NearFieldInteractionTable,
-        "build_normalizer_table",
-        fail_build_normalizer_table,
-    )
-
-    monkeypatch.setattr(
-        npt.NearFieldInteractionTable,
-        "build_table_via_duffy_radial_batched",
-        fake_batched,
-    )
-
-    q = object()
-    table.build_table_via_duffy_radial(queue=q)
-
-    assert seen["called"]
-    assert seen["queue"] is q
-    assert seen["dim"] == 3
+    assert seen["dim"] == dim
     assert table.last_duffy_build_timings["normalizer_s"] == 0.0
 
 
@@ -2398,6 +2348,7 @@ def test_arithmetic_orbit_reconstruction_sorts_nonadjacent_group_axes():
         "mixed-directional-target-derivative",
     ],
 )
+@pytest.mark.slow
 def test_arithmetic_orbit_reconstruction_matches_dense_oracle(kernel_case):
     from sumpy.kernel import (
         AxisSourceDerivative,
@@ -2671,8 +2622,6 @@ def test_arithmetic_orbit_reconstruction_q3_payload_diagnostic_row():
 
 
 def test_table_payload_serialization_excludes_nan_sentinels_for_reduced_tables():
-    import io
-
     from volumential.table_manager import (
         _deserialize_table_payload,
         _serialize_table_payload,

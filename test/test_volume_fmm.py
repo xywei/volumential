@@ -1,3 +1,17 @@
+"""Tests for the volume FMM driver.
+
+This module covers the queue-free guards and helpers in
+:mod:`volumential.volume_fmm` and :mod:`volumential.expansion_wrangler_fpnd`
+(source-field normalization, interpolation-target coverage, coincident
+source/target detection, list-1 scaling policy), and the end-to-end 2D/3D
+Laplace, Helmholtz and Yukawa runs -- including the Helmholtz/Laplace
+split path, whose results are compared against the corresponding
+non-split runs.
+
+The heaviest split-versus-nonsplit sweeps are marked ``full_accuracy``
+and only run under ``pytest --full-accuracy``.
+"""
+
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
 __license__ = """
@@ -29,6 +43,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+
 if (
     sys.platform == "darwin"
     and os.environ.get("VOLUMENTIAL_RUN_UNSTABLE_DARWIN_TESTS") != "1"
@@ -40,7 +55,7 @@ if (
     )
 
 import pyopencl as cl
-import pyopencl.array  # noqa: F401
+import pyopencl.array
 
 import volumential.meshgen as mg
 
@@ -153,7 +168,9 @@ def test_list1_gallery_includes_mixed_source_levels():
 
 
 def test_validate_table_box_particle_layout_accepts_q_order_layout():
-    from volumential.expansion_wrangler_fpnd import _validate_table_box_particle_layout
+    from volumential.expansion_wrangler_fpnd import (
+        _validate_table_box_particle_layout,
+    )
 
     tree = SimpleNamespace(
         box_target_counts_nonchild=_FakeDeviceArray(np.array([16, 0, 16, 16]))
@@ -169,7 +186,9 @@ def test_validate_table_box_particle_layout_accepts_q_order_layout():
 
 
 def test_validate_table_box_particle_layout_rejects_non_q_order_layout():
-    from volumential.expansion_wrangler_fpnd import _validate_table_box_particle_layout
+    from volumential.expansion_wrangler_fpnd import (
+        _validate_table_box_particle_layout,
+    )
 
     tree = SimpleNamespace(
         box_target_counts_nonchild=_FakeDeviceArray(np.array([16, 24, 16, 31]))
@@ -441,8 +460,8 @@ def test_rebuild_tob_from_geometry_restores_unit_level_edges():
     bad_edges_before = 0
     for parent in range(tob.nboxes):
         plevel = int(levels[parent])
-        for child in tob.box_child_ids[:, parent]:
-            child = int(child)
+        for raw_child in tob.box_child_ids[:, parent]:
+            child = int(raw_child)
             if child != 0 and int(levels[child]) != plevel + 1:
                 bad_edges_before += 1
 
@@ -454,8 +473,8 @@ def test_rebuild_tob_from_geometry_restores_unit_level_edges():
     bad_edges_after = 0
     for parent in range(repaired.nboxes):
         plevel = int(repaired_levels[parent])
-        for child in repaired.box_child_ids[:, parent]:
-            child = int(child)
+        for raw_child in repaired.box_child_ids[:, parent]:
+            child = int(raw_child)
             if child != 0 and int(repaired_levels[child]) != plevel + 1:
                 bad_edges_after += 1
 
@@ -580,7 +599,7 @@ def test_ensure_interpolation_target_coverage_accepts_empty_array():
 def test_ensure_interpolation_target_coverage_accepts_empty_device_like_array(
     monkeypatch,
 ):
-    import volumential.volume_fmm as volume_fmm
+    from volumential import volume_fmm
 
     class _EmptyDeviceLike:
         size = 0
@@ -652,7 +671,7 @@ def test_compute_interpolation_lookup_tol_handles_missing_tree_nlevels():
 
 
 def test_build_box_mode_to_source_ids_raises_on_unmatched_nodes(monkeypatch):
-    import volumential.volume_fmm as volume_fmm
+    from volumential import volume_fmm
 
     monkeypatch.setattr(volume_fmm.cl.array, "to_device", lambda queue, ary: ary)
 
@@ -686,7 +705,7 @@ def test_build_box_mode_to_source_ids_raises_on_unmatched_nodes(monkeypatch):
 
 
 def test_build_box_mode_to_source_ids_accepts_float32_roundoff(monkeypatch):
-    import volumential.volume_fmm as volume_fmm
+    from volumential import volume_fmm
 
     monkeypatch.setattr(volume_fmm.cl.array, "to_device", lambda queue, ary: ary)
 
@@ -726,7 +745,7 @@ def test_build_box_mode_to_source_ids_accepts_float32_roundoff(monkeypatch):
 
 
 def test_build_source_only_wrangler_preserves_self_extra_kwargs(monkeypatch):
-    import volumential.volume_fmm as volume_fmm
+    from volumential import volume_fmm
 
     class _DummyBoxtreeActx:
         def __init__(self, queue):
@@ -793,7 +812,7 @@ def test_build_source_only_wrangler_preserves_self_extra_kwargs(monkeypatch):
 
 
 def test_build_source_only_wrangler_rebuilds_target_to_source_mapping(monkeypatch):
-    import volumential.volume_fmm as volume_fmm
+    from volumential import volume_fmm
 
     class _DummyBoxtreeActx:
         def __init__(self, queue):
@@ -853,130 +872,122 @@ def test_build_source_only_wrangler_rebuilds_target_to_source_mapping(monkeypatc
     np.testing.assert_array_equal(rebuilt, np.arange(3, dtype=np.int32))
 
 
-def test_looks_like_coincident_source_target_setup_matches_user_ids():
-    import volumential.volume_fmm as volume_fmm
-
-    tree = SimpleNamespace(
-        sources_are_targets=False,
-        nsources=4,
-        ntargets=4,
-        dimensions=2,
-        user_source_ids=_FakeDeviceArray(np.array([2, 0, 3, 1], dtype=np.int32)),
-        user_target_ids=_FakeDeviceArray(np.array([2, 0, 3, 1], dtype=np.int32)),
-        sources=np.empty(2, dtype=object),
-        targets=np.empty(2, dtype=object),
-    )
-    tree.sources[0] = _FakeDeviceArray(
-        np.array([0.2, -0.5, 0.8, 0.1], dtype=np.float64)
-    )
-    tree.sources[1] = _FakeDeviceArray(
-        np.array([1.5, -0.2, 0.3, 1.2], dtype=np.float64)
-    )
-    tree.targets[0] = _FakeDeviceArray(
-        np.array([0.2, -0.5, 0.8, 0.1], dtype=np.float64)
-    )
-    tree.targets[1] = _FakeDeviceArray(
-        np.array([1.5, -0.2, 0.3, 1.2], dtype=np.float64)
-    )
-
-    assert volume_fmm._looks_like_coincident_source_target_setup(tree, queue=None)
+_COINCIDENT_SOURCE_COORDS_2D = (
+    [0.2, -0.5, 0.8, 0.1],
+    [1.5, -0.2, 0.3, 1.2],
+)
+_PERTURBED_TARGET_COORDS_2D = (
+    [0.2, -0.5, 0.8, 0.1],
+    [1.5, -0.2, 0.3, 1.25],
+)
+_COINCIDENT_SOURCE_COORDS_2D_N3 = (
+    [0.1, 0.2, 0.3],
+    [-0.4, 0.5, 0.6],
+)
 
 
-def test_looks_like_coincident_source_target_setup_rejects_equal_ids_mismatched_coords():
-    import volumential.volume_fmm as volume_fmm
+def _make_coincidence_probe_tree(
+    user_source_ids, user_target_ids, source_coords, target_coords
+):
+    """Build the minimal fake tree accepted by the coincidence heuristic.
 
-    tree = SimpleNamespace(
-        sources_are_targets=False,
-        nsources=4,
-        ntargets=4,
-        dimensions=2,
-        user_source_ids=_FakeDeviceArray(np.array([2, 0, 3, 1], dtype=np.int32)),
-        user_target_ids=_FakeDeviceArray(np.array([2, 0, 3, 1], dtype=np.int32)),
-        sources=np.empty(2, dtype=object),
-        targets=np.empty(2, dtype=object),
-    )
-    tree.sources[0] = _FakeDeviceArray(
-        np.array([0.2, -0.5, 0.8, 0.1], dtype=np.float64)
-    )
-    tree.sources[1] = _FakeDeviceArray(
-        np.array([1.5, -0.2, 0.3, 1.2], dtype=np.float64)
-    )
-    tree.targets[0] = _FakeDeviceArray(
-        np.array([0.2, -0.5, 0.8, 0.1], dtype=np.float64)
-    )
-    tree.targets[1] = _FakeDeviceArray(
-        np.array([1.5, -0.2, 0.3, 1.25], dtype=np.float64)
+    Passing `source_coords=None` omits the coordinate attributes entirely, so
+    that the heuristic has to bail out on the user-id comparison alone.
+    """
+    fields = {
+        "sources_are_targets": False,
+        "nsources": len(user_source_ids),
+        "ntargets": len(user_source_ids),
+        "user_source_ids": _FakeDeviceArray(
+            np.array(user_source_ids, dtype=np.int32)
+        ),
+        "user_target_ids": (
+            None
+            if user_target_ids is None
+            else _FakeDeviceArray(np.array(user_target_ids, dtype=np.int32))
+        ),
+    }
+    if source_coords is None:
+        return SimpleNamespace(**fields)
+
+    dim = len(source_coords)
+    sources = np.empty(dim, dtype=object)
+    targets = np.empty(dim, dtype=object)
+    for axis in range(dim):
+        sources[axis] = _FakeDeviceArray(
+            np.array(source_coords[axis], dtype=np.float64)
+        )
+        targets[axis] = _FakeDeviceArray(
+            np.array(target_coords[axis], dtype=np.float64)
+        )
+    return SimpleNamespace(
+        dimensions=dim, sources=sources, targets=targets, **fields
     )
 
-    assert not volume_fmm._looks_like_coincident_source_target_setup(tree, queue=None)
 
+@pytest.mark.parametrize(
+    (
+        "user_source_ids",
+        "user_target_ids",
+        "source_coords",
+        "target_coords",
+        "expected",
+    ),
+    [
+        (
+            [2, 0, 3, 1],
+            [2, 0, 3, 1],
+            _COINCIDENT_SOURCE_COORDS_2D,
+            _COINCIDENT_SOURCE_COORDS_2D,
+            True,
+        ),
+        (
+            [2, 0, 3, 1],
+            [2, 0, 3, 1],
+            _COINCIDENT_SOURCE_COORDS_2D,
+            _PERTURBED_TARGET_COORDS_2D,
+            False,
+        ),
+        ([0, 1, 2, 3], [3, 2, 1, 0], None, None, False),
+        (
+            [2, 0, 3, 1],
+            [14, 12, 15, 13],
+            _COINCIDENT_SOURCE_COORDS_2D,
+            _COINCIDENT_SOURCE_COORDS_2D,
+            True,
+        ),
+        (
+            [0, 1, 2],
+            None,
+            _COINCIDENT_SOURCE_COORDS_2D_N3,
+            _COINCIDENT_SOURCE_COORDS_2D_N3,
+            True,
+        ),
+    ],
+    ids=[
+        "matches_user_ids",
+        "rejects_equal_ids_mismatched_coords",
+        "rejects_mismatched_user_ids",
+        "matches_offset_target_ids",
+        "matches_without_user_target_ids",
+    ],
+)
+def test_looks_like_coincident_source_target_setup(
+    user_source_ids, user_target_ids, source_coords, target_coords, expected
+):
+    from volumential import volume_fmm
 
-def test_looks_like_coincident_source_target_setup_rejects_mismatched_user_ids():
-    import volumential.volume_fmm as volume_fmm
-
-    tree = SimpleNamespace(
-        sources_are_targets=False,
-        nsources=4,
-        ntargets=4,
-        user_source_ids=_FakeDeviceArray(np.array([0, 1, 2, 3], dtype=np.int32)),
-        user_target_ids=_FakeDeviceArray(np.array([3, 2, 1, 0], dtype=np.int32)),
+    tree = _make_coincidence_probe_tree(
+        user_source_ids, user_target_ids, source_coords, target_coords
     )
 
-    assert not volume_fmm._looks_like_coincident_source_target_setup(tree, queue=None)
+    result = volume_fmm._looks_like_coincident_source_target_setup(tree, queue=None)
 
-
-def test_looks_like_coincident_source_target_setup_matches_offset_target_ids():
-    import volumential.volume_fmm as volume_fmm
-
-    tree = SimpleNamespace(
-        sources_are_targets=False,
-        nsources=4,
-        ntargets=4,
-        dimensions=2,
-        user_source_ids=_FakeDeviceArray(np.array([2, 0, 3, 1], dtype=np.int32)),
-        user_target_ids=_FakeDeviceArray(np.array([14, 12, 15, 13], dtype=np.int32)),
-        sources=np.empty(2, dtype=object),
-        targets=np.empty(2, dtype=object),
-    )
-    tree.sources[0] = _FakeDeviceArray(
-        np.array([0.2, -0.5, 0.8, 0.1], dtype=np.float64)
-    )
-    tree.sources[1] = _FakeDeviceArray(
-        np.array([1.5, -0.2, 0.3, 1.2], dtype=np.float64)
-    )
-    tree.targets[0] = _FakeDeviceArray(
-        np.array([0.2, -0.5, 0.8, 0.1], dtype=np.float64)
-    )
-    tree.targets[1] = _FakeDeviceArray(
-        np.array([1.5, -0.2, 0.3, 1.2], dtype=np.float64)
-    )
-
-    assert volume_fmm._looks_like_coincident_source_target_setup(tree, queue=None)
-
-
-def test_looks_like_coincident_source_target_setup_matches_without_user_target_ids():
-    import volumential.volume_fmm as volume_fmm
-
-    tree = SimpleNamespace(
-        sources_are_targets=False,
-        nsources=3,
-        ntargets=3,
-        dimensions=2,
-        user_source_ids=_FakeDeviceArray(np.array([0, 1, 2], dtype=np.int32)),
-        user_target_ids=None,
-        sources=np.empty(2, dtype=object),
-        targets=np.empty(2, dtype=object),
-    )
-    tree.sources[0] = _FakeDeviceArray(np.array([0.1, 0.2, 0.3], dtype=np.float64))
-    tree.sources[1] = _FakeDeviceArray(np.array([-0.4, 0.5, 0.6], dtype=np.float64))
-    tree.targets[0] = _FakeDeviceArray(np.array([0.1, 0.2, 0.3], dtype=np.float64))
-    tree.targets[1] = _FakeDeviceArray(np.array([-0.4, 0.5, 0.6], dtype=np.float64))
-
-    assert volume_fmm._looks_like_coincident_source_target_setup(tree, queue=None)
+    assert bool(result) is expected
 
 
 def test_maybe_guard_coincident_source_target_tree_warns_once(caplog, monkeypatch):
-    import volumential.volume_fmm as volume_fmm
+    from volumential import volume_fmm
 
     monkeypatch.delenv("VOLUMENTIAL_STRICT_SOURCE_TARGET_TREE", raising=False)
     monkeypatch.setattr(volume_fmm, "_COINCIDENT_TREE_WARNING_EMITTED", False)
@@ -1007,7 +1018,7 @@ def test_maybe_guard_coincident_source_target_tree_warns_once(caplog, monkeypatc
 
 
 def test_maybe_guard_coincident_source_target_tree_strict_mode(monkeypatch):
-    import volumential.volume_fmm as volume_fmm
+    from volumential import volume_fmm
 
     monkeypatch.setenv("VOLUMENTIAL_STRICT_SOURCE_TARGET_TREE", "1")
     monkeypatch.setattr(volume_fmm, "_COINCIDENT_TREE_WARNING_EMITTED", False)
@@ -1113,53 +1124,53 @@ def _create_non_intel_opencl_context_or_skip():
     return cl.Context(devices=[devices[0]])
 
 
-def _get_laplace_3d_table(queue, table_path, q_order):
+#: Radial rule and root extent shared by every near-field table built here.
+_DUFFY_RADIAL_RULE = "tanh-sinh-fast"
+_TABLE_ROOT_EXTENT = 2.0
+
+
+def _duffy_quad_orders_2d(q_order):
+    """Return (regular, radial) Duffy quadrature orders for a 2D table."""
+    return max(8, 4 * q_order), max(21, 10 * q_order)
+
+
+def _duffy_quad_orders_3d(q_order, *, low_order_max=2):
+    """Return (regular, radial) Duffy quadrature orders for a 3D table."""
+    if q_order <= low_order_max:
+        return 6, 21
+    return 8, 31
+
+
+def _get_cached_near_field_tables(
+    queue,
+    table_path,
+    dim,
+    kernel_type,
+    q_order,
+    *,
+    regular_quad_order,
+    radial_quad_order,
+    root_extent=_TABLE_ROOT_EXTENT,
+    manager_dtype=None,
+    source_box_level=None,
+    max_source_box_level=None,
+    **kernel_kwargs,
+):
+    """Build or load near-field tables through the table-manager cache.
+
+    Returns a single table, or -- when `max_source_box_level` is given -- the
+    list of per-level tables for levels ``0 .. max_source_box_level``.
+    """
     from volumential.nearfield_potential_table import DuffyBuildConfig
     from volumential.table_manager import NearFieldInteractionTableManager
 
-    if q_order <= 2:
-        regular_quad_order = 6
-        radial_quad_order = 21
-    else:
-        regular_quad_order = 8
-        radial_quad_order = 31
+    manager_kwargs = {"root_extent": root_extent, "queue": queue}
+    if manager_dtype is not None:
+        manager_kwargs["dtype"] = manager_dtype
 
-    with NearFieldInteractionTableManager(
-        str(table_path), root_extent=2.0, queue=queue
-    ) as tm:
+    with NearFieldInteractionTableManager(str(table_path), **manager_kwargs) as tm:
         build_config = DuffyBuildConfig(
-            radial_rule="tanh-sinh-fast",
-            regular_quad_order=regular_quad_order,
-            radial_quad_order=radial_quad_order,
-        )
-        table, _ = tm.get_table(
-            3,
-            "Laplace",
-            q_order,
-            force_recompute=False,
-            queue=queue,
-            build_config=build_config,
-        )
-
-    return table
-
-
-def _get_laplace_3d_dx_table(queue, table_path, q_order, *, source_box_level=None):
-    from volumential.nearfield_potential_table import DuffyBuildConfig
-    from volumential.table_manager import NearFieldInteractionTableManager
-
-    if q_order <= 2:
-        regular_quad_order = 6
-        radial_quad_order = 21
-    else:
-        regular_quad_order = 8
-        radial_quad_order = 31
-
-    with NearFieldInteractionTableManager(
-        str(table_path), root_extent=2.0, queue=queue
-    ) as tm:
-        build_config = DuffyBuildConfig(
-            radial_rule="tanh-sinh-fast",
+            radial_rule=_DUFFY_RADIAL_RULE,
             regular_quad_order=regular_quad_order,
             radial_quad_order=radial_quad_order,
         )
@@ -1167,18 +1178,99 @@ def _get_laplace_3d_dx_table(queue, table_path, q_order, *, source_box_level=Non
             "force_recompute": False,
             "queue": queue,
             "build_config": build_config,
+            **kernel_kwargs,
         }
-        if source_box_level is not None:
-            get_table_kwargs["source_box_level"] = int(source_box_level)
 
-        table, _ = tm.get_table(
-            3,
-            "Laplace-Dx",
-            q_order,
-            **get_table_kwargs,
-        )
+        if max_source_box_level is None:
+            if source_box_level is not None:
+                get_table_kwargs["source_box_level"] = int(source_box_level)
+            table, _ = tm.get_table(dim, kernel_type, q_order, **get_table_kwargs)
+            return table
+
+        tables = []
+        for level in range(max_source_box_level + 1):
+            table, _ = tm.get_table(
+                dim,
+                kernel_type,
+                q_order,
+                source_box_level=level,
+                **get_table_kwargs,
+            )
+            tables.append(table)
+
+    return tables
+
+
+def _build_rigid_output_table(
+    queue,
+    dim,
+    q_order,
+    out_kernel,
+    kernel_kwargs,
+    *,
+    source_box_level,
+    kernel_type,
+    dtype,
+    regular_quad_order,
+    radial_quad_order,
+):
+    """Build a "rigid" near-field table directly, bypassing the cache."""
+    import volumential.nearfield_potential_table as npt
+
+    source_box_level = int(source_box_level)
+
+    table = npt.NearFieldInteractionTable(
+        quad_order=q_order,
+        dim=dim,
+        build_method="DuffyRadial",
+        kernel_func=npt.sumpy_kernel_to_lambda(
+            out_kernel,
+            parameter_values=kernel_kwargs,
+        ),
+        kernel_type=kernel_type,
+        sumpy_kernel=out_kernel,
+        source_box_extent=_TABLE_ROOT_EXTENT * (2 ** (-source_box_level)),
+        dtype=dtype,
+        progress_bar=False,
+    )
+    table.source_box_level = source_box_level
+    table.table_root_extent = _TABLE_ROOT_EXTENT
+    table.build_table_via_duffy_radial(
+        queue=queue,
+        radial_rule=_DUFFY_RADIAL_RULE,
+        regular_quad_order=regular_quad_order,
+        radial_quad_order=radial_quad_order,
+        **kernel_kwargs,
+    )
 
     return table
+
+
+def _get_laplace_3d_table(queue, table_path, q_order):
+    regular_quad_order, radial_quad_order = _duffy_quad_orders_3d(q_order)
+    return _get_cached_near_field_tables(
+        queue,
+        table_path,
+        3,
+        "Laplace",
+        q_order,
+        regular_quad_order=regular_quad_order,
+        radial_quad_order=radial_quad_order,
+    )
+
+
+def _get_laplace_3d_dx_table(queue, table_path, q_order, *, source_box_level=None):
+    regular_quad_order, radial_quad_order = _duffy_quad_orders_3d(q_order)
+    return _get_cached_near_field_tables(
+        queue,
+        table_path,
+        3,
+        "Laplace-Dx",
+        q_order,
+        regular_quad_order=regular_quad_order,
+        radial_quad_order=radial_quad_order,
+        source_box_level=source_box_level,
+    )
 
 
 def _get_laplace_3d_axis_source_derivative_table(
@@ -1191,77 +1283,32 @@ def _get_laplace_3d_axis_source_derivative_table(
 ):
     from sumpy.kernel import AxisSourceDerivative, LaplaceKernel
 
-    from volumential.nearfield_potential_table import DuffyBuildConfig
-    from volumential.table_manager import NearFieldInteractionTableManager
-
-    if q_order <= 2:
-        regular_quad_order = 6
-        radial_quad_order = 21
-    else:
-        regular_quad_order = 8
-        radial_quad_order = 31
-
-    sumpy_knl = AxisSourceDerivative(int(axis), LaplaceKernel(3))
-    kernel_type = f"Laplace-S{int(axis)}"
-
-    with NearFieldInteractionTableManager(
-        str(table_path), root_extent=2.0, queue=queue
-    ) as tm:
-        build_config = DuffyBuildConfig(
-            radial_rule="tanh-sinh-fast",
-            regular_quad_order=regular_quad_order,
-            radial_quad_order=radial_quad_order,
-        )
-        get_table_kwargs = {
-            "force_recompute": False,
-            "queue": queue,
-            "build_config": build_config,
-            "sumpy_knl": sumpy_knl,
-        }
-        if source_box_level is not None:
-            get_table_kwargs["source_box_level"] = int(source_box_level)
-
-        table, _ = tm.get_table(
-            3,
-            kernel_type,
-            q_order,
-            **get_table_kwargs,
-        )
-
-    return table
+    regular_quad_order, radial_quad_order = _duffy_quad_orders_3d(q_order)
+    return _get_cached_near_field_tables(
+        queue,
+        table_path,
+        3,
+        f"Laplace-S{int(axis)}",
+        q_order,
+        regular_quad_order=regular_quad_order,
+        radial_quad_order=radial_quad_order,
+        source_box_level=source_box_level,
+        sumpy_knl=AxisSourceDerivative(int(axis), LaplaceKernel(3)),
+    )
 
 
 def _get_laplace_2d_table(queue, table_path, q_order, *, source_box_level=None):
-    from volumential.nearfield_potential_table import DuffyBuildConfig
-    from volumential.table_manager import NearFieldInteractionTableManager
-
-    regular_quad_order = max(8, 4 * q_order)
-    radial_quad_order = max(21, 10 * q_order)
-
-    with NearFieldInteractionTableManager(
-        str(table_path), root_extent=2.0, queue=queue
-    ) as tm:
-        build_config = DuffyBuildConfig(
-            radial_rule="tanh-sinh-fast",
-            regular_quad_order=regular_quad_order,
-            radial_quad_order=radial_quad_order,
-        )
-        get_table_kwargs = {
-            "force_recompute": False,
-            "queue": queue,
-            "build_config": build_config,
-        }
-        if source_box_level is not None:
-            get_table_kwargs["source_box_level"] = int(source_box_level)
-
-        table, _ = tm.get_table(
-            2,
-            "Laplace",
-            q_order,
-            **get_table_kwargs,
-        )
-
-    return table
+    regular_quad_order, radial_quad_order = _duffy_quad_orders_2d(q_order)
+    return _get_cached_near_field_tables(
+        queue,
+        table_path,
+        2,
+        "Laplace",
+        q_order,
+        regular_quad_order=regular_quad_order,
+        radial_quad_order=radial_quad_order,
+        source_box_level=source_box_level,
+    )
 
 
 def _get_laplace_2d_dx_table(
@@ -1272,51 +1319,18 @@ def _get_laplace_2d_dx_table(
     source_box_level=None,
     max_source_box_level=None,
 ):
-    from volumential.nearfield_potential_table import DuffyBuildConfig
-    from volumential.table_manager import NearFieldInteractionTableManager
-
-    regular_quad_order = max(8, 4 * q_order)
-    radial_quad_order = max(21, 10 * q_order)
-
-    with NearFieldInteractionTableManager(
-        str(table_path), root_extent=2.0, queue=queue
-    ) as tm:
-        build_config = DuffyBuildConfig(
-            radial_rule="tanh-sinh-fast",
-            regular_quad_order=regular_quad_order,
-            radial_quad_order=radial_quad_order,
-        )
-        if max_source_box_level is None:
-            get_table_kwargs = {
-                "force_recompute": False,
-                "queue": queue,
-                "build_config": build_config,
-            }
-            if source_box_level is not None:
-                get_table_kwargs["source_box_level"] = int(source_box_level)
-
-            table, _ = tm.get_table(
-                2,
-                "Laplace-Dx",
-                q_order,
-                **get_table_kwargs,
-            )
-            return table
-
-        tables = []
-        for source_box_level in range(max_source_box_level + 1):
-            table, _ = tm.get_table(
-                2,
-                "Laplace-Dx",
-                q_order,
-                source_box_level=source_box_level,
-                force_recompute=False,
-                queue=queue,
-                build_config=build_config,
-            )
-            tables.append(table)
-
-    return tables
+    regular_quad_order, radial_quad_order = _duffy_quad_orders_2d(q_order)
+    return _get_cached_near_field_tables(
+        queue,
+        table_path,
+        2,
+        "Laplace-Dx",
+        q_order,
+        regular_quad_order=regular_quad_order,
+        radial_quad_order=radial_quad_order,
+        source_box_level=source_box_level,
+        max_source_box_level=max_source_box_level,
+    )
 
 
 def _get_yukawa_2d_dx_table(
@@ -1328,53 +1342,19 @@ def _get_yukawa_2d_dx_table(
     source_box_level=None,
     max_source_box_level=None,
 ):
-    from volumential.nearfield_potential_table import DuffyBuildConfig
-    from volumential.table_manager import NearFieldInteractionTableManager
-
-    regular_quad_order = max(8, 4 * q_order)
-    radial_quad_order = max(21, 10 * q_order)
-
-    with NearFieldInteractionTableManager(
-        str(table_path), root_extent=2.0, queue=queue
-    ) as tm:
-        build_config = DuffyBuildConfig(
-            radial_rule="tanh-sinh-fast",
-            regular_quad_order=regular_quad_order,
-            radial_quad_order=radial_quad_order,
-        )
-        if max_source_box_level is None:
-            get_table_kwargs = {
-                "force_recompute": False,
-                "queue": queue,
-                "build_config": build_config,
-                "lam": lam,
-            }
-            if source_box_level is not None:
-                get_table_kwargs["source_box_level"] = int(source_box_level)
-
-            table, _ = tm.get_table(
-                2,
-                "Yukawa-Dx",
-                q_order,
-                **get_table_kwargs,
-            )
-            return table
-
-        tables = []
-        for source_box_level in range(max_source_box_level + 1):
-            table, _ = tm.get_table(
-                2,
-                "Yukawa-Dx",
-                q_order,
-                source_box_level=source_box_level,
-                force_recompute=False,
-                queue=queue,
-                build_config=build_config,
-                lam=lam,
-            )
-            tables.append(table)
-
-    return tables
+    regular_quad_order, radial_quad_order = _duffy_quad_orders_2d(q_order)
+    return _get_cached_near_field_tables(
+        queue,
+        table_path,
+        2,
+        "Yukawa-Dx",
+        q_order,
+        regular_quad_order=regular_quad_order,
+        radial_quad_order=radial_quad_order,
+        source_box_level=source_box_level,
+        max_source_box_level=max_source_box_level,
+        lam=lam,
+    )
 
 
 def _get_laplace_2d_axis_source_derivative_table(
@@ -1388,56 +1368,19 @@ def _get_laplace_2d_axis_source_derivative_table(
 ):
     from sumpy.kernel import AxisSourceDerivative, LaplaceKernel
 
-    from volumential.nearfield_potential_table import DuffyBuildConfig
-    from volumential.table_manager import NearFieldInteractionTableManager
-
-    regular_quad_order = max(8, 4 * q_order)
-    radial_quad_order = max(21, 10 * q_order)
-
-    sumpy_knl = AxisSourceDerivative(int(axis), LaplaceKernel(2))
-    kernel_type = f"Laplace-S{int(axis)}"
-
-    with NearFieldInteractionTableManager(
-        str(table_path), root_extent=2.0, queue=queue
-    ) as tm:
-        build_config = DuffyBuildConfig(
-            radial_rule="tanh-sinh-fast",
-            regular_quad_order=regular_quad_order,
-            radial_quad_order=radial_quad_order,
-        )
-        if max_source_box_level is None:
-            get_table_kwargs = {
-                "force_recompute": False,
-                "queue": queue,
-                "build_config": build_config,
-                "sumpy_knl": sumpy_knl,
-            }
-            if source_box_level is not None:
-                get_table_kwargs["source_box_level"] = int(source_box_level)
-
-            table, _ = tm.get_table(
-                2,
-                kernel_type,
-                q_order,
-                **get_table_kwargs,
-            )
-            return table
-
-        tables = []
-        for source_box_level in range(max_source_box_level + 1):
-            table, _ = tm.get_table(
-                2,
-                kernel_type,
-                q_order,
-                source_box_level=source_box_level,
-                force_recompute=False,
-                queue=queue,
-                build_config=build_config,
-                sumpy_knl=sumpy_knl,
-            )
-            tables.append(table)
-
-    return tables
+    regular_quad_order, radial_quad_order = _duffy_quad_orders_2d(q_order)
+    return _get_cached_near_field_tables(
+        queue,
+        table_path,
+        2,
+        f"Laplace-S{int(axis)}",
+        q_order,
+        regular_quad_order=regular_quad_order,
+        radial_quad_order=radial_quad_order,
+        source_box_level=source_box_level,
+        max_source_box_level=max_source_box_level,
+        sumpy_knl=AxisSourceDerivative(int(axis), LaplaceKernel(2)),
+    )
 
 
 def _get_yukawa_2d_axis_source_derivative_table(
@@ -1452,91 +1395,35 @@ def _get_yukawa_2d_axis_source_derivative_table(
 ):
     from sumpy.kernel import AxisSourceDerivative, YukawaKernel
 
-    from volumential.nearfield_potential_table import DuffyBuildConfig
-    from volumential.table_manager import NearFieldInteractionTableManager
-
-    regular_quad_order = max(8, 4 * q_order)
-    radial_quad_order = max(21, 10 * q_order)
-
-    sumpy_knl = AxisSourceDerivative(int(axis), YukawaKernel(2))
-    kernel_type = f"Yukawa-S{int(axis)}"
-
-    with NearFieldInteractionTableManager(
-        str(table_path), root_extent=2.0, queue=queue
-    ) as tm:
-        build_config = DuffyBuildConfig(
-            radial_rule="tanh-sinh-fast",
-            regular_quad_order=regular_quad_order,
-            radial_quad_order=radial_quad_order,
-        )
-        if max_source_box_level is None:
-            get_table_kwargs = {
-                "force_recompute": False,
-                "queue": queue,
-                "build_config": build_config,
-                "sumpy_knl": sumpy_knl,
-                "lam": lam,
-            }
-            if source_box_level is not None:
-                get_table_kwargs["source_box_level"] = int(source_box_level)
-
-            table, _ = tm.get_table(
-                2,
-                kernel_type,
-                q_order,
-                **get_table_kwargs,
-            )
-            return table
-
-        tables = []
-        for source_box_level in range(max_source_box_level + 1):
-            table, _ = tm.get_table(
-                2,
-                kernel_type,
-                q_order,
-                source_box_level=source_box_level,
-                force_recompute=False,
-                queue=queue,
-                build_config=build_config,
-                sumpy_knl=sumpy_knl,
-                lam=lam,
-            )
-            tables.append(table)
-
-    return tables
+    regular_quad_order, radial_quad_order = _duffy_quad_orders_2d(q_order)
+    return _get_cached_near_field_tables(
+        queue,
+        table_path,
+        2,
+        f"Yukawa-S{int(axis)}",
+        q_order,
+        regular_quad_order=regular_quad_order,
+        radial_quad_order=radial_quad_order,
+        source_box_level=source_box_level,
+        max_source_box_level=max_source_box_level,
+        sumpy_knl=AxisSourceDerivative(int(axis), YukawaKernel(2)),
+        lam=lam,
+    )
 
 
 def _get_yukawa_2d_tables(queue, table_path, q_order, lam, *, max_source_box_level):
-    from volumential.nearfield_potential_table import DuffyBuildConfig
-    from volumential.table_manager import NearFieldInteractionTableManager
-
-    regular_quad_order = max(8, 4 * q_order)
-    radial_quad_order = max(21, 10 * q_order)
-
-    build_config = DuffyBuildConfig(
-        radial_rule="tanh-sinh-fast",
+    regular_quad_order, radial_quad_order = _duffy_quad_orders_2d(q_order)
+    return _get_cached_near_field_tables(
+        queue,
+        table_path,
+        2,
+        "Yukawa",
+        q_order,
         regular_quad_order=regular_quad_order,
         radial_quad_order=radial_quad_order,
+        max_source_box_level=max_source_box_level,
+        lam=lam,
     )
-
-    tables = []
-    with NearFieldInteractionTableManager(
-        str(table_path), root_extent=2.0, queue=queue
-    ) as tm:
-        for source_box_level in range(max_source_box_level + 1):
-            table, _ = tm.get_table(
-                2,
-                "Yukawa",
-                q_order,
-                source_box_level=source_box_level,
-                force_recompute=False,
-                queue=queue,
-                build_config=build_config,
-                lam=lam,
-            )
-            tables.append(table)
-
-    return tables
 
 
 def _build_helmholtz_2d_output_table(
@@ -1550,9 +1437,6 @@ def _build_helmholtz_2d_output_table(
 ):
     from sumpy.kernel import HelmholtzKernel
 
-    import volumential.nearfield_potential_table as npt
-
-    source_box_level = int(source_box_level)
     if out_kernel is None:
         out_kernel = HelmholtzKernel(2)
 
@@ -1562,31 +1446,19 @@ def _build_helmholtz_2d_output_table(
         _build_directional_parameter_values(out_kernel, source_direction)
     )
 
-    table = npt.NearFieldInteractionTable(
-        quad_order=q_order,
-        dim=2,
-        build_method="DuffyRadial",
-        kernel_func=npt.sumpy_kernel_to_lambda(
-            out_kernel,
-            parameter_values=kernel_kwargs,
-        ),
+    regular_quad_order, radial_quad_order = _duffy_quad_orders_2d(q_order)
+    return _build_rigid_output_table(
+        queue,
+        2,
+        q_order,
+        out_kernel,
+        kernel_kwargs,
+        source_box_level=source_box_level,
         kernel_type="helmholtz-rigid",
-        sumpy_kernel=out_kernel,
-        source_box_extent=2.0 * (2 ** (-source_box_level)),
         dtype=np.complex128,
-        progress_bar=False,
+        regular_quad_order=regular_quad_order,
+        radial_quad_order=radial_quad_order,
     )
-    table.source_box_level = source_box_level
-    table.table_root_extent = 2.0
-    table.build_table_via_duffy_radial(
-        queue=queue,
-        radial_rule="tanh-sinh-fast",
-        regular_quad_order=max(8, 4 * q_order),
-        radial_quad_order=max(21, 10 * q_order),
-        **kernel_kwargs,
-    )
-
-    return table
 
 
 def _build_yukawa_2d_output_table(
@@ -1600,9 +1472,6 @@ def _build_yukawa_2d_output_table(
 ):
     from sumpy.kernel import YukawaKernel
 
-    import volumential.nearfield_potential_table as npt
-
-    source_box_level = int(source_box_level)
     if out_kernel is None:
         out_kernel = YukawaKernel(2)
 
@@ -1612,31 +1481,19 @@ def _build_yukawa_2d_output_table(
         _build_directional_parameter_values(out_kernel, source_direction)
     )
 
-    table = npt.NearFieldInteractionTable(
-        quad_order=q_order,
-        dim=2,
-        build_method="DuffyRadial",
-        kernel_func=npt.sumpy_kernel_to_lambda(
-            out_kernel,
-            parameter_values=kernel_kwargs,
-        ),
+    regular_quad_order, radial_quad_order = _duffy_quad_orders_2d(q_order)
+    return _build_rigid_output_table(
+        queue,
+        2,
+        q_order,
+        out_kernel,
+        kernel_kwargs,
+        source_box_level=source_box_level,
         kernel_type="yukawa-rigid",
-        sumpy_kernel=out_kernel,
-        source_box_extent=2.0 * (2 ** (-source_box_level)),
         dtype=np.float64,
-        progress_bar=False,
+        regular_quad_order=regular_quad_order,
+        radial_quad_order=radial_quad_order,
     )
-    table.source_box_level = source_box_level
-    table.table_root_extent = 2.0
-    table.build_table_via_duffy_radial(
-        queue=queue,
-        radial_rule="tanh-sinh-fast",
-        regular_quad_order=max(8, 4 * q_order),
-        radial_quad_order=max(21, 10 * q_order),
-        **kernel_kwargs,
-    )
-
-    return table
 
 
 def _build_laplace_output_table(
@@ -1650,9 +1507,6 @@ def _build_laplace_output_table(
 ):
     from sumpy.kernel import LaplaceKernel
 
-    import volumential.nearfield_potential_table as npt
-
-    source_box_level = int(source_box_level)
     if out_kernel is None:
         out_kernel = LaplaceKernel(dim)
 
@@ -1660,45 +1514,26 @@ def _build_laplace_output_table(
     value_dtype = np.complex128 if out_kernel.is_complex_valued else np.float64
 
     if dim == 2:
-        regular_quad_order = max(8, 4 * q_order)
-        radial_quad_order = max(21, 10 * q_order)
+        regular_quad_order, radial_quad_order = _duffy_quad_orders_2d(q_order)
     elif dim == 3:
-        if q_order <= 2:
-            regular_quad_order = 6
-            radial_quad_order = 21
-        else:
-            regular_quad_order = 8
-            radial_quad_order = 31
+        regular_quad_order, radial_quad_order = _duffy_quad_orders_3d(q_order)
     else:
         raise NotImplementedError(
             f"laplace table helper only supports 2D/3D, got {dim}"
         )
 
-    table = npt.NearFieldInteractionTable(
-        quad_order=q_order,
-        dim=dim,
-        build_method="DuffyRadial",
-        kernel_func=npt.sumpy_kernel_to_lambda(
-            out_kernel,
-            parameter_values=kernel_kwargs,
-        ),
+    return _build_rigid_output_table(
+        queue,
+        dim,
+        q_order,
+        out_kernel,
+        kernel_kwargs,
+        source_box_level=source_box_level,
         kernel_type="laplace-rigid",
-        sumpy_kernel=out_kernel,
-        source_box_extent=2.0 * (2 ** (-source_box_level)),
         dtype=value_dtype,
-        progress_bar=False,
-    )
-    table.source_box_level = source_box_level
-    table.table_root_extent = 2.0
-    table.build_table_via_duffy_radial(
-        queue=queue,
-        radial_rule="tanh-sinh-fast",
         regular_quad_order=regular_quad_order,
         radial_quad_order=radial_quad_order,
-        **kernel_kwargs,
     )
-
-    return table
 
 
 def _build_helmholtz_2d_derivative_table(
@@ -1791,20 +1626,14 @@ def _get_helmholtz_split_term_tables(
         return {}
 
     if dim == 2:
-        regular_quad_order = max(8, 4 * q_order)
-        radial_quad_order = max(21, 10 * q_order)
+        regular_quad_order, radial_quad_order = _duffy_quad_orders_2d(q_order)
     elif dim == 3:
-        if q_order <= 2:
-            regular_quad_order = 6
-            radial_quad_order = 21
-        else:
-            regular_quad_order = 8
-            radial_quad_order = 31
+        regular_quad_order, radial_quad_order = _duffy_quad_orders_3d(q_order)
     else:
         raise NotImplementedError("split term tables currently support 2D/3D")
 
     build_config = DuffyBuildConfig(
-        radial_rule="tanh-sinh-fast",
+        radial_rule=_DUFFY_RADIAL_RULE,
         regular_quad_order=regular_quad_order,
         radial_quad_order=radial_quad_order,
     )
@@ -1819,7 +1648,7 @@ def _get_helmholtz_split_term_tables(
     term_tables = {}
     with NearFieldInteractionTableManager(
         str(table_path),
-        root_extent=2.0,
+        root_extent=_TABLE_ROOT_EXTENT,
         queue=queue,
     ) as tm:
         for term_kind, power in term_specs:
@@ -2069,7 +1898,7 @@ def _build_directional_parameter_values(out_kernel, source_direction):
         }
     else:
         direction_vec = np.asarray(source_direction, dtype=np.float64)
-        direction_by_name = {name: direction_vec for name in dir_names}
+        direction_by_name = dict.fromkeys(dir_names, direction_vec)
 
     dim = int(out_kernel.dim)
     for dir_name in dir_names:
@@ -2100,45 +1929,23 @@ def _build_helmholtz_3d_output_table(
     out_kernel=None,
     source_direction=None,
 ):
-    import volumential.nearfield_potential_table as npt
-
-    if q_order <= 2:
-        regular_quad_order = 6
-        radial_quad_order = 21
-    else:
-        regular_quad_order = 8
-        radial_quad_order = 31
-
-    source_box_level = int(source_box_level)
     base_knl = _make_fixed_helmholtz_3d_kernel(wave_number)
     output_knl = _apply_axis_derivative_wrappers_to_kernel(out_kernel, base_knl)
     kernel_kwargs = _build_directional_parameter_values(output_knl, source_direction)
 
-    table = npt.NearFieldInteractionTable(
-        quad_order=q_order,
-        dim=3,
-        build_method="DuffyRadial",
-        kernel_func=npt.sumpy_kernel_to_lambda(
-            output_knl,
-            parameter_values=kernel_kwargs,
-        ),
+    regular_quad_order, radial_quad_order = _duffy_quad_orders_3d(q_order)
+    return _build_rigid_output_table(
+        queue,
+        3,
+        q_order,
+        output_knl,
+        kernel_kwargs,
+        source_box_level=source_box_level,
         kernel_type="helmholtz-rigid",
-        sumpy_kernel=output_knl,
-        source_box_extent=2.0 * (2 ** (-source_box_level)),
         dtype=np.complex128,
-        progress_bar=False,
-    )
-    table.source_box_level = source_box_level
-    table.table_root_extent = 2.0
-    table.build_table_via_duffy_radial(
-        queue=queue,
-        radial_rule="tanh-sinh-fast",
         regular_quad_order=regular_quad_order,
         radial_quad_order=radial_quad_order,
-        **kernel_kwargs,
     )
-
-    return table
 
 
 def _build_yukawa_3d_output_table(
@@ -2152,16 +1959,6 @@ def _build_yukawa_3d_output_table(
 ):
     from sumpy.kernel import YukawaKernel
 
-    import volumential.nearfield_potential_table as npt
-
-    if q_order <= 2:
-        regular_quad_order = 6
-        radial_quad_order = 21
-    else:
-        regular_quad_order = 8
-        radial_quad_order = 31
-
-    source_box_level = int(source_box_level)
     base_knl = YukawaKernel(3)
     output_knl = _apply_axis_derivative_wrappers_to_kernel(out_kernel, base_knl)
     base_output_knl = output_knl.get_base_kernel()
@@ -2170,31 +1967,19 @@ def _build_yukawa_3d_output_table(
         _build_directional_parameter_values(output_knl, source_direction)
     )
 
-    table = npt.NearFieldInteractionTable(
-        quad_order=q_order,
-        dim=3,
-        build_method="DuffyRadial",
-        kernel_func=npt.sumpy_kernel_to_lambda(
-            output_knl,
-            parameter_values=kernel_kwargs,
-        ),
+    regular_quad_order, radial_quad_order = _duffy_quad_orders_3d(q_order)
+    return _build_rigid_output_table(
+        queue,
+        3,
+        q_order,
+        output_knl,
+        kernel_kwargs,
+        source_box_level=source_box_level,
         kernel_type="yukawa-rigid",
-        sumpy_kernel=output_knl,
-        source_box_extent=2.0 * (2 ** (-source_box_level)),
         dtype=np.float64,
-        progress_bar=False,
-    )
-    table.source_box_level = source_box_level
-    table.table_root_extent = 2.0
-    table.build_table_via_duffy_radial(
-        queue=queue,
-        radial_rule="tanh-sinh-fast",
         regular_quad_order=regular_quad_order,
         radial_quad_order=radial_quad_order,
-        **kernel_kwargs,
     )
-
-    return table
 
 
 def _helmholtz_complex_source_profile_2d(x, y):
@@ -2217,43 +2002,24 @@ def _get_helmholtz_3d_tables(
     *,
     max_source_box_level,
 ):
-    from volumential.nearfield_potential_table import DuffyBuildConfig
-    from volumential.table_manager import NearFieldInteractionTableManager
-
-    if q_order <= 1:
-        regular_quad_order = 6
-        radial_quad_order = 21
-    else:
-        regular_quad_order = 8
-        radial_quad_order = 31
-
-    with NearFieldInteractionTableManager(
-        str(table_path),
+    # NOTE: unlike the other 3D helpers this one switches to the high quadrature
+    # orders already at q_order == 2.
+    regular_quad_order, radial_quad_order = _duffy_quad_orders_3d(
+        q_order, low_order_max=1
+    )
+    return _get_cached_near_field_tables(
+        queue,
+        table_path,
+        3,
+        f"Helmholtz(k={wave_number:.6g})",
+        q_order,
+        regular_quad_order=regular_quad_order,
+        radial_quad_order=radial_quad_order,
         root_extent=1.0,
-        dtype=np.complex128,
-        queue=queue,
-    ) as tm:
-        kernel_tag = f"Helmholtz(k={wave_number:.6g})"
-        build_config = DuffyBuildConfig(
-            radial_rule="tanh-sinh-fast",
-            regular_quad_order=regular_quad_order,
-            radial_quad_order=radial_quad_order,
-        )
-        tables = []
-        for source_box_level in range(max_source_box_level + 1):
-            table, _ = tm.get_table(
-                3,
-                kernel_tag,
-                q_order,
-                source_box_level=source_box_level,
-                force_recompute=False,
-                queue=queue,
-                build_config=build_config,
-                sumpy_knl=_make_fixed_helmholtz_3d_kernel(wave_number),
-            )
-            tables.append(table)
-
-    return tables
+        manager_dtype=np.complex128,
+        max_source_box_level=max_source_box_level,
+        sumpy_knl=_make_fixed_helmholtz_3d_kernel(wave_number),
+    )
 
 
 def _make_patch_targets(queue, *coords):
@@ -2289,6 +2055,28 @@ def _compute_helmholtz_patch_rel_residual(
         -patch.laplace(u_patch) - (wave_number * wave_number) * u_patch - rho_patch
     )
     return float(np.linalg.norm(residual) / np.linalg.norm(rho_patch))
+
+
+def _assert_split_potentials_track_reference(
+    queue, split, direct, *, rel_tol, mismatch_label
+):
+    """Assert that a split-kernel run reproduces its reference run.
+
+    `split` and `direct` are the result dicts returned by the ``_run_*_case``
+    helpers; `mismatch_label` is the leading half of the assertion message.
+    """
+    split_pot = split["potentials"].get(queue)
+    direct_pot = direct["potentials"].get(queue)
+    assert np.all(np.isfinite(split_pot))
+    assert np.all(np.isfinite(direct_pot))
+
+    rel_diff = np.linalg.norm(split_pot - direct_pot) / max(
+        1.0,
+        np.linalg.norm(direct_pot),
+    )
+    assert rel_diff < rel_tol, (
+        f"{mismatch_label} (rel_diff={rel_diff:.3e})"
+    )
 
 
 def _run_3d_helmholtz_pde_case(
@@ -3684,7 +3472,11 @@ def test_list1_scaling_policy_documents_fixed_single_table_for_helmholtz():
 
 
 def test_list1_laplace_derivative_infer_scaling_is_first_order():
-    from sumpy.kernel import AxisSourceDerivative, AxisTargetDerivative, LaplaceKernel
+    from sumpy.kernel import (
+        AxisSourceDerivative,
+        AxisTargetDerivative,
+        LaplaceKernel,
+    )
 
     from volumential.list1 import NearFieldFromCSR
 
@@ -3765,7 +3557,11 @@ def test_list1_custom_scaling_policy_documents_user_code():
 
 
 def test_list1_laplace_2d_derivative_infer_scaling_has_no_log_displacement():
-    from sumpy.kernel import AxisSourceDerivative, AxisTargetDerivative, LaplaceKernel
+    from sumpy.kernel import (
+        AxisSourceDerivative,
+        AxisTargetDerivative,
+        LaplaceKernel,
+    )
 
     from volumential.list1 import NearFieldFromCSR
 
@@ -3786,7 +3582,11 @@ def test_list1_laplace_2d_derivative_infer_scaling_has_no_log_displacement():
 
 
 def test_source_kernel_derivation_preserves_source_derivatives():
-    from sumpy.kernel import AxisSourceDerivative, AxisTargetDerivative, LaplaceKernel
+    from sumpy.kernel import (
+        AxisSourceDerivative,
+        AxisTargetDerivative,
+        LaplaceKernel,
+    )
 
     from volumential.expansion_wrangler_fpnd import (
         _derive_source_kernels_from_target_kernels,
@@ -3920,7 +3720,11 @@ def test_helmholtz_split_policy_accepts_single_source_or_target_derivative_chain
 
 def test_volume_fmm_3d_laplace_source_target_derivative_antisymmetry(tmp_path):
     from sumpy.expansion import DefaultExpansionFactory
-    from sumpy.kernel import AxisSourceDerivative, AxisTargetDerivative, LaplaceKernel
+    from sumpy.kernel import (
+        AxisSourceDerivative,
+        AxisTargetDerivative,
+        LaplaceKernel,
+    )
 
     from volumential.expansion_wrangler_fpnd import (
         FPNDExpansionWrangler,
@@ -4589,18 +4393,12 @@ def test_volume_fmm_2d_yukawa_split_scalar_tracks_nonsplit(tmp_path):
         helmholtz_split=False,
     )
 
-    split_pot = split["potentials"].get(queue)
-    direct_pot = direct["potentials"].get(queue)
-    assert np.all(np.isfinite(split_pot))
-    assert np.all(np.isfinite(direct_pot))
-
-    rel_diff = np.linalg.norm(split_pot - direct_pot) / max(
-        1.0,
-        np.linalg.norm(direct_pot),
-    )
-    assert rel_diff < 1.0e-4, (
-        "2D Yukawa scalar split/nonsplit mismatch is too large "
-        f"(rel_diff={rel_diff:.3e})"
+    _assert_split_potentials_track_reference(
+        queue,
+        split,
+        direct,
+        rel_tol=1.0e-4,
+        mismatch_label="2D Yukawa scalar split/nonsplit mismatch is too large",
     )
 
 
@@ -4650,18 +4448,12 @@ def test_volume_fmm_2d_helmholtz_split_scalar_tracks_nonsplit(tmp_path):
         return_state=True,
     )
 
-    split_pot = split["potentials"].get(queue)
-    direct_pot = direct["potentials"].get(queue)
-    assert np.all(np.isfinite(split_pot))
-    assert np.all(np.isfinite(direct_pot))
-
-    rel_diff = np.linalg.norm(split_pot - direct_pot) / max(
-        1.0,
-        np.linalg.norm(direct_pot),
-    )
-    assert rel_diff < 1.0e-4, (
-        "2D Helmholtz scalar split/nonsplit mismatch is too large "
-        f"(rel_diff={rel_diff:.3e})"
+    _assert_split_potentials_track_reference(
+        queue,
+        split,
+        direct,
+        rel_tol=1.0e-4,
+        mismatch_label="2D Helmholtz scalar split/nonsplit mismatch is too large",
     )
 
 
@@ -4714,18 +4506,15 @@ def test_volume_fmm_2d_yukawa_split_axis_target_derivative_tracks_nonsplit(tmp_p
         out_kernel=out_knl,
     )
 
-    split_pot = split["potentials"].get(queue)
-    direct_pot = direct["potentials"].get(queue)
-    assert np.all(np.isfinite(split_pot))
-    assert np.all(np.isfinite(direct_pot))
-
-    rel_diff = np.linalg.norm(split_pot - direct_pot) / max(
-        1.0,
-        np.linalg.norm(direct_pot),
-    )
-    assert rel_diff < 1.0e-2, (
-        "2D Yukawa target-derivative split/nonsplit mismatch is too large "
-        f"(rel_diff={rel_diff:.3e})"
+    _assert_split_potentials_track_reference(
+        queue,
+        split,
+        direct,
+        rel_tol=1.0e-2,
+        mismatch_label=(
+            "2D Yukawa target-derivative split/nonsplit mismatch is too "
+            "large"
+        ),
     )
 
 
@@ -4781,18 +4570,15 @@ def test_volume_fmm_2d_yukawa_split_axis_source_derivative_tracks_nonsplit(tmp_p
         out_kernel=out_knl,
     )
 
-    split_pot = split["potentials"].get(queue)
-    direct_pot = direct["potentials"].get(queue)
-    assert np.all(np.isfinite(split_pot))
-    assert np.all(np.isfinite(direct_pot))
-
-    rel_diff = np.linalg.norm(split_pot - direct_pot) / max(
-        1.0,
-        np.linalg.norm(direct_pot),
-    )
-    assert rel_diff < 1.0e-2, (
-        "2D Yukawa source-derivative split/nonsplit mismatch is too large "
-        f"(rel_diff={rel_diff:.3e})"
+    _assert_split_potentials_track_reference(
+        queue,
+        split,
+        direct,
+        rel_tol=1.0e-2,
+        mismatch_label=(
+            "2D Yukawa source-derivative split/nonsplit mismatch is too "
+            "large"
+        ),
     )
 
 
@@ -4851,18 +4637,15 @@ def test_volume_fmm_2d_helmholtz_split_axis_target_derivative_tracks_nonsplit(
         return_state=True,
     )
 
-    split_pot = split["potentials"].get(queue)
-    direct_pot = direct["potentials"].get(queue)
-    assert np.all(np.isfinite(split_pot))
-    assert np.all(np.isfinite(direct_pot))
-
-    rel_diff = np.linalg.norm(split_pot - direct_pot) / max(
-        1.0,
-        np.linalg.norm(direct_pot),
-    )
-    assert rel_diff < 1.0e-2, (
-        "2D Helmholtz target-derivative split/nonsplit mismatch is too large "
-        f"(rel_diff={rel_diff:.3e})"
+    _assert_split_potentials_track_reference(
+        queue,
+        split,
+        direct,
+        rel_tol=1.0e-2,
+        mismatch_label=(
+            "2D Helmholtz target-derivative split/nonsplit mismatch is too "
+            "large"
+        ),
     )
 
 
@@ -4923,18 +4706,15 @@ def test_volume_fmm_2d_helmholtz_split_axis_source_derivative_tracks_nonsplit(
         return_state=True,
     )
 
-    split_pot = split["potentials"].get(queue)
-    direct_pot = direct["potentials"].get(queue)
-    assert np.all(np.isfinite(split_pot))
-    assert np.all(np.isfinite(direct_pot))
-
-    rel_diff = np.linalg.norm(split_pot - direct_pot) / max(
-        1.0,
-        np.linalg.norm(direct_pot),
-    )
-    assert rel_diff < 1.0e-2, (
-        "2D Helmholtz source-derivative split/nonsplit mismatch is too large "
-        f"(rel_diff={rel_diff:.3e})"
+    _assert_split_potentials_track_reference(
+        queue,
+        split,
+        direct,
+        rel_tol=1.0e-2,
+        mismatch_label=(
+            "2D Helmholtz source-derivative split/nonsplit mismatch is too "
+            "large"
+        ),
     )
 
 
@@ -4993,18 +4773,15 @@ def test_volume_fmm_3d_helmholtz_split_axis_target_derivative_tracks_nonsplit(
         return_state=True,
     )
 
-    split_pot = split["potentials"].get(queue)
-    direct_pot = direct["potentials"].get(queue)
-    assert np.all(np.isfinite(split_pot))
-    assert np.all(np.isfinite(direct_pot))
-
-    rel_diff = np.linalg.norm(split_pot - direct_pot) / max(
-        1.0,
-        np.linalg.norm(direct_pot),
-    )
-    assert rel_diff < 1.0e-2, (
-        "3D Helmholtz target-derivative split/nonsplit mismatch is too large "
-        f"(rel_diff={rel_diff:.3e})"
+    _assert_split_potentials_track_reference(
+        queue,
+        split,
+        direct,
+        rel_tol=1.0e-2,
+        mismatch_label=(
+            "3D Helmholtz target-derivative split/nonsplit mismatch is too "
+            "large"
+        ),
     )
 
 
@@ -5065,25 +4842,26 @@ def test_volume_fmm_3d_helmholtz_split_axis_source_derivative_tracks_nonsplit(
         return_state=True,
     )
 
-    split_pot = split["potentials"].get(queue)
-    direct_pot = direct["potentials"].get(queue)
-    assert np.all(np.isfinite(split_pot))
-    assert np.all(np.isfinite(direct_pot))
-
-    rel_diff = np.linalg.norm(split_pot - direct_pot) / max(
-        1.0,
-        np.linalg.norm(direct_pot),
-    )
-    assert rel_diff < 1.0e-2, (
-        "3D Helmholtz source-derivative split/nonsplit mismatch is too large "
-        f"(rel_diff={rel_diff:.3e})"
+    _assert_split_potentials_track_reference(
+        queue,
+        split,
+        direct,
+        rel_tol=1.0e-2,
+        mismatch_label=(
+            "3D Helmholtz source-derivative split/nonsplit mismatch is too "
+            "large"
+        ),
     )
 
 
 def test_volume_fmm_2d_helmholtz_split_directional_source_derivative_tracks_direct(
     tmp_path,
 ):
-    from sumpy.kernel import DirectionalSourceDerivative, HelmholtzKernel, LaplaceKernel
+    from sumpy.kernel import (
+        DirectionalSourceDerivative,
+        HelmholtzKernel,
+        LaplaceKernel,
+    )
 
     ctx = _create_non_intel_opencl_context_or_skip()
     queue = cl.CommandQueue(ctx)
@@ -5133,18 +4911,15 @@ def test_volume_fmm_2d_helmholtz_split_directional_source_derivative_tracks_dire
         return_state=True,
     )
 
-    split_pot = split["potentials"].get(queue)
-    direct_pot = direct["potentials"].get(queue)
-    assert np.all(np.isfinite(split_pot))
-    assert np.all(np.isfinite(direct_pot))
-
-    rel_diff = np.linalg.norm(split_pot - direct_pot) / max(
-        1.0,
-        np.linalg.norm(direct_pot),
-    )
-    assert rel_diff < 2.0e-2, (
-        "2D Helmholtz directional-source split/direct mismatch is too large "
-        f"(rel_diff={rel_diff:.3e})"
+    _assert_split_potentials_track_reference(
+        queue,
+        split,
+        direct,
+        rel_tol=2.0e-2,
+        mismatch_label=(
+            "2D Helmholtz directional-source split/direct mismatch is too "
+            "large"
+        ),
     )
 
 
@@ -5657,7 +5432,11 @@ def test_volume_fmm_2d_yukawa_split_full_accuracy_tracks_nonsplit_outputs(tmp_pa
 
 @pytest.mark.full_accuracy
 def test_volume_fmm_2d_helmholtz_split_full_accuracy_tracks_nonsplit_outputs(tmp_path):
-    from sumpy.kernel import AxisSourceDerivative, AxisTargetDerivative, HelmholtzKernel
+    from sumpy.kernel import (
+        AxisSourceDerivative,
+        AxisTargetDerivative,
+        HelmholtzKernel,
+    )
 
     ctx = _create_non_intel_opencl_context_or_skip()
     queue = cl.CommandQueue(ctx)
@@ -5814,7 +5593,11 @@ def test_volume_fmm_2d_helmholtz_split_full_accuracy_tracks_nonsplit_outputs(tmp
 def test_volume_fmm_2d_helmholtz_split_directional_source_full_accuracy_tracks_nonsplit(
     tmp_path,
 ):
-    from sumpy.kernel import DirectionalSourceDerivative, HelmholtzKernel, LaplaceKernel
+    from sumpy.kernel import (
+        DirectionalSourceDerivative,
+        HelmholtzKernel,
+        LaplaceKernel,
+    )
 
     ctx = _create_non_intel_opencl_context_or_skip()
     queue = cl.CommandQueue(ctx)
@@ -5956,7 +5739,11 @@ def test_volume_fmm_2d_yukawa_split_directional_source_full_accuracy_tracks_nons
 
 @pytest.mark.full_accuracy
 def test_volume_fmm_3d_helmholtz_split_full_accuracy_tracks_nonsplit_outputs(tmp_path):
-    from sumpy.kernel import AxisSourceDerivative, AxisTargetDerivative, HelmholtzKernel
+    from sumpy.kernel import (
+        AxisSourceDerivative,
+        AxisTargetDerivative,
+        HelmholtzKernel,
+    )
 
     ctx = _create_non_intel_opencl_context_or_skip()
     queue = cl.CommandQueue(ctx)
@@ -6309,18 +6096,15 @@ def test_volume_fmm_2d_yukawa_split_directional_source_derivative_tracks_direct(
         return_state=True,
     )
 
-    split_pot = split["potentials"].get(queue)
-    direct_pot = direct["potentials"].get(queue)
-    assert np.all(np.isfinite(split_pot))
-    assert np.all(np.isfinite(direct_pot))
-
-    rel_diff = np.linalg.norm(split_pot - direct_pot) / max(
-        1.0,
-        np.linalg.norm(direct_pot),
-    )
-    assert rel_diff < 2.0e-2, (
-        "2D Yukawa directional-source split/direct mismatch is too large "
-        f"(rel_diff={rel_diff:.3e})"
+    _assert_split_potentials_track_reference(
+        queue,
+        split,
+        direct,
+        rel_tol=2.0e-2,
+        mismatch_label=(
+            "2D Yukawa directional-source split/direct mismatch is too "
+            "large"
+        ),
     )
 
 
@@ -6673,15 +6457,35 @@ def test_volume_fmm_2d_helmholtz_split_power_log_single_table_matches_multilevel
     assert rel_diff < 5.0e-11
 
 
-def test_volume_fmm_2d_helmholtz_split_order2_auto_builds_term_tables(tmp_path):
+@pytest.mark.parametrize(
+    ("split_order", "q_order", "cache_name", "max_rel_pde_residual"),
+    [
+        pytest.param(
+            2,
+            5,
+            "nft-laplace2d-split-order2-missing-terms-q5.sqlite",
+            1.0,
+            id="order2",
+        ),
+        pytest.param(
+            4,
+            4,
+            "nft-laplace2d-split-order4-auto-q4.sqlite",
+            2.0,
+            id="order4",
+        ),
+    ],
+)
+def test_volume_fmm_2d_helmholtz_split_auto_builds_term_tables(
+    tmp_path, split_order, q_order, cache_name, max_rel_pde_residual
+):
     ctx = _create_non_intel_opencl_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
-    q_order = 5
     wave_number = 8.0
     table = _get_laplace_2d_table(
         queue,
-        tmp_path / "nft-laplace2d-split-order2-missing-terms-q5.sqlite",
+        tmp_path / cache_name,
         q_order,
     )
 
@@ -6694,11 +6498,11 @@ def test_volume_fmm_2d_helmholtz_split_order2_auto_builds_term_tables(tmp_path):
         fmm_order=16,
         wave_number=wave_number,
         helmholtz_split=True,
-        helmholtz_split_order=2,
+        helmholtz_split_order=split_order,
     )
 
     assert np.isfinite(result["rel_pde_residual"])
-    assert result["rel_pde_residual"] < 1.0
+    assert result["rel_pde_residual"] < max_rel_pde_residual
 
 
 def test_volume_fmm_2d_helmholtz_split_rejects_term_tables_from_other_cache(tmp_path):
@@ -6737,34 +6541,6 @@ def test_volume_fmm_2d_helmholtz_split_rejects_term_tables_from_other_cache(tmp_
             helmholtz_split_order=2,
             helmholtz_split_term_tables=term_tables,
         )
-
-
-def test_volume_fmm_2d_helmholtz_split_order4_auto_builds_term_tables(tmp_path):
-    ctx = _create_non_intel_opencl_context_or_skip()
-    queue = cl.CommandQueue(ctx)
-
-    q_order = 4
-    wave_number = 8.0
-    table = _get_laplace_2d_table(
-        queue,
-        tmp_path / "nft-laplace2d-split-order4-auto-q4.sqlite",
-        q_order,
-    )
-
-    result = _run_2d_helmholtz_pde_case(
-        ctx,
-        queue,
-        table,
-        q_order=q_order,
-        nlevels=3,
-        fmm_order=16,
-        wave_number=wave_number,
-        helmholtz_split=True,
-        helmholtz_split_order=4,
-    )
-
-    assert np.isfinite(result["rel_pde_residual"])
-    assert result["rel_pde_residual"] < 2.0
 
 
 def test_volume_fmm_2d_helmholtz_split_order3_smooth_equals_q_runs(tmp_path):
@@ -7441,8 +7217,8 @@ def test_volume_fmm_rejects_allow_list1_p2p_fallback_option():
 
 
 def test_volume_fmm_rejects_multi_source_full_sumpy_path(monkeypatch):
+    from volumential import volume_fmm
     from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
-    import volumential.volume_fmm as volume_fmm
 
     class _MockSumpyWrangler(ExpansionWranglerInterface):
         dtype = np.float64
@@ -7474,8 +7250,8 @@ def test_volume_fmm_rejects_multi_source_full_sumpy_path(monkeypatch):
 
 @pytest.mark.parametrize("noutputs", [1, 2])
 def test_volume_fmm_direct_eval_accepts_fmmlib_plain_arrays(monkeypatch, noutputs):
+    from volumential import volume_fmm
     from volumential.expansion_wrangler_interface import ExpansionWranglerInterface
-    import volumential.volume_fmm as volume_fmm
 
     class _DummyP2P:
         def __init__(self, target_kernels, *args, **kwargs):
@@ -7791,12 +7567,16 @@ def laplace_problem(ctx_factory, tmp_path_factory):
         crtr = np.array(
             [
                 np.abs(source_field(c) * m)
-                for (c, m) in zip(mesh.get_cell_centers(), mesh.get_cell_measures())
+                for (c, m) in zip(
+                    mesh.get_cell_centers(),
+                    mesh.get_cell_measures(),
+                    strict=True,
+                )
             ]
         )
         mesh.update_mesh(crtr, rratio_top, rratio_bot)
         if iloop > n_refinement_loops:
-            print("Max number of refinement loops reached.")
+            logger.warning("Max number of refinement loops reached.")
             break
 
     q_points = mesh.get_q_points()
@@ -7834,6 +7614,7 @@ def laplace_problem(ctx_factory, tmp_path_factory):
 
     # tune max_particles_in_box to reconstruct the mesh
     from boxtree.array_context import PyOpenCLArrayContext
+
     from volumential.tree_interactive_build import build_particle_tree_from_box_tree
 
     actx = PyOpenCLArrayContext(queue)

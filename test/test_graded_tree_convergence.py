@@ -166,7 +166,7 @@ def test_matched_error_dof_advantage_brackets_either_curve(gtc):
 
 
 def _row(gtc, **overrides):
-    row = {field: "" for field in gtc.FIELDS}
+    row = dict.fromkeys(gtc.FIELDS, "")
     row.update(
         {
             "case_id": "graded-laplace3d-q2-adaptive-a1",

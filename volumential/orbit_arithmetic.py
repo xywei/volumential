@@ -1,3 +1,21 @@
+"""Arithmetic ORBIT addressing for near-field interaction tables.
+
+This module owns the *arithmetic* (closed-form) variant of the ORBIT table
+compression scheme. Instead of storing an explicit orbit lookup table, it
+derives, per interaction case, an axis permutation, an axis sign pattern and an
+axis grouping from the case vector alone. Entry addresses can then be computed
+with integer arithmetic both on the host and inside the generated List 1
+OpenCL kernel.
+
+The public entry points are :func:`build_arithmetic_case_metadata`, which
+builds the per-case descriptor arrays a table needs, and
+:func:`enumerate_scalar_arithmetic_representatives`, which lists the full-table
+entry id of every compact orbit representative.
+
+.. autofunction:: build_arithmetic_case_metadata
+.. autofunction:: enumerate_scalar_arithmetic_representatives
+"""
+
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
 __license__ = """
@@ -22,18 +40,22 @@ THE SOFTWARE.
 
 import itertools
 import math
+from collections.abc import Sequence
+from typing import Any
 
 import numpy as np
 
 
-def _encode_mode_axes(axes, q_order):
+def _encode_mode_axes(axes: Sequence[int], q_order: int) -> int:
+    """Pack per-axis mode indices into a single base-*q_order* mode id."""
     result = 0
     for axis_value in axes:
         result = result * int(q_order) + int(axis_value)
     return int(result)
 
 
-def _decode_mode_axes(mode_id, q_order, dim):
+def _decode_mode_axes(mode_id: int, q_order: int, dim: int) -> list[int]:
+    """Unpack a base-*q_order* mode id into its *dim* per-axis indices."""
     axes = [0] * int(dim)
     residual = int(mode_id)
     for iaxis in range(int(dim) - 1, -1, -1):
@@ -50,15 +72,14 @@ def _case_arithmetic_axis_descriptors(
 ):
     case_vec = [int(val) for val in case_vec]
     dim = len(case_vec)
-    if axis_groups is None:
-        axis_group_specs = (tuple(range(dim)),)
-    else:
-        axis_group_specs = axis_groups
+    axis_group_specs = (tuple(range(dim)),) if axis_groups is None else axis_groups
     axis_group_specs = tuple(
         tuple(int(axis) for axis in group) for group in axis_group_specs
     )
-    direction_signs = np.zeros(dim, dtype=np.int8) if direction_signs is None else (
-        np.asarray(direction_signs, dtype=np.int8)
+    direction_signs = (
+        np.zeros(dim, dtype=np.int8)
+        if direction_signs is None
+        else np.asarray(direction_signs, dtype=np.int8)
     )
 
     axis_perm = np.empty(dim, dtype=np.uint8)
@@ -165,9 +186,9 @@ def _case_arithmetic_axis_descriptors(
 
 def _canonical_case_from_axis_descriptors(case_vec, axis_perm, axis_sign):
     canonical = []
-    for in_axis, sign in zip(axis_perm, axis_sign, strict=True):
+    for in_axis, raw_sign in zip(axis_perm, axis_sign, strict=True):
         value = int(case_vec[int(in_axis)])
-        sign = int(sign)
+        sign = int(raw_sign)
         canonical.append(0 if sign == 0 else value * sign)
 
     return canonical
@@ -526,7 +547,8 @@ def _evaluate_scalar_arithmetic_entry(
     return entry_id
 
 
-def _rank_multiset(values, alphabet_size):
+def _rank_multiset(values: Sequence[int], alphabet_size: int) -> int:
+    """Rank a sorted multiset of symbols in colex order over the alphabet."""
     values = [int(value) for value in values]
     alphabet_size = int(alphabet_size)
     rank = 0
@@ -662,7 +684,20 @@ def _entry_has_odd_reconstruction_stabilizer(
     return False
 
 
-def build_arithmetic_case_metadata(table, arithmetic_symmetry=None):
+def build_arithmetic_case_metadata(
+    table, arithmetic_symmetry: dict[str, Any] | None = None
+) -> dict[str, Any] | None:
+    """Build the per-case arithmetic ORBIT descriptors for *table*.
+
+    :arg table: A ``NearFieldInteractionTable`` from
+        :mod:`volumential.nearfield_potential_table`.
+    :arg arithmetic_symmetry: Optional kernel symmetry description, as returned
+        by the kernel analysis in the expansion wrangler. ``None`` requests the
+        symmetry-free (scalar) descriptors.
+    :returns: A dict of descriptor arrays and counts, or ``None`` when the
+        case orbit count or the compact entry count overflows the index dtypes
+        the generated kernel uses.
+    """
     if arithmetic_symmetry is None:
         axis_groups = None
         axis_sign_power = np.zeros(int(table.dim), dtype=np.uint8)
@@ -745,7 +780,13 @@ def build_arithmetic_case_metadata(table, arithmetic_symmetry=None):
     }
 
 
-def enumerate_scalar_arithmetic_representatives(table, metadata):
+def enumerate_scalar_arithmetic_representatives(table, metadata) -> np.ndarray:
+    """List the full-table entry id of each compact arithmetic representative.
+
+    The result is indexed by compact entry id, so ``entry_ids[i]`` is the
+    ``case_id * n_pairs + source_mode_id * n_q_points + target_point_id``
+    address that compact slot ``i`` stands for.
+    """
     pair_count = int(table.quad_order) * int(table.quad_order)
     folded_pair_count = (pair_count + 1) // 2
     canonical_case_ids = np.asarray(metadata["canonical_case_ids"], dtype=np.int32)

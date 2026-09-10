@@ -1,3 +1,21 @@
+"""Interactive box-tree construction for adaptive volume FMM meshes.
+
+This module owns the compatibility layer between :mod:`volumential` and the
+current upstream ``boxtree`` tree-of-boxes data structures. It provides:
+
+* :class:`BoxTree`, a mutable box tree that can be refined and coarsened in
+  place while keeping a 2:1 level restriction, along with device-side views of
+  its levels, centers and leaf boxes;
+* :class:`QuadratureOnBoxTree`, tensor-product quadrature on the leaf boxes of
+  such a tree; and
+* :func:`build_particle_tree_from_box_tree`, which converts a box tree plus its
+  quadrature nodes into a :class:`boxtree.Tree` suitable for FMM traversal.
+
+The private helpers in between rebuild, prune and balance tree-of-boxes objects
+by their level/grid-index keys rather than by box id, which is what makes
+refinement and coarsening reproducible.
+"""
+
 from __future__ import annotations
 
 import logging
@@ -6,6 +24,7 @@ import time
 import warnings
 from collections import deque
 from itertools import product
+from typing import NamedTuple
 
 import numpy as np
 
@@ -24,7 +43,7 @@ from boxtree import (
 logger = logging.getLogger(__name__)
 
 
-def _env_flag(name, default=False):
+def _env_flag(name: str, default: bool = False) -> bool:
     raw = os.environ.get(name)
     if raw is None:
         return default
@@ -32,7 +51,7 @@ def _env_flag(name, default=False):
     return raw.strip().lower() not in {"", "0", "false", "no", "off"}
 
 
-def _env_int(name, default):
+def _env_int(name: str, default: int) -> int:
     raw = os.environ.get(name)
     if raw is None or raw.strip() == "":
         return default
@@ -47,26 +66,27 @@ def _env_int(name, default):
         return default
 
 
-def _level_restriction_debug(msg):
-    print(f"[volumential.level_restriction] {msg}", flush=True)
+def _level_restriction_debug(msg: str) -> None:
+    logger.info("level restriction: %s", msg)
 
 
-def _leaf_boxes_numpy(tob):
+def _leaf_boxes_numpy(tob) -> np.ndarray:
     return np.where(np.all(tob.box_child_ids == 0, axis=0))[0]
 
 
-def _box_size(root_extent, level):
+def _box_size(root_extent, level) -> float:
     return root_extent * (0.5 ** int(level))
 
 
-def _are_adjacent(root_extent, levels, centers, ibox, jbox, tol=1.0e-15):
+def _are_adjacent(root_extent, levels, centers, ibox, jbox, tol=1.0e-15) -> bool:
     si = _box_size(root_extent, levels[ibox])
     sj = _box_size(root_extent, levels[jbox])
     dist = np.max(np.abs(centers[:, ibox] - centers[:, jbox]))
     return dist <= 0.5 * (si + sj) + tol
 
 
-def _child_slot_bits(dim):
+def _child_slot_bits(dim: int) -> np.ndarray:
+    """Return the ``(2**dim, dim)`` array of per-child grid-index offsets."""
     nchildren = 2**dim
     bits = np.empty((nchildren, dim), dtype=np.int64)
     for child_slot in range(nchildren):
@@ -76,7 +96,7 @@ def _child_slot_bits(dim):
     return bits
 
 
-def _in_bounds_grid_index(level, grid_index):
+def _in_bounds_grid_index(level, grid_index) -> bool:
     upper = 1 << int(level)
     return all(0 <= int(v) < upper for v in grid_index)
 
@@ -95,29 +115,67 @@ def _covering_leaf_key(leaf_keys, query_level, query_index):
     return None
 
 
-def _leaf_keys_from_tob(tob):
-    _, levels, _, _, grid_indices = _geometry_grid_indices(tob)
+def _leaf_keys_from_tob(tob) -> set[tuple[int, tuple[int, ...]]]:
+    geo = _geometry_grid_indices(tob)
     leaves = _leaf_boxes_numpy(tob)
 
     return {
-        (int(levels[ibox]), tuple(int(v) for v in grid_indices[ibox]))
+        (int(geo.levels[ibox]), tuple(int(v) for v in geo.grid_indices[ibox]))
         for ibox in leaves
     }
 
 
-def _tree_of_boxes_from_leaf_keys(template_tob, leaf_keys):
+def _make_tree_of_boxes(
+    template_tob,
+    *,
+    box_centers,
+    box_parent_ids,
+    box_child_ids,
+    box_levels,
+    level_start_box_nrs,
+):
+    """Build a :class:`boxtree.tree.TreeOfBoxes` from new topology arrays.
+
+    Every attribute that is not part of the topology (dtypes, extent
+    conventions, prune state) is inherited verbatim from *template_tob*, and
+    the box flags are recomputed from *box_child_ids*.
+    """
     from boxtree.tree import TreeOfBoxes
 
+    return TreeOfBoxes(
+        box_centers=box_centers,
+        root_extent=template_tob.root_extent,
+        box_parent_ids=box_parent_ids,
+        box_child_ids=box_child_ids,
+        box_levels=box_levels,
+        box_flags=np.asarray(
+            _compute_box_flags(box_child_ids), dtype=box_flags_enum.dtype
+        ),
+        level_start_box_nrs=level_start_box_nrs,
+        box_id_dtype=template_tob.box_id_dtype,
+        box_level_dtype=template_tob.box_level_dtype,
+        coord_dtype=template_tob.coord_dtype,
+        sources_have_extent=template_tob.sources_have_extent,
+        targets_have_extent=template_tob.targets_have_extent,
+        extent_norm=template_tob.extent_norm,
+        stick_out_factor=template_tob.stick_out_factor,
+        _is_pruned=template_tob._is_pruned,
+    )
+
+
+def _tree_of_boxes_from_leaf_keys(template_tob, leaf_keys):
     dim = int(template_tob.dimensions)
     child_slot_bits = _child_slot_bits(dim)
     nchildren = int(child_slot_bits.shape[0])
 
-    _, _, root_extent, root_min, _ = _geometry_grid_indices(template_tob)
+    geo = _geometry_grid_indices(template_tob)
+    root_extent = geo.root_extent
+    root_min = geo.root_min
 
     all_keys = set()
-    for level, idx in leaf_keys:
-        level = int(level)
-        idx = tuple(int(v) for v in idx)
+    for raw_level, raw_idx in leaf_keys:
+        level = int(raw_level)
+        idx = tuple(int(v) for v in raw_idx)
 
         all_keys.add((level, idx))
         parent_level = level
@@ -175,27 +233,16 @@ def _tree_of_boxes_from_leaf_keys(template_tob, leaf_keys):
     level_start_box_nrs = np.zeros(max_level + 2, dtype=template_tob.box_id_dtype)
     level_start_box_nrs[1:] = np.cumsum(level_counts).astype(template_tob.box_id_dtype)
 
-    return TreeOfBoxes(
+    return _make_tree_of_boxes(
+        template_tob,
         box_centers=np.asarray(box_centers, dtype=template_tob.coord_dtype),
-        root_extent=template_tob.root_extent,
         box_parent_ids=np.asarray(box_parent_ids, dtype=template_tob.box_id_dtype),
         box_child_ids=np.asarray(box_child_ids, dtype=template_tob.box_id_dtype),
         box_levels=np.asarray(box_levels, dtype=template_tob.box_level_dtype),
-        box_flags=np.asarray(
-            _compute_box_flags(box_child_ids), dtype=box_flags_enum.dtype
-        ),
         level_start_box_nrs=np.asarray(
             level_start_box_nrs,
             dtype=template_tob.box_id_dtype,
         ),
-        box_id_dtype=template_tob.box_id_dtype,
-        box_level_dtype=template_tob.box_level_dtype,
-        coord_dtype=template_tob.coord_dtype,
-        sources_have_extent=template_tob.sources_have_extent,
-        targets_have_extent=template_tob.targets_have_extent,
-        extent_norm=template_tob.extent_norm,
-        stick_out_factor=template_tob.stick_out_factor,
-        _is_pruned=template_tob._is_pruned,
     )
 
 
@@ -432,43 +479,6 @@ def _enforce_level_restriction(tob):
     return balanced_tob
 
 
-def _enforce_same_level_colleagues(tob):
-    while True:
-        box_levels = tob.box_levels
-        box_centers = tob.box_centers
-        has_children = np.any(tob.box_child_ids != 0, axis=0)
-        refine_flags = np.zeros(tob.nboxes, dtype=bool)
-
-        for ibox in range(tob.nboxes):
-            if not has_children[ibox]:
-                continue
-
-            level = int(box_levels[ibox])
-            for jbox in range(tob.nboxes):
-                if int(box_levels[jbox]) != level:
-                    continue
-                if not has_children[jbox]:
-                    continue
-                if ibox == jbox:
-                    continue
-                if not _are_adjacent(
-                    tob.root_extent, box_levels, box_centers, ibox, jbox
-                ):
-                    continue
-
-                for child in tob.box_child_ids[:, ibox]:
-                    if child != 0 and np.all(tob.box_child_ids[:, child] == 0):
-                        refine_flags[int(child)] = True
-                for child in tob.box_child_ids[:, jbox]:
-                    if child != 0 and np.all(tob.box_child_ids[:, child] == 0):
-                        refine_flags[int(child)] = True
-
-        if not np.any(refine_flags):
-            return tob
-
-        tob = refine_and_coarsen_tree_of_boxes(tob, refine_flags=refine_flags)
-
-
 def _resize_bool_flags(flags, new_size):
     flags = np.asarray(flags, dtype=bool).ravel()
     if flags.size == new_size:
@@ -485,19 +495,29 @@ def _resize_bool_flags(flags, new_size):
     return resized
 
 
-def _box_keys_from_geometry(tob):
-    _, levels, _, _, grid_indices = _geometry_grid_indices(tob)
+def _box_keys_from_geometry(tob) -> list[tuple[int, tuple[int, ...]]]:
+    geo = _geometry_grid_indices(tob)
 
     keys = []
     for ibox in range(tob.nboxes):
-        level = int(levels[ibox])
-        idx = grid_indices[ibox]
+        level = int(geo.levels[ibox])
+        idx = geo.grid_indices[ibox]
         keys.append((level, tuple(int(v) for v in idx)))
 
     return keys
 
 
-def _geometry_grid_indices(tob):
+class _GeometryGrid(NamedTuple):
+    """Integer grid description of a tree-of-boxes, derived from its geometry."""
+
+    centers: np.ndarray
+    levels: np.ndarray
+    root_extent: float
+    root_min: np.ndarray
+    grid_indices: np.ndarray
+
+
+def _geometry_grid_indices(tob) -> _GeometryGrid:
     centers = np.asarray(tob.box_centers)
     levels = np.asarray(tob.box_levels, dtype=np.int32)
 
@@ -520,7 +540,7 @@ def _geometry_grid_indices(tob):
             (centers[:, ibox] - root_min) / box_size - 0.5
         ).astype(np.int64)
 
-    return centers, levels, root_extent, root_min, grid_indices
+    return _GeometryGrid(centers, levels, root_extent, root_min, grid_indices)
 
 
 def _box_paths_from_topology(tob, *, require_connected=True):
@@ -547,14 +567,14 @@ def _box_paths_from_topology(tob, *, require_connected=True):
         parent_path = box_paths[parent_id]
         assert parent_path is not None
 
-        for child_slot, child_id in enumerate(child_ids[:, parent_id]):
-            child_id = int(child_id)
+        for child_slot, raw_child_id in enumerate(child_ids[:, parent_id]):
+            child_id = int(raw_child_id)
             if child_id == 0:
                 continue
             if child_id < 0 or child_id >= nboxes:
                 raise ValueError("tree-of-boxes contains invalid child id")
 
-            child_path = parent_path + (child_slot,)
+            child_path = (*parent_path, child_slot)
             prev_path = box_paths[child_id]
 
             if prev_path is None:
@@ -737,26 +757,13 @@ def _coarsen_tree_of_boxes_compat(
         box_parent_ids[peer_ids] = -1
         box_child_ids[:, parent_id] = 0
 
-    from boxtree.tree import TreeOfBoxes
-
-    coarsened = TreeOfBoxes(
+    coarsened = _make_tree_of_boxes(
+        tob,
         box_centers=tob.box_centers,
-        root_extent=tob.root_extent,
         box_parent_ids=box_parent_ids,
         box_child_ids=box_child_ids,
         box_levels=tob.box_levels,
-        box_flags=np.asarray(
-            _compute_box_flags(box_child_ids), dtype=box_flags_enum.dtype
-        ),
         level_start_box_nrs=None,
-        box_id_dtype=tob.box_id_dtype,
-        box_level_dtype=tob.box_level_dtype,
-        coord_dtype=tob.coord_dtype,
-        sources_have_extent=tob.sources_have_extent,
-        targets_have_extent=tob.targets_have_extent,
-        extent_norm=tob.extent_norm,
-        stick_out_factor=tob.stick_out_factor,
-        _is_pruned=tob._is_pruned,
     )
 
     return _prune_unreachable_boxes(coarsened)
@@ -770,7 +777,7 @@ class BoxTree:
     upstream ``boxtree.tree_of_boxes`` data structures internally.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.queue: cl.CommandQueue | None = None
         self.root_vertex = None
         self.root_extent = None
@@ -782,13 +789,14 @@ class BoxTree:
     def generate_uniform_boxtree(
         self,
         queue,
-        root_vertex=np.zeros(2),
+        root_vertex=np.zeros(2),  # noqa: B008
         root_extent=1,
-        nlevels=1,
+        nlevels: int = 1,
         box_id_dtype=np.int32,
         box_level_dtype=np.int32,
         coord_dtype=np.float64,
-    ):
+    ) -> None:
+        """Build a uniformly refined box tree of *nlevels* levels."""
         self.queue = queue
         self.root_vertex = np.asarray(root_vertex, dtype=coord_dtype)
         self.root_extent = coord_dtype(root_extent)
@@ -805,8 +813,13 @@ class BoxTree:
         self._sync_device_views()
 
     def refine_and_coarsen(
-        self, refine_flags, coarsen_flags, error_on_ignored_flags=False
-    ):
+        self, refine_flags, coarsen_flags, error_on_ignored_flags: bool = False
+    ) -> None:
+        """Refine and coarsen the tree in place, then restore level restriction.
+
+        Refinement is applied first; coarsening intents are tracked by parent
+        box path so that they survive the renumbering that refinement causes.
+        """
         if isinstance(refine_flags, cl.array.Array):
             refine_flags = refine_flags.get()
         if isinstance(coarsen_flags, cl.array.Array):
@@ -898,7 +911,7 @@ class BoxTree:
         self._tree = _rebuild_tob_from_geometry(self._tree)
         self._sync_device_views()
 
-    def _sync_device_views(self):
+    def _sync_device_views(self) -> None:
         assert self.queue is not None
         assert self._tree is not None
 
@@ -923,22 +936,27 @@ class BoxTree:
         self.level_boxes = obj_array_1d(level_boxes)
 
     @property
-    def dimensions(self):
+    def dimensions(self) -> int:
+        """Spatial dimension of the tree."""
         return self._tree.dimensions
 
     @property
-    def nboxes(self):
+    def nboxes(self) -> int:
+        """Total number of boxes, leaf and non-leaf."""
         return self._tree.nboxes
 
     @property
-    def nlevels(self):
+    def nlevels(self) -> int:
+        """Number of levels present in the tree."""
         return int(np.max(self._tree.box_levels)) + 1
 
     @property
-    def n_active_boxes(self):
+    def n_active_boxes(self) -> int:
+        """Number of leaf boxes."""
         return len(self._tree.leaf_boxes)
 
-    def get_box_extent(self, ibox):
+    def get_box_extent(self, ibox) -> tuple[np.ndarray, np.ndarray]:
+        """Return the (low, high) corners of box *ibox*."""
         if isinstance(ibox, cl.array.Array):
             ibox = int(ibox.get())
 
@@ -951,7 +969,9 @@ class BoxTree:
 
 
 class QuadratureOnBoxTree:
-    def __init__(self, boxtree, quadrature_formula=None):
+    """Tensor-product quadrature on the leaf boxes of a :class:`BoxTree`."""
+
+    def __init__(self, boxtree: BoxTree, quadrature_formula=None) -> None:
         self.boxtree = boxtree
 
         if quadrature_formula is None:
@@ -977,6 +997,7 @@ class QuadratureOnBoxTree:
         return np.asarray(self.boxtree._tree.box_centers[:, self._leaf_boxes()])
 
     def get_q_points(self, queue):
+        """Return the quadrature nodes as device arrays, one per axis."""
         q_nodes = self._reference_nodes()
         dim = self.boxtree.dimensions
         centers = self._leaf_centers().T
@@ -998,6 +1019,7 @@ class QuadratureOnBoxTree:
         )
 
     def get_q_weights(self, queue):
+        """Return the quadrature weights, scaled by each leaf box measure."""
         dim = self.boxtree.dimensions
         q_weights_1d = self._reference_weights()
         grids = np.meshgrid(*([q_weights_1d] * dim), indexing="ij")
@@ -1009,12 +1031,14 @@ class QuadratureOnBoxTree:
         return cl.array.to_device(queue, weights.astype(self.boxtree.coord_dtype))
 
     def get_cell_centers(self, queue):
+        """Return the leaf box centers as device arrays, one per axis."""
         centers = self._leaf_centers()
         return obj_array_1d(
             [cl.array.to_device(queue, np.ascontiguousarray(comp)) for comp in centers]
         )
 
     def get_cell_measures(self, queue):
+        """Return the leaf box measures (volumes) as a device array."""
         dim = self.boxtree.dimensions
         side_lengths = self.boxtree.root_extent / (2 ** self._leaf_levels())
         measures = (side_lengths**dim).astype(self.boxtree.coord_dtype)
@@ -1043,8 +1067,8 @@ def _level_order_boxes(box_child_ids, *, root_id=0):
         nxt = []
         queued = set()
 
-        for ibox in current:
-            ibox = int(ibox)
+        for raw_ibox in current:
+            ibox = int(raw_ibox)
             if ibox < 0 or ibox >= nboxes:
                 raise ValueError("tree-of-boxes contains invalid box id")
             if ibox in seen:
@@ -1101,26 +1125,13 @@ def _prune_unreachable_boxes(tob):
     old_child_ids = tob.box_child_ids[:, reachable]
     box_child_ids = np.where(old_child_ids == 0, 0, old_to_new[old_child_ids])
 
-    from boxtree.tree import TreeOfBoxes
-
-    return TreeOfBoxes(
+    return _make_tree_of_boxes(
+        tob,
         box_centers=box_centers,
-        root_extent=tob.root_extent,
         box_parent_ids=box_parent_ids,
         box_child_ids=box_child_ids,
         box_levels=box_levels,
-        box_flags=np.asarray(
-            _compute_box_flags(box_child_ids), dtype=box_flags_enum.dtype
-        ),
         level_start_box_nrs=None,
-        box_id_dtype=tob.box_id_dtype,
-        box_level_dtype=tob.box_level_dtype,
-        coord_dtype=tob.coord_dtype,
-        sources_have_extent=tob.sources_have_extent,
-        targets_have_extent=tob.targets_have_extent,
-        extent_norm=tob.extent_norm,
-        stick_out_factor=tob.stick_out_factor,
-        _is_pruned=tob._is_pruned,
     )
 
 
@@ -1139,11 +1150,13 @@ def _compute_box_flags(box_child_ids):
 
 
 def _rebuild_tob_from_geometry(tob):
-    from boxtree.tree import TreeOfBoxes
-
     box_paths = _box_paths_from_topology(tob, require_connected=False)
 
-    centers, levels, root_extent, _, grid_indices = _geometry_grid_indices(tob)
+    geo = _geometry_grid_indices(tob)
+    centers = geo.centers
+    levels = geo.levels
+    root_extent = geo.root_extent
+    grid_indices = geo.grid_indices
 
     nboxes = int(centers.shape[1])
     dim = int(tob.dimensions)
@@ -1159,11 +1172,7 @@ def _rebuild_tob_from_geometry(tob):
                 return True
         return False
 
-    child_slot_bits = np.empty((nchildren, dim), dtype=np.int64)
-    for child_slot in range(nchildren):
-        child_slot_bits[child_slot, :] = [
-            (child_slot >> (dim - 1 - iaxis)) & 1 for iaxis in range(dim)
-        ]
+    child_slot_bits = _child_slot_bits(dim)
 
     geo_keys = [
         (int(levels[i]), tuple(int(v) for v in grid_indices[i])) for i in range(nboxes)
@@ -1250,28 +1259,28 @@ def _rebuild_tob_from_geometry(tob):
     level_start_box_nrs = np.zeros(max_level + 2, dtype=tob.box_id_dtype)
     level_start_box_nrs[1:] = np.cumsum(level_counts).astype(tob.box_id_dtype)
 
-    return TreeOfBoxes(
+    return _make_tree_of_boxes(
+        tob,
         box_centers=np.asarray(new_centers, dtype=tob.coord_dtype),
-        root_extent=tob.root_extent,
         box_parent_ids=np.asarray(new_parent_ids, dtype=tob.box_id_dtype),
         box_child_ids=np.asarray(new_child_ids, dtype=tob.box_id_dtype),
         box_levels=np.asarray(new_levels, dtype=tob.box_level_dtype),
-        box_flags=np.asarray(
-            _compute_box_flags(new_child_ids), dtype=box_flags_enum.dtype
-        ),
         level_start_box_nrs=np.asarray(level_start_box_nrs, dtype=tob.box_id_dtype),
-        box_id_dtype=tob.box_id_dtype,
-        box_level_dtype=tob.box_level_dtype,
-        coord_dtype=tob.coord_dtype,
-        sources_have_extent=tob.sources_have_extent,
-        targets_have_extent=tob.targets_have_extent,
-        extent_norm=tob.extent_norm,
-        stick_out_factor=tob.stick_out_factor,
-        _is_pruned=tob._is_pruned,
     )
 
 
 def build_particle_tree_from_box_tree(actx, box_tree, q_points_host):
+    """Convert a :class:`BoxTree` and its quadrature nodes into a particle tree.
+
+    The returned :class:`boxtree.Tree` places every leaf box's quadrature nodes
+    in one contiguous run, ordered by a depth-first walk over the leaves, so
+    that box source/target ranges are exact and no particle sorting is needed.
+
+    :arg actx: A :class:`boxtree.array_context.PyOpenCLArrayContext`.
+    :arg box_tree: The :class:`BoxTree` to convert.
+    :arg q_points_host: Quadrature nodes on the host, shape ``(nnodes, dim)``,
+        laid out leaf box by leaf box in ``box_tree`` leaf order.
+    """
     tob = box_tree._tree
     dim = tob.dimensions
     n_q_points = q_points_host.shape[0] // len(tob.leaf_boxes)

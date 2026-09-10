@@ -20,437 +20,75 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
+__doc__ = """Miscellaneous host-side utilities, plus the historical grab-bag
+import surface.
+
+This module owns two small host-side helpers, :func:`clean_file` and
+:func:`import_code`.  Everything else it used to define now lives in a focused
+module and is re-exported here unchanged, so that ``from volumential.tools
+import ...`` keeps working:
+
+* :class:`~volumential.kernel_cache.KernelCacheWrapper` --
+  :mod:`volumential.kernel_cache`
+* :class:`~volumential.expression_eval.ScalarFieldExpressionEvaluation` --
+  :mod:`volumential.expression_eval`
+* :class:`~volumential.box_operators.BoxSpecificMap`,
+  :class:`~volumential.box_operators.DiscreteLegendreTransform`,
+  :class:`~volumential.box_operators.InverseDiscreteLegendreTransform`,
+  :class:`~volumential.box_operators.BoxSpecificReduction`,
+  :class:`~volumential.box_operators.BoxSum` and
+  :func:`~volumential.box_operators.generate_leading_order_filtering` --
+  :mod:`volumential.box_operators`
+
+.. autofunction:: clean_file
+.. autofunction:: import_code
+"""
+
 import logging
+from pathlib import Path
+from types import ModuleType
 
-import numpy as np
-
-import loopy as lp
-import pymbolic as pmbl
-import pyopencl as cl
-import pyopencl.array  # noqa: F401
-from constantdict import constantdict
-from pymbolic.mapper import IdentityMapper, WalkMapper
-from pymbolic.primitives import (
-    ExpressionNode as ExpressionType,
-    Variable as VariableType,
+from volumential.box_operators import (
+    BoxSpecificMap,
+    BoxSpecificReduction,
+    BoxSum,
+    DiscreteLegendreTransform,
+    InverseDiscreteLegendreTransform,
+    generate_leading_order_filtering,
 )
-from pytools import memoize_method
+from volumential.expression_eval import ScalarFieldExpressionEvaluation
+from volumential.kernel_cache import KernelCacheWrapper
 
 
 logger = logging.getLogger(__name__)
 
 
-class _MathLookupToBareCallMapper(IdentityMapper):
-    def map_call(self, expr):
-        function = self.rec(expr.function)
-        parameters = tuple(self.rec(par) for par in expr.parameters)
-
-        if (
-            isinstance(function, pmbl.primitives.Lookup)
-            and isinstance(function.aggregate, pmbl.primitives.Variable)
-            and function.aggregate.name == "math"
-        ):
-            function = pmbl.var(function.name)
-
-        return pmbl.primitives.Call(function, parameters)
-
-
-class _CallNameCollector(WalkMapper):
-    def __init__(self):
-        super().__init__()
-        self.names = set()
-
-    def map_call(self, expr):
-        if isinstance(expr.function, pmbl.primitives.Variable):
-            self.names.add(expr.function.name)
-
-        return super().map_call(expr)
-
-
-class _FunctionManglerCallable(lp.ScalarCallable):
-    def __init__(self, name, function_manglers):
-        super().__init__(name=name, name_in_target=name)
-        self.function_manglers = function_manglers
-
-    def with_types(self, arg_id_to_dtype, clbl_inf_ctx):
-        arg_num_to_dtype = {
-            id: dtype for id, dtype in arg_id_to_dtype.items() if id >= 0
-        }
-
-        # wait for full type information
-        if not arg_num_to_dtype or any(
-            dtype is None for dtype in arg_num_to_dtype.values()
-        ):
-            return self.copy(
-                arg_id_to_dtype=constantdict(arg_id_to_dtype)
-            ), clbl_inf_ctx
-
-        n_args = max(arg_num_to_dtype) + 1
-        if any(i not in arg_num_to_dtype for i in range(n_args)):
-            return self.copy(
-                arg_id_to_dtype=constantdict(arg_id_to_dtype)
-            ), clbl_inf_ctx
-
-        arg_dtypes = tuple(arg_num_to_dtype[i] for i in range(n_args))
-
-        for mangler in self.function_manglers:
-            mangle_info = mangler(None, pmbl.var(self.name), arg_dtypes)
-            if mangle_info is None:
-                mangle_info = mangler(
-                    None,
-                    pmbl.primitives.Lookup(pmbl.var("math"), self.name),
-                    arg_dtypes,
-                )
-
-            if mangle_info is None:
-                continue
-
-            updated_arg_id_to_dtype = {
-                i: dtype for i, dtype in enumerate(mangle_info.arg_dtypes)
-            }
-            updated_arg_id_to_dtype[-1] = mangle_info.result_dtypes[0]
-
-            return (
-                self.copy(
-                    name_in_target=mangle_info.target_name,
-                    arg_id_to_dtype=constantdict(updated_arg_id_to_dtype),
-                ),
-                clbl_inf_ctx,
-            )
-
-        # Fallback: assume return type matches the first argument.
-        fallback_arg_id_to_dtype = dict(arg_num_to_dtype)
-        fallback_arg_id_to_dtype[-1] = arg_num_to_dtype[0]
-        return (
-            self.copy(arg_id_to_dtype=constantdict(fallback_arg_id_to_dtype)),
-            clbl_inf_ctx,
-        )
-
-
-def _collect_called_function_names(expr):
-    collector = _CallNameCollector()
-    collector(expr)
-    return collector.names
-
-
 # {{{ clean files
 
 
-def clean_file(filename, new_name=None):
+def clean_file(filename, new_name=None) -> None:
     """Remove/rename file if exists.
     Fails silently when the file does not exist.
     Useful for, for example, writing output files that
     are meant to overwrite existing ones.
     """
-    import os
+    path = Path(filename)
 
-    if new_name is None:
-        try:
-            os.remove(filename)
-        except OSError:
-            pass
-    else:
-        try:
-            os.rename(filename, new_name)
-        except OSError:
-            pass
+    try:
+        if new_name is None:
+            path.unlink()
+        else:
+            path.rename(new_name)
+    except OSError:
+        logger.debug("clean_file: could not remove/rename %s", path)
 
 
 # }}} End clean files
 
-# {{{ loopy kernel cache wrapper
-
-
-class KernelCacheWrapper:
-    # FIXME: largely code duplication with sumpy.
-
-    def __init__(self):
-        self.name = "KernelCacheWrapper"
-        raise RuntimeError("KernelCacheWrapper objects should not be constructed")
-
-    def get_cache_key(self):
-        raise NotImplementedError("Unimplemented cache key")
-
-    def get_kernel(self):
-        raise NotImplementedError()
-
-    def get_optimized_kernel(self):
-        raise NotImplementedError()
-
-    @memoize_method
-    def get_cached_optimized_kernel(self, **kwargs):
-        from sumpy import CACHING_ENABLED, OPT_ENABLED, code_cache
-
-        if CACHING_ENABLED:
-            import loopy.version
-            from sumpy.version import KERNEL_VERSION as SUMPY_KERNEL_VERSION
-
-            from volumential.version import KERNEL_VERSION
-
-            cache_key = (
-                self.get_cache_key()
-                + tuple(sorted(kwargs.items()))
-                + (loopy.version.DATA_MODEL_VERSION,)
-                + (SUMPY_KERNEL_VERSION,)
-                + (KERNEL_VERSION,)
-                + (OPT_ENABLED,)
-            )
-
-            try:
-                result = code_cache[cache_key]
-                logger.debug(f"{self.name}: kernel cache hit [key={cache_key}]")
-                return result
-            except KeyError:
-                pass
-
-        logger.info("%s: kernel cache miss" % self.name)
-        if CACHING_ENABLED:
-            logger.info(f"{self.name}: kernel cache miss [key={cache_key}]")
-
-        from pytools import MinRecursionLimit
-
-        with MinRecursionLimit(3000):
-            if OPT_ENABLED:
-                knl = self.get_optimized_kernel(**kwargs)
-            else:
-                knl = self.get_kernel()
-
-        if CACHING_ENABLED:
-            code_cache.store_if_not_present(cache_key, knl)
-
-        return knl
-
-
-# }}} End loopy kernel cache wrapper
-
-# {{{ scalar field expression eval
-
-
-class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
-    """
-    Evaluate a field function on a set of D-d points.
-    Useful for imposing analytic conditions efficiently.
-    """
-
-    def __init__(
-        self,
-        dim,
-        expression,
-        variables=None,
-        dtype=np.float64,
-        function_manglers=None,
-        preamble_generators=None,
-    ):
-        """
-        :arg dim
-        :arg expression A pymbolic expression for the function
-        :arg variables A list of variables representing spacial coordinates
-        """
-        assert dim > 0
-        self.dim = dim
-
-        sympy_to_pymbolic = None
-
-        def _to_pymbolic(expr):
-            nonlocal sympy_to_pymbolic
-            if isinstance(expr, (ExpressionType, int, float, complex)):
-                return expr
-
-            if sympy_to_pymbolic is None:
-                from pymbolic.interop.sympy import SympyToPymbolicMapper
-
-                sympy_to_pymbolic = SympyToPymbolicMapper()
-
-            return sympy_to_pymbolic(expr)
-
-        self.expr = _to_pymbolic(expression)
-
-        if variables is None:
-            self.vars = [pmbl.var("x%d" % d) for d in range(self.dim)]
-        else:
-            assert isinstance(variables, list)
-            self.vars = [
-                var if isinstance(var, VariableType) else _to_pymbolic(var)
-                for var in variables
-            ]
-
-        self.dtype = dtype
-        self.function_manglers = function_manglers
-        self.preamble_generators = preamble_generators
-
-        self.name = "ScalarFieldExpressionEvaluation"
-
-    def get_cache_key(self):
-        return (
-            type(self).__name__,
-            str(self.dim) + "D",
-            self.expr.__str__(),
-            ",".join([x.__str__() for x in self.vars]),
-            repr(self.function_manglers),
-        )
-
-    def _apply_function_manglers(self, loopy_knl):
-        if self.function_manglers is None:
-            return loopy_knl
-
-        if hasattr(lp, "register_function_manglers"):
-            return lp.register_function_manglers(loopy_knl, self.function_manglers)
-
-        from loopy.target.opencl import get_opencl_callables
-
-        known_callables = set(get_opencl_callables().keys())
-        call_names = _collect_called_function_names(self.get_normalised_expr())
-        for name in sorted(call_names - known_callables):
-            loopy_knl = lp.register_callable(
-                loopy_knl,
-                name,
-                _FunctionManglerCallable(name, self.function_manglers),
-            )
-
-        return loopy_knl
-
-    def get_normalised_expr(self):
-        nexpr = self.expr
-        nvars = [pmbl.var("x%d" % d) for d in range(self.dim)]
-        for var, nvar in zip(self.vars, nvars):
-            nexpr = pmbl.substitute(nexpr, {var: nvar})
-
-        return _MathLookupToBareCallMapper()(nexpr)
-
-    def get_variable_assignment_code(self):
-        if self.dim == 1:
-            return "<> x0 = target_points[0, itgt]"
-        elif self.dim == 2:
-            return """<> x0 = target_points[0, itgt]
-                      <> x1 = target_points[1, itgt]"""
-        elif self.dim == 3:
-            return """<> x0 = target_points[0, itgt]
-                      <> x1 = target_points[1, itgt]
-                      <> x2 = target_points[2, itgt]"""
-        else:
-            raise NotImplementedError
-
-    def get_kernel(self, **kwargs):
-
-        extra_kernel_kwarg_types = ()
-        if "extra_kernel_kwarg_types" in kwargs:
-            extra_kernel_kwarg_types = kwargs["extra_kernel_kwarg_types"]
-
-        eval_inames = frozenset(["itgt"])
-        scalar_assignment = lp.Assignment(
-            id=None,
-            assignee="expr_val",
-            expression=self.get_normalised_expr(),
-            temp_var_type=lp.Optional(),
-        )
-        eval_insns = [
-            insn.copy(within_inames=insn.within_inames | eval_inames)
-            for insn in [scalar_assignment]
-        ]
-
-        loopy_knl = lp.make_kernel(
-            "{ [itgt]: 0<=itgt<n_targets }",
-            [
-                """
-                for itgt
-                    VAR_ASSIGNMENT
-                end
-                """.replace("VAR_ASSIGNMENT", self.get_variable_assignment_code())
-            ]
-            + eval_insns
-            + [
-                """
-                for itgt
-                    result[itgt] = expr_val
-                end
-                """
-            ],
-            [
-                lp.ValueArg("dim, n_targets", np.int32),
-                lp.GlobalArg("target_points", np.float64, "dim, n_targets"),
-                lp.TemporaryVariable("expr_val", None, ()),
-            ]
-            + list(extra_kernel_kwarg_types)
-            + [
-                "...",
-            ],
-            name="eval_expr",
-            lang_version=(2018, 2),
-        )
-
-        loopy_knl = lp.fix_parameters(loopy_knl, dim=self.dim)
-        loopy_knl = lp.set_options(loopy_knl, write_cl=False)
-        loopy_knl = lp.set_options(loopy_knl, return_dict=True)
-
-        loopy_knl = self._apply_function_manglers(loopy_knl)
-
-        if self.preamble_generators is not None:
-            loopy_knl = lp.register_preamble_generators(
-                loopy_knl, self.preamble_generators
-            )
-
-        return loopy_knl
-
-    def get_optimized_kernel(self, ncpus=None, **kwargs):
-        knl = self.get_kernel(**kwargs)
-        if ncpus is None:
-            import multiprocessing
-
-            # NOTE: this detects the number of logical cores, which
-            # may result in suboptimal performance.
-            ncpus = multiprocessing.cpu_count()
-        knl = lp.split_iname(
-            knl, split_iname="itgt", inner_length=ncpus, inner_tag="g.0"
-        )
-        return knl
-
-    def __call__(self, queue, target_points, **kwargs):
-        """
-        :arg target_points
-        :arg extra_kernel_kwargs
-        """
-        # handle target_points given as an obj_array of coords
-        if (
-            isinstance(target_points, np.ndarray)
-            and target_points.dtype == object
-            and isinstance(target_points[0], cl.array.Array)
-        ):
-            target_points = cl.array.concatenate(target_points).reshape([self.dim, -1])
-
-        assert target_points.shape[0] == self.dim
-
-        n_tgt_points = target_points[0].shape[0]
-        for tgt_d in target_points:
-            assert len(tgt_d) == n_tgt_points
-
-        extra_kernel_kwargs = {}
-        if "extra_kernel_kwargs" in kwargs:
-            extra_kernel_kwargs = kwargs["extra_kernel_kwargs"]
-
-        knl = self.get_cached_optimized_kernel()
-
-        if self.preamble_generators is not None:
-            knl = lp.register_preamble_generators(knl, self.preamble_generators)
-
-        knl_exec = knl.executor(queue.context)
-
-        evt, res = knl_exec(
-            queue,
-            target_points=target_points,
-            n_targets=n_tgt_points,
-            result=np.zeros(n_tgt_points, dtype=self.dtype),
-            **extra_kernel_kwargs,
-        )
-
-        return res["result"]
-
-
-# }}} End scalar field expression eval
-
 # {{{ import code
 
 
-def import_code(code, name, add_to_sys_modules=True):
+def import_code(code, name, add_to_sys_modules=True) -> ModuleType:
     """Dynamically generates a module.
 
     :arg code: can be any object containing code -- string, file object, or
@@ -458,9 +96,7 @@ def import_code(code, name, add_to_sys_modules=True):
     by dynamically importing the given code and optionally adds it
     to sys.modules under the given name.
     """
-    import imp
-
-    module = imp.new_module(name)
+    module = ModuleType(name)
 
     if add_to_sys_modules:
         import sys
@@ -474,390 +110,18 @@ def import_code(code, name, add_to_sys_modules=True):
 
 # }}} End import code
 
-# {{{ box-specific maps
 
-
-class BoxSpecificMap(KernelCacheWrapper):
-    """
-    Box-specific transform that maps between datum defined on quadrature
-    nodes. Being box-specific means that the transform for each box is
-    independent from the rest of the boxes.
-    """
-
-    pass
-
-
-# {{{ discrete Legendre transform
-
-
-class DiscreteLegendreTransform(BoxSpecificMap):
-    """
-    Transform from nodal values to Legendre polynomial coefficients
-    for all cells (leaf boxes of a boxtree Tree object).
-    It is assumed that the traversal is built over a tree where the
-    sources and targets coincide.
-    """
-
-    def __init__(self, dim, degree):
-        """
-        :arg dim
-        :arg degree Number of nodes in each axis direction.
-        """
-        assert dim > 0
-        self.dim = dim
-        assert degree > 0
-        self.degree = degree
-
-        # Template interval
-        self.template_interval = [-1.0, 1.0]
-        self.template_interval_extent = 2.0
-        self.template_interval_center = 0.0
-
-        self.leg_tplt_x, self.leg_tplt_w = np.polynomial.legendre.leggauss(degree)
-
-        if self.dim == 1:
-            self.V = np.polynomial.legendre.legvander(self.leg_tplt_x, self.degree - 1)
-            self.W = self.leg_tplt_w.reshape(-1)
-
-        elif self.dim == 2:
-            x, y = np.meshgrid(self.leg_tplt_x, self.leg_tplt_x)
-            self.V = np.polynomial.legendre.legvander2d(
-                x.reshape(-1), y.reshape(-1), [self.degree - 1] * self.dim
-            )
-            self.W = (self.leg_tplt_w[None, :] * self.leg_tplt_w[:, None]).reshape(-1)
-
-        elif self.dim == 3:
-            x, y, z = np.meshgrid(self.leg_tplt_x, self.leg_tplt_x, self.leg_tplt_x)
-            self.V = np.polynomial.legendre.legvander3d(
-                x.reshape(-1),
-                y.reshape(-1),
-                z.reshape(-1),
-                [self.degree - 1] * self.dim,
-            )
-            self.W = (
-                self.leg_tplt_w[:, None, None]
-                * self.leg_tplt_w[None, :, None]
-                * self.leg_tplt_w[None, None, :]
-            ).reshape(-1)
-
-        else:
-            raise NotImplementedError("Dimension %d is not supported" % self.dim)
-
-        # Vandermonde matrix: each column corresponds to one basis function
-        assert self.V.shape == (self.degree**self.dim, self.degree**self.dim)
-        assert self.W.shape == (self.degree**self.dim,)
-
-        # Normalizers
-        self.I = np.ascontiguousarray(  # noqa: E741
-            np.diag((self.V.T * self.W) @ self.V)
-        )
-        assert self.I.shape == (self.degree**self.dim,)
-
-        # Fix strides for loopy
-        self.V = np.ascontiguousarray(self.V)
-
-        # Check orthogonality
-        ortho_resid = np.linalg.norm(
-            self.V.T * np.matmul(self.W, self.V) - np.diag(self.I)
-        )
-        if ortho_resid > 1e-13:
-            logger.warning(
-                "Legendre polynomials' orthogonality residual = %f" % ortho_resid
-            )
-
-        self.name = "DiscreteLegendreTransform"
-
-    def get_cache_key(self):
-        return (type(self).__name__, str(self.dim) + "D", "degree=%d" % self.degree)
-
-    def get_kernel(self, **kwargs):
-
-        loopy_knl = lp.make_kernel(
-            [
-                "{ [ bid ] : 0 <= bid < n_boxes }",
-                "{ [ mid ] : 0 <= mid < n_box_nodes }",
-                "{ [ nid ] : 0 <= nid < n_box_nodes }",
-            ],
-            [
-                """
-                for bid
-                    <> box_id       = boxes[bid]
-                    <> box_node_beg = box_node_starts[box_id]
-
-                    # Rescale weights based on template interval sizes.
-                    # Not needed since the rscl in both the numerator and
-                    # the denominator and is canceled.
-                    #
-                    # <> box_level    = box_levels[box_id]
-                    # <> box_extent   = root_extent * (1.0 / (2**box_level))
-                    # <> weight_rscl  = (box_extent / 2.0)**dim
-
-                    for mid
-
-                        <> mode_id = box_node_beg + mid
-
-                        for nid
-                            <> user_node_id = user_node_ids[box_node_beg + nid]
-                        end
-
-                        result[mode_id] = sum(
-                                              nid,
-                                              (
-                                              func[user_node_id]
-                                              * weight[nid]
-                                              * vandermonde[nid, mid]
-                                              ) * filter_multiplier[nid]
-                                             ) / normalizer[mid]
-                    end
-                end
-                """
-            ],
-            [
-                lp.ValueArg("n_box_nodes, n_boxes", np.int32),
-                # lp.ValueArg("root_extent", np.float64),
-                lp.GlobalArg(
-                    "weight, normalizer, filter_multiplier", np.float64, "n_box_nodes"
-                ),
-                lp.GlobalArg("vandermonde", np.float64, "n_box_nodes, n_box_nodes"),
-                lp.GlobalArg("func", np.float64, "n_box_nodes * n_boxes"),
-                "...",
-            ],
-            name="discrete_legendre_transform",
-            lang_version=(2018, 2),
-        )
-
-        loopy_knl = lp.set_options(loopy_knl, write_cl=False)
-        loopy_knl = lp.set_options(loopy_knl, return_dict=True)
-
-        return loopy_knl
-
-    def get_optimized_kernel(self, ncpus=None, **kwargs):
-        knl = self.get_kernel(**kwargs)
-        if ncpus is None:
-            import multiprocessing
-
-            ncpus = multiprocessing.cpu_count()
-        knl = lp.split_iname(
-            knl, split_iname="bid", inner_length=ncpus, inner_tag="g.0"
-        )
-        return knl
-
-    def __call__(self, queue, traversal, nodal_vals, filtering=None, **kwargs):
-        """
-        :arg traversal
-        :arg nodal_vals CL array of nodal values.
-        :arg filtering Box-wide filter given by an CL array or None.
-        """
-
-        if filtering is None:
-            filter_multiplier = 1 + cl.array.zeros(
-                queue, self.degree**self.dim, np.float64
-            )
-        elif isinstance(filtering, cl.array.Array):
-            assert filtering.shape == (self.degree**self.dim,)
-            filter_multiplier = filtering
-        else:
-            raise RuntimeError(f"Invalid filtering argument: {str(filtering)}")
-
-        knl = self.get_cached_optimized_kernel()
-        knl_exec = knl.executor(queue.context)
-
-        evt, res = knl_exec(
-            queue,
-            boxes=traversal.target_boxes,
-            box_node_starts=traversal.tree.box_target_starts,
-            user_node_ids=traversal.tree.user_source_ids,
-            # box_levels=traversal.tree.box_levels,
-            # root_extent=traversal.tree.root_extent,
-            func=nodal_vals,
-            weight=cl.array.to_device(queue, self.W),
-            vandermonde=cl.array.to_device(queue, self.V),
-            normalizer=cl.array.to_device(queue, self.I),
-            n_box_nodes=self.degree**self.dim,
-            n_boxes=traversal.target_boxes.shape[0],
-            filter_multiplier=filter_multiplier,
-            result=cl.array.zeros_like(nodal_vals),
-        )
-
-        return res["result"]
-
-
-# }}} End discrete Legendre transform
-
-# {{{ inverse discrete Legendre transform
-
-
-class InverseDiscreteLegendreTransform(BoxSpecificMap):
-    """
-    Box-specific transform that maps box-local modal coefficients
-    to nodal values. Inverse of :class:`DiscreteLegendreTransform`.
-    """
-
-    pass
-
-
-# }}} End inverse discrete Legendre transform
-
-# }}} End box-specific maps
-
-# {{{ box-specific reductions
-
-
-class BoxSpecificReduction(KernelCacheWrapper):
-    """
-    Box-specific reduction that maps for each box a data vector defined
-    on the quadrature nodes to a scalar.
-    Being box-specific means that the reductions for each box is
-    independent from the rest of the boxes.
-    """
-
-    pass
-
-
-# {{{ sum
-
-
-class BoxSum(BoxSpecificReduction):
-    """
-    Adds up nodal values within each box.
-    """
-
-    def __init__(self, dim, degree):
-        """
-        :arg dim
-        :arg degree Number of nodes in each axis direction.
-        """
-        assert dim > 0
-        self.dim = dim
-        assert degree > 0
-        self.degree = degree
-
-        self.name = "BoxSum"
-
-    def get_cache_key(self):
-        return (type(self).__name__, str(self.dim) + "D", "degree=%d" % self.degree)
-
-    def get_kernel(self, **kwargs):
-
-        loopy_knl = lp.make_kernel(
-            [
-                "{ [ bid ] : 0 <= bid < n_boxes }",
-                "{ [ nid ] : 0 <= nid < n_box_nodes }",
-            ],
-            [
-                """
-                for bid
-                    <> box_id       = boxes[bid]
-                    <> box_node_beg = box_node_starts[box_id]
-
-                    result[bid] = sum(nid,
-                                      func[box_node_beg + nid]
-                                      * filter_multiplier[nid])
-                end
-                """
-            ],
-            [
-                lp.ValueArg("n_box_nodes, n_boxes", np.int32),
-                lp.GlobalArg("filter_multiplier", np.float64, "n_box_nodes"),
-                lp.GlobalArg("func", np.float64, "n_box_nodes * n_boxes"),
-                "...",
-            ],
-            name="box_filtered_sum",
-            lang_version=(2018, 2),
-        )
-
-        loopy_knl = lp.set_options(loopy_knl, write_cl=False)
-        loopy_knl = lp.set_options(loopy_knl, return_dict=True)
-
-        return loopy_knl
-
-    def get_optimized_kernel(self, ncpus=None, **kwargs):
-        knl = self.get_kernel(**kwargs)
-        if ncpus is None:
-            import multiprocessing
-
-            ncpus = multiprocessing.cpu_count()
-        knl = lp.split_iname(
-            knl, split_iname="bid", inner_length=ncpus, inner_tag="g.0"
-        )
-        return knl
-
-    def __call__(self, queue, traversal, nodal_vals, filtering=None, **kwargs):
-        """
-        :arg traversal
-        :arg nodal_vals CL array of nodal values.
-        :arg filtering Box-wide filter given by an CL array or None.
-
-        .. warning::
-           The output of this kernel is ordered in :mod:`boxtree`'s box ids.
-           It may not be the same as the order implied by the input (e.g.
-           box mesh generated by dealii).
-        """
-
-        if filtering is None:
-            filter_multiplier = 1 + cl.array.zeros(
-                queue, self.degree**self.dim, np.float64
-            )
-        elif isinstance(filtering, cl.array.Array):
-            assert filtering.shape == (self.degree**self.dim,)
-            filter_multiplier = filtering
-        else:
-            raise RuntimeError("Invalid filtering argument: %s" % str(filtering))
-
-        knl = self.get_cached_optimized_kernel()
-        knl_exec = knl.executor(queue.context)
-        n_boxes = traversal.target_boxes.shape[0]
-
-        evt, res = knl_exec(
-            queue,
-            boxes=traversal.target_boxes,
-            box_node_starts=traversal.tree.box_target_starts,
-            func=nodal_vals,
-            n_box_nodes=self.degree**self.dim,
-            n_boxes=n_boxes,
-            filter_multiplier=filter_multiplier,
-            result=cl.array.zeros(queue, n_boxes, nodal_vals.dtype),
-        )
-
-        return res["result"]
-
-
-# }}} End sum
-
-# }}} End box-specific reductions
-
-# {{{ filters for box-specific operators
-
-
-def generate_leading_order_filtering(dim, n_dofs):
-    """Returns a filtering vector that is an indicator function of the node
-    that corresponds to the leading order modal values in the Fourier space.
-    """
-
-    mask1d = np.zeros(n_dofs)
-    mask1d[-1] = 1
-
-    if dim == 1:
-        return mask1d
-
-    elif dim == 2:
-        return (
-            mask1d[:, None] + mask1d[None, :] - mask1d[:, None] * mask1d[None, :]
-        ).reshape(-1)
-
-    elif dim == 3:
-        return (
-            mask1d[:, None, None]
-            + mask1d[None, :, None]
-            + mask1d[None, None, :]
-            - mask1d[:, None, None] * mask1d[None, :, None]
-            - mask1d[:, None, None] * mask1d[None, None, :]
-            - mask1d[None, :, None] * mask1d[None, None, :]
-            + mask1d[:, None, None] * mask1d[None, :, None] * mask1d[None, None, :]
-        ).reshape(-1)
-
-    else:
-        raise NotImplementedError("Dimension %d not supported" % dim)
-
-
-# }}} End filters for box-specific operators
+__all__ = [
+    "BoxSpecificMap",
+    "BoxSpecificReduction",
+    "BoxSum",
+    "DiscreteLegendreTransform",
+    "InverseDiscreteLegendreTransform",
+    "KernelCacheWrapper",
+    "ScalarFieldExpressionEvaluation",
+    "clean_file",
+    "generate_leading_order_filtering",
+    "import_code",
+]
+
+# vim: filetype=pyopencl.python:fdm=marker

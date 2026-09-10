@@ -1,3 +1,8 @@
+"""Tests for the singular quadrature building blocks in 2D: 1D/2D adaptive
+quadrature, the triangle-to-rectangle map, and the triangle/box rules,
+checked against Green's identities on the unit square.
+"""
+
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
 __license__ = """
@@ -21,6 +26,7 @@ THE SOFTWARE.
 """
 
 import numpy as np
+import pytest
 
 import volumential.singular_integral_2d as sint
 
@@ -98,7 +104,7 @@ def test_is_in_r():
 
 
 def test_tria2rect_map():
-    t2r, jac_t2r, r2t, jac_r2t = sint.tria2rect_map_2d()
+    t2r, _jac_t2r, r2t, _jac_r2t = sint.tria2rect_map_2d()
     assert np.allclose(t2r((0, 0)), (0, 0))
     assert np.allclose(t2r((1, 0)), (1, 0))
     assert np.allclose(t2r((0, 1)), (1, np.pi / 2))
@@ -162,16 +168,22 @@ def test_tria_quad_2():
     assert np.isfinite(val)
 
 
-def test_box_quad_1():
+_BOX_QUAD_BOUNDS = (1, 2, 23, 40)
+
+
+@pytest.mark.parametrize(
+    "singular_point",
+    [
+        pytest.param((1.5, 31.5), id="singular_point_at_box_center"),
+        pytest.param((0, 0), id="singular_point_outside_box"),
+    ],
+)
+def test_box_quad(singular_point):
     def const_func(x, y):
         return 1
 
-    a = 1
-    b = 2
-    c = 23
-    d = 40
+    a, b, c, d = _BOX_QUAD_BOUNDS
     area = (b - a) * (d - c)
-    sp = ((a + b) / 2, (c + d) / 2)
 
     val, err = sint.box_quad(
         const_func,
@@ -179,7 +191,7 @@ def test_box_quad_1():
         b,
         c,
         d,
-        sp,
+        singular_point,
         args=(),
         tol=1e-8,
         rtol=1e-8,
@@ -188,38 +200,6 @@ def test_box_quad_1():
         miniter=1,
     )
 
-    assert np.isclose(val, area, atol=1e-8)
-    assert np.isclose(err, 0, atol=1e-8)
-
-
-def test_box_quad_2():
-    def const_func(x, y):
-        return 1
-
-    a = 1
-    b = 2
-    c = 23
-    d = 40
-    area = (b - a) * (d - c)
-    sp = (0, 0)
-
-    val, err = sint.box_quad(
-        const_func,
-        a,
-        b,
-        c,
-        d,
-        sp,
-        args=(),
-        tol=1e-8,
-        rtol=1e-8,
-        maxiter=50,
-        vec_func=True,
-        miniter=1,
-    )
-
-    print(area, val)
-    print(err)
     assert np.isclose(val, area, atol=1e-8)
     assert np.isclose(err, 0, atol=1e-8)
 

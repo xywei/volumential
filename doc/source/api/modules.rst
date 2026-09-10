@@ -1,6 +1,13 @@
 Modules
 ========
 
+Package Entry Point
+-------------------
+
+.. automodule:: volumential
+
+.. automodule:: volumential.version
+
 Box Mesh Generation
 -------------------
 
@@ -11,6 +18,16 @@ The active implementation is the boxtree-based path (including adaptive
 tree-of-boxes refinement).
 
 .. automodule:: volumential.meshgen
+
+Adaptive refinement and coarsening of the tree of boxes, including 2:1 level
+restriction, live in :py:mod:`volumential.tree_interactive_build`.
+
+.. automodule:: volumential.tree_interactive_build
+
+The geometry objects handed to the wranglers (bounding boxes, quadrature
+points, traversals) are assembled in :py:mod:`volumential.geometry`.
+
+.. automodule:: volumential.geometry
 
 Singular Integrals
 ------------------
@@ -38,7 +55,11 @@ Symmetry Discovery
 The set of symmetry operations that can be used to speed up precomputation depends on the dimension and symmetry properties of the kernel (e.g., is it a fundamental solution kernel or one of its derivatives?).
 
 .. automodule:: volumential.list1_symmetry
-   :members:
+
+The orbit bookkeeping used to canonicalize table entries under those symmetry
+operations lives in :py:mod:`volumential.orbit_arithmetic`.
+
+.. automodule:: volumential.orbit_arithmetic
 
 Interaction Enumeration
 ***********************
@@ -47,16 +68,17 @@ This module enumerates the set of interaction cases that could possibly happen i
 
 .. automodule:: volumential.list1_gallery
 
-Table Lookup (Deprecated)
-*************************
+List 1 Evaluation
+*****************
 
-This module produces table lookup schemes given information about the kernel and the table data format. The module is deprecated in favor of :py:mod:`volumential.nearfield_potential_table` and :py:mod:`volumential.table_manager`.
+The on-device near-field evaluators read table data through the CSR
+interaction lists produced by the traversal:
+:py:class:`volumential.list1.KernelScalingPolicy` records how a kernel's table
+entries are selected and rescaled, :py:class:`volumential.list1.NearFieldEvalBase`
+generates and caches the :mod:`loopy` kernel, and
+:py:class:`volumential.list1.NearFieldFromCSR` drives it over a traversal.
 
 .. automodule:: volumential.list1
-
-.. warning::
-
-   Use :py:mod:`volumential.nearfield_potential_table` and :py:mod:`volumential.table_manager` instead! :py:mod:`volumential.list1` is deprecated and will be removed in the future.
 
 Table and Table Manager
 ***********************
@@ -68,6 +90,11 @@ The tables are stored in SQLite format and managed through
    :members:
 
 .. automodule:: volumential.table_manager
+
+Fixed-parameter tables can also be assembled from a certified reduced kernel
+expansion (RKE).
+
+.. automodule:: volumential.rke_table_assembly
 
 Multipole/Local Expansions
 --------------------------
@@ -87,8 +114,17 @@ the total runtime.
 
 .. automodule:: volumential.volume_fmm
 
+Interpolation between meshmode discretizations and the box mesh lives in
+:py:mod:`volumential.interpolation`.  (Its module docstring currently declares
+``.. currentmodule:: volumential``, so pulling it in with ``automodule`` here
+would look up its classes in the wrong module; the entry returns once that is
+fixed.)
+
+Sources and Densities
+---------------------
+
 Function Extension
-------------------
+******************
 
 The :py:mod:`volumential.function_extension` module provides helper functions to
 perform source density extensions using layer potentials. The resulting values
@@ -97,8 +133,30 @@ volume handoff workflows.
 
 .. automodule:: volumential.function_extension
 
+Gaussian Fixtures
+*****************
+
+.. automodule:: volumential.gaussian
+
+Symbolic Expressions
+********************
+
+.. automodule:: volumential.symbolic
+
 Miscellaneous Tools
 -------------------
 
 .. automodule:: volumential.tools
-   :members:
+
+Most of what :py:mod:`volumential.tools` used to define now lives in a focused
+module and is re-exported from ``tools`` unchanged.
+
+.. automodule:: volumential.kernel_cache
+
+.. automodule:: volumential.expression_eval
+
+.. automodule:: volumential.box_operators
+
+.. automodule:: volumential.lagrange
+
+.. automodule:: volumential.opcounters

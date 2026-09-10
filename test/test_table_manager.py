@@ -1,3 +1,8 @@
+"""Tests for the near-field table manager: cache lookup and rebuild, kernel
+parameter validation, and agreement of cached table entries with direct
+adaptive quadrature.
+"""
+
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
 __license__ = """
@@ -20,6 +25,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
+import logging
 import os
 import subprocess
 import sys
@@ -27,6 +33,7 @@ from shutil import copyfile
 
 import numpy as np
 import pytest
+
 
 if (
     sys.platform == "darwin"
@@ -41,8 +48,13 @@ if (
 import pyopencl as cl
 
 import volumential as vm
-from volumential.table_manager import NearFieldInteractionTableManager as NFTable
-from volumential.table_manager import TableRequest
+from volumential.table_manager import (
+    NearFieldInteractionTableManager as NFTable,
+    TableRequest,
+)
+
+
+logger = logging.getLogger(__name__)
 
 
 def get_table(queue, q_order=1, dim=2):
@@ -64,6 +76,13 @@ def get_table(queue, q_order=1, dim=2):
     return table
 
 
+def table_for_q_order(table_2d_order1, queue, q_order, dim=2):
+    """Reuse the session-cached order-1 table, or build one for `q_order`."""
+    if q_order == 1:
+        return table_2d_order1
+    return get_table(queue, q_order, dim)
+
+
 def test_case_id(ctx_factory, table_2d_order1):
     table = table_2d_order1
     case_same_box = len(table.interaction_case_vecs) // 2
@@ -75,20 +94,23 @@ def test_get_table_2d_order1(table_2d_order1):
     assert table.dim == 2
 
 
-def test_get_table_yukawa_requires_lambda(ctx_factory, tmp_path):
+@pytest.mark.parametrize("kernel_name", ["Yukawa", "Yukawa-Dx"])
+def test_get_table_yukawa_requires_lambda(ctx_factory, tmp_path, kernel_name):
     cl_ctx = ctx_factory()
     queue = cl.CommandQueue(cl_ctx)
 
-    cache_file = tmp_path / "nft-yukawa-requires-lam.sqlite"
-    with NFTable(str(cache_file), progress_bar=False) as table_manager:
-        with pytest.raises(TypeError, match="missing kernel parameter"):
-            table_manager.get_table(
-                2,
-                "Yukawa",
-                q_order=1,
-                force_recompute=True,
-                queue=queue,
-            )
+    cache_file = tmp_path / f"nft-{kernel_name.lower()}-requires-lam.sqlite"
+    with (
+        NFTable(str(cache_file), progress_bar=False) as table_manager,
+        pytest.raises(TypeError, match="missing kernel parameter"),
+    ):
+        table_manager.get_table(
+            2,
+            kernel_name,
+            q_order=1,
+            force_recompute=True,
+            queue=queue,
+        )
 
 
 def test_get_table_yukawa_builds_with_lambda(ctx_factory, tmp_path):
@@ -142,22 +164,6 @@ def test_get_table_derivative_builds(
     assert table.is_built
     values = np.array([table.get_entry_data(i) for i in range(len(table.data))])
     assert np.all(np.isfinite(values))
-
-
-def test_get_table_yukawa_dx_requires_lambda(ctx_factory, tmp_path):
-    cl_ctx = ctx_factory()
-    queue = cl.CommandQueue(cl_ctx)
-
-    cache_file = tmp_path / "nft-yukawa-dx-requires-lam.sqlite"
-    with NFTable(str(cache_file), progress_bar=False) as table_manager:
-        with pytest.raises(TypeError, match="missing kernel parameter"):
-            table_manager.get_table(
-                2,
-                "Yukawa-Dx",
-                q_order=1,
-                force_recompute=True,
-                queue=queue,
-            )
 
 
 def test_load_saved_yukawa_table_rejects_lambda_mismatch(ctx_factory, tmp_path):
@@ -602,10 +608,7 @@ def test_strict_mode_accepts_a_cached_batched_build(
 
 
 def laplace_const_source_same_box(table_2d_order1, queue, q_order, dim=2):
-    if q_order == 1:
-        nft = table_2d_order1
-    else:
-        nft = get_table(queue, q_order, dim)
+    nft = table_for_q_order(table_2d_order1, queue, q_order, dim)
 
     n_pairs = nft.n_pairs
     n_q_points = nft.n_q_points
@@ -625,10 +628,7 @@ def laplace_const_source_same_box(table_2d_order1, queue, q_order, dim=2):
 
 
 def laplace_cons_source_neighbor_box(table_2d_order1, queue, q_order, case_id, dim=2):
-    if q_order == 1:
-        nft = table_2d_order1
-    else:
-        nft = get_table(queue, q_order, dim)
+    nft = table_for_q_order(table_2d_order1, queue, q_order, dim)
 
     n_pairs = nft.n_pairs
     n_q_points = nft.n_q_points
@@ -653,10 +653,7 @@ def test_lcssb_1(ctx_factory, table_2d_order1):
 
 
 def interp_func(table_2d_order1, queue, q_order, coef, dim=2):
-    if q_order == 1:
-        nft = table_2d_order1
-    else:
-        nft = get_table(queue, q_order, dim)
+    nft = table_for_q_order(table_2d_order1, queue, q_order, dim)
 
     assert dim == 2
 
@@ -706,10 +703,7 @@ def drive_test_direct_quad_same_box(table_2d_order1, queue, q_order, dim=2):
     u = laplace_const_source_same_box(table_2d_order1, queue, q_order)
     func = interp_func(table_2d_order1, queue, q_order, u)
 
-    if q_order == 1:
-        nft = table_2d_order1
-    else:
-        nft = get_table(queue, q_order, dim)
+    nft = table_for_q_order(table_2d_order1, queue, q_order, dim)
 
     def const_one_source_func(x, y):
         return 1
@@ -725,10 +719,10 @@ def drive_test_direct_quad_same_box(table_2d_order1, queue, q_order, dim=2):
         for ids in range(nft.n_q_points):
             mode = nft.get_mode(ids)
             vv = direct_quad(mode, target)
-            print(ids, it, vv)
+            logger.info("mode=%s target=%s value=%s", ids, it, vv)
             v3 += vv
 
-        print(target, v1, v2, v3)
+        logger.info("target=%s table=%s direct=%s modes=%s", target, v1, v2, v3)
         assert np.abs(v1 - v2) < 2e-6
         assert np.abs(v1 - v3) < 1e-6
 
@@ -788,10 +782,7 @@ def test_get_neighbor_target_point(ctx_factory, table_2d_order1):
 
 
 def laplace_const_source_neighbor_box(table_2d_order1, queue, q_order, case_id, dim=2):
-    if q_order == 1:
-        nft = table_2d_order1
-    else:
-        nft = get_table(queue, q_order, dim)
+    nft = table_for_q_order(table_2d_order1, queue, q_order, dim)
 
     n_pairs = nft.n_pairs
     n_q_points = nft.n_q_points
@@ -809,10 +800,7 @@ def drive_test_direct_quad_neighbor_box(
     table_2d_order1, queue, q_order, case_id, dim=2
 ):
     u = laplace_const_source_neighbor_box(table_2d_order1, queue, q_order, case_id)
-    if q_order == 1:
-        nft = table_2d_order1
-    else:
-        nft = get_table(queue, q_order, dim)
+    nft = table_for_q_order(table_2d_order1, queue, q_order, dim)
 
     def const_one_source_func(x, y):
         return 1
@@ -825,10 +813,10 @@ def drive_test_direct_quad_neighbor_box(
         for ids in range(nft.n_q_points):
             mode = nft.get_mode(ids)
             vv = direct_quad(mode, target)
-            print(ids, it, vv)
+            logger.info("mode=%s target=%s value=%s", ids, it, vv)
             v3 += vv
 
-        print(target, v1, v2, v3)
+        logger.info("target=%s table=%s direct=%s modes=%s", target, v1, v2, v3)
         assert np.abs(v1 - v2) < 2e-6
         assert np.abs(v1 - v3) < 1e-6
 

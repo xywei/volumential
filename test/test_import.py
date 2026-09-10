@@ -1,3 +1,5 @@
+"""Smoke test that the top-level :mod:`volumential` package imports."""
+
 
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 

@@ -1,3 +1,7 @@
+"""Tests that the tanh-sinh radial Duffy rules agree with the adaptive
+triangle/box baselines on singular integrands.
+"""
+
 import math
 
 import numpy as np
@@ -43,7 +47,8 @@ def test_radial_duffy_quadrature_matches_adaptive_triangle_baseline():
 def test_radial_duffy_adaptive_matches_adaptive_triangle_baseline():
     tria = ((0.0, 0.0), (1.0, 0.0), (0.3, 0.8))
 
-    func = lambda x, y: 1.0 / np.sqrt(x * x + y * y)
+    def func(x, y):
+        return 1.0 / np.sqrt(x * x + y * y)
 
     baseline, _ = tria_quad(
         func,
@@ -70,7 +75,8 @@ def test_radial_duffy_3d_smoke_matches_adaptive_baseline():
     bounds = [(0.0, 1.0), (0.0, 1.0), (0.0, 1.0)]
     singular_point = (0.0, 0.0, 0.0)
 
-    func = lambda x, y, z: 1.0 / np.sqrt(x * x + y * y + z * z)
+    def func(x, y, z):
+        return 1.0 / np.sqrt(x * x + y * y + z * z)
 
     from volumential.singular_integral_2d import box_quad_duffy_radial_nd
 

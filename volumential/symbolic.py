@@ -20,6 +20,24 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
+__doc__ = """Symbolic (:mod:`pymbolic`) building blocks for analytic fields.
+
+This module owns
+
+* one wrapper per OpenCL math function (:data:`CL_MATH_FUNCS`), each producing
+  a ``math.<name>(x)`` :mod:`pymbolic` call node,
+* the coordinate variables :data:`x`, :data:`y`, :data:`z`,
+* :func:`der_laplacian` for symbolic Laplacians, and
+* :func:`math_func_mangler` / :func:`get_evaluator`, which connect such
+  expressions to :class:`volumential.tools.ScalarFieldExpressionEvaluation`.
+
+.. autofunction:: der_laplacian
+.. autofunction:: math_func_mangler
+.. autofunction:: get_evaluator
+"""
+
+from collections.abc import Callable, Sequence
+
 import numpy as np
 
 import loopy as lp
@@ -31,7 +49,8 @@ from volumential.tools import ScalarFieldExpressionEvaluation
 # {{{ math functions
 
 CL_MATH_URL = (
-    r"https://www.khronos.org/registry/OpenCL/sdk/1.0/docs/man/xhtml/mathFunctions.html"  # noqa: E501
+    "https://www.khronos.org/registry/OpenCL/sdk/1.0/docs/man/xhtml/"
+    "mathFunctions.html"
 )
 
 CL_MATH_FUNCS = [
@@ -102,19 +121,28 @@ CL_MATH_FUNCS = [
     "trunc",
 ]
 
-clmath_decl_code = r"""
-def FUNC_NAME(x):
-    "CL math function FUNC_NAME.\n\nSee CL_MATH_URL for details."
-    return pmbl.primitives.Call(
-            pmbl.primitives.Lookup(pmbl.primitives.Variable("math"), "FUNC_NAME"),
-            (x,))
-"""
 
-for fname in CL_MATH_FUNCS:
-    code = clmath_decl_code.replace("FUNC_NAME", fname).replace(
-        "CL_MATH_URL", CL_MATH_URL
+def _make_cl_math_func(fname: str) -> Callable[[object], pmbl.primitives.Call]:
+    """Build a wrapper emitting a ``math.<fname>(x)`` :mod:`pymbolic` call."""
+
+    def cl_math_func(x):
+        return pmbl.primitives.Call(
+            pmbl.primitives.Lookup(pmbl.primitives.Variable("math"), fname),
+            (x,),
+        )
+
+    cl_math_func.__name__ = fname
+    cl_math_func.__qualname__ = fname
+    cl_math_func.__doc__ = (
+        f"CL math function {fname}.\n\nSee {CL_MATH_URL} for details."
     )
-    exec(code)
+    return cl_math_func
+
+
+# One module-level wrapper per OpenCL math function, e.g. ``symbolic.sin``.
+for fname in CL_MATH_FUNCS:
+    globals()[fname] = _make_cl_math_func(fname)
+del fname
 
 # }}} End math functions
 
@@ -123,7 +151,13 @@ y = pmbl.var("y")
 z = pmbl.var("z")
 
 
-def der_laplacian(func, coord_vars=None):
+def der_laplacian(func, coord_vars: Sequence[str] | None = None):
+    """Return the symbolic Laplacian of *func* in the given coordinates.
+
+    :arg func: a :mod:`pymbolic` expression.
+    :arg coord_vars: names of the coordinate variables, ``("x", "y", "z")``
+        by default.
+    """
     if coord_vars is None:
         coord_vars = ["x", "y", "z"]
 
@@ -134,6 +168,11 @@ def der_laplacian(func, coord_vars=None):
 
 
 def math_func_mangler(target, name, arg_dtypes):
+    """Return :mod:`loopy` call-mangling info for ``math.<name>`` lookups.
+
+    :returns: a :class:`loopy.CallMangleInfo`, or *None* if *name* is not a
+        single-argument ``math`` lookup.
+    """
     if len(arg_dtypes) == 1 and isinstance(name, pmbl.primitives.Lookup):
         (arg_dtype,) = arg_dtypes
 
@@ -142,7 +181,7 @@ def math_func_mangler(target, name, arg_dtypes):
             isinstance(name.aggregate, pmbl.primitives.Variable)
             and name.aggregate.name == "math"
         ):
-            raise RuntimeError("unexpected aggregate '%s'" % str(name.aggregate))
+            raise RuntimeError(f"unexpected aggregate '{name.aggregate}'")
 
         if arg_dtype.is_complex():
             if arg_dtype.numpy_dtype == np.complex64:
@@ -150,7 +189,7 @@ def math_func_mangler(target, name, arg_dtypes):
             elif arg_dtype.numpy_dtype == np.complex128:
                 tpname = "cdouble"
             else:
-                raise RuntimeError("unexpected complex type '%s'" % arg_dtype)
+                raise RuntimeError(f"unexpected complex type '{arg_dtype}'")
 
             return lp.CallMangleInfo(
                 target_name=f"{tpname}_{fname}",
@@ -159,7 +198,7 @@ def math_func_mangler(target, name, arg_dtypes):
             )
 
         return lp.CallMangleInfo(
-            target_name="%s" % fname,
+            target_name=str(fname),
             result_dtypes=(arg_dtype,),
             arg_dtypes=(arg_dtype,),
         )
@@ -167,7 +206,15 @@ def math_func_mangler(target, name, arg_dtypes):
     return None
 
 
-def get_evaluator(dim, expression, variables=None):
+def get_evaluator(
+    dim: int, expression, variables=None
+) -> ScalarFieldExpressionEvaluation:
+    """Return an evaluator for *expression* over *dim*-dimensional points.
+
+    :arg expression: a :mod:`pymbolic` expression in *variables*.
+    :arg variables: coordinate variables, defaulting to :data:`x`, :data:`y`
+        and :data:`z` truncated to *dim*.
+    """
     if variables is None:
         if dim == 1:
             variables = [x]
@@ -187,3 +234,5 @@ def get_evaluator(dim, expression, variables=None):
 
 
 # }}} End evaluation helper
+
+# vim: filetype=pyopencl.python:fdm=marker

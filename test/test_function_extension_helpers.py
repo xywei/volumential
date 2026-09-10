@@ -1,3 +1,7 @@
+"""Unit tests for the small array-context and geometry helpers used by
+:mod:`volumential.function_extension`.
+"""
+
 import types
 
 import pytest

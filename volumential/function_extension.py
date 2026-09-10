@@ -1,4 +1,8 @@
-"""Function extension with regularity constraints:
+"""Function extension with regularity constraints.
+
+This module owns the extension operators that continue a function given on a
+2D curved domain to the surrounding box, together with the Goursat-type
+:mod:`sumpy` kernels the biharmonic extension is written in.
 
 1. :math:`L^2`: extend with constant value
 
@@ -47,16 +51,19 @@ from pymbolic import var
 from pytential import GeometryCollection, bind, sym
 from pytential.array_context import PyOpenCLArrayContext
 from pytential.linalg.gmres import gmres
-from pytential.target import PointsTarget
 from pytential.symbolic.stokes import StokesletWrapper, StressletWrapper
 from pytools.obj_array import new_1d as obj_array_1d
 from sumpy.kernel import AxisTargetDerivative, ExpressionKernel
+
+
+logger = logging.getLogger(__name__)
 
 
 # {{{ helper functions
 
 
 def setup_cl_ctx(ctx=None, queue=None):
+    """Return an OpenCL context, taken from *ctx*, *queue*, or created."""
     if ctx is None:
         if queue is None:
             return cl.create_some_context()
@@ -67,6 +74,7 @@ def setup_cl_ctx(ctx=None, queue=None):
 
 
 def setup_command_queue(ctx=None, queue=None):
+    """Return a command queue, reusing *queue* when one is given."""
     if queue is None:
         cl_ctx = setup_cl_ctx(ctx, queue)
         return cl.CommandQueue(cl_ctx)
@@ -75,6 +83,7 @@ def setup_command_queue(ctx=None, queue=None):
 
 
 def setup_array_context(actx=None, ctx=None, queue=None):
+    """Return an array context, reusing *actx* when one is given."""
     if actx is not None:
         return actx
 
@@ -83,10 +92,14 @@ def setup_array_context(actx=None, ctx=None, queue=None):
 
 
 def _build_extension_places(target_geometry, qbx, target_association_tolerance):
-    if not isinstance(target_geometry, PointsTarget):
-        targets = target_geometry
-    else:
-        targets = target_geometry
+    """Return the geometry collection an extension is evaluated on.
+
+    The collection holds the QBX layer-potential source under ``"qbx"``, a copy
+    with a relaxed target association tolerance under ``"qbx_target_assoc"``,
+    and *target_geometry* (a discretization or a
+    :class:`~pytential.target.PointsTarget`) under ``"targets"``.
+    """
+    targets = target_geometry
 
     qbx_target_assoc = qbx.copy(
         target_association_tolerance=target_association_tolerance
@@ -105,6 +118,11 @@ def _build_extension_places(target_geometry, qbx, target_association_tolerance):
 
 
 def get_normal_vectors(queue, density_discr, loc_sign=-1):
+    """Return the boundary normals pointing away from the extension domain.
+
+    :arg loc_sign: ``-1`` for the interior side (the discretization's own
+        normal), ``+1`` for the exterior side (its negation).
+    """
     if loc_sign == 1:
         return -bind(density_discr, sym.normal(2).as_vector())(queue)
     elif loc_sign == -1:
@@ -112,12 +130,14 @@ def get_normal_vectors(queue, density_discr, loc_sign=-1):
 
 
 def get_tangent_vectors(queue, density_discr, loc_sign):
+    """Return the boundary tangents, oriented with the domain on the left."""
     # the domain is on the left.
     normal = get_normal_vectors(queue, density_discr, loc_sign)
     return obj_array_1d([-1 * normal[1], normal[0]])
 
 
 def get_path_length(queue, density_discr):
+    """Return the arclength of the boundary curve."""
     return bind(density_discr, sym.integral(2, 1, 1))(queue)
 
 
@@ -288,28 +308,11 @@ def compute_harmonic_extension(
 
     # }}}
 
-    # NOTE: matching is needed if using
-    # pytential.symbolic.pde.scalar.DirichletOperator
-    # but here we are using a representation that does not have null
-    # space for exterior Dirichlet problem
-    if loc_sign == 1 and False:
-        bdry_measure = bind(density_discr, sym.integral(dim, dim - 1, 1))(queue)
-
-        int_func_bdry = bind(qbx, sym.integral(dim, dim - 1, var("integrand")))(
-            queue, integrand=f
-        )
-
-        solu_bdry = bind((qbx, density_discr), representation_sym)(
-            queue, sigma=sigma
-        ).real
-        int_solu_bdry = bind(qbx, sym.integral(dim, dim - 1, var("integrand")))(
-            queue, integrand=solu_bdry
-        )
-
-        matching_const = (int_func_bdry - int_solu_bdry) / bdry_measure
-
-    else:
-        matching_const = 0.0
+    # NOTE: a boundary-mean matching constant is needed when using
+    # pytential.symbolic.pde.scalar.DirichletOperator, but the representation
+    # used here has no null space for the exterior Dirichlet problem, so the
+    # constant is always zero.
+    matching_const = 0.0
 
     ext_f = ext_f + matching_const
 
@@ -337,8 +340,11 @@ def compute_harmonic_extension(
 
 
 class ComplexLogKernel(ExpressionKernel):
+    """The Goursat kernel :math:`\\log |z| / (4 \\pi)`."""
+
     init_arg_names = ("dim",)
     is_complex_valued = True
+    has_efficient_scale_adjustment = True
 
     def __init__(self, dim=None):
         if dim == 2:
@@ -353,11 +359,8 @@ class ComplexLogKernel(ExpressionKernel):
 
         super().__init__(dim, expression=expr, global_scaling_const=scaling)
 
-    has_efficient_scale_adjustment = True
-
     def adjust_for_kernel_scaling(self, expr, rscale, nderivatives):
         """Efficient rescaling."""
-
         if self.dim == 2:
             if nderivatives == 0:
                 # return expr + var("log")(rscale)
@@ -374,12 +377,14 @@ class ComplexLogKernel(ExpressionKernel):
         return (self.dim,)
 
     def __repr__(self):
-        return "CplxLogKnl%dD" % self.dim
+        return f"CplxLogKnl{self.dim}D"
 
     mapper_method = "map_expression_kernel"
 
 
 class ComplexLinearLogKernel(ExpressionKernel):
+    """The Goursat kernel :math:`-\\bar{z} \\log |z| / (4 \\pi)`."""
+
     init_arg_names = ("dim",)
     is_complex_valued = True
     has_efficient_scale_adjustment = False
@@ -401,15 +406,17 @@ class ComplexLinearLogKernel(ExpressionKernel):
         return (self.dim,)
 
     def __repr__(self):
-        return "CplxLinLogKnl%dD" % self.dim
+        return f"CplxLinLogKnl{self.dim}D"
 
     mapper_method = "map_expression_kernel"
 
 
 class ComplexLinearKernel(ExpressionKernel):
+    """The Goursat kernel :math:`-z / (8 \\pi)`."""
+
     init_arg_names = ("dim",)
     is_complex_valued = True
-    has_efficient_scale_adjustment = False
+    has_efficient_scale_adjustment = True
 
     def __init__(self, dim=None):
         if dim == 2:
@@ -421,8 +428,6 @@ class ComplexLinearKernel(ExpressionKernel):
             raise NotImplementedError("unsupported dimensionality")
 
         super().__init__(dim, expression=expr, global_scaling_const=scaling)
-
-    has_efficient_scale_adjustment = True
 
     def adjust_for_kernel_scaling(self, expr, rscale, nderivatives):
         """Efficient rescaling of the kernel."""
@@ -436,12 +441,14 @@ class ComplexLinearKernel(ExpressionKernel):
         return (self.dim,)
 
     def __repr__(self):
-        return "CplxLinKnl%dD" % self.dim
+        return f"CplxLinKnl{self.dim}D"
 
     mapper_method = "map_expression_kernel"
 
 
 class ComplexFractionalKernel(ExpressionKernel):
+    """The Goursat kernel :math:`-i \\bar{z} / (4 \\pi z)`."""
+
     init_arg_names = ("dim",)
     is_complex_valued = True
     has_efficient_scale_adjustment = False
@@ -462,7 +469,7 @@ class ComplexFractionalKernel(ExpressionKernel):
         return (self.dim,)
 
     def __repr__(self):
-        return "CplxFracKnl%dD" % self.dim
+        return f"CplxFracKnl{self.dim}D"
 
     mapper_method = "map_expression_kernel"
 
@@ -471,16 +478,14 @@ class ComplexFractionalKernel(ExpressionKernel):
 
 
 def get_extension_bie_symbolic_operator(loc_sign=1):
+    """Return the symbolic Stokes BIE operator used by the extension.
+
+    :arg loc_sign: ``-1`` for interior Dirichlet, ``+1`` for exterior
+        Dirichlet.
     """
-    loc_sign:
-      -1 for interior Dirichlet
-      +1 for exterior Dirichlet
-    """
-    logger = logging.getLogger("SETUP")
-    logger.info(locals())
+    logger.info("building extension BIE operator with loc_sign=%s", loc_sign)
 
     dim = 2
-    cse = sym.cse
 
     sigma_sym = sym.make_sym_vector("sigma", dim)
     int_sigma = sym.Ones() * sym.integral(2, 1, sigma_sym)
@@ -589,8 +594,8 @@ def compute_biharmonic_extension(
         (density_rho_sym * dxids_sym,),
         qbx_forced_limit=None,
     )
-    GD2 = [
-        sym.IntG(  # noqa: N806
+    GD2 = [  # noqa: N806
+        sym.IntG(
             AxisTargetDerivative(iaxis, ComplexLogKernel(dim)),
             (cplx_log_knl,),
             (density_conj_rho_sym * dxids_sym + density_rho_sym * dxids_conj_sym,),
@@ -693,9 +698,9 @@ def compute_biharmonic_extension(
     omega_S1 = bind(  # noqa: N806
         (qbx_stick_out, target_discr), GS1
     )(actx, mu=mu).real
-    omega_S2 = (
+    omega_S2 = (  # noqa: N806
         -1
-        * bind(  # noqa: N806
+        * bind(
             (qbx_stick_out, target_discr), GS2
         )(actx, mu=mu).real
     )
@@ -705,9 +710,9 @@ def compute_biharmonic_extension(
     grad_omega_S1 = bind(  # noqa: N806
         (qbx_stick_out, target_discr), sym.grad(dim, GS1)
     )(actx, mu=mu).real
-    grad_omega_S2 = (
+    grad_omega_S2 = (  # noqa: N806
         -1
-        * bind(  # noqa: N806
+        * bind(
             (qbx_stick_out, target_discr), sym.grad(dim, GS2)
         )(actx, mu=mu).real
     )
