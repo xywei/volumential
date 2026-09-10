@@ -61,6 +61,14 @@ Set `VOLUMENTIAL_DUFFY_NO_FALLBACK=1` to turn the fallback into a
 `RuntimeError` instead — campaign runs use this so that a table which quietly
 dropped to the scalar builder cannot be recorded as a batched build.  Any
 value other than unset, `0`, `false`, `no` or `off` enables the strict mode.
+Strict mode also applies on the *load* path, where the builder never runs: a
+cached table whose recorded routing is `scalar-fallback`, or which records no
+routing at all (a payload written before routing was recorded, so its
+provenance cannot be verified), is refused with an
+`UnverifiedBuildRoutingError` naming the table and the remedy — rebuild it
+with `force_recompute=True`, or unset the switch to accept the cached data.
+Without that, a strict campaign whose cache had already been warmed would load
+and use exactly the data the switch exists to refuse.
 It is an environment switch rather than a `DuffyBuildConfig` field because the
 build config is hashed into the table-cache fingerprint, and an operational
 strictness policy should not invalidate cached numerical data.

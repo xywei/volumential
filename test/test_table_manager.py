@@ -276,6 +276,138 @@ def test_batched_build_routing_survives_the_cache_round_trip(
     assert opcounters.direct_build_routing(loaded) == "batched"
 
 
+def _build_fallback_table_cache(cache_file, queue):
+    """A cache file whose one entry was produced by the scalar fallback."""
+    import volumential.nearfield_potential_table as npt
+
+    original = npt.NearFieldInteractionTable.\
+        build_table_via_duffy_radial_batched
+
+    def failing_batched(self, build_queue, *args, **kwargs):
+        raise RuntimeError("synthetic batched build failure")
+
+    npt.NearFieldInteractionTable.build_table_via_duffy_radial_batched = (
+        failing_batched
+    )
+    try:
+        with NFTable(str(cache_file), progress_bar=False) as table_manager:
+            with pytest.warns(RuntimeWarning, match="falling back to the"):
+                table_manager.get_table(
+                    2, "Laplace", q_order=1, force_recompute=True, queue=queue
+                )
+    finally:
+        npt.NearFieldInteractionTable.build_table_via_duffy_radial_batched = (
+            original
+        )
+
+
+def test_strict_mode_refuses_a_cached_scalar_fallback(
+    ctx_factory, tmp_path, monkeypatch
+):
+    """A warmed cache must not smuggle fallback data past strict mode.
+
+    ``VOLUMENTIAL_DUFFY_NO_FALLBACK`` turns the fallback into a build-time
+    error, but a cached table skips the builder entirely, so without this
+    check a strict campaign whose cache was warmed earlier would load and
+    use exactly the data the switch exists to refuse.
+    """
+    from volumential.nearfield_potential_table import DUFFY_NO_FALLBACK_ENV_VAR
+    from volumential.table_manager import UnverifiedBuildRoutingError
+
+    queue = cl.CommandQueue(cl.Context([ctx_factory().devices[0]]))
+    cache_file = tmp_path / "nft-strict-cached-fallback.sqlite"
+    _build_fallback_table_cache(cache_file, queue)
+
+    # without strict mode the cached fallback loads, routing and all
+    with NFTable(str(cache_file), progress_bar=False) as table_manager:
+        loaded, is_recomputed = table_manager.get_table(
+            2, "Laplace", q_order=1, queue=queue
+        )
+    assert not is_recomputed
+    assert loaded.build_routing == "scalar-fallback"
+
+    monkeypatch.setenv(DUFFY_NO_FALLBACK_ENV_VAR, "1")
+    with NFTable(str(cache_file), progress_bar=False) as table_manager:
+        with pytest.raises(UnverifiedBuildRoutingError) as refused:
+            table_manager.get_table(2, "Laplace", q_order=1, queue=queue)
+
+    message = str(refused.value)
+    assert "scalar Duffy fallback" in message
+    assert "synthetic batched build failure" in message
+    assert DUFFY_NO_FALLBACK_ENV_VAR in message
+    assert "force_recompute=True" in message
+    # the refusal must not be mistaken for a cache miss and silently rebuilt
+    assert not isinstance(refused.value, KeyError)
+
+
+def test_strict_mode_refuses_a_cached_table_with_no_recorded_routing(
+    ctx_factory, tmp_path, monkeypatch
+):
+    """A payload written before routing was recorded cannot be vouched for."""
+    from volumential.nearfield_potential_table import DUFFY_NO_FALLBACK_ENV_VAR
+    from volumential.table_manager import UnverifiedBuildRoutingError
+
+    queue = cl.CommandQueue(cl.Context([ctx_factory().devices[0]]))
+    cache_file = tmp_path / "nft-strict-legacy.sqlite"
+
+    import volumential.table_manager as tm
+
+    original = tm._serialize_table_payload
+
+    def without_routing(table):
+        # emulate a pre-recording payload
+        saved = table.build_routing, table.build_fallback_reason
+        table.build_routing = None
+        table.build_fallback_reason = None
+        try:
+            return original(table)
+        finally:
+            table.build_routing, table.build_fallback_reason = saved
+
+    monkeypatch.setattr(tm, "_serialize_table_payload", without_routing)
+    with NFTable(str(cache_file), progress_bar=False) as table_manager:
+        table_manager.get_table(
+            2, "Laplace", q_order=1, force_recompute=True, queue=queue
+        )
+    monkeypatch.undo()
+
+    import volumential.opcounters as opcounters
+
+    with NFTable(str(cache_file), progress_bar=False) as table_manager:
+        loaded, _ = table_manager.get_table(
+            2, "Laplace", q_order=1, queue=queue
+        )
+    assert opcounters.direct_build_routing(loaded) == "unknown"
+
+    monkeypatch.setenv(DUFFY_NO_FALLBACK_ENV_VAR, "1")
+    with NFTable(str(cache_file), progress_bar=False) as table_manager:
+        with pytest.raises(UnverifiedBuildRoutingError, match="no build routing"):
+            table_manager.get_table(2, "Laplace", q_order=1, queue=queue)
+
+
+def test_strict_mode_accepts_a_cached_batched_build(
+    ctx_factory, tmp_path, monkeypatch
+):
+    """The guard must not reject the routing strict mode is asking for."""
+    from volumential.nearfield_potential_table import DUFFY_NO_FALLBACK_ENV_VAR
+
+    queue = cl.CommandQueue(cl.Context([ctx_factory().devices[0]]))
+    cache_file = tmp_path / "nft-strict-batched.sqlite"
+    with NFTable(str(cache_file), progress_bar=False) as table_manager:
+        built, _ = table_manager.get_table(
+            2, "Laplace", q_order=1, force_recompute=True, queue=queue
+        )
+    assert built.build_routing == "batched"
+
+    monkeypatch.setenv(DUFFY_NO_FALLBACK_ENV_VAR, "1")
+    with NFTable(str(cache_file), progress_bar=False) as table_manager:
+        loaded, is_recomputed = table_manager.get_table(
+            2, "Laplace", q_order=1, queue=queue
+        )
+    assert not is_recomputed
+    assert loaded.build_routing == "batched"
+
+
 def laplace_const_source_same_box(table_2d_order1, queue, q_order, dim=2):
     if q_order == 1:
         nft = table_2d_order1

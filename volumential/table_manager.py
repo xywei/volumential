@@ -50,7 +50,11 @@ import numpy as np
 from sumpy.kernel import ExpressionKernel
 
 import volumential as vm
-from volumential.nearfield_potential_table import NearFieldInteractionTable
+from volumential.nearfield_potential_table import (
+    DUFFY_NO_FALLBACK_ENV_VAR,
+    NearFieldInteractionTable,
+    _duffy_fallback_is_disabled,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -246,6 +250,63 @@ def _deserialize_table_payload(blob):
     with BytesIO(blob) as f:
         with np.load(f, allow_pickle=False) as payload:
             return {name: payload[name] for name in payload.files}
+
+
+class UnverifiedBuildRoutingError(RuntimeError):
+    """A cached table's recorded build routing is refused by strict mode."""
+
+
+def _refuse_unverified_build_routing(table, table_request):
+    """Refuse a cached table whose routing strict mode would not have produced.
+
+    ``VOLUMENTIAL_DUFFY_NO_FALLBACK`` turns the batched-to-scalar Duffy
+    fallback into a build-time error, but a *cached* table skips the builder
+    entirely.  Without this check a strict campaign that had already warmed
+    its cache would load and use exactly the differently converged
+    scalar-fallback data the switch exists to refuse -- and, because the
+    routing is faithfully restored from the payload, would even report it
+    correctly while doing so.
+
+    ``unknown`` (a payload written before the routing was recorded) is
+    refused too: strict mode's contract is that every table in the campaign
+    has a verified provenance, and an unrecorded one cannot be vouched for.
+    Both cases name the remedy, since the operator's options -- rebuild, or
+    accept the table by unsetting the switch -- are a judgement call and not
+    ours to make silently.
+    """
+    if not _duffy_fallback_is_disabled():
+        return
+
+    import volumential.opcounters as opcounters
+
+    routing = opcounters.direct_build_routing(table)
+    if routing not in ("scalar-fallback", "unknown"):
+        return
+
+    identity = (
+        f"dim={table_request.dim} kernel={table_request.kernel_type} "
+        f"q_order={table_request.q_order} "
+        f"source_box_level={table_request.source_box_level}"
+    )
+    if routing == "scalar-fallback":
+        reason = opcounters.direct_build_fallback_reason(table)
+        detail = (
+            "was produced by the scalar Duffy fallback"
+            + (f" ({reason})" if reason else "")
+        )
+    else:
+        detail = (
+            "records no build routing (its payload predates routing "
+            "recording), so it cannot be shown to be a batched build"
+        )
+
+    raise UnverifiedBuildRoutingError(
+        f"cached near-field table [{identity}] {detail}, and "
+        f"{DUFFY_NO_FALLBACK_ENV_VAR} is set. Rebuild it with "
+        "force_recompute=True (which will fail loudly if the batched build "
+        f"still cannot run), or unset {DUFFY_NO_FALLBACK_ENV_VAR} to accept "
+        "the cached data."
+    )
 
 
 def _external_payload_checksum(entry_ids, values):
@@ -1691,6 +1752,8 @@ class NearFieldInteractionTableManager:
             raise
         except (OSError, EOFError, TypeError, ValueError, zipfile.BadZipFile) as exc:
             raise KeyError("table cache payload is corrupted") from exc
+
+        _refuse_unverified_build_routing(table, table_request)
 
         assert table.n_q_points == record["n_q_points"]
         assert table.n_pairs == record["n_pairs"]
