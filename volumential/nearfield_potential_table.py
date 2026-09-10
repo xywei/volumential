@@ -212,7 +212,8 @@ _REAL_VALUED_FUNCTIONS = frozenset({
 })
 
 
-def _is_known_real(expr, unproven_names=frozenset()):
+def _is_known_real(expr, unproven_names=frozenset(),
+                   integer_names=frozenset()):
     """Whether *expr* can be *proved* real-valued, node by node.
 
     The guard on the Euler rewrite has to be positive rather than a
@@ -244,15 +245,17 @@ def _is_known_real(expr, unproven_names=frozenset()):
         return complex(expr).imag == 0
 
     if isinstance(expr, prim.CommonSubexpression):
-        return _is_known_real(expr.child, unproven_names)
+        return _is_known_real(expr.child, unproven_names, integer_names)
 
     if isinstance(expr, prim.Variable):
         # SpatialConstant and friends subclass Variable
         return expr.name not in unproven_names
 
     if isinstance(expr, prim.Subscript):
-        return _is_known_real(expr.aggregate, unproven_names) and all(
-            _is_known_real(index, unproven_names)
+        return _is_known_real(
+            expr.aggregate, unproven_names, integer_names
+        ) and all(
+            _is_known_real(index, unproven_names, integer_names)
             for index in (
                 expr.index
                 if isinstance(expr.index, tuple)
@@ -262,17 +265,22 @@ def _is_known_real(expr, unproven_names=frozenset()):
 
     if isinstance(expr, prim.Sum | prim.Product):
         return all(
-            _is_known_real(child, unproven_names) for child in expr.children
+            _is_known_real(child, unproven_names, integer_names)
+            for child in expr.children
         )
 
     if isinstance(expr, prim.Quotient | prim.FloorDiv | prim.Remainder):
         return _is_known_real(
-            expr.numerator, unproven_names
-        ) and _is_known_real(expr.denominator, unproven_names)
+            expr.numerator, unproven_names, integer_names
+        ) and _is_known_real(
+            expr.denominator, unproven_names, integer_names
+        )
 
     if isinstance(expr, prim.Power):
-        return _is_known_real(expr.base, unproven_names) and _is_known_real(
-            expr.exponent, unproven_names
+        return _is_known_real(
+            expr.base, unproven_names, integer_names
+        ) and _is_known_real(
+            expr.exponent, unproven_names, integer_names
         )
 
     if isinstance(expr, prim.Call):
@@ -282,8 +290,17 @@ def _is_known_real(expr, unproven_names=frozenset()):
             and function.name in _REAL_VALUED_FUNCTIONS
         ):
             return False
+        if expr.parameters and all(
+            _is_known_integer(parameter, integer_names)
+            for parameter in expr.parameters
+        ):
+            # Not the promotion one would expect: loopy types a floating
+            # builtin fed only by integers at *single* precision -- it
+            # emits floor((float) (n)) -- where the cdouble_exp being
+            # replaced promoted the result and worked in double.
+            return False
         return all(
-            _is_known_real(parameter, unproven_names)
+            _is_known_real(parameter, unproven_names, integer_names)
             for parameter in expr.parameters
         )
 
@@ -518,7 +535,9 @@ class ComplexExponentialRewriter(CSECachingMapperMixin, IdentityMapper):
         """
         if _is_known_integer(expr, self.integer_arg_names):
             return False
-        return _is_known_real(expr, self.unproven_arg_names)
+        return _is_known_real(
+            expr, self.unproven_arg_names, self.integer_arg_names
+        )
 
     def map_common_subexpression_uncached(self, expr, /, *args, **kwargs):
         return IdentityMapper.map_common_subexpression(

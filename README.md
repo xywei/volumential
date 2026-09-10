@@ -120,9 +120,10 @@ wave number, and an argument declared with no dtype at all
 and which accepts a complex value at run time) is likewise not proven real.
 A phase that is provably *integer* -- every node an integer constant, an
 argument declared with an integer dtype, or an integer-preserving operation
-over those (`abs`, `min`, `max`, floor division, remainder; not `floor` or
-`ceil`, which C promotes to double) -- also keeps its `cdouble_exp`, and so
-does an integer magnitude: the C
+over those (`abs`, `min`, `max`, floor division, remainder) -- also keeps its
+`cdouble_exp`, and so does an integer magnitude, and so does a floating
+builtin fed only by integers (loopy emits `floor((float) (n))`, not the
+double promotion C would suggest): the C
 `cos`/`sin` overload chosen for an integer argument is not ours to predict,
 and a single-precision one would cost an order-one phase error past `2**24`,
 where the complex exponential carries the precision explicitly. Ordinary

@@ -3188,18 +3188,30 @@ def test_integer_preserving_calls_keep_a_phase_integral():
             frozenset(), integer_names
         )(original) == original
 
-    # floor/ceil/round/trunc have no integer overload in C, so they promote
-    # to double and the phase is safe to rewrite
+    # floor/ceil/round/trunc are not integer-*valued* -- C has no integer
+    # overload for them -- but fed an integer, loopy types them at single
+    # precision, so they are not proven double either and the rewrite is
+    # declined for a different reason.  See
+    # test_an_integer_fed_builtin_is_not_proven_double.
     for name in ("floor", "ceil", "round", "trunc"):
         phase = prim.Call(prim.Variable(name), (n,))
-        assert npt._is_known_real(phase)
         assert not npt._is_known_integer(phase, integer_names)
         original = prim.Call(
             prim.Variable("exp"), (prim.Product((np.complex128(1j), phase)),)
         )
         assert npt.ComplexExponentialRewriter(
             frozenset(), integer_names
-        )(original) != original
+        )(original) == original
+        # ... and with a double operand mixed in, it is proven again
+        widened = prim.Call(
+            prim.Variable(name), (prim.Product((n, prim.Variable("r"))),)
+        )
+        rewritten = prim.Call(
+            prim.Variable("exp"), (prim.Product((np.complex128(1j), widened)),)
+        )
+        assert npt.ComplexExponentialRewriter(
+            frozenset(), integer_names
+        )(rewritten) != rewritten
 
 
 def test_a_narrow_float_phase_keeps_its_complex_exponential():
@@ -3388,6 +3400,35 @@ def test_the_magnitude_is_held_to_the_same_precision_proof():
         prim.Variable("exp"), (prim.Product((np.complex128(1j), k)),)
     )
     assert narrow_magnitude(purely_imaginary) != purely_imaginary
+
+
+def test_an_integer_fed_builtin_is_not_proven_double():
+    """``floor(n)`` over an integer ``n`` is emitted at single precision.
+
+    loopy generates ``floor((float) (n))``, not the double promotion C
+    would suggest, so the rewritten magnitude would use a single-precision
+    ``exp`` where ``cdouble_exp`` had worked in double -- enough to
+    underflow ``exp(-200)``.
+    """
+    import pymbolic.primitives as prim
+
+    n = prim.Variable("n")
+    k = prim.Variable("k")
+    integer_names = frozenset({"n"})
+
+    magnitude = prim.Call(prim.Variable("floor"), (n,))
+    assert npt._is_known_real(magnitude)  # real, just not a double
+    assert not npt._is_known_real(magnitude, frozenset(), integer_names)
+
+    original = prim.Call(
+        prim.Variable("exp"),
+        (prim.Sum((magnitude, prim.Product((np.complex128(1j), k)))),),
+    )
+    assert npt.ComplexExponentialRewriter(
+        frozenset(), integer_names
+    )(original) == original
+    # nothing declared integral: the same expression is rewritten
+    assert npt.ComplexExponentialRewriter()(original) != original
 
 
 def test_an_inferred_argument_dtype_counts_as_potentially_complex():
