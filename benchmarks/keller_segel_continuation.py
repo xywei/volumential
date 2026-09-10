@@ -57,6 +57,7 @@ if str(_BENCH_DIR) not in sys.path:
 from split_parameter_sweep import (  # noqa: E402
     _build_path,
     _capture_table_get_timings,
+    _case_parameter_token,
     _clear_sqlite_cache,
     _coords_host,
     _get_laplace_2d_table,
@@ -2160,6 +2161,13 @@ def main() -> int:
         parser.error("--window-theta must be finite and positive")
     if args.windowed_p_star < 1:
         parser.error("--windowed-p-star must be >= 1")
+    if not (args.cfl > 0.0) or not math.isfinite(args.cfl):
+        # dt_cfl = cfl * node_gap / u_max: at zero or below, every step
+        # falls under the theta floor and the run stops without advancing
+        # once -- after the geometry, the fixed chemoattractant tables and
+        # the first solve -- yet still writes zero-step summaries and
+        # returns success.
+        parser.error("--cfl must be finite and positive")
 
     import pyopencl as cl
 
@@ -2211,7 +2219,8 @@ def main() -> int:
     for mass_factor in args.mass_factors:
         case_id = (
             f"ks2d-{args.initial_profile}-q{q_order}-l{nlevels}"
-            f"-a{args.alpha:g}-m{mass_factor:g}"
+            f"-a{_case_parameter_token(args.alpha)}"
+            f"-m{_case_parameter_token(mass_factor)}"
         )
         shared_case_kwargs = dict(
             mode=args.mode,

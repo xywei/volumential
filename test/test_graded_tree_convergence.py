@@ -277,3 +277,46 @@ def test_validate_rows_requires_ladder_convergence(gtc):
                 ),
             ]
         )
+
+
+def test_a_failed_gate_carries_its_rows_out(gtc):
+    """The gates run after every expensive solve of the ladder.
+
+    Raising a bare RuntimeError discarded the whole run's diagnostics
+    precisely when they are needed to investigate the failed verdict.
+    """
+    assert issubclass(gtc._BenchmarkGateError, RuntimeError)
+    rows = [_row(gtc)]
+    error = gtc._BenchmarkGateError("gate says no", rows)
+    assert error.rows is rows
+    assert str(error) == "gate says no"
+
+
+def test_main_writes_the_csv_before_reporting_a_failed_gate(
+        gtc, tmp_path, monkeypatch, capsys):
+    out = tmp_path / "graded.csv"
+    rows = [_row(gtc)]
+
+    def _gate_failure(**kwargs):
+        raise gtc._BenchmarkGateError("adaptive ladder did not converge", rows)
+
+    monkeypatch.setattr(gtc, "run_benchmark", _gate_failure)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "graded_tree_convergence.py",
+            "--out", str(out),
+            "--cache-dir", str(tmp_path / "cache"),
+        ],
+    )
+
+    with pytest.raises(
+        gtc._BenchmarkGateError, match="did not converge"
+    ):
+        gtc.main()
+
+    # the verdict still propagates, but the measurements survive it
+    assert out.exists()
+    assert rows[0]["case_id"] in out.read_text()
+    assert "GATE-FAILED" in capsys.readouterr().out

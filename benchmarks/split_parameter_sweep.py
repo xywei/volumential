@@ -540,6 +540,18 @@ def _configure_logging() -> None:
     )
 
 
+def _case_parameter_token(parameter: float) -> str:
+    """The parameter token of a ``case_id``.
+
+    ``.17g`` round-trips a float64, so two parameters that differ beyond
+    the sixth significant digit cannot collide on one case id and have
+    their rows merged (or their saved fields overwritten) by tooling keyed
+    on it.  ``%g`` strips trailing zeros, so the committed round-valued
+    ids are byte-identical: 2.0 is still "2".
+    """
+    return f"{float(parameter):.17g}"
+
+
 def _table_build_routing_counts(tables) -> dict[str, int]:
     """How many of ``tables`` were produced by each recorded routing.
 
@@ -2233,8 +2245,9 @@ def _windowed_row_base(
     row.update(
         {
             "case_id": (
-                f"{kernel.lower()}{dim}d-{parameter_name}{parameter:g}"
-                f"-windowed-theta{theta:g}"
+                f"{kernel.lower()}{dim}d-{parameter_name}"
+                f"{_case_parameter_token(parameter)}"
+                f"-windowed-theta{_case_parameter_token(theta)}"
             ),
             "mode": mode,
             "kernel": kernel,
@@ -2944,7 +2957,8 @@ def _row_from_result(
     accounting_dict = asdict(accounting)
     return {
         "case_id": (
-            f"{kernel.lower()}{dim}d-{parameter_name}{parameter:g}"
+            f"{kernel.lower()}{dim}d-{parameter_name}"
+            f"{_case_parameter_token(parameter)}"
             f"-p{split_order}"
         ),
         "mode": mode,

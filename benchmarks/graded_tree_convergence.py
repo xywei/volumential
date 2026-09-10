@@ -305,6 +305,21 @@ def _matched_error_dof_advantage(
     return ""
 
 
+class _BenchmarkGateError(RuntimeError):
+    """A post-run gate failure that carries the rows it was measured on.
+
+    The gates of :func:`_validate_rows` run on complete rows, so a failure
+    means every expensive solve of the ladder already happened and only
+    the verdict on them is negative -- exactly when the diagnostics are
+    needed to investigate the failure.  :func:`main` writes them out
+    before re-raising, the same idiom ``split_parameter_sweep`` uses.
+    """
+
+    def __init__(self, message: str, rows: list[dict[str, Any]]) -> None:
+        super().__init__(message)
+        self.rows = rows
+
+
 def _validate_rows(rows: list[dict[str, Any]]) -> None:
     """Hard gates: adaptive rungs must be genuinely graded, references must
     dominate the modeling gap, and each ladder must actually converge."""
@@ -710,7 +725,12 @@ def run_benchmark(
     uniform_summary = _annotate_ladder(uniform_rows, 3)
     adaptive_summary = _annotate_ladder(adaptive_rows, 3)
     rows = uniform_rows + adaptive_rows
-    _validate_rows(rows)
+    # The gates run on complete rows and carry them out on the exception,
+    # so main can write the CSV before reporting the failed verdict.
+    try:
+        _validate_rows(rows)
+    except RuntimeError as exc:
+        raise _BenchmarkGateError(str(exc), rows) from exc
 
     dof_advantage = _matched_error_dof_advantage(uniform_rows, adaptive_rows)
     metadata = {
@@ -935,21 +955,29 @@ def main() -> int:
     if len(source_center) != 3:
         parser.error("--source-center must have three coordinates")
 
-    rows, metadata = run_benchmark(
-        mode=args.mode,
-        backend=args.backend,
-        cache_dir=args.cache_dir,
-        q_order=q_order,
-        uniform_nlevels=uniform_nlevels,
-        base_nlevels=base_nlevels,
-        adapt_steps=adapt_steps,
-        adapt_fraction=args.adapt_fraction,
-        fmm_order=fmm_order,
-        regular_quad_order=regular_quad_order,
-        radial_quad_order=radial_quad_order,
-        source_alpha=args.source_alpha,
-        source_center=source_center,  # pyright: ignore[reportArgumentType]
-    )
+    try:
+        rows, metadata = run_benchmark(
+            mode=args.mode,
+            backend=args.backend,
+            cache_dir=args.cache_dir,
+            q_order=q_order,
+            uniform_nlevels=uniform_nlevels,
+            base_nlevels=base_nlevels,
+            adapt_steps=adapt_steps,
+            adapt_fraction=args.adapt_fraction,
+            fmm_order=fmm_order,
+            regular_quad_order=regular_quad_order,
+            radial_quad_order=radial_quad_order,
+            source_alpha=args.source_alpha,
+            source_center=source_center,  # pyright: ignore[reportArgumentType]
+        )
+    except _BenchmarkGateError as exc:
+        # The rows are measured; only the verdict on them failed.  Write
+        # them before re-raising, so a multi-hour ladder keeps the very
+        # diagnostics the failed gate has to be investigated with.
+        write_csv(args.out, exc.rows)
+        print(f"GATE-FAILED (CSV written to {args.out}): {exc}")
+        raise
     write_csv(args.out, rows)
     metadata_out = args.metadata_out
     if metadata_out is None:

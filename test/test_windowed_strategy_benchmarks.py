@@ -740,6 +740,35 @@ def test_gate_failure_carries_its_rows_for_the_csv(sweep):
 # }}}
 
 
+def test_case_parameter_tokens_round_trip_a_float64(sweep):
+    """Two parameters that differ in the eighth digit need distinct ids.
+
+    ``%g`` renders both as ``1`` at the default six significant digits,
+    so tooling keyed on ``case_id`` merged two independent measurements --
+    and in the Keller-Segel driver the later case's saved-field NPZ
+    overwrote the earlier one, since the id is the filename.
+    """
+    close = (1.0000001, 1.0000002)
+    tokens = {sweep._case_parameter_token(value) for value in close}
+    assert len(tokens) == len(close)
+    assert all(float(token) in close for token in tokens)
+    # ... while the committed round-valued tokens are byte-identical
+    assert sweep._case_parameter_token(2.0) == "2"
+    assert sweep._case_parameter_token(16.0) == "16"
+    assert sweep._case_parameter_token(0.5) == "0.5"
+
+
+def test_keller_segel_case_ids_keep_close_mass_factors_apart(ks):
+    """The Keller-Segel case id is also the saved-field NPZ filename."""
+    assert ks._case_parameter_token is not None
+    ids = {
+        f"ks2d-gaussian-q2-l9-a{ks._case_parameter_token(1.0)}"
+        f"-m{ks._case_parameter_token(mass_factor)}"
+        for mass_factor in (1.0000001, 1.0000002)
+    }
+    assert len(ids) == 2
+
+
 def _sweep_windowed_kwargs(sweep, tmp_path):
     from volumential.nearfield_potential_table import DuffyBuildConfig
 
@@ -1240,6 +1269,30 @@ def test_ks_main_rejects_a_bad_window_theta(ks, tmp_path, monkeypatch,
     assert "--window-theta must be finite and positive" in (
         capsys.readouterr().err
     )
+    assert not (tmp_path / "never-created").exists()
+
+
+@pytest.mark.parametrize("bad", ["0", "-0.5", "nan", "inf"])
+def test_ks_main_rejects_a_bad_cfl(ks, tmp_path, monkeypatch, capsys, bad):
+    """``dt_cfl = cfl * node_gap / u_max``: at zero or below every step
+    falls under the theta floor, so the run stops without advancing once
+    -- after the geometry, the fixed chemoattractant tables and the first
+    solve -- and still writes zero-step summaries and returns success.
+    """
+    monkeypatch.setattr(
+        ks.sys,
+        "argv",
+        [
+            "keller_segel_continuation.py",
+            f"--cfl={bad}",
+            "--out-dir", str(tmp_path / "never-created"),
+        ],
+    )
+    with pytest.raises(SystemExit) as exited:
+        ks.main()
+
+    assert exited.value.code == 2
+    assert "--cfl must be finite and positive" in capsys.readouterr().err
     assert not (tmp_path / "never-created").exists()
 
 
