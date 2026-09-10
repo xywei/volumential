@@ -696,6 +696,108 @@ def test_main_rejects_a_non_finite_window_declaration(
     assert not (tmp_path / "never-created").exists()
 
 
+@pytest.mark.parametrize(
+    ("argv_extra", "message"),
+    [
+        (["--parameters", "2", "0"], "degenerates both 3D kernels"),
+        (["--parameters", "nan"], "must be finite"),
+        (["--parameters", "2", "2"], "must be unique"),
+        (["--split-orders", "2", "2"], "must be unique"),
+        (["--kernels", "Helmholtz", "--parameters", "64"],
+         "needs FMM order"),
+    ],
+)
+def test_main_validates_the_whole_sweep_before_any_setup(
+    composition3d, tmp_path, monkeypatch, capsys, argv_extra, message
+):
+    """No invalid sweep may reach device selection or the cache directory.
+
+    ``run_case`` validates too, for programmatic callers, but by then a
+    full-mode run has already selected a device and, for the FMM-order
+    check, built an adaptive geometry.
+    """
+    monkeypatch.setattr(
+        composition3d.sys,
+        "argv",
+        [
+            "adaptive_split_composition_3d.py",
+            "--mode", "smoke",
+            "--out", str(tmp_path / "unused.csv"),
+            "--cache-dir", str(tmp_path / "never-created"),
+            *argv_extra,
+        ],
+    )
+    monkeypatch.setattr(
+        composition3d,
+        "_select_opencl_device",
+        lambda *a, **k: pytest.fail("validation must precede device setup"),
+    )
+
+    with pytest.raises(SystemExit) as exited:
+        composition3d.main()
+
+    assert exited.value.code == 2
+    assert message in capsys.readouterr().err
+    assert not (tmp_path / "never-created").exists()
+
+
+def test_partial_windowed_provisioning_metrics_survive_a_failure(
+    composition3d, tmp_path, monkeypatch
+):
+    """A level that completed must still be counted in the failed row.
+
+    The failure-row path exists to preserve provisioning evidence; a row
+    reporting zero load time, zero payload and zero tables after two
+    levels succeeded is the opposite of that.
+    """
+    import volumential.rke_table_assembly as rke
+
+    monkeypatch.setattr(
+        composition3d,
+        "_prepare_windowed_family",
+        lambda **k: {"build_s": 0.25, "was_cold": True},
+    )
+    monkeypatch.setattr(
+        rke,
+        "assemble_windowed_parameterized_table",
+        lambda *a, **k: (object(), {
+            "condition_number": 2.0, "smooth_quad_order": 4,
+        }),
+    )
+
+    calls = {"n": 0}
+
+    def flaky_register(**kwargs):
+        calls["n"] += 1
+        if calls["n"] > 2:
+            raise RuntimeError("registration refused on the third level")
+        return object(), {
+            "register_s": 1.0,
+            "load_s": 0.5,
+            "register_payload_bytes": 1000,
+        }
+
+    monkeypatch.setattr(
+        composition3d, "_register_and_load_windowed_table", flaky_register
+    )
+
+    kwargs = _windowed_kwargs(tmp_path)
+    kwargs["source_levels"] = [1, 2, 3]
+    row = composition3d._run_windowed_composition(None, **kwargs)
+
+    assert row["windowed_status"] == "failed"
+    assert "third level" in row["windowed_refusal"]
+    # the two levels that completed are still accounted for
+    assert row["windowed_table_count"] == 2
+    assert row["windowed_table_load_s"] == pytest.approx(1.0)
+    # 2.0 from the two completed levels, plus the wall time of the third
+    # level's failed attempt, which the handler charges to the stage that
+    # was running
+    assert 2.0 <= row["windowed_register_s"] < 2.1
+    assert row["windowed_register_payload_bytes"] == 2000
+    assert row["windowed_channel_build_s"] > 0.0
+
+
 def test_sqlite_failures_become_rows_too(
     composition3d, tmp_path, monkeypatch
 ):

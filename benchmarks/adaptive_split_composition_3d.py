@@ -632,7 +632,14 @@ def _run_windowed_composition(
             register_s += transfer["register_s"]
             load_s += transfer["load_s"]
             register_payload_bytes += int(transfer["register_payload_bytes"])
+            # Publish every accumulated metric, not just the register time:
+            # a later level's failure returns this dict as the failed row,
+            # and the work already done is exactly the per-level
+            # provisioning evidence that path exists to preserve.
             result["windowed_register_s"] = register_s
+            result["windowed_table_load_s"] = load_s
+            result["windowed_register_payload_bytes"] = register_payload_bytes
+            result["windowed_table_count"] = len(tables)
     except (RKEWindowCoverageError, RKEWindowConditioningError) as exc:
         # a certificate refusal: the declaration does not cover this row
         return _refused_or_failed("refused", exc)
@@ -1377,6 +1384,20 @@ def main() -> int:
         # only once the geometry and every direct and online-split table of
         # the first case have already been built
         parser.error("--window-theta must be finite")
+
+    # The same pure checks run_case runs, hoisted here so an invalid sweep
+    # never reaches device selection, the cache directory, or -- for an
+    # underresolved Helmholtz wave number -- a full-mode adaptive geometry
+    # build.  run_case keeps them too, for programmatic callers.
+    try:
+        parameters = _validated_parameters(parameters)
+        split_orders = _validated_split_orders(split_orders)
+        for q_order, _initial_nlevels, _adapt_steps in cases:
+            _require_resolved_fmm_order(
+                kernels, parameters, max(8, 4 * q_order)
+            )
+    except ValueError as exc:
+        parser.error(str(exc))
 
     device = _select_opencl_device(cl, args.backend)
     ctx = cl.Context([device])
