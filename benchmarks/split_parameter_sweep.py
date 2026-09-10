@@ -2270,6 +2270,27 @@ def run_benchmark(
             "only; run the fixed-parameter Helmholtz sweep with "
             "--fmm-order-rule fixed (or --helmholtz-k none)"
         )
+    if any(not math.isfinite(k) or k <= 0.0 for k in helmholtz_k):
+        # Every Helmholtz diagnostic in this sweep is defined for an
+        # oscillatory far field: the resolved-order rule prescribes an order
+        # from ``k a``, and :func:`_far_field_resolution_failures` reads two
+        # exactly-zero error columns as a diverged-then-cancelled field.  At
+        # ``k = 0`` the kernel degenerates to Laplace, so both premises fail
+        # and the row would be a Laplace measurement filed under a Helmholtz
+        # label.  Run Laplace as Laplace instead of as a zero-frequency
+        # Helmholtz.  (Mirrors the windowed ladder, whose thetas are already
+        # required to be finite and positive.)
+        raise ValueError(
+            "Helmholtz wave numbers must be finite and positive; the zero "
+            "wave number degenerates to Laplace and is not a Helmholtz row"
+        )
+    if any(not math.isfinite(lam) or lam <= 0.0 for lam in yukawa_lam):
+        # Same degeneracy on the screened side: the Yukawa kernel at
+        # ``lambda = 0`` is Laplace.
+        raise ValueError(
+            "Yukawa decay rates must be finite and positive; the zero decay "
+            "rate degenerates to Laplace and is not a Yukawa row"
+        )
     if repeat_count < 1:
         raise ValueError("repeat_count must be >= 1")
     if len(set(split_orders)) != len(split_orders):

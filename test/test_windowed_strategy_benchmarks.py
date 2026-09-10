@@ -553,6 +553,92 @@ def test_resolved_rule_is_refused_for_the_fixed_parameter_sweep(sweep, tmp_path)
         )
 
 
+def test_zero_wave_number_is_refused_as_a_helmholtz_row(sweep, tmp_path):
+    """``k = 0`` is Laplace, and every Helmholtz diagnostic here assumes it is not.
+
+    ``_far_field_resolution_failures`` reads two exactly-zero error columns as
+    a diverged-then-cancelled far field, and the resolved-order rule
+    prescribes an order from ``k a``; at ``k = 0`` the direct and split paths
+    solve the same non-oscillatory problem, so both premises are void.
+    """
+    with pytest.raises(ValueError, match="degenerates to Laplace"):
+        sweep.run_benchmark(
+            mode="smoke",
+            backend="this-backend-does-not-exist",
+            cache_dir=tmp_path / "never-created",
+            dim=3,
+            q_order=2,
+            nlevels=2,
+            fmm_order=8,
+            split_orders=[1],
+            helmholtz_k=[4.0, 0.0],
+            yukawa_lam=[],
+            direct_levels=[2],
+            repeat_count=1,
+        )
+
+
+def test_zero_decay_rate_is_refused_as_a_yukawa_row(sweep, tmp_path):
+    with pytest.raises(ValueError, match="degenerates to Laplace"):
+        sweep.run_benchmark(
+            mode="smoke",
+            backend="this-backend-does-not-exist",
+            cache_dir=tmp_path / "never-created",
+            dim=3,
+            q_order=2,
+            nlevels=2,
+            fmm_order=8,
+            split_orders=[1],
+            helmholtz_k=[],
+            yukawa_lam=[0.0],
+            direct_levels=[2],
+            repeat_count=1,
+        )
+
+
+def test_non_finite_wave_numbers_are_refused(sweep, tmp_path):
+    for bad in (float("nan"), float("inf")):
+        with pytest.raises(ValueError, match="finite and positive"):
+            sweep.run_benchmark(
+                mode="smoke",
+                backend="this-backend-does-not-exist",
+                cache_dir=tmp_path / "never-created",
+                dim=3,
+                q_order=2,
+                nlevels=2,
+                fmm_order=8,
+                split_orders=[1],
+                helmholtz_k=[bad],
+                yukawa_lam=[],
+                direct_levels=[2],
+                repeat_count=1,
+            )
+
+
+def test_positive_parameters_still_pass_validation(sweep, tmp_path):
+    """The guard must not reject the ordinary sweep it sits in front of.
+
+    A nonexistent backend makes ``run_benchmark`` fail *after* validation, so
+    reaching the device-selection error is the evidence that the parameter
+    checks let a normal dispatch through.
+    """
+    with pytest.raises(ValueError, match="backend must be one of"):
+        sweep.run_benchmark(
+            mode="smoke",
+            backend="this-backend-does-not-exist",
+            cache_dir=tmp_path / "never-created",
+            dim=3,
+            q_order=2,
+            nlevels=2,
+            fmm_order=8,
+            split_orders=[1],
+            helmholtz_k=[4.0, 8.0],
+            yukawa_lam=[4.0],
+            direct_levels=[2],
+            repeat_count=1,
+        )
+
+
 def test_max_fmm_order_must_not_undercut_the_floor(sweep, tmp_path):
     with pytest.raises(ValueError, match="max_fmm_order"):
         sweep.run_benchmark(
