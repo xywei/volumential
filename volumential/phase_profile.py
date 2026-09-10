@@ -28,11 +28,17 @@ phase name                       stage
 
 Design constraints, in order of importance:
 
-1. **Zero cost when inactive.**  :func:`phase` is a context manager that
-   short-circuits on one :class:`~contextvars.ContextVar` read when no
-   profile is active, so the instrumented driver keeps its uninstrumented
-   timings.  Nothing is monkeypatched and no timer runs unless a caller
-   opted in.
+1. **Zero cost when inactive.**  :func:`phase` is a plain function that
+   short-circuits on one :class:`~contextvars.ContextVar` read and returns
+   a shared do-nothing context manager when no profile is active, so the
+   instrumented driver keeps its uninstrumented timings.  Deliberately not
+   a ``@contextmanager`` generator: building and entering one costs about
+   1.4 us, which ``drive_volume_fmm`` would pay eight or nine times per
+   solve -- eight versus nine, because only the online-split path enters
+   ``split_correction``, so the "inert" instrumentation would put a
+   strategy-dependent bias into exactly the unprofiled solve means the
+   break-even curves are built from.  Nothing is monkeypatched and no timer
+   runs unless a caller opted in.
 
 2. **Activation follows the caller, not the process.**  The active profiles
    live in a :class:`~contextvars.ContextVar`, so two threads that each
@@ -250,22 +256,64 @@ def active() -> bool:
     return bool(_ACTIVE.get())
 
 
-@contextmanager
+class _InactivePhase:
+    """The context manager :func:`phase` hands back when nothing is active.
+
+    A single shared instance with empty ``__enter__``/``__exit__``, not a
+    ``@contextmanager`` generator: entering a generator-based
+    :class:`contextlib._GeneratorContextManager` costs about 1.4 us, which
+    ``drive_volume_fmm`` would pay eight or nine times per *unprofiled*
+    solve -- and eight versus nine, because only the online-split path
+    enters ``split_correction``, so the "inert" instrumentation would add a
+    strategy-dependent bias to exactly the solve means the break-even curves
+    are built from.
+    """
+
+    __slots__ = ()
+
+    def __enter__(self):
+        return None
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        return False
+
+
+_INACTIVE_PHASE = _InactivePhase()
+
+
+class _ActivePhase:
+    """Times one phase block against the profiles active on entry."""
+
+    __slots__ = ("_name", "_profiles", "_start")
+
+    def __init__(self, name, profiles):
+        self._name = name
+        self._profiles = profiles
+        self._start = 0.0
+
+    def __enter__(self):
+        for profile in self._profiles:
+            profile._enter()
+        self._start = time.perf_counter()
+        return None
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        for profile in self._profiles:
+            profile.sync()
+        elapsed = time.perf_counter() - self._start
+        for profile in self._profiles:
+            profile._exit(str(self._name), elapsed)
+        return False
+
+
 def phase(name: str):
-    """Time the body under phase ``name``; a no-op when nothing is active."""
+    """Time the body under phase ``name``; a no-op when nothing is active.
+
+    Returns a context manager rather than being one, so the inactive path is
+    a :class:`~contextvars.ContextVar` read and a shared-singleton return
+    (see :class:`_InactivePhase` for why that matters).
+    """
     profiles = _ACTIVE.get()
     if not profiles:
-        yield
-        return
-
-    for profile in profiles:
-        profile._enter()
-    start = time.perf_counter()
-    try:
-        yield
-    finally:
-        for profile in profiles:
-            profile.sync()
-        elapsed = time.perf_counter() - start
-        for profile in profiles:
-            profile._exit(str(name), elapsed)
+        return _INACTIVE_PHASE
+    return _ActivePhase(name, profiles)

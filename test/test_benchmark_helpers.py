@@ -1371,6 +1371,109 @@ def test_sweep_phase_row_columns_map_both_paths():
     )
 
 
+def test_sweep_correction_counts_come_from_the_break_even_function():
+    """The two E6 artifacts must not be able to disagree.
+
+    The sweep's split-correction operation counts are produced by the same
+    ``_split_correction_operation_counts`` the break-even driver calls, and
+    both drivers stamp the same ``phase_counting_rule``.
+    """
+    sweep = _load_benchmark("split_parameter_sweep")
+    break_even = _load_benchmark("break_even_validation")
+
+    assert (
+        break_even._split_correction_operation_counts
+        is sweep._split_correction_operation_counts
+    )
+    assert (
+        break_even._tensor_product_interp_fmas
+        is sweep._tensor_product_interp_fmas
+    )
+    # the sweep's rule differs from the driver's only in using this row's own
+    # series length where the driver averages over its parameter set
+    assert sweep.PHASE_COUNTING_RULE.startswith("e6-v2:")
+    assert break_even.PHASE_COUNTING_RULE.startswith("e6-v2:")
+    assert (
+        sweep.PHASE_COUNTING_RULE.replace("*nmax", "")
+        == break_even.PHASE_COUNTING_RULE.replace("*mean_nmax", "").replace(
+            ";recombination=0_per_solve_and_no_windowed_family_in_this_driver",
+            "",
+        )
+    )
+
+
+def test_sweep_non_split_paths_report_a_structural_zero_correction():
+    """A blank must mean "not counted", never "there was none".
+
+    The direct reference path, and the windowed-assembled path that rides
+    the unchanged direct warm path, execute no split correction at all.
+    """
+    sweep = _load_benchmark("split_parameter_sweep")
+
+    columns = sweep._phase_correction_op_columns(
+        queue=None, traversal=None, wrangler=None, split=False,
+        q_order=4, split_order=2, split_smooth_quad_order=None,
+    )
+    assert set(columns) == set(sweep.PHASE_CORRECTION_OPS_NAMES)
+    assert columns["ops_phase_split_correction_status"] == "no_split_correction"
+    for name in sweep.PHASE_CORRECTION_OPS_NAMES:
+        if name != "ops_phase_split_correction_status":
+            assert columns[name] == 0
+
+
+def test_sweep_withholds_the_split_total_when_the_wrangler_is_opaque():
+    """An uninterrogable wrangler blanks the correction *and* the total.
+
+    Reporting a solve total that silently omits the correction phase would
+    be worse than reporting nothing, since the correction is the split
+    strategy's dominant near-field cost.
+    """
+    sweep = _load_benchmark("split_parameter_sweep")
+
+    columns = sweep._phase_correction_op_columns(
+        queue=None, traversal=None, wrangler=object(), split=True,
+        q_order=4, split_order=2, split_smooth_quad_order=None,
+    )
+    assert columns["ops_phase_split_correction_status"].startswith(
+        "unavailable:"
+    )
+    assert columns["ops_phase_split_correction_total"] == ""
+    assert columns["ops_phase_split_correction_remainder_pair_evals"] == ""
+
+    # ... and the blank propagates to the per-path total
+    measurements = dict.fromkeys(
+        sweep.PHASE_CORRECTION_OPS_NAMES, sweep.PHASE_UNMEASURED
+    )
+    measurements["ops_phase_solve_total"] = sweep.PHASE_UNMEASURED
+    row = sweep._phase_row_columns(
+        reference_timing=measurements, split_timing=measurements
+    )
+    assert row["ops_phase_solve_total_split"] == sweep.PHASE_UNMEASURED
+
+
+def test_sweep_phase_row_columns_take_correction_from_the_split_path_only():
+    sweep = _load_benchmark("split_parameter_sweep")
+    reference = sweep._phase_measurements(
+        queue=None, traversal=None, wrangler=None, solve=None,
+        phase_repeat_count=0,
+    )
+    split = dict(reference)
+    for index, name in enumerate(sweep.PHASE_CORRECTION_OPS_NAMES):
+        split[name] = index
+        # the reference path carries a decoy that must never be picked up
+        reference[name] = "reference-decoy"
+    split["ops_phase_solve_total"] = 9999
+    reference["ops_phase_solve_total"] = 1111
+
+    columns = sweep._phase_row_columns(
+        reference_timing=reference, split_timing=split
+    )
+    for index, name in enumerate(sweep.PHASE_CORRECTION_OPS_NAMES):
+        assert columns[name] == index
+    assert columns["ops_phase_solve_total_split"] == 9999
+    assert columns["ops_phase_solve_total_reference"] == 1111
+
+
 def test_sweep_phase_row_columns_are_empty_for_an_unprofiled_run():
     module = _load_benchmark("split_parameter_sweep")
     unmeasured = module._phase_measurements(

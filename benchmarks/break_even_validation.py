@@ -186,7 +186,11 @@ from split_parameter_sweep import (  # noqa: E402
     _prepare_rke_channels,
     _select_opencl_device,
     _split_channel_build_config,
+    _split_correction_operation_counts,
     _split_smooth_quad_order,
+    # re-exported: named by the counting rule in this module's docstring and
+    # exercised through this module's namespace by the driver's tests
+    _tensor_product_interp_fmas,  # noqa: F401
     _yukawa_reference_build_config,
 )
 
@@ -550,176 +554,6 @@ def _operation_counters(
 
 
 # {{{ per-phase operation counts and timings (E6)
-
-def _tensor_product_interp_fmas(*, dim: int, q: int, q_smooth: int) -> int:
-    """FMAs of one box's smooth-quadrature interpolation, as executed.
-
-    ``_interpolate_box_values_to_smooth_quad`` applies the 1D barycentric
-    matrix one axis at a time (``interp_mat @ v @ interp_mat.T`` in 2D, the
-    optimized ``einsum`` path in 3D), so the cost is the tensor-product sum
-    ``sum_{k=1..d} q_smooth**k * q**(d-k+1)`` and *not* the dense
-    ``q_smooth**d * q**d`` a matrix-free reading would suggest.  At the
-    production configuration (``d = 2``, ``q = 4``, ``q_smooth = 8``) this
-    is 384 per box against 1024 dense, a factor of 2.67.
-    """
-    dim = int(dim)
-    q = int(q)
-    q_smooth = int(q_smooth)
-    return int(
-        sum(q_smooth ** (axis + 1) * q ** (dim - axis) for axis in range(dim))
-    )
-
-
-def _split_correction_operation_counts(
-    *, queue, traversal, wrangler, q_order, smooth_quad_order
-):
-    """Executed operation counts of the online split correction phase.
-
-    The correction phase runs, in this order (see
-    ``FPNDSumpyExpansionWrangler.eval_direct_helmholtz_split_correction``):
-    an optional interpolated smooth-source rebuild, one near-field P2P for
-    the series remainder, and, per retained term, one table apply plus (for
-    2D single-table ``power_log`` terms under the ``p2p`` beta mode) one
-    further near-field P2P.  Every count below is read off the executed
-    wrangler and traversal, so it prices what ran rather than the symbolic
-    ``Delta W`` of the cost model.
-
-    Two conventions are inherited from the pre-existing ``ops_*`` columns
-    and are worth stating because they make these counts *lower bounds* on
-    executed kernel launches rather than launch counts:
-
-    * a table apply is priced at one FMA per near-field pair per applied
-      table, blind to the arithmetic dtype.  This driver runs a complex128
-      source function, and ``_eval_direct_helmholtz_split_term_table``
-      dispatches a real-valued term kernel once for the real part and once
-      for the imaginary part, so each retained channel executes *two* List 1
-      passes for the one apply counted here.  Counting it once is what keeps
-      ``base + extra == ops_split_table_fmas_per_solve``, the published
-      ``p``-times-direct identity, and it prices the two strategies on the
-      same dtype-blind footing;
-    * the smooth-source rebuild is priced by
-      :func:`_tensor_product_interp_fmas`, i.e. as the axis-by-axis
-      contraction the implementation performs.
-
-    :returns: a dict of counts plus a ``status`` string; on any failure to
-        interrogate the wrangler the counts are ``""`` and ``status``
-        carries the exception, so an implementation change shows up as a
-        blank rather than as a wrong number.
-    """
-    import volumential.opcounters as opcounters
-    from volumential.expansion_wrangler_fpnd import (
-        _normalize_helmholtz_split_term_key,
-    )
-
-    blank = {
-        "extra_table_fmas": "",
-        "remainder_pair_evals": "",
-        "beta_p2p_pair_evals": "",
-        "smooth_interp_fmas": "",
-        "smooth_sources_per_box": "",
-        "status": "",
-    }
-
-    try:
-        tree = traversal.tree
-        dim = int(tree.dimensions)
-        n_quad_points = int(q_order) ** dim
-
-        split_order = int(wrangler.helmholtz_split_order)
-        use_series_remainder_path = split_order > 1 or (
-            split_order == 1
-            and not wrangler.helmholtz_split_order1_legacy_subtraction
-        )
-        smooth_order = (
-            None if smooth_quad_order is None else int(smooth_quad_order)
-        )
-        use_interp_smooth_quad = (
-            smooth_order is not None and smooth_order > int(q_order)
-        )
-
-        if use_interp_smooth_quad:
-            interp_data = wrangler._get_helmholtz_split_smooth_interp_data(
-                smooth_order,
-                allow_node_overlap=use_series_remainder_path,
-            )
-            smooth_sources_per_box = int(interp_data["n_smooth_points"])
-        else:
-            smooth_sources_per_box = n_quad_points
-
-        box_source_counts = np.asarray(
-            tree.box_source_counts_nonchild.get(queue), dtype=np.int64
-        )
-        smooth_counts = np.where(
-            box_source_counts > 0, smooth_sources_per_box, 0
-        ).astype(np.int64)
-        remainder_pair_evals = opcounters.nearfield_point_pairs_from_counts(
-            target_boxes=traversal.target_boxes.get(queue),
-            neighbor_source_boxes_starts=(
-                traversal.neighbor_source_boxes_starts.get(queue)
-            ),
-            neighbor_source_boxes_lists=(
-                traversal.neighbor_source_boxes_lists.get(queue)
-            ),
-            box_target_counts_nonchild=(
-                tree.box_target_counts_nonchild.get(queue)
-            ),
-            box_source_counts_nonchild=smooth_counts,
-        )
-
-        if use_interp_smooth_quad:
-            n_active_source_boxes = int(np.count_nonzero(box_source_counts))
-            smooth_interp_fmas = (
-                n_active_source_boxes
-                * _tensor_product_interp_fmas(
-                    dim=dim, q=int(q_order), q_smooth=int(smooth_order)
-                )
-            )
-        else:
-            smooth_interp_fmas = 0
-
-        nearfield_pairs = opcounters.nearfield_point_pairs(queue, traversal)
-        beta_mode = (
-            str(
-                wrangler._helmholtz_split_auto_config.get(
-                    "power_log_single_table_beta_mode", "p2p"
-                )
-            )
-            .strip()
-            .lower()
-        )
-        extra_table_applies = 0
-        beta_p2p_passes = 0
-        for term_key, _kernel, _coeff in wrangler._helmholtz_split_extra_terms():
-            term_tables = wrangler._get_helmholtz_split_term_tables(term_key)
-            n_term_tables = (
-                len(term_tables) if isinstance(term_tables, list) else 1
-            )
-            extra_table_applies += 1
-            term_kind, _term_power = _normalize_helmholtz_split_term_key(
-                term_key
-            )
-            if dim == 2 and term_kind == "power_log" and n_term_tables == 1:
-                if beta_mode == "p2p":
-                    beta_p2p_passes += 1
-                else:
-                    # the "table" beta mode applies one more table instead
-                    extra_table_applies += 1
-
-        return {
-            "extra_table_fmas": extra_table_applies * nearfield_pairs,
-            "remainder_pair_evals": remainder_pair_evals,
-            "beta_p2p_pair_evals": beta_p2p_passes * remainder_pair_evals,
-            "smooth_interp_fmas": smooth_interp_fmas,
-            "smooth_sources_per_box": smooth_sources_per_box,
-            "status": (
-                "interpolated_smooth_quadrature"
-                if use_interp_smooth_quad
-                else "base_quadrature"
-            ),
-        }
-    except Exception as exc:  # noqa: BLE001 - recorded, never guessed around
-        return {**blank, "status": f"unavailable:{type(exc).__name__}: {exc}"}
-
 
 def _phase_operation_counts(
     *,
