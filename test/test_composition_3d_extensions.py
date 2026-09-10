@@ -780,10 +780,14 @@ def test_underresolved_helmholtz_parameters_are_refused(composition3d):
     underresolved far field diverges in both and the reported path
     mismatch stays small while both numbers are wrong.
     """
-    with pytest.raises(ValueError, match="needs FMM order"):
+    with pytest.raises(ValueError, match="needs FMM order") as refused:
         composition3d._require_resolved_fmm_order(
             ("Helmholtz",), (64.0,), max(8, 4 * 2)
         )
+    # the remedy the message offers has to exist: this driver takes q from
+    # its built-in case list and exposes no --q-order flag
+    assert "--q-order" not in str(refused.value)
+    assert "run_case()" in str(refused.value)
     # Yukawa is resolved at the floor whatever its decay rate, so the same
     # value is fine when no Helmholtz row is requested
     composition3d._require_resolved_fmm_order(

@@ -816,8 +816,10 @@ def _require_resolved_fmm_order(kernels, parameters, fmm_order):
                 f"resolve its far field, but this driver runs every row at "
                 f"the fixed order {fmm_order}; both the direct and the split "
                 "path would be underresolved together and their mismatch "
-                "would understate the error. Raise --q-order (the order is "
-                "max(8, 4*q)) or use a smaller wave number."
+                "would understate the error. The order is max(8, 4*q) and "
+                "this driver takes q from its built-in case list, so use a "
+                "wave number this mode's q resolves, or call run_case() "
+                "directly with a case whose q_order is large enough."
             )
 
 
