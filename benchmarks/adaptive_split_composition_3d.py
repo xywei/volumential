@@ -46,6 +46,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import sys
 import time
 from pathlib import Path
@@ -241,7 +242,13 @@ def _case_id(
     parameter_tag = KERNEL_PARAMETER_TAGS[kernel]
     return (
         f"{kernel.lower()}3d-q{q_order}-l{initial_nlevels}-"
-        f"a{adapt_steps}-{parameter_tag}{parameter:g}-{suffix}"
+        # ``.17g`` round-trips a float64, so two parameters that differ
+        # beyond the sixth significant digit cannot collide on one case id
+        # and have their rows merged by tooling keyed on it.  This is the
+        # same precision the registered-cache filenames use, and it leaves
+        # the committed ids untouched: %g strips trailing zeros, so 2.0 is
+        # still "2".
+        f"a{adapt_steps}-{parameter_tag}{parameter:.17g}-{suffix}"
     )
 
 
@@ -693,6 +700,24 @@ def _validate_split_order_convergence(rows: list[dict[str, Any]]) -> None:
 
     for (case_key, parameter), by_order in errors.items():
         orders = sorted(by_order)
+        # Every gate below is a `>` comparison, and every comparison against
+        # nan is false, so a run whose mismatches came out nan would sail
+        # through a check that exists to catch exactly that kind of failure.
+        # An infinite p=1 error would likewise excuse any finite p=2 one.
+        # Reject non-finite evidence before, not through, the ratios.
+        non_finite = sorted(
+            order for order in orders if not math.isfinite(by_order[order])
+        )
+        if non_finite:
+            raise RuntimeError(
+                "full high-accuracy 3D Yukawa composition produced "
+                "non-finite mismatches at "
+                f"{case_key} lambda={parameter:g}: "
+                + ", ".join(
+                    f"p={order} gives {by_order[order]}"
+                    for order in non_finite
+                )
+            )
         if len(orders) < 2:
             continue
         if 1 in by_order and 2 in by_order and (
@@ -714,6 +739,51 @@ def _validate_split_order_convergence(rows: list[dict[str, Any]]) -> None:
                 )
 
 
+def _validated_parameters(parameters):
+    """Kernel parameters of one sweep, checked before anything expensive.
+
+    ``argparse`` hands through ``0``, ``nan`` and ``inf`` unexamined.  At
+    zero both the 3D Yukawa and the 3D Helmholtz kernel degenerate to
+    Laplace while the row still carries ``kernel=Yukawa`` and a
+    ``yukawa3d-...`` case id, so the CSV would record a Laplace measurement
+    under a Yukawa label; a non-finite value instead poisons the arithmetic
+    and surfaces only after the geometry and the cold table builds.
+    ``split_parameter_sweep.run_benchmark`` refuses both, and so does this.
+    """
+    validated = [float(parameter) for parameter in parameters]
+    if not validated:
+        raise ValueError("at least one kernel parameter is required")
+    if any(not math.isfinite(parameter) for parameter in validated):
+        raise ValueError("kernel parameters must be finite")
+    if any(parameter <= 0.0 for parameter in validated):
+        raise ValueError(
+            "kernel parameters must be positive; the zero parameter "
+            "degenerates both 3D kernels to Laplace and is not a "
+            "Yukawa/Helmholtz row"
+        )
+    if len(set(validated)) != len(validated):
+        raise ValueError("kernel parameters must be unique")
+    return tuple(validated)
+
+
+def _validated_split_orders(split_orders):
+    """Retained split orders of one sweep, checked for duplicates.
+
+    A repeated order clears and rebuilds the same RKE cache twice and
+    appends two rows with the same ``case_id``; the convergence gate then
+    collapses them into one mapping entry, so the duplicate is invisible
+    there while the evidence CSV carries both rows.
+    """
+    validated = [int(split_order) for split_order in split_orders]
+    if not validated:
+        raise ValueError("at least one split order is required")
+    if any(split_order < 1 for split_order in validated):
+        raise ValueError("split orders must be >= 1")
+    if len(set(validated)) != len(validated):
+        raise ValueError("split orders must be unique")
+    return tuple(validated)
+
+
 def run_case(
     ctx,
     queue,
@@ -732,6 +802,9 @@ def run_case(
     windowed_p_star: int = DEFAULT_WINDOWED_P_STAR,
     windowed_chan_orders: tuple[int, int] = DEFAULT_WINDOWED_CHAN_ORDERS_3D,
 ):
+    parameters = _validated_parameters(parameters)
+    split_orders = _validated_split_orders(split_orders)
+
     mesh, q_points, q_weights, tree, traversal, _, _, _ = _build_adaptive_geometry(
         ctx, queue, q_order, initial_nlevels, adapt_steps
     )

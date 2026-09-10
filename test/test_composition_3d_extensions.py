@@ -244,6 +244,24 @@ def test_case_id_reproduces_the_committed_yukawa_ids(composition3d):
         composition3d._case_id("Stokes", 3, 4, 2, 2.0, "p1")
 
 
+def test_case_id_separates_parameters_beyond_six_digits(composition3d):
+    """Two parameters that differ in the eighth digit need distinct ids.
+
+    Tooling keyed on ``case_id`` would otherwise merge or overwrite two
+    different measurements.
+    """
+    close = (1.0000001, 1.0000002)
+    ids = {
+        composition3d._case_id("Yukawa", 3, 4, 2, parameter, "p2")
+        for parameter in close
+    }
+    assert len(ids) == len(close)
+    # ... while the committed round-valued ids are byte-identical
+    assert composition3d._case_id("Yukawa", 3, 4, 2, 2.0, "p1") == (
+        "yukawa3d-q3-l4-a2-lam2-p1"
+    )
+
+
 def test_channel_counting_rule(composition3d):
     """3D extracts the odd radial powers r^(2j-1), j = 1 .. p-1, so the
     channel count is p - 1 and the shared table count (base included) is p:
@@ -407,6 +425,31 @@ def test_split_order_gate_rejects_material_degradation(composition3d):
         composition3d._validate_split_order_convergence(rows)
 
 
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+def test_split_order_gate_rejects_non_finite_mismatches(composition3d, bad):
+    """A nan mismatch must not pass a gate made of ``>`` comparisons.
+
+    ``nan > threshold`` is false, so a numerical blow-up that produced nan
+    errors would have passed the very check meant to catch it; an infinite
+    p=1 error would likewise have excused any finite p=2 one.
+    """
+    rows = [
+        _online_row(
+            composition3d, split_order=1, rke_vs_direct_weighted_rel_l2=bad
+        ),
+        _online_row(
+            composition3d, split_order=2, rke_vs_direct_weighted_rel_l2=1.0e-8
+        ),
+    ]
+    with pytest.raises(RuntimeError, match="non-finite mismatches"):
+        composition3d._validate_split_order_convergence(rows)
+
+    # a single non-finite row, with no second order to compare against, is
+    # still evidence that must not be written
+    with pytest.raises(RuntimeError, match="non-finite mismatches"):
+        composition3d._validate_split_order_convergence(rows[:1])
+
+
 def test_split_order_gate_scope(composition3d):
     # smoke rows, default-policy rows, Helmholtz rows, and windowed rows are
     # all outside the gate
@@ -469,6 +512,62 @@ def test_windowed_channel_order_default_matches_the_assembler(composition3d):
         2, None, None
     )
     assert DEFAULT_WINDOWED_CHAN_ORDERS_3D == (20, 61)
+
+
+@pytest.mark.parametrize(
+    ("parameters", "message"),
+    [
+        ((2.0, 0.0), "degenerates both 3D kernels to Laplace"),
+        ((-1.0,), "must be positive"),
+        ((float("nan"),), "must be finite"),
+        ((float("inf"),), "must be finite"),
+        ((2.0, 2.0), "must be unique"),
+        ((), "at least one kernel parameter"),
+    ],
+)
+def test_kernel_parameters_are_validated(composition3d, parameters, message):
+    """argparse hands 0, nan and inf straight through; run_case must not.
+
+    At zero both 3D kernels are Laplace while the row still says
+    ``kernel=Yukawa``, so the CSV would carry a Laplace measurement under a
+    Yukawa label.
+    """
+    with pytest.raises(ValueError, match=message):
+        composition3d._validated_parameters(parameters)
+
+
+def test_valid_kernel_parameters_pass_through(composition3d):
+    assert composition3d._validated_parameters([2.0, 4.0, 8.0]) == (
+        2.0, 4.0, 8.0
+    )
+    assert composition3d._validated_parameters(
+        composition3d.FULL_PARAMETERS
+    ) == tuple(composition3d.FULL_PARAMETERS)
+
+
+@pytest.mark.parametrize(
+    ("split_orders", "message"),
+    [
+        ((2, 2), "must be unique"),
+        ((0,), "must be >= 1"),
+        ((), "at least one split order"),
+    ],
+)
+def test_split_orders_are_validated(composition3d, split_orders, message):
+    """A repeated order rebuilds one cache twice and emits duplicate rows.
+
+    ``_validate_split_order_convergence`` keys on the order, so the second
+    row silently replaces the first there while both reach the CSV.
+    """
+    with pytest.raises(ValueError, match=message):
+        composition3d._validated_split_orders(split_orders)
+
+
+def test_valid_split_orders_pass_through(composition3d):
+    assert composition3d._validated_split_orders([1, 2, 3]) == (1, 2, 3)
+    assert composition3d._validated_split_orders(
+        composition3d.FULL_SPLIT_ORDERS
+    ) == tuple(composition3d.FULL_SPLIT_ORDERS)
 
 
 def test_shared_windowed_helpers_reject_unsupported_dimensions():
