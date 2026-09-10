@@ -472,11 +472,18 @@ def test_windowed_channel_order_default_matches_the_assembler(composition3d):
 
 
 def test_shared_windowed_helpers_reject_unsupported_dimensions():
+    """Both shared helpers refuse a dimension they have no geometry for.
+
+    The refusal goes through the sweep's own ``_require_dimension``, so the
+    message names ``SUPPORTED_DIMENSIONS`` rather than spelling "2D and 3D"
+    twice.
+    """
     if str(_BENCHMARK_DIR) not in sys.path:
         sys.path.insert(0, str(_BENCHMARK_DIR))
     sweep = _load_benchmark_module("split_parameter_sweep")
+    assert sweep.SUPPORTED_DIMENSIONS == (2, 3)
 
-    with pytest.raises(ValueError, match="2D and 3D"):
+    with pytest.raises(ValueError, match=r"dim must be one of"):
         sweep._prepare_windowed_family(
             cache_path=Path("unused.sqlite"),
             q_order=2,
@@ -487,7 +494,7 @@ def test_shared_windowed_helpers_reject_unsupported_dimensions():
             chan_radial_order=61,
             dim=4,
         )
-    with pytest.raises(ValueError, match="2D and 3D"):
+    with pytest.raises(ValueError, match=r"dim must be one of"):
         sweep._register_and_load_windowed_table(
             queue=None,
             cache_path=Path("unused.sqlite"),
