@@ -125,6 +125,101 @@ def test_multiple_active_profiles_all_receive_the_phase():
     assert inner.calls("far_refine_locals") == 1
 
 
+def test_a_concurrent_solve_does_not_join_another_thread_s_profile():
+    """Activation is per execution context, not per process.
+
+    Two threads each profiling their own solve must record only their own
+    phases.  With a process-global active list the second thread's blocks
+    would be added to the first thread's profile as well.
+    """
+    import threading
+
+    started = threading.Barrier(2)
+    profiles = {}
+    errors = []
+
+    def solve(tag, phase_name):
+        try:
+            profile = pp.PhaseProfile()
+            profiles[tag] = profile
+            with pp.profiling(profile):
+                # both threads are inside their own profiling block here
+                started.wait(timeout=10.0)
+                with pp.phase(phase_name):
+                    pass
+        except Exception as exc:  # pragma: no cover - reported below
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=solve, args=("a", "far_form_multipoles")),
+        threading.Thread(target=solve, args=("b", "far_eval_locals")),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=20.0)
+
+    assert errors == []
+    assert profiles["a"].names() == ["far_form_multipoles"]
+    assert profiles["b"].names() == ["far_eval_locals"]
+    assert not pp.active()
+
+
+def test_a_concurrent_solve_does_not_drain_another_thread_s_queue():
+    """The wrong queue is drained too, not merely the wrong counter written.
+
+    Each profile carries its own ``sync`` (in practice its own
+    ``queue.finish``).  A phase block in one thread must invoke only its own.
+    """
+    import threading
+
+    started = threading.Barrier(2)
+    syncs = {"a": [], "b": []}
+    errors = []
+
+    def solve(tag):
+        try:
+            profile = pp.PhaseProfile(sync=lambda tag=tag: syncs[tag].append(1))
+            with pp.profiling(profile):
+                started.wait(timeout=10.0)
+                with pp.phase("nearfield_table_apply"):
+                    pass
+        except Exception as exc:  # pragma: no cover - reported below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=solve, args=(tag,)) for tag in ("a", "b")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=20.0)
+
+    assert errors == []
+    # entry sync plus exit sync, from that thread's phase block only
+    assert len(syncs["a"]) == 2
+    assert len(syncs["b"]) == 2
+
+
+def test_a_thread_started_inside_a_profile_does_not_inherit_it():
+    """A worker thread is a separate execution context, so it starts clean."""
+    import threading
+
+    profile = pp.PhaseProfile()
+    seen = []
+
+    def worker():
+        seen.append(pp.active())
+        with pp.phase("split_correction"):
+            pass
+
+    with pp.profiling(profile):
+        thread = threading.Thread(target=worker)
+        thread.start()
+        thread.join(timeout=20.0)
+
+    assert seen == [False]
+    assert profile.calls("split_correction") == 0
+
+
 @pytest.mark.parametrize("bad", [-1.0, -1e-9])
 def test_negative_seconds_are_rejected(bad):
     profile = pp.PhaseProfile()

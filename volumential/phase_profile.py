@@ -29,11 +29,17 @@ phase name                       stage
 Design constraints, in order of importance:
 
 1. **Zero cost when inactive.**  :func:`phase` is a context manager that
-   short-circuits on one truthiness check when no profile is active, so the
-   instrumented driver keeps its uninstrumented timings.  Nothing is
-   monkeypatched and no timer runs unless a caller opted in.
+   short-circuits on one :class:`~contextvars.ContextVar` read when no
+   profile is active, so the instrumented driver keeps its uninstrumented
+   timings.  Nothing is monkeypatched and no timer runs unless a caller
+   opted in.
 
-2. **Device work is attributed to the phase that launched it.**  OpenCL
+2. **Activation follows the caller, not the process.**  The active profiles
+   live in a :class:`~contextvars.ContextVar`, so two threads that each
+   profile a solve record only their own phases and drain only their own
+   OpenCL queue.  A process-global activation would silently merge them.
+
+3. **Device work is attributed to the phase that launched it.**  OpenCL
    command queues are asynchronous, so a host-side timer around a kernel
    launch measures the launch, not the kernel.  A profile therefore carries
    a *sync* callable (in practice ``queue.finish``) which :func:`phase`
@@ -44,7 +50,7 @@ Design constraints, in order of importance:
    report, and must report the profiled total alongside the shares so the
    perturbation is visible.
 
-3. **Phases are disjoint by construction, not by assumption.**  The blocks
+4. **Phases are disjoint by construction, not by assumption.**  The blocks
    in ``drive_volume_fmm`` do not nest.  If a caller nests them anyway, the
    inner name is recorded in :attr:`PhaseProfile.nested_names` and the
    elapsed time is counted under both names; a consumer that finds
@@ -59,6 +65,7 @@ from __future__ import annotations
 
 import time
 from contextlib import contextmanager
+from contextvars import ContextVar
 
 __all__ = [
     "FAR_FIELD_PHASES",
@@ -207,7 +214,21 @@ class PhaseProfile:
     # }}}
 
 
-_ACTIVE: list[PhaseProfile] = []
+#: The profiles collecting in *this* execution context.
+#:
+#: A :class:`~contextvars.ContextVar` rather than a plain module global: the
+#: activation has to follow the caller that opened it.  A second thread
+#: running :func:`~volumential.volume_fmm.drive_volume_fmm` concurrently must
+#: not have its work added to the first thread's profile, and -- worse, since
+#: it silently corrupts the *other* solve's numbers too -- must not have its
+#: phase boundaries drain the first thread's OpenCL queue instead of its own.
+#: A fresh thread starts from the empty default; an :mod:`asyncio` task
+#: inherits the context it was created in, which is the right answer for work
+#: spawned inside a profiled block.  The value is an immutable tuple, so a
+#: context that inherited it cannot mutate its parent's.
+_ACTIVE: ContextVar[tuple[PhaseProfile, ...]] = ContextVar(
+    "volumential_phase_profile_active", default=()
+)
 
 
 @contextmanager
@@ -215,26 +236,28 @@ def profiling(profile: PhaseProfile):
     """Activate ``profile`` for every :func:`phase` block in the body."""
     if not isinstance(profile, PhaseProfile):
         raise ValueError("profiling requires a PhaseProfile instance")
-    _ACTIVE.append(profile)
+    token = _ACTIVE.set((*_ACTIVE.get(), profile))
     try:
         yield profile
     finally:
-        _ACTIVE.remove(profile)
+        # reset() restores the exact previous value, so nesting the same
+        # profile twice unwinds correctly where list.remove() would not
+        _ACTIVE.reset(token)
 
 
 def active() -> bool:
-    """Whether any profile is currently collecting."""
-    return bool(_ACTIVE)
+    """Whether any profile is currently collecting in this context."""
+    return bool(_ACTIVE.get())
 
 
 @contextmanager
 def phase(name: str):
     """Time the body under phase ``name``; a no-op when nothing is active."""
-    if not _ACTIVE:
+    profiles = _ACTIVE.get()
+    if not profiles:
         yield
         return
 
-    profiles = list(_ACTIVE)
     for profile in profiles:
         profile._enter()
     start = time.perf_counter()
