@@ -703,3 +703,105 @@ def test_online_split_rows_reject_a_nonfinite_mismatch_outside_the_scope(
                 )
 
 # }}}
+
+
+# {{{ parameter, split-order and resolved-order validation
+
+@pytest.mark.parametrize(("parameters", "message"), [
+    ((2.0, 0.0), "degenerates both 2D kernels to Laplace"),
+    ((-1.0,), "must be positive"),
+    ((float("nan"),), "must be finite"),
+    ((float("inf"),), "must be finite"),
+    ((2.0, 2.0), "must be unique"),
+    ((), "at least one kernel parameter"),
+])
+def test_kernel_parameters_are_validated(composition, parameters, message):
+    """argparse hands 0, nan and inf straight through; run_case must not."""
+    with pytest.raises(ValueError, match=message):
+        composition._validated_parameters(parameters)
+
+
+def test_valid_kernel_parameters_pass_through(composition):
+    assert composition._validated_parameters([2.0, 4.0, 8.0]) == (
+        2.0, 4.0, 8.0
+    )
+    assert composition._validated_parameters(
+        composition.FULL_PARAMETERS
+    ) == tuple(composition.FULL_PARAMETERS)
+
+
+@pytest.mark.parametrize(("split_orders", "message"), [
+    ((2, 2), "must be unique"),
+    ((0,), "must be >= 1"),
+    ((), "at least one split order"),
+])
+def test_split_orders_are_validated(composition, split_orders, message):
+    with pytest.raises(ValueError, match=message):
+        composition._validated_split_orders(split_orders)
+
+
+def test_every_shipped_2d_configuration_is_resolved(composition):
+    """The guard must accept every configuration the driver ships with.
+
+    Each mode's cases are paired with that mode's parameters, which is how
+    ``main`` dispatches them.
+    """
+    for cases, parameters in (
+        (composition.SMOKE_CASES, composition.SMOKE_PARAMETERS),
+        (composition.FULL_CASES, composition.FULL_PARAMETERS),
+    ):
+        for q_order, _initial_nlevels, _adapt_steps in cases:
+            composition._require_resolved_fmm_order(
+                ("Helmholtz", "Yukawa"), parameters, max(8, 4 * q_order)
+            )
+
+
+def test_underresolved_helmholtz_parameters_are_refused(composition):
+    """A wave number the fixed order cannot resolve must not run.
+
+    The direct, online-split and windowed paths share one FMM here, so an
+    underresolved far field diverges in all three and the reported path
+    mismatch stays small while every number is wrong.
+    """
+    with pytest.raises(ValueError, match="needs FMM order 33") as refused:
+        composition._require_resolved_fmm_order(
+            ("Helmholtz",), (64.0,), max(8, 4 * 3)
+        )
+    # the remedy the message offers has to exist: this driver takes q from
+    # its built-in case list and exposes no --q-order flag
+    assert "--q-order" not in str(refused.value)
+    assert "run_case()" in str(refused.value)
+    # Yukawa is resolved at the floor whatever its decay rate, so the same
+    # value is fine when no Helmholtz row is requested
+    composition._require_resolved_fmm_order(
+        ("Yukawa",), (64.0,), max(8, 4 * 3)
+    )
+
+
+def test_main_refuses_an_underresolved_wave_number_before_a_device(
+    composition, tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setattr(
+        composition,
+        "_select_opencl_device",
+        lambda *a, **k: pytest.fail("device selection must not be reached"),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "adaptive_split_composition.py",
+            "--kernels", "Helmholtz",
+            "--parameters", "64",
+            "--out", str(tmp_path / "never-written.csv"),
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exited:
+        composition.main()
+
+    assert exited.value.code == 2
+    assert "needs FMM order" in capsys.readouterr().err
+    assert not (tmp_path / "never-written.csv").exists()
+
+# }}}

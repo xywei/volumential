@@ -777,6 +777,55 @@ def _sweep_windowed_kwargs(sweep, tmp_path):
     }
 
 
+@pytest.mark.parametrize(("exc", "status"), [
+    (ValueError("unusable channel order"), "failed"),
+    (OSError("family cache is unwritable"), "failed"),
+    (sqlite3.OperationalError("database is locked"), "failed"),
+])
+def test_sweep_family_failures_become_one_row_per_theta(
+        sweep, tmp_path, monkeypatch, exc, status):
+    """The one-off family build is provisioning too.
+
+    The fixed-parameter direct and online-split rows of this kernel are
+    already measured when it runs, and main() preserves rows only for
+    _BenchmarkGateError, so an escaping exception discarded them instead
+    of emitting a failed windowed row for each requested theta.
+    """
+    def _raise(**kwargs):
+        raise exc
+
+    monkeypatch.setattr(sweep, "_prepare_windowed_family", _raise)
+
+    kwargs = _sweep_windowed_kwargs(sweep, tmp_path)
+    kwargs["thetas"] = [1.0, 4.0]
+    rows = sweep._run_windowed_strategy(**kwargs)
+
+    assert len(rows) == len(kwargs["thetas"])
+    for row in rows:
+        assert row["windowed_status"] == status
+        assert "windowed channel family" in row["windowed_refusal"]
+        assert type(exc).__name__ in row["windowed_refusal"]
+        # the time it burned before failing is reported, not discarded
+        assert row["windowed_channel_build_s"] > 0.0
+
+
+def test_a_sweep_family_certificate_refusal_stays_refused(
+        sweep, tmp_path, monkeypatch):
+    from volumential.rke_table_assembly import RKEWindowCoverageError
+
+    def _raise(**kwargs):
+        raise RKEWindowCoverageError("theta outside the declaration")
+
+    monkeypatch.setattr(sweep, "_prepare_windowed_family", _raise)
+
+    rows = sweep._run_windowed_strategy(
+        **_sweep_windowed_kwargs(sweep, tmp_path)
+    )
+
+    assert rows[0]["windowed_status"] == "refused"
+    assert "RKEWindowCoverageError" in rows[0]["windowed_refusal"]
+
+
 def _stub_sweep_windowed_assembly(sweep, monkeypatch):
     import volumential.rke_table_assembly as rke
 

@@ -2315,16 +2315,38 @@ def _run_windowed_strategy(
         f"classical-probe-{dim}d-q{q_order}-l{nlevels}.sqlite"
     )
 
-    family = _prepare_windowed_family(
-        cache_path=family_cache,
-        dim=dim,
-        q_order=q_order,
-        source_box_level=nlevels,
-        window_theta=window_theta,
-        p_star=p_star,
-        chan_regular_order=chan_orders[0],
-        chan_radial_order=chan_orders[1],
-    )
+    # The one-off family build is provisioning too, and the fixed-parameter
+    # direct and online-split rows of this kernel have already been measured
+    # when it runs.  main() preserves rows only for _BenchmarkGateError and
+    # otherwise writes the CSV after run_benchmark() returns, so a corrupt,
+    # locked or unwritable family cache would discard those measurements
+    # instead of emitting a failed windowed row per requested theta.
+    family_start = time.perf_counter()
+    family_failure: tuple[str, str] | None = None
+    try:
+        family = _prepare_windowed_family(
+            cache_path=family_cache,
+            dim=dim,
+            q_order=q_order,
+            source_box_level=nlevels,
+            window_theta=window_theta,
+            p_star=p_star,
+            chan_regular_order=chan_orders[0],
+            chan_radial_order=chan_orders[1],
+        )
+    except (RKEWindowCoverageError, RKEWindowConditioningError) as exc:
+        family_failure = ("refused", f"{type(exc).__name__}: {exc}")
+    except (
+        ValueError, RuntimeError, NotImplementedError, OSError, KeyError,
+        # sqlite3's exceptions descend from Exception, not OSError
+        sqlite3.Error,
+    ) as exc:
+        family_failure = ("failed", f"{type(exc).__name__}: {exc}")
+    if family_failure is not None:
+        family = {
+            "build_s": time.perf_counter() - family_start,
+            "was_cold": True,
+        }
 
     rows: list[dict[str, Any]] = []
     for theta in thetas:
@@ -2375,6 +2397,17 @@ def _run_windowed_strategy(
         )
         row["windowed_channel_build_s"] = family["build_s"]
         row["windowed_channel_build_was_cold"] = int(family["was_cold"])
+
+        if family_failure is not None:
+            # the family every theta of this kernel would have read never
+            # got built: one row per requested theta, carrying the same
+            # taxonomy the assembly and transfer use
+            row["windowed_status"] = family_failure[0]
+            row["windowed_refusal"] = (
+                f"windowed channel family: {family_failure[1]}"
+            )
+            rows.append(row)
+            continue
 
         assemble_start = time.perf_counter()
         try:

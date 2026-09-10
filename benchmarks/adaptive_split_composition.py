@@ -80,6 +80,7 @@ from split_parameter_sweep import (  # noqa: E402
     _get_laplace_2d_table,
     _prepare_windowed_family,
     _register_and_load_windowed_table,
+    _resolved_fmm_order,
     _select_opencl_device,
     _split_channel_build_config,
     _split_smooth_quad_order,
@@ -697,6 +698,88 @@ def _validate_split_order_convergence(rows: list[dict[str, Any]]) -> None:
                 )
 
 
+def _require_resolved_fmm_order(kernels, parameters, fmm_order):
+    """Refuse a Helmholtz parameter this driver's fixed FMM order cannot
+    resolve.
+
+    Unlike ``split_parameter_sweep``'s windowed ladder, every row here
+    shares one parameter-independent ``fmm_order``.  That is fine for
+    Yukawa, whose far field decays and whose expansions are resolved at the
+    floor, and for the committed Helmholtz parameters; it is not fine for
+    an arbitrary ``--parameters`` value.  An underresolved oscillatory far
+    field is especially treacherous *here*, because the direct-table, the
+    online-split and the windowed paths run the identical FMM: they diverge
+    together and the path mismatch this driver reports stays reassuringly
+    small while every number is wrong.
+
+    Rather than let the order float per parameter -- which would mix orders
+    inside one row set -- refuse the parameter and say what order it would
+    need.  Same rule as the 3D twin.
+    """
+    if "Helmholtz" not in kernels:
+        return
+
+    for parameter in parameters:
+        required = _resolved_fmm_order(2, parameter, floor=fmm_order)
+        if required > fmm_order:
+            raise ValueError(
+                f"Helmholtz k={parameter:g} needs FMM order {required} to "
+                "resolve its far field, but this driver runs every row at "
+                f"the fixed order {fmm_order}; the direct, split and "
+                "windowed paths would be underresolved together and their "
+                "mismatch would understate the error. The order is "
+                "max(8, 4*q) and this driver takes q from its built-in "
+                "case list, so use a wave number this mode's q resolves, "
+                "or call run_case() directly with a case whose q_order is "
+                "large enough."
+            )
+
+
+def _validated_parameters(parameters):
+    """Kernel parameters of one sweep, checked before anything expensive.
+
+    ``argparse`` hands through ``0``, ``nan`` and ``inf`` unexamined.  At
+    zero both the 2D Yukawa and the 2D Helmholtz kernel degenerate to
+    Laplace while the row still carries ``kernel=Yukawa`` and a
+    ``yukawa2d-...`` case id, so the CSV would record a Laplace measurement
+    under a Yukawa label; a non-finite value instead poisons the arithmetic
+    and surfaces only after the geometry and the cold table builds.
+    ``split_parameter_sweep.run_benchmark`` refuses both, and so does this.
+    """
+    validated = [float(parameter) for parameter in parameters]
+    if not validated:
+        raise ValueError("at least one kernel parameter is required")
+    if any(not math.isfinite(parameter) for parameter in validated):
+        raise ValueError("kernel parameters must be finite")
+    if any(parameter <= 0.0 for parameter in validated):
+        raise ValueError(
+            "kernel parameters must be positive; the zero parameter "
+            "degenerates both 2D kernels to Laplace and is not a "
+            "Yukawa/Helmholtz row"
+        )
+    if len(set(validated)) != len(validated):
+        raise ValueError("kernel parameters must be unique")
+    return tuple(validated)
+
+
+def _validated_split_orders(split_orders):
+    """Retained split orders of one sweep, checked for duplicates.
+
+    A repeated order clears and rebuilds the same RKE cache twice and
+    appends two rows with the same ``case_id``; the convergence gate then
+    collapses them into one mapping entry, so the duplicate is invisible
+    there while the evidence CSV carries both rows.
+    """
+    validated = [int(split_order) for split_order in split_orders]
+    if not validated:
+        raise ValueError("at least one split order is required")
+    if any(split_order < 1 for split_order in validated):
+        raise ValueError("split orders must be >= 1")
+    if len(set(validated)) != len(validated):
+        raise ValueError("split orders must be unique")
+    return tuple(validated)
+
+
 def run_case(
     ctx,
     queue,
@@ -715,6 +798,9 @@ def run_case(
     windowed_p_star: int = DEFAULT_WINDOWED_P_STAR,
     windowed_chan_orders: tuple[int, int] = DEFAULT_WINDOWED_CHAN_ORDERS_2D,
 ):
+    parameters = _validated_parameters(parameters)
+    split_orders = _validated_split_orders(split_orders)
+
     mesh, q_points, q_weights, tree, traversal, _, _, _ = _build_adaptive_geometry(
         ctx, queue, q_order, initial_nlevels, adapt_steps
     )
@@ -730,6 +816,7 @@ def run_case(
     source_levels = _populated_source_levels(queue, tree, traversal)
 
     fmm_order = max(8, 4 * q_order)
+    _require_resolved_fmm_order(kernels, parameters, fmm_order)
     weights_host = q_weights.get(queue)
     source_values_host = _gaussian_source_host(_coords_host(queue, q_points))
     tree_root_extent = float(tree.root_extent)
@@ -1222,6 +1309,20 @@ def main() -> int:
             "(box_extent / Theta)**2 overflows float64 for the supported "
             "O(1) source-box extents"
         )
+
+    # The same pure checks run_case runs, hoisted here so an invalid sweep
+    # never reaches device selection, the cache directory, or -- for an
+    # underresolved Helmholtz wave number -- an adaptive geometry build.
+    # run_case keeps them too, for programmatic callers.
+    try:
+        parameters = _validated_parameters(parameters)
+        split_orders = _validated_split_orders(split_orders)
+        for q_order, _initial_nlevels, _adapt_steps in cases:
+            _require_resolved_fmm_order(
+                kernels, parameters, max(8, 4 * q_order)
+            )
+    except ValueError as exc:
+        parser.error(str(exc))
 
     device = _select_opencl_device(cl, args.backend)
     ctx = cl.Context([device])

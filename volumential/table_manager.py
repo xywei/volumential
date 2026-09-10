@@ -331,17 +331,29 @@ def _refuse_unverified_build_routing(table, table_request, build_method=None):
     )
 
 
-def _external_payload_checksum(entry_ids, values):
-    """Checksum over the table-entry identities and values of an externally
-    registered table payload (PR #131 discipline: cached numerical evidence
-    carries a content checksum, not just a key)."""
+def _external_payload_checksum(payload):
+    """Checksum over the *whole* numerical payload of an externally
+    registered table (PR #131 discipline: cached numerical evidence carries
+    a content checksum, not just a key).
+
+    Every array, not only the entry identities and values: ``q_points``,
+    ``interaction_case_vecs``, ``case_indices`` and the two normalizer
+    arrays decide which interaction case and which basis geometry the
+    evaluator reads an entry under, so a same-shape corruption in any of
+    them silently produces wrong potentials from data whose entries are
+    intact.  Keys are hashed in sorted order with their dtype and shape,
+    so a renamed, added or dropped array changes the digest too.
+
+    The payload is written and read back through ``np.savez`` with
+    ``allow_pickle=False``, so every value here is a plain non-object
+    ndarray and ``tobytes()`` is a faithful, reproducible encoding.
+    """
     import hashlib
 
     digest = hashlib.sha256()
-    entry_ids = np.ascontiguousarray(np.asarray(entry_ids), dtype="<i8")
-    values = np.ascontiguousarray(np.asarray(values))
-    for label, array in ((b"entry_ids\0", entry_ids), (b"values\0", values)):
-        digest.update(label)
+    for key in sorted(payload):
+        array = np.ascontiguousarray(np.asarray(payload[key]))
+        digest.update(str(key).encode("utf-8") + b"\0")
         digest.update(str(array.dtype.str).encode("ascii"))
         digest.update(np.asarray(array.shape, dtype="<i8").tobytes())
         digest.update(array.tobytes())
@@ -349,8 +361,12 @@ def _external_payload_checksum(entry_ids, values):
 
 
 def _payload_checksum_arrays(payload):
-    """(entry_ids, values) arrays of a deserialized payload in the layout
-    :func:`_external_payload_checksum` hashes."""
+    """``(entry_ids, values)`` arrays of a deserialized payload, whichever
+    of the two data layouts it uses.
+
+    The checksum hashes the whole payload; this picks out the entry values
+    for the emptiness and finiteness checks at registration.
+    """
     if "reduced_entry_ids" in payload and "reduced_data" in payload:
         return payload["reduced_entry_ids"], payload["reduced_data"]
     if "data" in payload:
@@ -1815,10 +1831,7 @@ class NearFieldInteractionTableManager:
 
         stored_payload_checksum = loaded_kwargs.get("external_payload_checksum")
         if stored_payload_checksum is not None:
-            checksum_ids, checksum_values = _payload_checksum_arrays(payload)
-            computed_checksum = _external_payload_checksum(
-                checksum_ids, checksum_values
-            )
+            computed_checksum = _external_payload_checksum(payload)
             if computed_checksum != stored_payload_checksum:
                 raise KeyError(
                     "externally registered table payload failed its checksum; "
@@ -2372,9 +2385,7 @@ assemble_windowed_parameterized_table`) under the standard
             raise ValueError(
                 "cannot register a table with non-finite entry data"
             )
-        payload_checksum = _external_payload_checksum(
-            checksum_ids, checksum_values
-        )
+        payload_checksum = _external_payload_checksum(payload)
 
         distinct_numbers = set()
         for vec in table.interaction_case_vecs:

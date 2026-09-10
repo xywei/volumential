@@ -285,6 +285,98 @@ def test_load_rejects_tampered_payload_checksum(tmp_path, assembled_yukawa):
         )
 
 
+@pytest.mark.parametrize("corrupted", [
+    "case_indices",
+    "interaction_case_vecs",
+    "q_points",
+    "mode_normalizers",
+    "kernel_exterior_normalizers",
+])
+def test_load_rejects_corrupted_payload_metadata(
+        tmp_path, assembled_yukawa, corrupted):
+    """The checksum covers the whole payload, not only entries and values.
+
+    ``case_indices`` and ``interaction_case_vecs`` decide which interaction
+    case an entry is read under, and ``q_points`` and the normalizers fix
+    the basis geometry, so a same-shape corruption in any of them produces
+    wrong potentials from entry data that is itself intact.
+    """
+    from io import BytesIO
+
+    from volumential.table_manager import (
+        _deserialize_table_payload,
+        _external_payload_checksum,
+    )
+
+    table, certificate = assembled_yukawa
+    cache = tmp_path / "registered.sqlite"
+    with NearFieldInteractionTableManager(
+        str(cache), root_extent=ROOT_EXTENT
+    ) as manager:
+        _register(manager, table, certificate)
+
+    conn = sqlite3.connect(str(cache))
+    (blob,) = conn.execute("SELECT payload FROM nearfield_cache").fetchone()
+    payload = _deserialize_table_payload(blob)
+    before = _external_payload_checksum(payload)
+
+    # one element, same shape, same dtype -- and the entry ids and values
+    # are untouched
+    array = np.array(payload[corrupted])
+    flat = array.reshape(-1)
+    flat[0] = flat[0] + array.dtype.type(1)
+    payload[corrupted] = flat.reshape(array.shape)
+    assert _external_payload_checksum(payload) != before
+
+    with BytesIO() as f:
+        np.savez(f, **payload)
+        conn.execute(
+            "UPDATE nearfield_cache SET payload=?", (f.getvalue(),)
+        )
+    conn.commit()
+    conn.close()
+
+    with NearFieldInteractionTableManager(
+        str(cache), root_extent=ROOT_EXTENT
+    ) as manager, pytest.raises(KeyError, match="checksum"):
+        manager.load_saved_table(
+            DIM, "Yukawa", Q_ORDER, source_box_level=LEVEL, lam=LAM
+        )
+
+
+def test_payload_checksum_covers_every_array():
+    """A renamed, added or dropped array changes the digest too."""
+    from volumential.table_manager import _external_payload_checksum
+
+    base = {
+        "reduced_entry_ids": np.arange(4, dtype=np.int64),
+        "reduced_data": np.linspace(0.0, 1.0, 4),
+        "case_indices": np.array([0, 1, 2, 3], dtype=np.int64),
+    }
+    digest = _external_payload_checksum(base)
+
+    # order of insertion does not matter: keys are hashed sorted
+    assert _external_payload_checksum(
+        dict(reversed(list(base.items())))
+    ) == digest
+
+    dropped = {k: v for k, v in base.items() if k != "case_indices"}
+    assert _external_payload_checksum(dropped) != digest
+
+    renamed = dict(dropped)
+    renamed["case_index"] = base["case_indices"]
+    assert _external_payload_checksum(renamed) != digest
+
+    added = dict(base)
+    added["mode_normalizers"] = np.ones(4)
+    assert _external_payload_checksum(added) != digest
+
+    # ... and so does a dtype change that leaves the values equal
+    retyped = dict(base)
+    retyped["case_indices"] = base["case_indices"].astype(np.int32)
+    assert _external_payload_checksum(retyped) != digest
+
+
 def test_register_validates_geometry(tmp_path, assembled_yukawa):
     table, certificate = assembled_yukawa
     cache = tmp_path / "registered.sqlite"
