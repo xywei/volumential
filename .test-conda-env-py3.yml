@@ -8,7 +8,6 @@ dependencies:
   - cmake
   - colorama
   - cython
-  - dealii
   - genpy
   - git
   - iniconfig
@@ -24,7 +23,7 @@ dependencies:
   - pytest
   - pytest-cov
   - python-symengine
-  - python=3.11
+  - python=3.12
   - pyvkfft
   - scipy
   - symengine

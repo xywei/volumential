@@ -65,6 +65,7 @@ gmsh_interop = { git = "https://github.com/inducer/gmsh_interop.git" }
 loopy = { git = "https://github.com/inducer/loopy.git" }
 meshmode = { git = "https://github.com/inducer/meshmode.git" }
 modepy = { git = "https://github.com/inducer/modepy.git" }
+pyfmmlib = { git = "https://github.com/inducer/pyfmmlib.git" }
 pymbolic = { git = "https://github.com/inducer/pymbolic.git" }
 pytential = { git = "https://github.com/inducer/pytential.git" }
 pytools = { git = "https://github.com/inducer/pytools.git" }

@@ -748,7 +748,16 @@ class ElementsToSourcesLookupBuilder:
             ],
             [
                 lp.ValueArg("nelements, dim, nboxes, nsources", np.int32),
-                lp.GlobalArg("mesh_vertex_indices", np.int32, "nelements, dim+1"),
+                # The vertex count per simplex is a compile-time constant
+                # here -- the instruction text above already indexes
+                # ``mesh_vertex_indices[iel, 0 .. self.dim]`` literally -- so
+                # spell it as one.  Written as ``dim+1`` against the runtime
+                # ``dim`` value argument, loopy's bounds check cannot prove
+                # ``0 <= 0 <= dim`` for an unconstrained ``dim`` and rejects
+                # every access with a LoopyIndexError.
+                lp.GlobalArg(
+                    "mesh_vertex_indices", np.int32, f"nelements, {self.dim + 1}"
+                ),
                 lp.GlobalArg("box_source_starts", np.int32, "nboxes"),
                 lp.GlobalArg("box_source_counts_cumul", np.int32, "nboxes"),
                 lp.GlobalArg("leaves_near_ball_lists", np.int32, None),

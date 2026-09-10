@@ -38,7 +38,7 @@ wheels = [
 [[package]]
 name = "boxtree"
 version = "2024.10"
-source = { git = "https://github.com/inducer/boxtree.git#bfee6b8ffee7e187a1020984305a7107cecca638" }
+source = { git = "https://github.com/inducer/boxtree.git#82a86d8c0701cd1aa4c1596365ad4206a212c5d2" }
 dependencies = [
     { name = "arraycontext" },
     { name = "cgen" },
@@ -561,21 +561,10 @@ wheels = [
 
 [[package]]
 name = "pyfmmlib"
-version = "2024.1.1"
-source = { registry = "https://pypi.org/simple" }
+version = "2024.2"
+source = { git = "https://github.com/inducer/pyfmmlib.git#5d3887281f607bccc27c6ec1825584f9c7138f03" }
 dependencies = [
     { name = "numpy" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/25/fa/12a8175f2235a3ec0f3f71fd2ec152b5b098cd5def8ced64e7b6fea033ad/pyfmmlib-2024.1.1.tar.gz", hash = "sha256:1c48575c133499b6ec0130d866694bccbda52c842f2fb9f9277b1ccfc19323ac", size = 6098646, upload-time = "2024-02-26T22:00:05.828Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/02/7b/692717d7c99ff71a261fce476fa17c3a218234ab0babade50a9d5cd6f107/pyfmmlib-2024.1.1-cp311-cp311-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:945320beb4fb5de12a3deb9d3d1fec10b7363e516903511b8594dad07849fac3", size = 1646329, upload-time = "2024-02-26T21:59:46.952Z" },
-    { url = "https://files.pythonhosted.org/packages/0f/a8/8f20240a5f28c8632e617c24df524d5847ca8afd5594de342d884e45f351/pyfmmlib-2024.1.1-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:7fa7b91880f6cf3b32498c3e4d55e0578a0fa8d6e0f6d032a2c514dc0e52563d", size = 1711910, upload-time = "2024-02-26T21:59:49.293Z" },
-    { url = "https://files.pythonhosted.org/packages/2a/3e/86cc9b7fd4a0f8dda371715c28636cddb9b3205b829e8c6b7a586a97b25d/pyfmmlib-2024.1.1-cp311-cp311-musllinux_1_1_i686.whl", hash = "sha256:a9187b99c53f96263388eb9ff8952cd0b4a880ac90b1e6bb180fb64ca64096e8", size = 1432469, upload-time = "2024-02-26T21:59:51.361Z" },
-    { url = "https://files.pythonhosted.org/packages/e7/4d/73fb6c27fceebea67971e23209a3988898ab17a0f063d9af73fb3893ca35/pyfmmlib-2024.1.1-cp311-cp311-musllinux_1_1_x86_64.whl", hash = "sha256:0e5942ee78ee7dba236a0b24f5d7b18d4ea105efef5992c18117e75455fa2228", size = 1401218, upload-time = "2024-02-26T21:59:52.801Z" },
-    { url = "https://files.pythonhosted.org/packages/f1/89/0ed89c3e10ebb6ca853c62cdc54b1831dfab8f987c54c16da619d58e828f/pyfmmlib-2024.1.1-cp312-cp312-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:fc17efff6f2285e077c607fd72843812efcc5838ed8c6fef71c16cb7b2a3eaec", size = 1613101, upload-time = "2024-02-26T21:59:54.806Z" },
-    { url = "https://files.pythonhosted.org/packages/84/b0/7fca8e3dda86d71a6926b18cdb2260b99d80f1ca6dcfbfea788af53ffaea/pyfmmlib-2024.1.1-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:48c6fffa08dde37356de792a02465eb63171a42bed4ea8c0f7ca7a1b7a891e3a", size = 1693321, upload-time = "2024-02-26T21:59:57.008Z" },
-    { url = "https://files.pythonhosted.org/packages/80/06/bc8ef403c5036e5d6c10162b232ceefaf618d3dacbd36bdc3141dab0420c/pyfmmlib-2024.1.1-cp312-cp312-musllinux_1_1_i686.whl", hash = "sha256:a62ff83467dd4938ee4bd850c2126d398aec491cc94b2bab0a0e7933b4873825", size = 1399863, upload-time = "2024-02-26T21:59:59.251Z" },
-    { url = "https://files.pythonhosted.org/packages/24/6c/390bd746f94cde7295d9b6ff6443ab330c3cdab40d0bbe152f1a42737295/pyfmmlib-2024.1.1-cp312-cp312-musllinux_1_1_x86_64.whl", hash = "sha256:cd438ce70c2d29db4b8f9ef2e9d623bcb5ec4df9a14cffb331b4ced3efcacb5f", size = 1381740, upload-time = "2024-02-26T22:00:01.709Z" },
 ]
 
 [[package]]
@@ -1098,7 +1087,7 @@ requires-dist = [
     { name = "meshmode", git = "https://github.com/inducer/meshmode.git" },
     { name = "modepy", git = "https://github.com/inducer/modepy.git" },
     { name = "mpmath", marker = "extra == 'benchmark'" },
-    { name = "pyfmmlib", marker = "extra == 'fmmlib'", specifier = ">=2024.1" },
+    { name = "pyfmmlib", marker = "extra == 'fmmlib'", git = "https://github.com/inducer/pyfmmlib.git" },
     { name = "pymbolic", git = "https://github.com/inducer/pymbolic.git" },
     { name = "pyopencl" },
     { name = "pytential", git = "https://github.com/inducer/pytential.git" },
