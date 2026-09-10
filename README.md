@@ -22,8 +22,20 @@ uv run python examples/poisson3d.py
 `pyopencl`, `pytools`, `modepy`, `arraycontext`, `meshmode`, `pytential`) to
 main-branch Git sources rather than to released wheels, because those projects
 publish releases rarely and the wheels have shipped defects that silently
-corrupt adaptive-tree results. Add `--extra fmmlib` for the FMMLib backend; see
-`DEVELOPMENT.md` for the full provisioning recipe, including the post-install
+corrupt adaptive-tree results.
+
+The FMMLib backend is the exception: `pyfmmlib` has no `tool.uv.sources` entry,
+so `--extra fmmlib` would resolve to the PyPI release, which lacks both the
+OpenMP option and the batched wrappers the backend needs (and
+`FPNDFMMLibExpansionWrangler` then falls back to its serial path in silence).
+Install it from upstream `main` instead:
+
+```bash
+uv pip install --active "pyfmmlib @ git+https://github.com/inducer/pyfmmlib.git"
+```
+
+See `DEVELOPMENT.md` for the full provisioning recipe, including the
+verification that the batched wrappers are present and the post-install
 traversal sanity check that every experiment environment must pass.
 
 ## Repository Layout
