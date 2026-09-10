@@ -31,7 +31,9 @@ from functools import partial
 import numpy as np
 
 import loopy as lp
+import pymbolic.primitives as prim
 import pyopencl as cl
+from pymbolic.mapper import CSECachingMapperMixin, IdentityMapper
 from pytools import memoize_method
 
 import volumential.list1_gallery as gallery
@@ -79,6 +81,513 @@ def _duffy_fallback_is_disabled():
     if value is None:
         return False
     return value.strip().lower() not in ("", "0", "false", "no", "off")
+
+
+# {{{ complex exponential -> real exp/cos/sin rewrite
+
+def _is_numeric_constant(value):
+    return isinstance(value, (int, float, complex, np.number)) and not isinstance(
+        value, (bool, np.bool_)
+    )
+
+
+def _is_structural_zero(expr):
+    return _is_numeric_constant(expr) and expr == 0
+
+
+def _is_structural_one(expr):
+    return _is_numeric_constant(expr) and expr == 1
+
+
+def _mul(left, right):
+    """``left * right`` with structural 0/1 folding and product flattening."""
+    if _is_structural_zero(left) or _is_structural_zero(right):
+        return 0
+    if _is_structural_one(left):
+        return right
+    if _is_structural_one(right):
+        return left
+    if _is_numeric_constant(left) and _is_numeric_constant(right):
+        return left * right
+
+    def _factors(expr):
+        return expr.children if isinstance(expr, prim.Product) else (expr,)
+
+    return prim.Product((*_factors(left), *_factors(right)))
+
+
+def _add(left, right):
+    """``left + right`` with structural 0 folding and sum flattening."""
+    if _is_structural_zero(left):
+        return right
+    if _is_structural_zero(right):
+        return left
+    if _is_numeric_constant(left) and _is_numeric_constant(right):
+        return left + right
+
+    def _terms(expr):
+        return expr.children if isinstance(expr, prim.Sum) else (expr,)
+
+    return prim.Sum((*_terms(left), *_terms(right)))
+
+
+def _div(numerator, denominator):
+    """``numerator / denominator`` with structural 1 folding."""
+    if _is_structural_zero(numerator):
+        return 0
+    if _is_structural_one(denominator):
+        return numerator
+    if _is_numeric_constant(numerator) and _is_numeric_constant(denominator):
+        return numerator / denominator
+    return prim.Quotient(numerator, denominator)
+
+
+def _has_variable(expr, _cache=None) -> bool:
+    """Whether *expr* mentions any variable at all.
+
+    Memoized by node identity for the same reason as
+    :func:`_is_known_real`: the split's named pairs make the DAG compact
+    but leave a naive walk exponential.
+    """
+    if _cache is None:
+        _cache = {}
+    key = id(expr)
+    cached = _cache.get(key)
+    if cached is not None:
+        return cached
+    result = _has_variable_uncached(expr, _cache)
+    _cache[key] = result
+    return result
+
+
+def _has_variable_uncached(expr, _cache) -> bool:
+    if isinstance(expr, prim.Variable):
+        return True
+    if isinstance(expr, prim.CommonSubexpression):
+        return _has_variable(expr.child, _cache)
+    if isinstance(expr, prim.Subscript):
+        return True
+    if isinstance(expr, prim.Sum | prim.Product):
+        return any(_has_variable(child, _cache) for child in expr.children)
+    if isinstance(expr, prim.Quotient | prim.FloorDiv | prim.Remainder):
+        return _has_variable(expr.numerator, _cache) or _has_variable(
+            expr.denominator, _cache
+        )
+    if isinstance(expr, prim.Power):
+        return _has_variable(expr.base, _cache) or _has_variable(
+            expr.exponent, _cache
+        )
+    if isinstance(expr, prim.Call):
+        return any(_has_variable(param, _cache) for param in expr.parameters)
+    return False
+
+
+def _named_subexpression(expr):
+    """*expr* behind a CSE, unless it is already a leaf or one."""
+    if _is_numeric_constant(expr) or isinstance(
+        expr, prim.Variable | prim.CommonSubexpression
+    ):
+        return expr
+    return prim.CommonSubexpression(expr)
+
+
+def _split_complex_expression(expr):
+    """Split ``expr`` into ``(re, im)`` such that ``expr == re + 1j*im``.
+
+    The split walks sums, products and numeric constants and stops at every
+    other node, attributing it wholly to ``re``.  That makes the identity
+    ``expr == re + 1j*im`` exact by construction for *any* input, real or
+    complex: nothing here assumes that a symbol is real-valued, and a complex
+    quantity hidden inside an opaque node simply stays inside ``re``.  ``im``
+    is the structural integer ``0`` exactly when no complex numeric constant
+    was reachable through sums and products, which is the case for every
+    real-valued kernel (Laplace, Yukawa).
+    """
+    if _is_numeric_constant(expr):
+        value = complex(expr)
+        if value.imag == 0:
+            return expr, 0
+        return value.real, value.imag
+
+    if isinstance(expr, prim.Sum):
+        re_total, im_total = 0, 0
+        for child in expr.children:
+            child_re, child_im = _split_complex_expression(child)
+            re_total = _add(re_total, child_re)
+            im_total = _add(im_total, child_im)
+        return re_total, im_total
+
+    if isinstance(expr, prim.Quotient):
+        # (a + ib)/c = a/c + i b/c for a *real* c.  Worth walking because
+        # SympyToPymbolicMapper emits a "/1" wrapper -- exp(1j*k) arrives
+        # as exp((1j*k)/1) -- which would otherwise make the whole
+        # exponent opaque and leave the cdouble_exp in place.  A complex
+        # denominator is left alone: dividing through it would reintroduce
+        # exactly the cancellation this module exists to avoid.
+        den_re, den_im = _split_complex_expression(expr.denominator)
+        if _is_structural_zero(den_im):
+            num_re, num_im = _split_complex_expression(expr.numerator)
+            return _div(num_re, den_re), _div(num_im, den_re)
+        return expr, 0
+
+    if isinstance(expr, prim.Product):
+        re_total, im_total = 1, 0
+        for child in expr.children:
+            child_re, child_im = _split_complex_expression(child)
+            # (a + ib)(c + id) = (ac - bd) + i(ad + bc)
+            new_re = _add(
+                _mul(re_total, child_re), _mul(-1, _mul(im_total, child_im))
+            )
+            new_im = _add(
+                _mul(re_total, child_im), _mul(im_total, child_re)
+            )
+            re_total, im_total = new_re, new_im
+            # Once *both* accumulated components are nonzero -- which needs
+            # at least two complex-carrying factors -- each subsequent
+            # factor embeds both of them into both of its outputs, so the
+            # DAG doubles per factor and everything downstream (the
+            # realness proof, code generation) walks it as a tree.  Naming
+            # them holds that to one node per factor.  Nothing happens in
+            # the ordinary case, where one side stays a structural zero
+            # until the last factor.
+            if not (
+                _is_structural_zero(re_total)
+                or _is_structural_zero(im_total)
+            ):
+                re_total = _named_subexpression(re_total)
+                im_total = _named_subexpression(im_total)
+        return re_total, im_total
+
+    return expr, 0
+
+
+#: Functions whose result is real whenever every argument is real.  These
+#: are the C/OpenCL elementary functions loopy emits for a float64 argument;
+#: a function *not* listed here -- ``hankel1`` and the other complex special
+#: functions above all -- makes :func:`_is_known_real` answer *False*, which
+#: is the conservative answer.  A negative argument to ``sqrt`` or ``log``
+#: gives NaN in float64 rather than a complex value, so it stays real here.
+_REAL_VALUED_FUNCTIONS = frozenset({
+    "abs", "acos", "acosh", "asin", "asinh", "atan", "atan2", "atanh",
+    "cbrt", "ceil", "copysign", "cos", "cosh", "erf", "erfc", "exp",
+    "expm1", "fabs", "floor", "fmax", "fmin", "fmod", "hypot", "log",
+    "log10", "log1p", "log2", "max", "min", "pow", "remainder", "rint",
+    "round", "rsqrt", "sin", "sinh", "sqrt", "tan", "tanh", "trunc",
+})
+
+
+def _is_known_real(expr, unproven_names=frozenset(), _cache=None):
+    """Whether *expr* can be *proved* real-valued, node by node.
+
+    The guard on the Euler rewrite has to be positive rather than a
+    blocklist.  :func:`_split_complex_expression` attributes every node it
+    does not walk into -- a :class:`~pymbolic.primitives.CommonSubexpression`
+    among them, and the fused Duffy expressions are post-CSE -- wholly to
+    the real part, so an exponent such as ``exp(1j*CSE((3 + 40j)*r))`` has
+    no complex-typed *dependency* yet still yields a complex phase.  Asking
+    "does this touch a complex argument?" would pass it; asking "is every
+    node here provably real?" does not.
+
+    *unproven_names* are the kernel argument names that are not provably
+    real (see :func:`_kernel_arg_names_not_known_real`).  Unrecognized node
+    types answer *False*: a rewrite declined costs the ``cdouble_exp``
+    speedup, a rewrite wrongly allowed costs every digit of the result.
+    """
+    if _cache is None:
+        _cache = {}
+    # Memoized by node identity: _split_complex_expression names each
+    # accumulated real/imaginary pair behind a CommonSubexpression, and the
+    # next factor references *both* members of the previous pair, so the
+    # DAG is compact while a naive walk of it is still exponential.  The
+    # cache lives for one top-level call, which is exactly as long as the
+    # nodes it keys on.
+    key = id(expr)
+    cached = _cache.get(key)
+    if cached is not None:
+        return cached
+
+    result = _is_known_real_uncached(expr, unproven_names, _cache)
+    _cache[key] = result
+    return result
+
+
+def _is_known_real_uncached(expr, unproven_names, _cache):
+    if _is_numeric_constant(expr):
+        # The *type*, not the value.  A complex-typed constant promotes the
+        # whole operation, so exp(1j*sqrt(x + complex128(0j))) becomes a
+        # cdouble_sqrt whose result can be imaginary even though the
+        # constant's own imaginary part is zero.  A float32 constant
+        # narrows it instead, putting the phase in a float CSE and picking
+        # the single-precision cos/sin, where cdouble_exp had worked in
+        # double.  Python's int and float, and numpy's integers, are fine.
+        if isinstance(expr, complex | np.complexfloating):
+            return False
+        if isinstance(expr, np.floating) and expr.dtype.itemsize < 8:
+            return False
+        return complex(expr).imag == 0
+
+    if isinstance(expr, prim.CommonSubexpression):
+        return _is_known_real(expr.child, unproven_names, _cache)
+
+    if isinstance(expr, prim.Variable):
+        # SpatialConstant and friends subclass Variable
+        return expr.name not in unproven_names
+
+    if isinstance(expr, prim.Subscript):
+        return _is_known_real(expr.aggregate, unproven_names) and all(
+            _is_known_real(index, unproven_names, _cache)
+            for index in (
+                expr.index
+                if isinstance(expr.index, tuple)
+                else (expr.index,)
+            )
+        )
+
+    if isinstance(expr, prim.Sum | prim.Product):
+        return all(
+            _is_known_real(child, unproven_names, _cache)
+            for child in expr.children
+        )
+
+    if isinstance(expr, prim.Quotient | prim.FloorDiv | prim.Remainder):
+        return _is_known_real(
+            expr.numerator, unproven_names, _cache
+        ) and _is_known_real(expr.denominator, unproven_names, _cache)
+
+    if isinstance(expr, prim.Power):
+        return _is_known_real(
+            expr.base, unproven_names, _cache
+        ) and _is_known_real(expr.exponent, unproven_names, _cache)
+
+    if isinstance(expr, prim.Call):
+        function = expr.function
+        if not (
+            isinstance(function, prim.Variable)
+            and function.name in _REAL_VALUED_FUNCTIONS
+        ):
+            return False
+        return all(
+            _is_known_real(parameter, unproven_names, _cache)
+            for parameter in expr.parameters
+        )
+
+    return False
+
+
+def _loopy_arg_names_not_known_real(loopy_args) -> frozenset:
+    """The same dtype rule, for loopy arguments given outside the kernel."""
+    names = set()
+    for loopy_arg in loopy_args or ():
+        name = getattr(loopy_arg, "name", None)
+        if not name:
+            continue
+        dtype = getattr(loopy_arg, "dtype", None)
+        dtype = getattr(dtype, "numpy_dtype", dtype)
+        try:
+            proven = bool(
+                dtype is not None
+                and np.issubdtype(dtype, np.floating)
+                and np.dtype(dtype).itemsize >= 8
+            )
+        except TypeError:
+            proven = False
+        if not proven:
+            names.add(name)
+    return frozenset(names)
+
+
+def _kernel_arg_names_not_known_real(kernel):
+    """Names of *kernel*'s arguments that are not a proven ``float64``.
+
+    The rewrite replaces one ``cdouble_exp``, which promotes its whole
+    argument to double, with bare real ``exp``/``cos``/``sin`` calls whose
+    precision loopy infers from the expression.  This module cannot
+    reproduce that inference -- an integer argument alone narrows the
+    result of a floating builtin, and even a plain ``3.0`` beside an
+    integer comes out ``3.0f`` -- so it does not try.  An argument is
+    proven only when its declared dtype is a real floating type at least
+    as wide as a ``double``; everything else, including
+    ``complex128`` (``HelmholtzKernel(dim, allow_evanescent=True)``),
+    ``float32``, every integer dtype, and the ``<auto/runtime>`` loopy
+    leaves on a bare ``lp.ValueArg("k")``, is unproven and declines the
+    rewrite for any exponent that touches it.
+
+    No sumpy kernel this table builds has such an argument -- Helmholtz's
+    ``k`` and Yukawa's ``lam`` are both ``float64`` -- so the rule costs
+    the optimization nothing in practice and buys a guarantee instead of a
+    model.
+    """
+    names = set()
+    for name, dtype in _kernel_arg_dtypes(kernel).items():
+        try:
+            proven = bool(
+                dtype is not None
+                and np.issubdtype(dtype, np.floating)
+                and np.dtype(dtype).itemsize >= 8
+            )
+        except TypeError:
+            proven = False
+        if not proven:
+            names.add(name)
+    return frozenset(names)
+
+
+def _kernel_arg_dtypes(kernel):
+    """``name -> declared numpy dtype`` for *kernel*'s runtime arguments."""
+    if kernel is None:
+        return {}
+
+    get_args = getattr(kernel, "get_args", None)
+    if get_args is None:
+        return {}
+
+    dtypes = {}
+    for kernel_arg in get_args():
+        loopy_arg = getattr(kernel_arg, "loopy_arg", None)
+        name = getattr(loopy_arg, "name", None)
+        if not name:
+            continue
+        dtype = getattr(loopy_arg, "dtype", None)
+        dtypes[name] = getattr(dtype, "numpy_dtype", dtype)
+    return dtypes
+
+
+class ComplexExponentialRewriter(CSECachingMapperMixin, IdentityMapper):
+    r"""Rewrite ``exp(re + 1j*im)`` as ``exp(re) * (cos(im) + 1j*sin(im))``.
+
+    pyopencl's ``pyopencl-complex.h`` implements ``cdouble_exp`` (and the
+    complex trigonometric functions) with the OpenCL ``sincos(x, &cosx)``
+    out-parameter builtin.  On the PoCL 7.0 / LLVM 19.1.7 CPU driver that
+    builtin costs roughly 200 ns per call against roughly 1.6 ns for a
+    separate ``sin(x)`` plus ``cos(x)`` -- a ~130x pathology, measured in
+    isolation and not reproduced on a second CPU OpenCL runtime on the same
+    processor.  Because the Duffy table quadrature evaluates the kernel at
+    every node, that single builtin made the 3D Helmholtz direct-table build
+    about ten times slower than the otherwise identical real-valued Yukawa
+    build at the same quadrature orders, and accounted for essentially the
+    whole gap.
+
+    Splitting the exponential keeps complex-valued kernels on real
+    ``exp``/``cos``/``sin`` calls, which the driver compiles normally.  The
+    rewrite is ``exp(a + b) = exp(a) exp(b)`` composed with Euler's formula,
+    both of which hold for complex ``a`` and ``b``, applied to an exact
+    structural split of the exponent (see
+    :func:`_split_complex_expression`), so it is valid for genuinely complex
+    exponents too -- the damped complex-frequency form ``exp((-a + 1j b) r)``
+    included -- and not only for the purely imaginary ``exp(1j k r)`` of the
+    Helmholtz kernel.  Exponents with no complex constant (Yukawa, Laplace)
+    are left untouched and keep their plain real ``exp``.
+
+    The rewrite is *value*-exact but not *conditioning*-exact once the phase
+    itself may be complex.  For :math:`z = x + \mathrm{i}y`, both
+    :math:`\cos z` and :math:`\sin z` grow like :math:`e^{|y|}/2` while
+    :math:`e^{\mathrm{i}z}` decays like :math:`e^{-y}`, so Euler's formula
+    turns a decaying exponential into a cancelling difference of two large
+    terms: severe relative error for moderate :math:`|y|` and overflow to
+    infinity or NaN beyond that.  A complex exponent is not hypothetical --
+    ``HelmholtzKernel(dim, allow_evanescent=True)`` declares its wave number
+    ``k`` as ``complex128`` -- so a phase that is not *provably* real keeps
+    its ``cdouble_exp``, which evaluates the decaying result directly and
+    stably.  The test is :func:`_is_known_real`, a positive node-by-node
+    proof rather than a search for complex dependencies: the fused Duffy
+    expressions are post-CSE, and
+    :func:`_split_complex_expression` hands an opaque
+    :class:`~pymbolic.primitives.CommonSubexpression` to the real part
+    wholesale, so a phase can be complex without naming a complex argument
+    anywhere the split can see.  *unproven_arg_names* names the kernel
+    arguments that are not provably real; see
+    :func:`_kernel_arg_names_not_known_real`.
+
+    Mixes in the common-subexpression cache so a shared CSE node in the
+    post-CSE expression DAG is visited once rather than once per reference.
+    :class:`~pymbolic.mapper.CSECachingMapperMixin` has to come *first* in
+    the bases: both it and :class:`~pymbolic.mapper.IdentityMapper` define
+    ``map_common_subexpression``, so with the other order the MRO picks the
+    uncached one and the cache -- and therefore
+    :meth:`map_common_subexpression_uncached` -- is never reached.
+    """
+
+    def __init__(self, unproven_arg_names=frozenset()):
+        super().__init__()
+        self.unproven_arg_names = frozenset(unproven_arg_names)
+
+    def _is_double_precision_real(self, expr):
+        """Whether *expr* is safe to hand to a real double-precision call.
+
+        Every leaf must be a real double: a real-typed constant at least
+        as wide as a ``double``, or a variable the kernel has not left
+        unproven (see :func:`_kernel_arg_names_not_known_real`, which
+        treats a complex, narrow, integer or undeclared argument dtype as
+        unproven).
+
+        An expression of *only* constants is refused whatever their
+        Python types, because nothing in it fixes the emitted precision:
+        loopy writes the constant real half of ``exp(-200 + 1j*k)`` as
+        ``exp((float) (-200.0f))``, which underflows, where the
+        ``cdouble_exp`` it replaces kept the finite ``exp(-200)``.  A
+        variable that this module has proven a ``float64`` is what makes
+        the surrounding arithmetic a double.
+        """
+        if not _is_known_real(expr, self.unproven_arg_names):
+            return False
+        return _has_variable(expr)
+
+    def map_common_subexpression_uncached(self, expr, /, *args, **kwargs):
+        return IdentityMapper.map_common_subexpression(
+            self, expr, *args, **kwargs
+        )
+
+    def map_call(self, expr, /, *args, **kwargs):
+        expr = super().map_call(expr, *args, **kwargs)
+
+        if not isinstance(expr, prim.Call):
+            return expr
+        if not (
+            isinstance(expr.function, prim.Variable)
+            and expr.function.name == "exp"
+            and len(expr.parameters) == 1
+        ):
+            return expr
+
+        (argument,) = expr.parameters
+        real_part, imag_part = _split_complex_expression(argument)
+        if _is_structural_zero(imag_part):
+            # a real exponent: leave the plain real exp() alone
+            return expr
+
+        # Both halves of the split become bare real calls -- cos/sin for
+        # the phase, exp for the magnitude -- so both must clear the same
+        # bar, and one predicate applies it to each.  A phase that is not
+        # provably real is the dangerous case (an evanescent Helmholtz wave
+        # number: cos and sin both blow up like exp(|imag|) and then
+        # cancel), and one that is not provably a double is the quiet one
+        # (a narrow or integer operand picks a lower-precision C overload
+        # where cdouble_exp had promoted the whole exponent).
+        if not self._is_double_precision_real(imag_part):
+            return expr
+        if not (
+            _is_structural_zero(real_part)
+            or self._is_double_precision_real(real_part)
+        ):
+            return expr
+
+        # the phase is used by both cos and sin, so name it once
+        phase = prim.CommonSubexpression(imag_part)
+        euler = prim.Sum((
+            prim.Call(prim.Variable("cos"), (phase,)),
+            prim.Product((
+                np.complex128(1j),
+                prim.Call(prim.Variable("sin"), (phase,)),
+            )),
+        ))
+
+        if _is_structural_zero(real_part):
+            return euler
+
+        magnitude = prim.Call(prim.Variable("exp"), (real_part,))
+        return prim.Product((magnitude, euler))
+
+# }}}
 
 
 def _kernel_symmetry_meta(kernel):
@@ -1893,12 +2402,40 @@ class NearFieldInteractionTable:
                 component_names.append(f"{dir_vec_name}{iaxis}")
         return tuple(component_names)
 
+    def _complex_exponential_rewriter(self, extra_arg_types=()):
+        """This table's :class:`ComplexExponentialRewriter`, kernel-aware.
+
+        *extra_arg_types* are loopy arguments a caller supplies alongside
+        the kernel's own -- ``build_kernel_exterior_normalizer_table``
+        takes them as ``extra_kernel_kwarg_types``.  They are not in
+        ``integral_knl.get_args()``, so without them a ``complex128``
+        parameter supplied that way would look like a proven ``float64``
+        to the guard.
+        """
+        unproven = set(_kernel_arg_names_not_known_real(self.integral_knl))
+        unproven |= _loopy_arg_names_not_known_real(extra_arg_types)
+        return ComplexExponentialRewriter(frozenset(unproven))
+
+    def _rewrite_complex_exponentials(self, expr, extra_arg_types=()):
+        """Apply the guarded rewrite to a single expression."""
+        return self._complex_exponential_rewriter(extra_arg_types)(expr)
+
     def _get_fused_duffy_expr_maps(self):
+        # Runs last, after sumpy's own rewriters and the kernel's code
+        # transformer, so it sees the final complex constants: it turns
+        # cdouble_exp into real exp/cos/sin (see ComplexExponentialRewriter
+        # for the PoCL sincos pathology this avoids).  Exponents that reach a
+        # complex-valued kernel argument are left as cdouble_exp.
+        complex_exp_rewriter = self._complex_exponential_rewriter()
+
         if self.integral_knl is None:
-            return []
+            return [complex_exp_rewriter]
 
         if not self._has_directional_source_wrapper():
-            return [self.integral_knl.get_code_transformer()]
+            return [
+                self.integral_knl.get_code_transformer(),
+                complex_exp_rewriter,
+            ]
 
         base_kernel = self.integral_knl
         get_base_kernel = getattr(self.integral_knl, "get_base_kernel", None)
@@ -1910,9 +2447,9 @@ class NearFieldInteractionTable:
 
         get_transform = getattr(base_kernel, "get_code_transformer", None)
         if callable(get_transform):
-            return [get_transform()]
+            return [get_transform(), complex_exp_rewriter]
 
-        return []
+        return [complex_exp_rewriter]
 
     def _prepare_loopy_kernel_for_integral_kernel(self, loopy_knl):
         """Apply kernel-specific loopy callable registrations if needed."""
@@ -2126,7 +2663,14 @@ class NearFieldInteractionTable:
         scaling_assignment = lp.Assignment(
             id=None,
             assignee="knl_scaling",
-            expression=sympy_conv(self.integral_knl.get_global_scaling_const()),
+            # The same rewrite as the quadrature instructions: this
+            # assignment is built outside to_loopy_insns, so the expression
+            # maps do not reach it, and it runs inside both ientry and
+            # inode -- one untouched cdouble_exp here is one per quadrature
+            # node, which is the whole cost this PR removes.
+            expression=self._rewrite_complex_exponentials(
+                sympy_conv(self.integral_knl.get_global_scaling_const())
+            ),
             temp_var_type=lp.Optional(),
             within_inames=frozenset(["ientry", "inode"]),
         )
@@ -3505,6 +4049,13 @@ class NearFieldInteractionTable:
         from sumpy.codegen import to_loopy_insns
         from sumpy.symbolic import SympyToPymbolicMapper, make_sym_vector
 
+        # Read before the expression maps are built: the rewrite guard
+        # needs these argument dtypes, and they are not in
+        # integral_knl.get_args().
+        extra_kernel_kwarg_types = ()
+        if "extra_kernel_kwarg_types" in kwargs:
+            extra_kernel_kwarg_types = kwargs["extra_kernel_kwarg_types"]
+
         dvec = make_sym_vector("dist", self.dim)
         sac = SymbolicAssignmentCollection()
         result_name = sac.assign_unique(
@@ -3520,7 +4071,13 @@ class NearFieldInteractionTable:
         knl_insns = to_loopy_insns(
             sac.assignments.items(),
             vector_names={"dist"},
-            pymbolic_expr_maps=[self.integral_knl.get_code_transformer()],
+            pymbolic_expr_maps=[
+                self.integral_knl.get_code_transformer(),
+                # same cdouble_exp avoidance as the fused Duffy kernel; the
+                # caller's extra loopy arguments join the guard, since they
+                # are not in integral_knl.get_args()
+                self._complex_exponential_rewriter(extra_kernel_kwarg_types),
+            ],
             retain_names=[result_name],
             complex_dtype=np.complex128,
         )
@@ -3535,13 +4092,13 @@ class NearFieldInteractionTable:
         scaling_assignment = lp.Assignment(
             id=None,
             assignee="knl_scaling",
-            expression=sympy_conv(self.integral_knl.get_global_scaling_const()),
+            # same guarded rewrite as the quadrature instructions above
+            expression=self._rewrite_complex_exponentials(
+                sympy_conv(self.integral_knl.get_global_scaling_const()),
+                extra_kernel_kwarg_types,
+            ),
             temp_var_type=lp.Optional(),
         )
-
-        extra_kernel_kwarg_types = ()
-        if "extra_kernel_kwarg_types" in kwargs:
-            extra_kernel_kwarg_types = kwargs["extra_kernel_kwarg_types"]
 
         use_target_minus_source = _kernel_uses_target_minus_source_displacement(
             self.integral_knl
