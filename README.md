@@ -103,9 +103,13 @@ search for complex arguments, because the split hands any node it does not
 walk into — a post-CSE `CommonSubexpression`, say — to the real part
 wholesale, so `exp(1j*CSE((3+40j)*r))` has a complex phase without naming a
 complex argument anywhere. A phase passes only if every node in it is a real
-constant, a variable not declared complex by the kernel (the wave number of
-`HelmholtzKernel(dim, allow_evanescent=True)` is), an arithmetic combination
-of those, or a call to a function that is real for real arguments. Ordinary
+constant, a variable the kernel does not leave unproven, an arithmetic
+combination of those, or a call to a function that is real for real
+arguments. A kernel argument counts as real only if its *declared* dtype is
+real: `HelmholtzKernel(dim, allow_evanescent=True)` declares a `complex128`
+wave number, and an argument declared with no dtype at all
+(`KernelArgument(lp.ValueArg("k"))`, which loopy leaves as `<auto/runtime>`
+and which accepts a complex value at run time) is likewise not proven real. Ordinary
 Helmholtz and Yukawa pass and are rewritten as above.
 
 Measured effect at 3D, `q = 3`, source box level 2: Helmholtz per

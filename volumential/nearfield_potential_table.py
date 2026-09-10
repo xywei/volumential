@@ -189,7 +189,7 @@ _REAL_VALUED_FUNCTIONS = frozenset({
 })
 
 
-def _is_known_real(expr, complex_names=frozenset()):
+def _is_known_real(expr, unproven_names=frozenset()):
     """Whether *expr* can be *proved* real-valued, node by node.
 
     The guard on the Euler rewrite has to be positive rather than a
@@ -201,24 +201,24 @@ def _is_known_real(expr, complex_names=frozenset()):
     "does this touch a complex argument?" would pass it; asking "is every
     node here provably real?" does not.
 
-    *complex_names* are the kernel argument names declared complex (see
-    :func:`_complex_valued_kernel_arg_names`).  Unrecognized node types
-    answer *False*: a rewrite declined costs the ``cdouble_exp`` speedup,
-    a rewrite wrongly allowed costs every digit of the result.
+    *unproven_names* are the kernel argument names that are not provably
+    real (see :func:`_kernel_arg_names_not_known_real`).  Unrecognized node
+    types answer *False*: a rewrite declined costs the ``cdouble_exp``
+    speedup, a rewrite wrongly allowed costs every digit of the result.
     """
     if _is_numeric_constant(expr):
         return complex(expr).imag == 0
 
     if isinstance(expr, prim.CommonSubexpression):
-        return _is_known_real(expr.child, complex_names)
+        return _is_known_real(expr.child, unproven_names)
 
     if isinstance(expr, prim.Variable):
         # SpatialConstant and friends subclass Variable
-        return expr.name not in complex_names
+        return expr.name not in unproven_names
 
     if isinstance(expr, prim.Subscript):
-        return _is_known_real(expr.aggregate, complex_names) and all(
-            _is_known_real(index, complex_names)
+        return _is_known_real(expr.aggregate, unproven_names) and all(
+            _is_known_real(index, unproven_names)
             for index in (
                 expr.index
                 if isinstance(expr.index, tuple)
@@ -228,17 +228,17 @@ def _is_known_real(expr, complex_names=frozenset()):
 
     if isinstance(expr, prim.Sum | prim.Product):
         return all(
-            _is_known_real(child, complex_names) for child in expr.children
+            _is_known_real(child, unproven_names) for child in expr.children
         )
 
     if isinstance(expr, prim.Quotient | prim.FloorDiv | prim.Remainder):
         return _is_known_real(
-            expr.numerator, complex_names
-        ) and _is_known_real(expr.denominator, complex_names)
+            expr.numerator, unproven_names
+        ) and _is_known_real(expr.denominator, unproven_names)
 
     if isinstance(expr, prim.Power):
-        return _is_known_real(expr.base, complex_names) and _is_known_real(
-            expr.exponent, complex_names
+        return _is_known_real(expr.base, unproven_names) and _is_known_real(
+            expr.exponent, unproven_names
         )
 
     if isinstance(expr, prim.Call):
@@ -249,21 +249,30 @@ def _is_known_real(expr, complex_names=frozenset()):
         ):
             return False
         return all(
-            _is_known_real(parameter, complex_names)
+            _is_known_real(parameter, unproven_names)
             for parameter in expr.parameters
         )
 
     return False
 
 
-def _complex_valued_kernel_arg_names(kernel):
-    """Names of *kernel*'s runtime arguments that may carry complex values.
+def _kernel_arg_names_not_known_real(kernel):
+    """Names of *kernel*'s runtime arguments that are not provably real.
 
-    ``HelmholtzKernel(dim, allow_evanescent=True)`` declares its wave number
-    ``k`` as ``complex128``; the ordinary Helmholtz kernel declares it as
-    ``float64``.  Only the declared dtype distinguishes the two, since both
-    reach the table builder as the same symbolic
+    An argument counts as real only when its declared dtype *is* a real
+    numpy dtype.  ``HelmholtzKernel(dim, allow_evanescent=True)`` declares
+    its wave number ``k`` as ``complex128`` where the ordinary Helmholtz
+    kernel declares ``float64``, and only that dtype distinguishes them,
+    since both reach the table builder as the same symbolic
     :class:`~pymbolic.primitives.Variable`.
+
+    The default is deliberately "not real" rather than "not complex".  A
+    custom kernel may declare ``KernelArgument(lp.ValueArg("k"))`` with no
+    dtype at all, which loopy leaves as ``<auto/runtime>`` while
+    :meth:`NearFieldInteractionTable._extract_integral_kernel_runtime_kwargs`
+    happily accepts a complex value for it -- so an argument whose dtype is
+    absent, inferred, or of a kind this function does not recognize has to
+    be treated as potentially complex.
     """
     if kernel is None:
         return frozenset()
@@ -280,17 +289,18 @@ def _complex_valued_kernel_arg_names(kernel):
             continue
 
         dtype = getattr(loopy_arg, "dtype", None)
-        # loopy wraps dtypes in loopy.types.NumpyType
+        # loopy wraps dtypes in loopy.types.NumpyType; loopy.types.AutoType
+        # (the "<auto/runtime>" placeholder) carries no numpy dtype at all
         dtype = getattr(dtype, "numpy_dtype", dtype)
-        if dtype is None:
-            continue
-
         try:
-            is_complex = np.issubdtype(dtype, np.complexfloating)
+            is_real = dtype is not None and bool(
+                np.issubdtype(dtype, np.floating)
+                or np.issubdtype(dtype, np.integer)
+            )
         except TypeError:
-            continue
+            is_real = False
 
-        if is_complex:
+        if not is_real:
             names.add(name)
 
     return frozenset(names)
@@ -338,9 +348,9 @@ class ComplexExponentialRewriter(CSECachingMapperMixin, IdentityMapper):
     :func:`_split_complex_expression` hands an opaque
     :class:`~pymbolic.primitives.CommonSubexpression` to the real part
     wholesale, so a phase can be complex without naming a complex argument
-    anywhere the split can see.  *complex_arg_names* names the kernel
-    arguments declared complex; see
-    :func:`_complex_valued_kernel_arg_names`.
+    anywhere the split can see.  *unproven_arg_names* names the kernel
+    arguments that are not provably real; see
+    :func:`_kernel_arg_names_not_known_real`.
 
     Mixes in the common-subexpression cache so a shared CSE node in the
     post-CSE expression DAG is visited once rather than once per reference.
@@ -351,9 +361,9 @@ class ComplexExponentialRewriter(CSECachingMapperMixin, IdentityMapper):
     :meth:`map_common_subexpression_uncached` -- is never reached.
     """
 
-    def __init__(self, complex_arg_names=frozenset()):
+    def __init__(self, unproven_arg_names=frozenset()):
         super().__init__()
-        self.complex_arg_names = frozenset(complex_arg_names)
+        self.unproven_arg_names = frozenset(unproven_arg_names)
 
     def map_common_subexpression_uncached(self, expr, /, *args, **kwargs):
         return IdentityMapper.map_common_subexpression(
@@ -378,7 +388,7 @@ class ComplexExponentialRewriter(CSECachingMapperMixin, IdentityMapper):
             # a real exponent: leave the plain real exp() alone
             return expr
 
-        if not _is_known_real(imag_part, self.complex_arg_names):
+        if not _is_known_real(imag_part, self.unproven_arg_names):
             # The phase is not *provably* real -- an evanescent Helmholtz
             # wave number, or any node this module cannot reason about.
             # cos/sin of a complex phase both blow up like exp(|imag|) and
@@ -2223,7 +2233,7 @@ class NearFieldInteractionTable:
         # for the PoCL sincos pathology this avoids).  Exponents that reach a
         # complex-valued kernel argument are left as cdouble_exp.
         complex_exp_rewriter = ComplexExponentialRewriter(
-            _complex_valued_kernel_arg_names(self.integral_knl)
+            _kernel_arg_names_not_known_real(self.integral_knl)
         )
 
         if self.integral_knl is None:
@@ -3859,7 +3869,7 @@ class NearFieldInteractionTable:
                 self.integral_knl.get_code_transformer(),
                 # same cdouble_exp avoidance as the fused Duffy kernel
                 ComplexExponentialRewriter(
-                    _complex_valued_kernel_arg_names(self.integral_knl)
+                    _kernel_arg_names_not_known_real(self.integral_knl)
                 ),
             ],
             retain_names=[result_name],

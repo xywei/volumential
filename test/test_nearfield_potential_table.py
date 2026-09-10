@@ -3047,16 +3047,56 @@ def test_complex_exponential_rewriter_visits_a_shared_cse_once():
     assert len(visits) == 1
 
 
-def test_complex_valued_kernel_arg_names_follows_the_declared_dtype():
+def test_kernel_arg_names_not_known_real_follows_the_declared_dtype():
     from sumpy.kernel import HelmholtzKernel, LaplaceKernel, YukawaKernel
 
-    assert npt._complex_valued_kernel_arg_names(HelmholtzKernel(3)) == frozenset()
-    assert npt._complex_valued_kernel_arg_names(YukawaKernel(3)) == frozenset()
-    assert npt._complex_valued_kernel_arg_names(LaplaceKernel(3)) == frozenset()
-    assert npt._complex_valued_kernel_arg_names(None) == frozenset()
-    assert npt._complex_valued_kernel_arg_names(
+    # a declared real dtype is proof enough
+    assert npt._kernel_arg_names_not_known_real(HelmholtzKernel(3)) == (
+        frozenset()
+    )
+    assert npt._kernel_arg_names_not_known_real(YukawaKernel(3)) == frozenset()
+    assert npt._kernel_arg_names_not_known_real(LaplaceKernel(3)) == (
+        frozenset()
+    )
+    assert npt._kernel_arg_names_not_known_real(None) == frozenset()
+    # ... a declared complex one is not
+    assert npt._kernel_arg_names_not_known_real(
         HelmholtzKernel(3, allow_evanescent=True)
     ) == frozenset({"k"})
+
+
+def test_an_inferred_argument_dtype_counts_as_potentially_complex():
+    """``lp.ValueArg("k")`` has no dtype, and accepts a complex value.
+
+    Loopy leaves such an argument as ``<auto/runtime>``, and
+    ``_extract_integral_kernel_runtime_kwargs`` accepts any ``numbers.Number``
+    for it, so an undeclared dtype must not be read as "real".
+    """
+    import loopy as lp
+    import pymbolic.primitives as prim
+    from sumpy.kernel import KernelArgument
+
+    class _UndeclaredArgKernel:
+        @staticmethod
+        def get_args():
+            return [KernelArgument(lp.ValueArg("k"))]
+
+    assert KernelArgument(lp.ValueArg("k")).loopy_arg.dtype is None
+    assert npt._kernel_arg_names_not_known_real(
+        _UndeclaredArgKernel()
+    ) == frozenset({"k"})
+
+    # ... so exp(1j*k*r) keeps its cdouble_exp for such a kernel
+    unproven = npt._kernel_arg_names_not_known_real(_UndeclaredArgKernel())
+    original = prim.Call(
+        prim.Variable("exp"),
+        (prim.Product((
+            np.complex128(1j), prim.Variable("k"), prim.Variable("r")
+        )),),
+    )
+    assert npt.ComplexExponentialRewriter(unproven)(original) == original
+    # and is rewritten only when nothing says the argument may be complex
+    assert npt.ComplexExponentialRewriter()(original) != original
 
 
 def test_complex_exponential_rewriter_keeps_a_possibly_complex_phase():
