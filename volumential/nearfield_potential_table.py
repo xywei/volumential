@@ -508,6 +508,18 @@ class ComplexExponentialRewriter(CSECachingMapperMixin, IdentityMapper):
         self.unproven_arg_names = frozenset(unproven_arg_names)
         self.integer_arg_names = frozenset(integer_arg_names)
 
+    def _is_double_precision_real(self, expr):
+        """Whether *expr* is safe to hand to a real double-precision call.
+
+        Real by :func:`_is_known_real`, and not an integer-only expression
+        by :func:`_is_known_integer` -- an integer operand would select a
+        C overload of its own, where the ``cdouble_exp`` being replaced
+        promoted the whole exponent to double.
+        """
+        if _is_known_integer(expr, self.integer_arg_names):
+            return False
+        return _is_known_real(expr, self.unproven_arg_names)
+
     def map_common_subexpression_uncached(self, expr, /, *args, **kwargs):
         return IdentityMapper.map_common_subexpression(
             self, expr, *args, **kwargs
@@ -531,30 +543,20 @@ class ComplexExponentialRewriter(CSECachingMapperMixin, IdentityMapper):
             # a real exponent: leave the plain real exp() alone
             return expr
 
-        if _is_known_integer(imag_part, self.integer_arg_names):
-            # An integer phase would reach cos/sin as an integer, where the
-            # cdouble_exp it replaces evaluated it as a double.  The C
-            # overload resolution is then not ours to predict, and a single
-            # precision one costs an O(1) phase error above 2**24.  Keep
-            # the exponential, which carries the precision explicitly.
+        # Both halves of the split become bare real calls -- cos/sin for
+        # the phase, exp for the magnitude -- so both must clear the same
+        # bar, and one predicate applies it to each.  A phase that is not
+        # provably real is the dangerous case (an evanescent Helmholtz wave
+        # number: cos and sin both blow up like exp(|imag|) and then
+        # cancel), and one that is not provably a double is the quiet one
+        # (a narrow or integer operand picks a lower-precision C overload
+        # where cdouble_exp had promoted the whole exponent).
+        if not self._is_double_precision_real(imag_part):
             return expr
-
-        if not _is_known_real(imag_part, self.unproven_arg_names):
-            # The phase is not *provably* real -- an evanescent Helmholtz
-            # wave number, or any node this module cannot reason about.
-            # cos/sin of a complex phase both blow up like exp(|imag|) and
-            # then cancel; cdouble_exp stays stable, so keep it.
-            return expr
-
-        if not _is_structural_zero(real_part) and not _is_known_real(
-            real_part, self.unproven_arg_names
+        if not (
+            _is_structural_zero(real_part)
+            or self._is_double_precision_real(real_part)
         ):
-            # The magnitude becomes a bare exp(real_part).  Held to the
-            # same proof as the phase: a narrow real there picks the
-            # single-precision exp where cdouble_exp promoted the whole
-            # exponent, which underflows exp(-200) to zero, and a complex
-            # one would be a cdouble_exp anyway, so declining costs
-            # nothing.
             return expr
 
         # the phase is used by both cos and sin, so name it once

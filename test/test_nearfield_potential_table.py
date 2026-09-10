@@ -3325,6 +3325,38 @@ def test_narrow_float_constants_are_not_proof_of_a_double_phase():
     assert npt.ComplexExponentialRewriter()(widened) != widened
 
 
+def test_an_integer_magnitude_keeps_its_complex_exponential():
+    """``exp(n + 1j*k)`` with an integer ``n`` keeps ``cdouble_exp`` too.
+
+    The integer guard used to apply to the phase alone, so an integer
+    magnitude reached a bare ``exp()`` where the complex exponential had
+    incorporated it as a double.
+    """
+    import pymbolic.primitives as prim
+
+    n = prim.Variable("n")
+    k = prim.Variable("k")
+    integer_names = frozenset({"n"})
+    argument = prim.Sum((n, prim.Product((np.complex128(1j), k))))
+    original = prim.Call(prim.Variable("exp"), (argument,))
+
+    # nothing declared integral: both halves are doubles, so it rewrites
+    assert npt.ComplexExponentialRewriter()(original) != original
+    # n declared int32: the magnitude is integral, so it does not
+    assert npt.ComplexExponentialRewriter(
+        frozenset(), integer_names
+    )(original) == original
+
+    # the phase-only case still rewrites under the same integer set, since
+    # there is no magnitude to prove
+    phase_only = prim.Call(
+        prim.Variable("exp"), (prim.Product((np.complex128(1j), k)),)
+    )
+    assert npt.ComplexExponentialRewriter(
+        frozenset(), integer_names
+    )(phase_only) != phase_only
+
+
 def test_the_magnitude_is_held_to_the_same_precision_proof():
     """``exp(re)`` must be a double too, not only the phase.
 

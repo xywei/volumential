@@ -111,7 +111,7 @@ variable the kernel does not leave unproven (a `float32` argument counts as
 unproven, because the rewrite would pick the single-precision `cos`/`sin`
 overloads where `cdouble_exp` promoted to double), an arithmetic combination
 of those, or a call to a function that is real for real arguments. The magnitude `exp(re)` is held to the same proof as the
-phase, since it too becomes a bare real call. The global scaling constant is
+phase, by the same predicate, since it too becomes a bare real call. The global scaling constant is
 rewritten under the same guard, since it is evaluated inside both quadrature
 loops. A kernel argument counts as real only if its *declared* dtype is
 real: `HelmholtzKernel(dim, allow_evanescent=True)` declares a `complex128`
@@ -121,7 +121,8 @@ and which accepts a complex value at run time) is likewise not proven real.
 A phase that is provably *integer* -- every node an integer constant, an
 argument declared with an integer dtype, or an integer-preserving operation
 over those (`abs`, `min`, `max`, floor division, remainder; not `floor` or
-`ceil`, which C promotes to double) -- also keeps its `cdouble_exp`: the C
+`ceil`, which C promotes to double) -- also keeps its `cdouble_exp`, and so
+does an integer magnitude: the C
 `cos`/`sin` overload chosen for an integer argument is not ours to predict,
 and a single-precision one would cost an order-one phase error past `2**24`,
 where the complex exponential carries the precision explicitly. Ordinary
