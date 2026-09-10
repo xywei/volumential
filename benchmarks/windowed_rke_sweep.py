@@ -901,13 +901,26 @@ def _build_direct_table(
 def _reference_build_routing(
     loose: dict[str, Any], tight: dict[str, Any], reference_policy: str
 ) -> str:
-    """The recorded DuffyRadial routing of the policy that supplied the
-    reference values, or the empty string when no policy did."""
+    """The recorded DuffyRadial routing of the policy that supplied values.
+
+    When neither policy did -- both builds failed, which strict no-fallback
+    mode can cause for both at once -- the row has no Duffy reference at
+    all.  That is reported as the ``failed`` marker the policy results
+    already carry, joined when the two differ, and never as the empty
+    string: blank is what a legacy row without the column reads as, and a
+    provenance consumer must be able to tell "no reference was built" from
+    "this run predates the column".
+    """
     if reference_policy == "tight":
         return str(tight.get("routing", ""))
     if reference_policy == "loose":
         return str(loose.get("routing", ""))
-    return ""
+
+    markers = sorted({
+        str(result.get("routing", "")) or "failed"
+        for result in (loose, tight)
+    })
+    return ";".join(markers)
 
 
 def _reference_from_policies(

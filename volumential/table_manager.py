@@ -1767,10 +1767,6 @@ class NearFieldInteractionTableManager:
         except (OSError, EOFError, TypeError, ValueError, zipfile.BadZipFile) as exc:
             raise KeyError("table cache payload is corrupted") from exc
 
-        _refuse_unverified_build_routing(
-            table, table_request, stored_build_method
-        )
-
         assert table.n_q_points == record["n_q_points"]
         assert table.n_pairs == record["n_pairs"]
         assert table.quad_order == record["quad_order"]
@@ -1859,6 +1855,17 @@ class NearFieldInteractionTableManager:
         for atkey, atval in loaded_kwargs.items():
             setattr(table, atkey, atval)
         t_kwargs_load_end = time.perf_counter()
+
+        # Last, after every compatibility check above.  Those raise KeyError,
+        # which get_table reads as a cache miss and recomputes; refusing the
+        # routing first would turn "this cached entry is for a different
+        # parameter" into a hard UnverifiedBuildRoutingError, so a strict
+        # request for lam=5 would fail merely because the slot still holds a
+        # fallback table for lam=3.  The refusal is only meaningful once the
+        # payload has been established as eligible to satisfy *this* request.
+        _refuse_unverified_build_routing(
+            table, table_request, stored_build_method
+        )
 
         table.is_built = True
 

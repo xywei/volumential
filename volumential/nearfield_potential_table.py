@@ -2703,6 +2703,7 @@ class NearFieldInteractionTable:
         n_entries = len(invariant_entry_ids)
 
         if n_entries == 0:
+            self._record_build_routing("batched")
             self.is_built = True
             self._progress_step(_DUFFY_PROGRESS_STAGES)
             t_total_end = time.perf_counter()
@@ -2742,6 +2743,13 @@ class NearFieldInteractionTable:
         t_symmetry_fill_end = t_symmetry_fill_start
         self._progress_step()
 
+        # Recorded here, on completion, and not only by the routing
+        # dispatcher: this method is public and callers use it directly, so
+        # a table it finished would otherwise report "unknown" and lose the
+        # provenance from its serialized payload.  The dispatcher still
+        # records it up front so a fallback can overwrite it with
+        # "scalar-fallback" after a failed attempt.
+        self._record_build_routing("batched")
         self.is_built = True
 
         t_total_end = time.perf_counter()

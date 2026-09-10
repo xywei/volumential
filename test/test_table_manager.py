@@ -385,6 +385,94 @@ def test_strict_mode_refuses_a_cached_table_with_no_recorded_routing(
             table_manager.get_table(2, "Laplace", q_order=1, queue=queue)
 
 
+def test_strict_mode_refusal_follows_the_compatibility_checks(
+    ctx_factory, tmp_path, monkeypatch
+):
+    """An ineligible cache entry is a miss, not a strict-mode refusal.
+
+    The compatibility checks raise ``KeyError``, which ``get_table`` reads
+    as a cache miss and recomputes.  Refusing the routing before them would
+    turn "this entry is for a different parameter" into a hard error, so a
+    strict request for ``lam=5`` would fail merely because the slot still
+    holds a fallback table for ``lam=3``.
+    """
+    import volumential.nearfield_potential_table as npt
+    from volumential.nearfield_potential_table import DUFFY_NO_FALLBACK_ENV_VAR
+
+    queue = cl.CommandQueue(cl.Context([ctx_factory().devices[0]]))
+    cache_file = tmp_path / "nft-strict-other-parameter.sqlite"
+
+    original = npt.NearFieldInteractionTable.\
+        build_table_via_duffy_radial_batched
+
+    def failing_batched(self, build_queue, *args, **kwargs):
+        raise RuntimeError("synthetic batched build failure")
+
+    npt.NearFieldInteractionTable.build_table_via_duffy_radial_batched = (
+        failing_batched
+    )
+    try:
+        with NFTable(str(cache_file), progress_bar=False) as table_manager:
+            with pytest.warns(RuntimeWarning, match="falling back to the"):
+                cached, _ = table_manager.get_table(
+                    2, "Yukawa", q_order=1, lam=3.0,
+                    force_recompute=True, queue=queue,
+                )
+    finally:
+        npt.NearFieldInteractionTable.build_table_via_duffy_radial_batched = (
+            original
+        )
+    assert cached.build_routing == "scalar-fallback"
+
+    monkeypatch.setenv(DUFFY_NO_FALLBACK_ENV_VAR, "1")
+    with NFTable(str(cache_file), progress_bar=False) as table_manager:
+        request = TableRequest.from_args(2, "Yukawa", 1, 0)
+        # a request the cached entry cannot satisfy is a plain cache miss
+        with pytest.raises(KeyError, match="kernel parameter 'lam' mismatch"):
+            table_manager._load_saved_table_for_request(request, lam=5.0)
+
+        # ... while the matching request is the one strict mode refuses
+        from volumential.table_manager import UnverifiedBuildRoutingError
+
+        with pytest.raises(UnverifiedBuildRoutingError):
+            table_manager._load_saved_table_for_request(request, lam=3.0)
+
+
+def test_public_batched_builder_records_its_own_routing(monkeypatch):
+    """``build_table_via_duffy_radial_batched`` is public and used directly.
+
+    A table it finished must not report ``unknown``; the routing
+    dispatcher is not the only entry point, and the repository's own tests
+    call this method straight through.
+    """
+    import numpy as _np
+
+    import volumential.nearfield_potential_table as npt
+    import volumential.opcounters as opcounters
+    from sumpy.kernel import LaplaceKernel
+
+    table = npt.NearFieldInteractionTable(
+        quad_order=1, dim=2, sumpy_kernel=LaplaceKernel(2),
+        progress_bar=False,
+    )
+    assert table.build_routing is None
+
+    def fake_batched_values(
+        queue, invariant_info, local_entry_indices, *args, **kwargs
+    ):
+        return _np.asarray(local_entry_indices, dtype=table.dtype) + 1
+
+    monkeypatch.setattr(
+        table, "_batched_duffy_values_for_local_indices", fake_batched_values
+    )
+    table.build_table_via_duffy_radial_batched(queue=None)
+
+    assert table.is_built
+    assert table.build_routing == "batched"
+    assert table.build_fallback_reason is None
+    assert opcounters.direct_build_routing(table) == "batched"
+
+
 def test_strict_mode_accepts_a_cached_batched_build(
     ctx_factory, tmp_path, monkeypatch
 ):
