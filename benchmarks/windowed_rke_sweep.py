@@ -59,6 +59,7 @@ import csv
 import json
 import logging
 import operator
+import sqlite3
 import time
 from pathlib import Path
 from typing import Any
@@ -489,7 +490,16 @@ def _windowed_assembly_result(
             "windowed_assemble_seconds": time.perf_counter() - start,
             "values": None,
         }
-    except (ValueError, RuntimeError, NotImplementedError) as exc:
+    except (
+        ValueError, RuntimeError, NotImplementedError, KeyError,
+        # the channel family is an .npz cache: creating, writing or
+        # atomically replacing one of its files can fail, and main()
+        # writes the CSV only after run_sweep() returns, so an escaping
+        # I/O error loses every row the sweep already completed
+        OSError,
+        # sqlite3's exceptions descend from Exception, not OSError
+        sqlite3.Error,
+    ) as exc:
         return {
             "windowed_status": "failed",
             "windowed_refusal": f"{type(exc).__name__}: {exc}",

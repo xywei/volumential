@@ -360,6 +360,54 @@ def _external_payload_checksum(payload):
     return digest.hexdigest()
 
 
+#: Cache-kwarg keys the registration digest cannot cover: the digest is
+#: stored under this name, so hashing it would be self-referential.
+_CHECKSUM_EXCLUDED_KWARGS = frozenset({"external_payload_checksum"})
+
+
+def _external_identity_checksum(table_request, cache_kwargs):
+    """Digest of the identity an external payload is registered *under*.
+
+    The payload digest alone protects the numbers; it says nothing about
+    which request they answer.  The kernel parameters (``lam``, a
+    Helmholtz ``k``, ...) live in ``nearfield_cache_kwargs``, outside the
+    payload, and the loader compares them against the *request*: corrupt a
+    stored ``lam`` from A to B and a request for B matches, the payload
+    still verifies, and the table assembled for A is evaluated as B.
+
+    Hashed in the canonical ``(value_type, value_text)`` form the kwargs
+    are stored in, so the digest computed here at registration and the one
+    recomputed from the deserialized row at load are identical by
+    construction -- ``repr`` round-trips a float64, and the int, bool, str
+    and complex forms round-trip exactly too.
+    """
+    import hashlib
+
+    digest = hashlib.sha256()
+    for label, value in (
+        ("dim", table_request.dim),
+        ("kernel_type", table_request.kernel_type),
+        ("q_order", table_request.q_order),
+        ("source_box_level", table_request.source_box_level),
+    ):
+        digest.update(f"{label}\0{value}\0".encode())
+    for key in sorted(cache_kwargs):
+        if key in _CHECKSUM_EXCLUDED_KWARGS:
+            continue
+        value_type, value_text = _serialize_scalar(cache_kwargs[key])
+        digest.update(f"{key}\0{value_type}\0{value_text}\0".encode())
+    return digest.hexdigest()
+
+
+def _external_registration_checksum(payload, table_request, cache_kwargs):
+    """The stored ``external_payload_checksum``: the payload digest bound
+    to the identity it was registered under."""
+    return (
+        f"{_external_payload_checksum(payload)}"
+        f":{_external_identity_checksum(table_request, cache_kwargs)}"
+    )
+
+
 def _payload_checksum_arrays(payload):
     """``(entry_ids, values)`` arrays of a deserialized payload, whichever
     of the two data layouts it uses.
@@ -1831,7 +1879,13 @@ class NearFieldInteractionTableManager:
 
         stored_payload_checksum = loaded_kwargs.get("external_payload_checksum")
         if stored_payload_checksum is not None:
-            computed_checksum = _external_payload_checksum(payload)
+            # Recomputed from the row as stored, not from the request, so a
+            # corrupted kernel parameter fails here rather than passing the
+            # request comparison below against a table assembled for a
+            # different parameter.
+            computed_checksum = _external_registration_checksum(
+                payload, table_request, loaded_kwargs
+            )
             if computed_checksum != stored_payload_checksum:
                 raise KeyError(
                     "externally registered table payload failed its checksum; "
@@ -2378,14 +2432,13 @@ assemble_windowed_parameterized_table`) under the standard
         # payloads: a poisoned registered table would otherwise apply at full
         # direct-warm speed with no build step left to catch it.
         payload = _deserialize_table_payload(payload_blob)
-        checksum_ids, checksum_values = _payload_checksum_arrays(payload)
+        _checksum_ids, checksum_values = _payload_checksum_arrays(payload)
         if np.asarray(checksum_values).size == 0:
             raise ValueError("cannot register a table with no entry data")
         if not np.all(np.isfinite(np.asarray(checksum_values))):
             raise ValueError(
                 "cannot register a table with non-finite entry data"
             )
-        payload_checksum = _external_payload_checksum(payload)
 
         distinct_numbers = set()
         for vec in table.interaction_case_vecs:
@@ -2412,7 +2465,6 @@ assemble_windowed_parameterized_table`) under the standard
         )
 
         cache_kwargs = self._kwargs_for_cache_storage(kwargs)
-        cache_kwargs["external_payload_checksum"] = payload_checksum
         cache_kwargs.setdefault("table_provenance", "external_assembly")
         if provenance is not None:
             if not isinstance(provenance, dict):
@@ -2424,6 +2476,16 @@ assemble_windowed_parameterized_table`) under the standard
                 # loudly instead of being dropped by the kwargs writer
                 _serialize_scalar(value)
                 cache_kwargs[f"provenance_{key}"] = value
+        # Last, once every stored kwarg exists: the digest binds the payload
+        # to the whole identity it is registered under, so tampering with
+        # any of it -- a kernel parameter, the build config, the recorded
+        # provenance -- invalidates the entry instead of silently
+        # re-labelling the table.
+        cache_kwargs["external_payload_checksum"] = (
+            _external_registration_checksum(
+                payload, table_request, cache_kwargs
+            )
+        )
 
         self.datafile.execute(
             """

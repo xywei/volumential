@@ -344,6 +344,125 @@ def test_load_rejects_corrupted_payload_metadata(
         )
 
 
+def test_load_rejects_a_retargeted_kernel_parameter(
+        tmp_path, assembled_yukawa):
+    """The digest binds the payload to the identity it was registered
+    under, not just to its own numbers.
+
+    The kernel parameters live in ``nearfield_cache_kwargs``, outside the
+    payload, and the loader compares them against the *request*: corrupt
+    a stored ``lam`` from A to B and a request for B matched, the payload
+    still verified, and the table assembled for A was evaluated as B.
+    """
+    table, certificate = assembled_yukawa
+    cache = tmp_path / "registered.sqlite"
+    with NearFieldInteractionTableManager(
+        str(cache), root_extent=ROOT_EXTENT
+    ) as manager:
+        _register(manager, table, certificate)
+
+    other_lam = 1.5 * LAM
+    conn = sqlite3.connect(str(cache))
+    conn.execute(
+        "UPDATE nearfield_cache_kwargs SET value_text=? WHERE key='lam'",
+        (repr(float(other_lam)),),
+    )
+    conn.commit()
+    conn.close()
+
+    # the request now agrees with the (corrupted) stored parameter, so the
+    # parameter comparison is satisfied and only the digest can catch it
+    with NearFieldInteractionTableManager(
+        str(cache), root_extent=ROOT_EXTENT
+    ) as manager, pytest.raises(KeyError, match="checksum"):
+        manager.load_saved_table(
+            DIM, "Yukawa", Q_ORDER, source_box_level=LEVEL, lam=other_lam
+        )
+
+
+def test_load_rejects_tampered_provenance(tmp_path, assembled_yukawa):
+    """Recorded provenance is part of the registered identity too."""
+    table, certificate = assembled_yukawa
+    cache = tmp_path / "registered.sqlite"
+    with NearFieldInteractionTableManager(
+        str(cache), root_extent=ROOT_EXTENT
+    ) as manager:
+        _register(manager, table, certificate)
+
+    conn = sqlite3.connect(str(cache))
+    conn.execute(
+        "UPDATE nearfield_cache_kwargs SET value_text=? "
+        "WHERE key='provenance_window_theta'",
+        (repr(2.0 * WINDOW_THETA),),
+    )
+    conn.commit()
+    conn.close()
+
+    with NearFieldInteractionTableManager(
+        str(cache), root_extent=ROOT_EXTENT
+    ) as manager, pytest.raises(KeyError, match="checksum"):
+        manager.load_saved_table(
+            DIM, "Yukawa", Q_ORDER, source_box_level=LEVEL, lam=LAM
+        )
+
+
+def test_identity_checksum_round_trips_the_stored_representation():
+    """The digest is computed at registration from live values and at load
+    from values deserialized out of SQLite; the two must agree by
+    construction, or every honest load would fail.
+    """
+    from volumential.table_manager import (
+        _deserialize_scalar,
+        _external_identity_checksum,
+        _serialize_scalar,
+    )
+
+    class _Request:
+        dim = 2
+        kernel_type = "Yukawa"
+        q_order = 2
+        source_box_level = 2
+
+    live = {
+        "lam": 8.0 / 3.0,
+        "provenance_p_star": 4,
+        "provenance_kind": "windowed_rke_assembly",
+        "provenance_cold": True,
+        "provenance_pole": complex(1.5, -0.25),
+        # excluded from the digest: it is where the digest itself is stored
+        "external_payload_checksum": "whatever",
+    }
+    stored = {
+        key: _deserialize_scalar(*_serialize_scalar(value))
+        for key, value in live.items()
+    }
+    assert _external_identity_checksum(_Request, stored) == (
+        _external_identity_checksum(_Request, live)
+    )
+
+    # ... and every identifying field actually enters it
+    for key, changed in (
+        ("lam", 8.0 / 3.0 + 1.0e-15),
+        ("provenance_p_star", 5),
+        ("provenance_kind", "something_else"),
+        ("provenance_cold", False),
+        ("provenance_pole", complex(1.5, 0.25)),
+    ):
+        tampered = dict(stored)
+        tampered[key] = changed
+        assert _external_identity_checksum(_Request, tampered) != (
+            _external_identity_checksum(_Request, stored)
+        )
+
+    # the checksum slot itself is not hashed, and neither is a missing key
+    # confused with an empty one
+    without = {k: v for k, v in stored.items()
+               if k != "external_payload_checksum"}
+    assert _external_identity_checksum(_Request, without) == (
+        _external_identity_checksum(_Request, stored)
+    )
+
+
 def test_payload_checksum_covers_every_array():
     """A renamed, added or dropped array changes the digest too."""
     from volumential.table_manager import _external_payload_checksum

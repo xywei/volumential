@@ -1,4 +1,5 @@
 import importlib.util
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -1136,6 +1137,15 @@ def _windowed_sweep_windowed_kwargs(tmp_path):
     ("ValueError", "failed"),
     ("RuntimeError", "failed"),
     ("NotImplementedError", "failed"),
+    ("KeyError", "failed"),
+    # the channel family is an .npz cache, so creating, writing or
+    # atomically replacing one of its files can fail; main() writes the
+    # CSV only after run_sweep() returns, so an escaping I/O error loses
+    # every row the sweep already completed
+    ("OSError", "failed"),
+    ("PermissionError", "failed"),
+    # sqlite3's exceptions descend from Exception, not OSError
+    ("OperationalError", "failed"),
 ])
 def test_windowed_sweep_windowed_errors_use_structured_refusal_taxonomy(
     tmp_path, monkeypatch, error_name, expected_status
@@ -1149,6 +1159,10 @@ def test_windowed_sweep_windowed_errors_use_structured_refusal_taxonomy(
         "ValueError": ValueError,
         "RuntimeError": RuntimeError,
         "NotImplementedError": NotImplementedError,
+        "KeyError": KeyError,
+        "OSError": OSError,
+        "PermissionError": PermissionError,
+        "OperationalError": sqlite3.OperationalError,
     }
 
     def assemble(*args, **kwargs):
