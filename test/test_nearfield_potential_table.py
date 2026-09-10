@@ -3114,6 +3114,94 @@ def test_an_integer_only_phase_keeps_its_complex_exponential():
     )(floating) != floating
 
 
+def test_a_complex_typed_constant_is_not_proof_of_realness():
+    """``np.complex128(0j)`` promotes the operation, whatever its value.
+
+    ``exp(1j*sqrt(x + complex128(0j)))`` reaches loopy as a
+    ``cdouble_sqrt``, which for ``x = -1600`` returns ``40j`` -- so the
+    phase is imaginary and the Euler rewrite cancels to zero against a
+    finite ``exp(-40)``.
+    """
+    import cmath
+
+    import pymbolic.primitives as prim
+
+    x = prim.Variable("x")
+    promoted = prim.Sum((x, np.complex128(0j)))
+    phase = prim.Call(prim.Variable("sqrt"), (promoted,))
+
+    # the value is real; the type is not
+    assert complex(np.complex128(0j)).imag == 0
+    assert not npt._is_known_real(np.complex128(0j))
+    assert not npt._is_known_real(promoted)
+    assert not npt._is_known_real(phase)
+    # a real-typed zero is still fine
+    assert npt._is_known_real(prim.Sum((x, np.float64(0.0))))
+
+    original = prim.Call(
+        prim.Variable("exp"), (prim.Product((np.complex128(1j), phase)),)
+    )
+    assert npt.ComplexExponentialRewriter()(original) == original
+
+    # ... and this is the arithmetic that would have been lost: at x =
+    # -1600 the phase is 40j, the true value is exp(-40), and the Euler
+    # form cancels to exactly zero -- every digit, as in the evanescent
+    # case above
+    imaginary_phase = cmath.sqrt(complex(-1600.0))
+    assert imaginary_phase == 40j
+    assert cmath.exp(1j * imaginary_phase) == pytest.approx(cmath.exp(-40.0))
+    assert cmath.exp(-40.0) != 0
+    assert cmath.cos(imaginary_phase) + 1j * cmath.sin(imaginary_phase) == 0
+
+    # further out it stops being finite at all
+    with np.errstate(over="ignore", invalid="ignore"):
+        far = np.sqrt(np.complex128(-1.0e6))
+        assert np.isfinite(np.exp(1j * far))
+        assert not np.isfinite(np.cos(far) + 1j * np.sin(far))
+
+
+def test_integer_preserving_calls_keep_a_phase_integral():
+    """``exp(1j*abs(n))`` is as integral as ``exp(1j*n)``.
+
+    ``_is_known_real`` accepts ``abs``, so without this the integer guard
+    fell through and the rewrite emitted ``cos(abs(n))`` over an integer.
+    """
+    import pymbolic.primitives as prim
+
+    n = prim.Variable("n")
+    integer_names = frozenset({"n"})
+
+    for build in (
+        lambda: prim.Call(prim.Variable("abs"), (n,)),
+        lambda: prim.Call(prim.Variable("max"), (n, 3)),
+        lambda: prim.Call(prim.Variable("min"), (n, 3)),
+        lambda: prim.FloorDiv(n, 2),
+        lambda: prim.Remainder(n, 7),
+    ):
+        phase = build()
+        assert npt._is_known_real(phase), phase
+        assert npt._is_known_integer(phase, integer_names), phase
+        original = prim.Call(
+            prim.Variable("exp"), (prim.Product((np.complex128(1j), phase)),)
+        )
+        assert npt.ComplexExponentialRewriter(
+            frozenset(), integer_names
+        )(original) == original
+
+    # floor/ceil/round/trunc have no integer overload in C, so they promote
+    # to double and the phase is safe to rewrite
+    for name in ("floor", "ceil", "round", "trunc"):
+        phase = prim.Call(prim.Variable(name), (n,))
+        assert npt._is_known_real(phase)
+        assert not npt._is_known_integer(phase, integer_names)
+        original = prim.Call(
+            prim.Variable("exp"), (prim.Product((np.complex128(1j), phase)),)
+        )
+        assert npt.ComplexExponentialRewriter(
+            frozenset(), integer_names
+        )(original) != original
+
+
 def test_an_inferred_argument_dtype_counts_as_potentially_complex():
     """``lp.ValueArg("k")`` has no dtype, and accepts a complex value.
 

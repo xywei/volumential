@@ -102,16 +102,19 @@ evaluates the decaying result directly. The test is positive rather than a
 search for complex arguments, because the split hands any node it does not
 walk into — a post-CSE `CommonSubexpression`, say — to the real part
 wholesale, so `exp(1j*CSE((3+40j)*r))` has a complex phase without naming a
-complex argument anywhere. A phase passes only if every node in it is a real
-constant, a variable the kernel does not leave unproven, an arithmetic
-combination of those, or a call to a function that is real for real
-arguments. A kernel argument counts as real only if its *declared* dtype is
+complex argument anywhere. A phase passes only if every node in it is a
+real-*typed* constant (a `complex128(0j)` does not qualify: its type
+promotes the operation, so `sqrt(x + 0j)` can come back imaginary), a
+variable the kernel does not leave unproven, an arithmetic combination of
+those, or a call to a function that is real for real arguments. A kernel argument counts as real only if its *declared* dtype is
 real: `HelmholtzKernel(dim, allow_evanescent=True)` declares a `complex128`
 wave number, and an argument declared with no dtype at all
 (`KernelArgument(lp.ValueArg("k"))`, which loopy leaves as `<auto/runtime>`
 and which accepts a complex value at run time) is likewise not proven real.
-A phase that is provably *integer* -- every node an integer constant or an
-argument declared with an integer dtype -- also keeps its `cdouble_exp`: the C
+A phase that is provably *integer* -- every node an integer constant, an
+argument declared with an integer dtype, or an integer-preserving operation
+over those (`abs`, `min`, `max`, floor division, remainder; not `floor` or
+`ceil`, which C promotes to double) -- also keeps its `cdouble_exp`: the C
 `cos`/`sin` overload chosen for an integer argument is not ours to predict,
 and a single-precision one would cost an order-one phase error past `2**24`,
 where the complex exponential carries the precision explicitly. Ordinary

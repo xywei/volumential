@@ -207,6 +207,12 @@ def _is_known_real(expr, unproven_names=frozenset()):
     speedup, a rewrite wrongly allowed costs every digit of the result.
     """
     if _is_numeric_constant(expr):
+        # The *type*, not the value: a complex-typed constant promotes the
+        # whole operation, so exp(1j*sqrt(x + complex128(0j))) becomes a
+        # cdouble_sqrt whose result can be imaginary even though the
+        # constant's own imaginary part is zero.
+        if isinstance(expr, complex | np.complexfloating):
+            return False
         return complex(expr).imag == 0
 
     if isinstance(expr, prim.CommonSubexpression):
@@ -256,6 +262,13 @@ def _is_known_real(expr, unproven_names=frozenset()):
     return False
 
 
+#: Calls that return an integer when every argument is one.  ``floor``,
+#: ``ceil``, ``round`` and ``trunc`` are deliberately *absent*: C gives them
+#: no integer overload, so an integer argument is promoted and the result is
+#: a double, which is the precision the phase needs anyway.
+_INTEGER_PRESERVING_FUNCTIONS = frozenset({"abs", "max", "min"})
+
+
 def _is_known_integer(expr, integer_names=frozenset()):
     """Whether *expr* provably evaluates in integer arithmetic.
 
@@ -281,6 +294,23 @@ def _is_known_integer(expr, integer_names=frozenset()):
         return _is_known_integer(
             expr.base, integer_names
         ) and _is_known_integer(expr.exponent, integer_names)
+
+    if isinstance(expr, prim.FloorDiv | prim.Remainder):
+        return _is_known_integer(
+            expr.numerator, integer_names
+        ) and _is_known_integer(expr.denominator, integer_names)
+
+    if isinstance(expr, prim.Call):
+        function = expr.function
+        if not (
+            isinstance(function, prim.Variable)
+            and function.name in _INTEGER_PRESERVING_FUNCTIONS
+        ):
+            return False
+        return all(
+            _is_known_integer(parameter, integer_names)
+            for parameter in expr.parameters
+        )
 
     return False
 
