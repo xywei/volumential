@@ -142,24 +142,43 @@ def _div(numerator, denominator):
     return prim.Quotient(numerator, denominator)
 
 
-def _has_variable(expr) -> bool:
-    """Whether *expr* mentions any variable at all."""
+def _has_variable(expr, _cache=None) -> bool:
+    """Whether *expr* mentions any variable at all.
+
+    Memoized by node identity for the same reason as
+    :func:`_is_known_real`: the split's named pairs make the DAG compact
+    but leave a naive walk exponential.
+    """
+    if _cache is None:
+        _cache = {}
+    key = id(expr)
+    cached = _cache.get(key)
+    if cached is not None:
+        return cached
+    result = _has_variable_uncached(expr, _cache)
+    _cache[key] = result
+    return result
+
+
+def _has_variable_uncached(expr, _cache) -> bool:
     if isinstance(expr, prim.Variable):
         return True
     if isinstance(expr, prim.CommonSubexpression):
-        return _has_variable(expr.child)
+        return _has_variable(expr.child, _cache)
     if isinstance(expr, prim.Subscript):
         return True
     if isinstance(expr, prim.Sum | prim.Product):
-        return any(_has_variable(child) for child in expr.children)
+        return any(_has_variable(child, _cache) for child in expr.children)
     if isinstance(expr, prim.Quotient | prim.FloorDiv | prim.Remainder):
-        return _has_variable(expr.numerator) or _has_variable(
-            expr.denominator
+        return _has_variable(expr.numerator, _cache) or _has_variable(
+            expr.denominator, _cache
         )
     if isinstance(expr, prim.Power):
-        return _has_variable(expr.base) or _has_variable(expr.exponent)
+        return _has_variable(expr.base, _cache) or _has_variable(
+            expr.exponent, _cache
+        )
     if isinstance(expr, prim.Call):
-        return any(_has_variable(param) for param in expr.parameters)
+        return any(_has_variable(param, _cache) for param in expr.parameters)
     return False
 
 
@@ -257,7 +276,7 @@ _REAL_VALUED_FUNCTIONS = frozenset({
 })
 
 
-def _is_known_real(expr, unproven_names=frozenset()):
+def _is_known_real(expr, unproven_names=frozenset(), _cache=None):
     """Whether *expr* can be *proved* real-valued, node by node.
 
     The guard on the Euler rewrite has to be positive rather than a
@@ -274,6 +293,25 @@ def _is_known_real(expr, unproven_names=frozenset()):
     types answer *False*: a rewrite declined costs the ``cdouble_exp``
     speedup, a rewrite wrongly allowed costs every digit of the result.
     """
+    if _cache is None:
+        _cache = {}
+    # Memoized by node identity: _split_complex_expression names each
+    # accumulated real/imaginary pair behind a CommonSubexpression, and the
+    # next factor references *both* members of the previous pair, so the
+    # DAG is compact while a naive walk of it is still exponential.  The
+    # cache lives for one top-level call, which is exactly as long as the
+    # nodes it keys on.
+    key = id(expr)
+    cached = _cache.get(key)
+    if cached is not None:
+        return cached
+
+    result = _is_known_real_uncached(expr, unproven_names, _cache)
+    _cache[key] = result
+    return result
+
+
+def _is_known_real_uncached(expr, unproven_names, _cache):
     if _is_numeric_constant(expr):
         # The *type*, not the value.  A complex-typed constant promotes the
         # whole operation, so exp(1j*sqrt(x + complex128(0j))) becomes a
@@ -289,7 +327,7 @@ def _is_known_real(expr, unproven_names=frozenset()):
         return complex(expr).imag == 0
 
     if isinstance(expr, prim.CommonSubexpression):
-        return _is_known_real(expr.child, unproven_names)
+        return _is_known_real(expr.child, unproven_names, _cache)
 
     if isinstance(expr, prim.Variable):
         # SpatialConstant and friends subclass Variable
@@ -297,7 +335,7 @@ def _is_known_real(expr, unproven_names=frozenset()):
 
     if isinstance(expr, prim.Subscript):
         return _is_known_real(expr.aggregate, unproven_names) and all(
-            _is_known_real(index, unproven_names)
+            _is_known_real(index, unproven_names, _cache)
             for index in (
                 expr.index
                 if isinstance(expr.index, tuple)
@@ -307,15 +345,19 @@ def _is_known_real(expr, unproven_names=frozenset()):
 
     if isinstance(expr, prim.Sum | prim.Product):
         return all(
-            _is_known_real(child, unproven_names)
+            _is_known_real(child, unproven_names, _cache)
             for child in expr.children
         )
 
     if isinstance(expr, prim.Quotient | prim.FloorDiv | prim.Remainder):
-        return _is_known_real(expr.numerator, unproven_names) and _is_known_real(expr.denominator, unproven_names)
+        return _is_known_real(
+            expr.numerator, unproven_names, _cache
+        ) and _is_known_real(expr.denominator, unproven_names, _cache)
 
     if isinstance(expr, prim.Power):
-        return _is_known_real(expr.base, unproven_names) and _is_known_real(expr.exponent, unproven_names)
+        return _is_known_real(
+            expr.base, unproven_names, _cache
+        ) and _is_known_real(expr.exponent, unproven_names, _cache)
 
     if isinstance(expr, prim.Call):
         function = expr.function
@@ -325,7 +367,7 @@ def _is_known_real(expr, unproven_names=frozenset()):
         ):
             return False
         return all(
-            _is_known_real(parameter, unproven_names)
+            _is_known_real(parameter, unproven_names, _cache)
             for parameter in expr.parameters
         )
 

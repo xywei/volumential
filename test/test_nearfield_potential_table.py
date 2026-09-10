@@ -3338,6 +3338,44 @@ def test_a_quotient_by_one_does_not_hide_the_phase():
     ) == prim.Call(prim.Variable("exp"), (complex_denominator,))
 
 
+def test_proving_a_product_chain_stays_linear():
+    """The proof must walk the named DAG, not expand it into a tree.
+
+    Each factor's named real/imaginary pair references *both* members of
+    the previous pair, so a naive recursion is exponential in the number
+    of factors even though the DAG itself is linear.
+    """
+    import time
+
+    import pymbolic.primitives as prim
+
+    def chain(n_factors):
+        return prim.Product(tuple(
+            prim.Sum((
+                prim.Variable(f"a{i}"),
+                prim.Product((np.complex128(1j), prim.Variable(f"b{i}"))),
+            ))
+            for i in range(n_factors)
+        ))
+
+    def prove(n_factors):
+        real_part, imag_part = npt._split_complex_expression(chain(n_factors))
+        start = time.perf_counter()
+        assert npt._is_known_real(real_part)
+        assert npt._is_known_real(imag_part)
+        assert npt._has_variable(imag_part)
+        return time.perf_counter() - start
+
+    prove(4)  # warm any import-time cost
+    small = prove(6)
+    large = prove(20)
+
+    # 20 factors against 6 is 2**14 times the work if the walk is a tree;
+    # a generous linear-ish bound still separates the two by orders of
+    # magnitude
+    assert large < 200 * max(small, 1.0e-6), (small, large)
+
+
 def test_splitting_a_product_chain_stays_linear():
     """The split must not build an exponentially large expression tree.
 
