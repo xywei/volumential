@@ -271,8 +271,19 @@ def test_field_set_is_unique_and_carries_far_field_columns(sweep):
         "implied_reference_norm",
     ):
         assert name in sweep.FIELDS
-    # the historical 106 columns keep their positions
-    assert sweep.FIELDS[:106] == sweep.FIELDS[:-5]
+    # The historical 106 columns keep their positions and the five E1b
+    # columns sit immediately after them.  Pinned by index rather than as
+    # "the last five", so a later PR appending its own columns -- #134's
+    # PHASE_FIELDS do -- does not silently move the boundary this is
+    # guarding.
+    assert sweep.FIELDS.index("fmm_order_rule") == 106
+    assert sweep.FIELDS[106:111] == (
+        "fmm_order_rule",
+        "fmm_order_floor",
+        "fmm_expansion_radius",
+        "far_field_status",
+        "implied_reference_norm",
+    )
     assert sweep.FIELDS[0] == "case_id"
     assert sweep.FIELDS[3] == "dim"
 
