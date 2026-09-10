@@ -5,9 +5,16 @@ dependency resolution.
 
 ## Supported Setup
 
-- Python: `3.11` (recommended for local and CI parity)
+- Python: `3.12` (the version CI tests; see the note below)
 - OpenCL runtime: required (`pocl` is the default tested backend)
 - Package manager: `uv`
+
+`requires-python` in `pyproject.toml` is still `>=3.11`, and nothing in
+Volumential itself needs 3.12. CI pins 3.12 only because `loopy` currently
+imports `override` from the standard-library `typing` module, which gained it
+in 3.12; under 3.11 `import loopy` fails outright. A 3.11 environment is
+therefore unsupported in practice until that upstream import moves to
+`typing_extensions`.
 
 ## Local Setup
 
@@ -22,7 +29,7 @@ dependency resolution.
 
    ```bash
    micromamba create -n volumential-dev -c conda-forge -c nodefaults \
-     python=3.11 pyopencl pocl scipy numpy
+     python=3.12 pyopencl pocl scipy numpy
    micromamba activate volumential-dev
    ```
 
@@ -50,7 +57,7 @@ ssh <remote-host>
 git clone <repo-url>
 cd volumential
 micromamba create -n volumential-dev -c conda-forge -c nodefaults \
-  python=3.11 pyopencl pocl scipy numpy
+  python=3.12 pyopencl pocl scipy numpy
 micromamba activate volumential-dev
 uv sync --active --extra test --extra doc
 uv run pytest -q test/test_volume_fmm.py::test_volume_fmm_laplace
