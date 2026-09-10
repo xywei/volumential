@@ -32,6 +32,7 @@ metadata-wrapped runs on a controlled remote compute host.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import csv
 import math
 import time
@@ -1519,28 +1520,47 @@ def _register_and_load_windowed_table(
         )
     register_s = time.perf_counter() - register_start
 
-    with _capture_table_get_timings() as load_records:
-        with NearFieldInteractionTableManager(
-            str(cache_path), root_extent=root_extent, queue=queue,
-            **manager_kwargs,
-        ) as table_manager:
-            loaded_table, is_recomputed = table_manager.get_table(
-                dim,
-                kernel_request,
-                q_order,
-                source_box_level=source_box_level,
-                queue=queue,
-                **get_kwargs,
+    # Registration is done.  If the reload below fails, a caller turning
+    # that into a failure row still needs to account for it, or the row
+    # charges the reload's wall time to registration while reporting a
+    # zero payload for work that completed.  The partial metrics ride on
+    # the exception under a name the caller looks for.
+    partial_transfer = {
+        "register_s": register_s,
+        "register_payload_bytes": register_payload_bytes,
+        "load_s": 0.0,
+        "load_payload_bytes": 0,
+    }
+
+    try:
+        with _capture_table_get_timings() as load_records:
+            with NearFieldInteractionTableManager(
+                str(cache_path), root_extent=root_extent, queue=queue,
+                **manager_kwargs,
+            ) as table_manager:
+                loaded_table, is_recomputed = table_manager.get_table(
+                    dim,
+                    kernel_request,
+                    q_order,
+                    source_box_level=source_box_level,
+                    queue=queue,
+                    **get_kwargs,
+                )
+        if is_recomputed:
+            raise RuntimeError(
+                "registered windowed table did not load as a pure cache hit"
             )
-    if is_recomputed:
-        raise RuntimeError(
-            "registered windowed table did not load as a pure cache hit"
-        )
-    load_summary = _summarize_table_get_timings(load_records)
-    if load_summary["build_count"] or load_summary["load_count"] != 1:
-        raise RuntimeError(
-            "registered windowed table load pass was not a single pure load"
-        )
+        load_summary = _summarize_table_get_timings(load_records)
+        if load_summary["build_count"] or load_summary["load_count"] != 1:
+            raise RuntimeError(
+                "registered windowed table load pass was not a single pure "
+                "load"
+            )
+    except BaseException as exc:
+        with contextlib.suppress(AttributeError):
+            exc.partial_windowed_transfer = dict(partial_transfer)
+        raise
+
     return loaded_table, {
         "register_s": register_s,
         "register_payload_bytes": register_payload_bytes,

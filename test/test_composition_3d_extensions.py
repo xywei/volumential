@@ -27,6 +27,7 @@ THE SOFTWARE.
 """
 
 import importlib.util
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -895,6 +896,179 @@ def test_a_cold_channel_family_is_reported_on_a_later_failure(
     assert row["windowed_status"] == "failed"
     assert row["windowed_channel_build_was_cold"] == 1
     assert row["windowed_channel_build_s"] >= 3.0
+
+
+def test_channel_family_time_is_not_double_counted_on_failure(
+    composition3d, tmp_path, monkeypatch
+):
+    """A completed level's build time must be charged exactly once.
+
+    ``result["windowed_channel_build_s"]`` is published per level and the
+    failure handler *adds* the running stage's partial time, so a stage
+    clock shared across levels would count the completed ones twice.
+    """
+    import time as _time
+
+    levels = {"n": 0}
+
+    def flaky_family(**kwargs):
+        levels["n"] += 1
+        if levels["n"] > 1:
+            _time.sleep(0.05)
+            raise RuntimeError("channel build failed on the second level")
+        return {"build_s": 3.0, "was_cold": True}
+
+    monkeypatch.setattr(
+        composition3d, "_prepare_windowed_family", flaky_family
+    )
+
+    kwargs = _windowed_kwargs(tmp_path)
+    kwargs["source_levels"] = [1, 2]
+    row = composition3d._run_windowed_composition(None, **kwargs)
+
+    assert row["windowed_status"] == "failed"
+    # 3.0 from the completed level plus the ~0.05 s failed attempt --
+    # emphatically not 6.0
+    assert 3.0 <= row["windowed_channel_build_s"] < 3.5
+
+
+def test_partial_registration_metrics_survive_a_failed_reload(
+    composition3d, tmp_path, monkeypatch
+):
+    """Registration that completed must be reported even if the reload fails.
+
+    ``_register_and_load_windowed_table`` does both in one call, so
+    without the partial metrics the row charges the reload's wall time to
+    registration and reports a zero payload for a table that really was
+    registered.
+    """
+    import volumential.rke_table_assembly as rke
+
+    monkeypatch.setattr(
+        composition3d,
+        "_prepare_windowed_family",
+        lambda **k: {"build_s": 0.0, "was_cold": False},
+    )
+    monkeypatch.setattr(
+        rke,
+        "assemble_windowed_parameterized_table",
+        lambda *a, **k: (object(), {
+            "condition_number": 2.0, "smooth_quad_order": 4,
+        }),
+    )
+
+    def register_then_fail(**kwargs):
+        exc = RuntimeError("cache reopen failed")
+        exc.partial_windowed_transfer = {
+            "register_s": 4.0,
+            "register_payload_bytes": 8000,
+            "load_s": 0.0,
+            "load_payload_bytes": 0,
+        }
+        raise exc
+
+    monkeypatch.setattr(
+        composition3d, "_register_and_load_windowed_table", register_then_fail
+    )
+
+    row = composition3d._run_windowed_composition(
+        None, **_windowed_kwargs(tmp_path)
+    )
+
+    assert row["windowed_status"] == "failed"
+    assert row["windowed_register_s"] == pytest.approx(4.0)
+    assert row["windowed_register_payload_bytes"] == 8000
+    assert row["windowed_table_load_s"] == pytest.approx(0.0)
+
+
+def test_register_and_load_attaches_what_it_completed(tmp_path, monkeypatch):
+    """The helper must publish partial metrics on a failed reload."""
+    sweep = _load_benchmark_module("split_parameter_sweep")
+
+    import volumential.table_manager as tm
+
+    opened = {"n": 0}
+
+    class _StubManager:
+        last_register_timings = {"payload_bytes": 8000}
+
+        def __init__(self, *args, **kwargs):
+            opened["n"] += 1
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def register_external_table(self, *args, **kwargs):
+            return None
+
+        def get_table(self, *args, **kwargs):
+            raise sqlite3.OperationalError("cache reopen failed")
+
+    monkeypatch.setattr(tm, "NearFieldInteractionTableManager", _StubManager)
+
+    with pytest.raises(sqlite3.OperationalError) as failed:
+        sweep._register_and_load_windowed_table(
+            queue=None,
+            cache_path=tmp_path / "registered.sqlite",
+            kernel="Yukawa",
+            q_order=2,
+            parameter=2.0,
+            source_box_level=1,
+            table=object(),
+            certificate={
+                "window_theta": 16.0,
+                "p_star": 4,
+                "smooth_quad_order": 4,
+                "condition_number": 2.0,
+            },
+            root_extent=2.0,
+            dim=3,
+        )
+
+    # registration happened, and the exception carries what it cost
+    assert opened["n"] == 2
+    partial = failed.value.partial_windowed_transfer
+    assert partial["register_payload_bytes"] == 8000
+    assert partial["register_s"] >= 0.0
+    assert partial["load_s"] == 0.0
+
+
+@pytest.mark.parametrize("tiny", ["1e-308", "1e-200"])
+def test_main_rejects_a_window_declaration_whose_scale_overflows(
+    composition3d, tmp_path, monkeypatch, capsys, tiny
+):
+    """``(box_extent / Theta)**2`` must not overflow before the run starts.
+
+    ``get_windowed_channel_table`` raises ``OverflowError``, which no
+    failure taxonomy covers, after all the direct and online-split work.
+    """
+    monkeypatch.setattr(
+        composition3d.sys,
+        "argv",
+        [
+            "adaptive_split_composition_3d.py",
+            "--mode", "smoke",
+            "--include-windowed",
+            f"--window-theta={tiny}",
+            "--out", str(tmp_path / "unused.csv"),
+            "--cache-dir", str(tmp_path / "never-created"),
+        ],
+    )
+    monkeypatch.setattr(
+        composition3d,
+        "_select_opencl_device",
+        lambda *a, **k: pytest.fail("validation must precede device setup"),
+    )
+
+    with pytest.raises(SystemExit) as exited:
+        composition3d.main()
+
+    assert exited.value.code == 2
+    assert "overflows float64" in capsys.readouterr().err
+    assert not (tmp_path / "never-created").exists()
 
 
 def test_sqlite_failures_become_rows_too(

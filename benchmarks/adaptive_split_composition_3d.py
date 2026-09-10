@@ -548,7 +548,26 @@ def _run_windowed_composition(
         result["windowed_refusal"] = (
             f"{stage_label}: {type(exc).__name__}: {exc}"
         )
-        # charge the partial time to whichever phase was running
+        # A register/reload call that got as far as registering attaches
+        # what it completed; use that instead of charging the whole
+        # combined call to registration with a zero payload.
+        partial = getattr(exc, "partial_windowed_transfer", None)
+        if partial is not None:
+            result["windowed_register_s"] = (
+                float(result["windowed_register_s"])
+                + float(partial["register_s"])
+            )
+            result["windowed_register_payload_bytes"] = (
+                int(result["windowed_register_payload_bytes"])
+                + int(partial["register_payload_bytes"])
+            )
+            result["windowed_table_load_s"] = (
+                float(result["windowed_table_load_s"])
+                + float(partial["load_s"])
+            )
+            return result
+
+        # otherwise charge the partial time to whichever phase was running
         result[stage_bucket] = float(result[stage_bucket]) + (
             time.perf_counter() - stage_start
         )
@@ -566,6 +585,12 @@ def _run_windowed_composition(
         channel_build_s = 0.0
         was_cold = False
         for level in source_levels:
+            # Restart the stage clock per level: result[stage_bucket]
+            # already holds the completed levels, and the failure handler
+            # *adds* the partial time, so a shared start would count them
+            # twice.
+            stage_label = f"windowed channel family, level {int(level)}"
+            stage_start = time.perf_counter()
             family = _prepare_windowed_family(
                 cache_path=family_cache,
                 q_order=q_order,
@@ -1394,6 +1419,21 @@ def main() -> int:
         # only once the geometry and every direct and online-split table of
         # the first case have already been built
         parser.error("--window-theta must be finite")
+    # get_windowed_channel_table forms (box_extent / Theta)**2, and the
+    # assembler already requires an O(1) box extent (1e-3 .. 1e3), so
+    # checking the largest allowed extent bounds every level.  A Theta
+    # small enough to overflow that raises OverflowError, which no failure
+    # taxonomy covers, after all the direct and online-split work.
+    try:
+        window_scale = (1.0e3 / args.window_theta) ** 2
+    except OverflowError:
+        window_scale = math.inf
+    if not math.isfinite(window_scale):
+        parser.error(
+            "--window-theta is too small: the window scale "
+            "(box_extent / Theta)**2 overflows float64 for the supported "
+            "O(1) source-box extents"
+        )
 
     # The same pure checks run_case runs, hoisted here so an invalid sweep
     # never reaches device selection, the cache directory, or -- for an
