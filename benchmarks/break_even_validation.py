@@ -99,6 +99,14 @@ separately here rather than folded away:
    ``power_log_single_table_beta_mode`` is ``p2p``, counted at
    ``ops_phase_split_correction_beta_p2p_pair_evals``.
 
+``ops_phase_split_correction_remainder_term_evals`` multiplies the pair count
+by the *generated* remainder kernel's term count
+(``ops_phase_split_correction_remainder_terms_per_pair``), read off the
+expression rather than taken as the series length: in 2D the kernel emits a
+constant, one ``r**(2n)`` term for every ``n = 1 .. nmax``, and a second
+``r**(2n) log r`` term for every ``n >= p``, so ``nmax`` alone undercounts it
+by roughly a factor of two.
+
 ``ops_phase_split_correction_remainder_term_evals`` (and therefore
 ``ops_phase_split_correction_rke`` and ``ops_phase_solve_total_rke``) uses
 the *mean* of ``ops_split_series_nmax_per_parameter`` over the run's
@@ -305,6 +313,7 @@ PHASE_OPS_FIELDS = (
     "ops_phase_split_correction_extra_table_fmas",
     "ops_phase_split_correction_remainder_pair_evals",
     "ops_phase_split_correction_remainder_term_evals",
+    "ops_phase_split_correction_remainder_terms_per_pair",
     "ops_phase_split_correction_beta_p2p_pair_evals",
     "ops_phase_split_correction_smooth_interp_fmas",
     "ops_phase_split_smooth_sources_per_box",
@@ -364,9 +373,10 @@ PHASE_OPS_UNITS = {
 #: Identifies the counting-rule revision the ``ops_phase_*`` columns follow,
 #: so a consumer can tell two executions of different rules apart.
 PHASE_COUNTING_RULE = (
-    "e6-v2:far=dense_coefficient_touches_from_traversal_and_expansion_sizes;"
+    "e6-v3:far=dense_coefficient_touches_from_traversal_and_expansion_sizes;"
     "nearfield=fma_per_nearfield_pair_per_applied_table_dtype_blind;"
-    "split_correction=extra_table_fmas+remainder_pair_evals*mean_nmax"
+    "split_correction=extra_table_fmas"
+    "+remainder_pair_evals*generated_remainder_term_count"
     "+beta_p2p_pair_evals+smooth_interp_fmas;"
     "smooth_interp=tensor_product_axis_by_axis_not_dense;"
     "recombination=0_per_solve_and_no_windowed_family_in_this_driver"
@@ -589,16 +599,24 @@ def _phase_operation_counts(
         smooth_quad_order=smooth_quad_order,
     )
 
-    mean_nmax = (
-        float(np.mean(nmax_by_parameter)) if nmax_by_parameter else 0.0
-    )
+    # The generated remainder kernel's own term count, not the series
+    # length: in 2D it emits a constant plus a power term per index plus a
+    # power-log term per index at or above the split order, so nmax alone
+    # undercounts it by roughly a factor of two.  _split_correction_
+    # operation_counts reads it off the expression; fall back to the
+    # series length only if it could not be interrogated, and say so.
+    terms_per_pair = correction.get("remainder_terms_per_pair", "")
+    if terms_per_pair == "":
+        terms_per_pair = (
+            float(np.mean(nmax_by_parameter)) if nmax_by_parameter else 0.0
+        )
     remainder_pairs = correction["remainder_pair_evals"]
     if remainder_pairs == "":
         remainder_term_evals = ""
         correction_total = ""
         rke_solve_total = ""
     else:
-        remainder_term_evals = float(remainder_pairs) * mean_nmax
+        remainder_term_evals = float(remainder_pairs) * float(terms_per_pair)
         correction_total = (
             float(correction["extra_table_fmas"])
             + remainder_term_evals
@@ -629,6 +647,9 @@ def _phase_operation_counts(
         "ops_phase_split_correction_remainder_pair_evals": remainder_pairs,
         "ops_phase_split_correction_remainder_term_evals": (
             remainder_term_evals
+        ),
+        "ops_phase_split_correction_remainder_terms_per_pair": (
+            correction.get("remainder_terms_per_pair", "")
         ),
         "ops_phase_split_correction_beta_p2p_pair_evals": (
             correction["beta_p2p_pair_evals"]

@@ -1371,6 +1371,135 @@ def test_sweep_phase_row_columns_map_both_paths():
     )
 
 
+def test_excluded_self_pairs_are_not_counted_in_the_remainder():
+    """``exclude_self`` skips each target's own source; the count must too.
+
+    On the base-quadrature path the correction keeps ``target_to_source``
+    and passes the tree's ``exclude_self``, so the P2P skips the diagonal.
+    Counting it overstates the remainder, and the beta P2P with it.
+    """
+    import numpy as _np
+
+    sweep = _load_benchmark("split_parameter_sweep")
+
+    class _Dev:
+        def __init__(self, array):
+            self._array = _np.asarray(array)
+
+        def get(self, queue=None):
+            return self._array
+
+    # per_box must equal q_order**dim, since the remainder runs on the
+    # smooth source set, which is the base quadrature here
+    n_boxes, q_order, per_box = 4, 2, 4
+    counts = _np.full(n_boxes, per_box, dtype=_np.int64)
+    starts = _np.arange(n_boxes + 1, dtype=_np.int64)
+    lists = _np.arange(n_boxes, dtype=_np.int64)
+
+    class _Tree:
+        dimensions = 2
+        box_source_counts_nonchild = _Dev(counts)
+        box_target_counts_nonchild = _Dev(counts)
+
+    class _Traversal:
+        tree = _Tree()
+        target_boxes = _Dev(_np.arange(n_boxes, dtype=_np.int64))
+        neighbor_source_boxes_starts = _Dev(starts)
+        neighbor_source_boxes_lists = _Dev(lists)
+
+    class _TreeIndep:
+        def __init__(self, exclude_self):
+            self.exclude_self = exclude_self
+
+    class _Wrangler:
+        helmholtz_split_order = 1
+        helmholtz_split_order1_legacy_subtraction = False
+        _helmholtz_split_auto_config = {}
+
+        def __init__(self, exclude_self):
+            self.tree_indep = _TreeIndep(exclude_self)
+
+        def _helmholtz_split_extra_terms(self):
+            return []
+
+        def _get_helmholtz_split_remainder_kernel(self):
+            from volumential.expansion_wrangler_fpnd import (
+                _HelmholtzSplitSeriesRemainderKernel,
+            )
+            return _HelmholtzSplitSeriesRemainderKernel(2, 4.0, 0.0, 1, 3)
+
+    def _count(exclude_self):
+        return sweep._split_correction_operation_counts(
+            queue=None,
+            traversal=_Traversal(),
+            wrangler=_Wrangler(exclude_self),
+            q_order=q_order,
+            smooth_quad_order=None,
+        )
+
+    kept = _count(False)
+    skipped = _count(True)
+    # the helper swallows any interrogation failure into `status`; surface
+    # it rather than comparing against a blank
+    assert not str(kept["status"]).startswith("unavailable"), kept["status"]
+    assert not str(skipped["status"]).startswith("unavailable"), (
+        skipped["status"]
+    )
+
+    # every box neighbours only itself here: 4 boxes x 5 targets x 5 sources
+    assert kept["remainder_pair_evals"] == n_boxes * per_box * per_box
+    # ... minus one skipped diagonal per target
+    assert skipped["remainder_pair_evals"] == (
+        n_boxes * per_box * per_box - n_boxes * per_box
+    )
+    assert kept["status"] == "base_quadrature"
+
+
+def test_remainder_terms_are_counted_from_the_generated_expression():
+    """The multiplier is the kernel's term count, not the series length.
+
+    In 2D ``_HelmholtzSplitSeriesRemainderKernel`` emits a constant, one
+    ``r**(2n)`` term for every ``n = 1 .. nmax``, and a second
+    ``r**(2n) log r`` term for every ``n >= split_order``, so ``nmax``
+    alone undercounts the remainder by roughly a factor of two.
+    """
+    from volumential.expansion_wrangler_fpnd import (
+        _HelmholtzSplitSeriesRemainderKernel,
+    )
+
+    sweep = _load_benchmark("split_parameter_sweep")
+
+    class _Wrangler:
+        def __init__(self, kernel):
+            self._kernel = kernel
+
+        def _get_helmholtz_split_remainder_kernel(self):
+            return self._kernel
+
+    for split_order, nmax in ((1, 4), (2, 6), (3, 9)):
+        kernel = _HelmholtzSplitSeriesRemainderKernel(
+            2, 4.0, 0.0, split_order, nmax
+        )
+        counted = sweep._remainder_terms_per_pair(_Wrangler(kernel))
+        # 1 constant + nmax power terms + one log term per n >= p
+        expected = 1 + nmax + (nmax - split_order + 1)
+        assert counted == expected, (split_order, nmax, counted, expected)
+        assert counted > nmax
+
+    # 3D drops the even powers the tables extract, so it is not 2n either
+    for split_order, nmax in ((1, 5), (3, 9)):
+        kernel = _HelmholtzSplitSeriesRemainderKernel(
+            3, 4.0, 0.0, split_order, nmax
+        )
+        counted = sweep._remainder_terms_per_pair(_Wrangler(kernel))
+        max_extracted_n = 2 * max(0, split_order - 1)
+        expected = sum(
+            1 for n in range(1, nmax + 1)
+            if not (n % 2 == 0 and n <= max_extracted_n)
+        )
+        assert counted == expected, (split_order, nmax, counted, expected)
+
+
 def test_sweep_correction_counts_come_from_the_break_even_function():
     """The two E6 artifacts must not be able to disagree.
 
@@ -1389,17 +1518,18 @@ def test_sweep_correction_counts_come_from_the_break_even_function():
         break_even._tensor_product_interp_fmas
         is sweep._tensor_product_interp_fmas
     )
-    # the sweep's rule differs from the driver's only in using this row's own
-    # series length where the driver averages over its parameter set
-    assert sweep.PHASE_COUNTING_RULE.startswith("e6-v2:")
-    assert break_even.PHASE_COUNTING_RULE.startswith("e6-v2:")
-    assert (
-        sweep.PHASE_COUNTING_RULE.replace("*nmax", "")
-        == break_even.PHASE_COUNTING_RULE.replace("*mean_nmax", "").replace(
-            ";recombination=0_per_solve_and_no_windowed_family_in_this_driver",
-            "",
-        )
+    # the two rules are now identical except for the recombination clause,
+    # which only the break-even driver can state (the sweep does provision
+    # windowed families)
+    assert sweep.PHASE_COUNTING_RULE.startswith("e6-v3:")
+    assert break_even.PHASE_COUNTING_RULE.startswith("e6-v3:")
+    assert break_even.PHASE_COUNTING_RULE == (
+        sweep.PHASE_COUNTING_RULE
+        + ";recombination=0_per_solve_and_no_windowed_family_in_this_driver"
     )
+    # the remainder multiplier is the generated term count, not nmax
+    assert "generated_remainder_term_count" in sweep.PHASE_COUNTING_RULE
+    assert "nmax" not in sweep.PHASE_COUNTING_RULE
 
 
 def test_sweep_non_split_paths_report_a_structural_zero_correction():

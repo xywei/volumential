@@ -82,6 +82,7 @@ PHASE_CORRECTION_OPS_NAMES = (
     "ops_phase_split_correction_extra_table_fmas",
     "ops_phase_split_correction_remainder_pair_evals",
     "ops_phase_split_correction_remainder_term_evals",
+    "ops_phase_split_correction_remainder_terms_per_pair",
     "ops_phase_split_correction_beta_p2p_pair_evals",
     "ops_phase_split_correction_smooth_interp_fmas",
     "ops_phase_split_smooth_sources_per_box",
@@ -109,9 +110,10 @@ PHASE_FIELDS = (
 #: identical to ``break_even_validation``'s, because the counts come from
 #: the same functions.
 PHASE_COUNTING_RULE = (
-    "e6-v2:far=dense_coefficient_touches_from_traversal_and_expansion_sizes;"
+    "e6-v3:far=dense_coefficient_touches_from_traversal_and_expansion_sizes;"
     "nearfield=fma_per_nearfield_pair_per_applied_table_dtype_blind;"
-    "split_correction=extra_table_fmas+remainder_pair_evals*nmax"
+    "split_correction=extra_table_fmas"
+    "+remainder_pair_evals*generated_remainder_term_count"
     "+beta_p2p_pair_evals+smooth_interp_fmas;"
     "smooth_interp=tensor_product_axis_by_axis_not_dense"
 )
@@ -1220,6 +1222,42 @@ def _tensor_product_interp_fmas(*, dim: int, q: int, q_smooth: int) -> int:
     )
 
 
+def _remainder_terms_per_pair(wrangler) -> int:
+    """Terms the split remainder kernel evaluates at each near-field pair.
+
+    Counted from the *generated* expression, not from a formula: the
+    series length ``nmax`` is not the term count.  In 2D
+    ``_HelmholtzSplitSeriesRemainderKernel`` emits a constant, one
+    ``r**(2n)`` term for every ``n = 1 .. nmax``, and a second
+    ``r**(2n) log r`` term for every ``n >= split_order`` -- roughly twice
+    ``nmax``.  In 3D it emits one ``r**(n-1)`` term per retained ``n``,
+    skipping the even powers the tables extract.  Deriving the multiplier
+    from the expression means a change to either branch cannot leave this
+    count stale.
+    """
+    import pymbolic.primitives as prim
+
+    kernel = wrangler._get_helmholtz_split_remainder_kernel()
+    expression = kernel.expression
+    while True:
+        # unwrap whatever the kernel-wrapper chain put around it
+        inner = getattr(expression, "expression", None)
+        if inner is None or inner is expression:
+            break
+        expression = inner
+
+    def _count(expr):
+        if isinstance(expr, prim.Sum):
+            return sum(_count(child) for child in expr.children)
+        # the 3D branch starts from a literal ``expr = 0`` that pymbolic
+        # keeps as a Sum child; it is not an evaluated term
+        if isinstance(expr, int | float | complex | np.number) and expr == 0:
+            return 0
+        return 1
+
+    return int(_count(expression))
+
+
 def _split_correction_operation_counts(
     *, queue, traversal, wrangler, q_order, smooth_quad_order
 ):
@@ -1267,6 +1305,7 @@ def _split_correction_operation_counts(
         "beta_p2p_pair_evals": "",
         "smooth_interp_fmas": "",
         "smooth_sources_per_box": "",
+        "remainder_terms_per_pair": "",
         "status": "",
     }
 
@@ -1316,6 +1355,28 @@ def _split_correction_operation_counts(
             box_source_counts_nonchild=smooth_counts,
         )
 
+        # exclude_self: on the base-quadrature path the correction keeps
+        # target_to_source and passes the tree's own exclude_self flag, so
+        # the P2P skips each target's own source.  The interpolated path
+        # pops target_to_source and passes False.  Counting the skipped
+        # diagonal would overstate the remainder, and the beta P2P below,
+        # by one pair per target.
+        excluded_self_pairs = 0
+        if not use_interp_smooth_quad and getattr(
+            getattr(wrangler, "tree_indep", None), "exclude_self", False
+        ):
+            excluded_self_pairs = int(
+                np.sum(
+                    np.asarray(
+                        tree.box_target_counts_nonchild.get(queue),
+                        dtype=np.int64,
+                    )[np.asarray(traversal.target_boxes.get(queue))]
+                )
+            )
+        remainder_pair_evals = max(
+            0, int(remainder_pair_evals) - excluded_self_pairs
+        )
+
         if use_interp_smooth_quad:
             n_active_source_boxes = int(np.count_nonzero(box_source_counts))
             smooth_interp_fmas = (
@@ -1361,6 +1422,7 @@ def _split_correction_operation_counts(
             "beta_p2p_pair_evals": beta_p2p_passes * remainder_pair_evals,
             "smooth_interp_fmas": smooth_interp_fmas,
             "smooth_sources_per_box": smooth_sources_per_box,
+            "remainder_terms_per_pair": _remainder_terms_per_pair(wrangler),
             "status": (
                 "interpolated_smooth_quadrature"
                 if use_interp_smooth_quad
@@ -1386,6 +1448,7 @@ def _phase_correction_op_columns(
         "ops_phase_split_correction_extra_table_fmas": 0,
         "ops_phase_split_correction_remainder_pair_evals": 0,
         "ops_phase_split_correction_remainder_term_evals": 0,
+        "ops_phase_split_correction_remainder_terms_per_pair": 0,
         "ops_phase_split_correction_beta_p2p_pair_evals": 0,
         "ops_phase_split_correction_smooth_interp_fmas": 0,
         "ops_phase_split_smooth_sources_per_box": 0,
@@ -1403,6 +1466,7 @@ def _phase_correction_op_columns(
         smooth_quad_order=split_smooth_quad_order,
     )
     remainder_pairs = correction["remainder_pair_evals"]
+    terms_per_pair = correction.get("remainder_terms_per_pair", "")
     if remainder_pairs == "":
         # the wrangler could not be interrogated: every count that depends
         # on it, and the solve total that would swallow it, stay blank
@@ -1410,7 +1474,8 @@ def _phase_correction_op_columns(
             f"ops_phase_split_correction_{name}": correction.get(name, "")
             for name in (
                 "extra_table_fmas", "remainder_pair_evals",
-                "beta_p2p_pair_evals", "smooth_interp_fmas", "status",
+                "beta_p2p_pair_evals", "smooth_interp_fmas",
+                "remainder_terms_per_pair", "status",
             )
         } | {
             "ops_phase_split_correction_remainder_term_evals": "",
@@ -1420,18 +1485,17 @@ def _phase_correction_op_columns(
             "ops_phase_split_correction_total": "",
         }
 
-    try:
-        nmax = int(wrangler._helmholtz_split_series_nmax(int(split_order)))
-    except Exception as exc:  # noqa: BLE001 - recorded, never guessed around
+    if terms_per_pair == "":
+        # the remainder kernel could not be interrogated, so the term count
+        # this multiplies by is unknown; the same policy as a blank pair
+        # count applies
         return {
             **zero,
-            "ops_phase_split_correction_status": (
-                f"unavailable:{type(exc).__name__}: {exc}"
-            ),
+            "ops_phase_split_correction_status": correction["status"],
             "ops_phase_split_correction_total": "",
         }
 
-    remainder_term_evals = float(remainder_pairs) * nmax
+    remainder_term_evals = float(remainder_pairs) * float(terms_per_pair)
     total = (
         float(correction["extra_table_fmas"])
         + remainder_term_evals
@@ -1445,6 +1509,9 @@ def _phase_correction_op_columns(
         "ops_phase_split_correction_remainder_pair_evals": remainder_pairs,
         "ops_phase_split_correction_remainder_term_evals": (
             remainder_term_evals
+        ),
+        "ops_phase_split_correction_remainder_terms_per_pair": (
+            terms_per_pair
         ),
         "ops_phase_split_correction_beta_p2p_pair_evals": (
             correction["beta_p2p_pair_evals"]

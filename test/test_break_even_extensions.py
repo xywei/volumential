@@ -123,6 +123,7 @@ def _phase_summary_row(module, *, with_seconds=True):
         "ops_phase_split_correction_extra_table_fmas": 2000,
         "ops_phase_split_correction_remainder_pair_evals": 4000,
         "ops_phase_split_correction_remainder_term_evals": 4000.0,
+        "ops_phase_split_correction_remainder_terms_per_pair": 1,
         "ops_phase_split_correction_beta_p2p_pair_evals": 2000,
         "ops_phase_split_correction_smooth_interp_fmas": 1000,
         "ops_phase_split_smooth_sources_per_box": 16,
