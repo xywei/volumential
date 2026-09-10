@@ -110,18 +110,12 @@ FIELDS = (
     "direct_loose_radial_order",
     "direct_loose_status",
     "direct_loose_build_seconds",
-    "direct_loose_build_routing",
     "direct_tight_regular_order",
     "direct_tight_radial_order",
     "direct_tight_status",
     "direct_tight_build_seconds",
-    "direct_tight_build_routing",
     "direct_policy_rel_max_entry_floor",
     "direct_reference_policy",
-    # which DuffyRadial builder actually produced the reference table used by
-    # this row (a "scalar-fallback" changes both the cost class and the
-    # converged accuracy at the requested orders)
-    "direct_build_routing",
     "windowed_vs_direct_rel_max_entry",
     "windowed_vs_direct_rel_l2",
     "classical_vs_direct_rel_max_entry",
@@ -148,6 +142,16 @@ FIELDS = (
     "ops_channel_build_singular_nodes",
     "ops_channel_build_singular_nodes_analytic",
     "ops_channel_build_special_function_evals",
+    # Which DuffyRadial builder actually produced the reference table used
+    # by this row (a "scalar-fallback" changes both the cost class and the
+    # converged accuracy at the requested orders), and the same for each
+    # policy's own build.  Appended after the historical 72 columns: this
+    # CSV has an append-only layout contract, so inserting them beside the
+    # other direct_* fields would shift every column after them and make a
+    # positional reader mix old and new runs.
+    "direct_loose_build_routing",
+    "direct_tight_build_routing",
+    "direct_build_routing",
 )
 
 PARAMETER_NAMES = {"Helmholtz": "k", "Yukawa": "lambda"}

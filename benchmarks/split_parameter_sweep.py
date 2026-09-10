@@ -2851,7 +2851,15 @@ def _row_from_result(
     direct_levels: list[int],
     repeat_count: int,
     dim: int = 2,
+    direct_build_routing: str | None = None,
 ) -> dict[str, Any]:
+    """``direct_build_routing`` defaults to the aggregate in *direct_costs*.
+
+    Pass this row's own routing where the caller has it: ``direct_costs``
+    carries a union over every parameter, which is right for the shared
+    setup-cost columns beside it and wrong for a column documented as the
+    routing of this row's direct reference tables.
+    """
     dim = _require_dimension(dim)
     diff = split_values - reference_values
     reference_norm = max(float(np.linalg.norm(reference_values)), 1.0e-300)
@@ -2910,7 +2918,11 @@ def _row_from_result(
         "direct_table_build_s": direct_costs["build_s"],
         "direct_table_quadrature_build_s": direct_costs["quadrature_build_s"],
         "direct_table_load_s": direct_costs["load_s"],
-        "direct_build_routing": direct_costs.get("build_routing", "unknown"),
+        "direct_build_routing": (
+            direct_build_routing
+            if direct_build_routing is not None
+            else direct_costs.get("build_routing", "unknown")
+        ),
         "rke_channel_build_s": rke_costs["build_s"],
         "rke_channel_quadrature_build_s": rke_costs["quadrature_build_s"],
         "rke_channel_load_s": rke_costs["load_s"],
@@ -3147,9 +3159,19 @@ def run_benchmark(
                     "source_values_host": source_values_host,
                     "reference_values": reference_values,
                     "reference_timing": reference_timing,
+                    # this parameter's own routing, not the union below:
+                    # direct_build_routing is documented as the routing of
+                    # *this row's* direct reference tables, and one
+                    # parameter falling back must not relabel the rest
+                    "direct_build_routing": str(
+                        parameter_direct_costs["build_routing"]
+                    ),
                 }
             )
 
+        # The union over every parameter, describing the *aggregate* setup
+        # this kernel's shared cost columns account for.  Each row reports
+        # its own parameter's routing instead (see parameter_cases above).
         direct_costs["build_routing"] = ";".join(sorted(direct_routings))
 
         direct_solve_total_s = sum(
@@ -3272,6 +3294,7 @@ def run_benchmark(
                         amortization=amortization,
                         direct_levels=direct_levels,
                         repeat_count=repeat_count,
+                        direct_build_routing=case["direct_build_routing"],
                     )
                 )
 

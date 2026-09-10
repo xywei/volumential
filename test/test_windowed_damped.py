@@ -292,6 +292,16 @@ def test_sweep_fields_extend_the_committed_layout():
     fields = list(module.FIELDS)
     # append-only contract: the historical columns keep their positions
     assert fields.index("case_id") == 0
+    # the routing columns are appended, not inserted beside the other
+    # direct_* fields, so a positional reader of an older CSV is unaffected
+    assert fields[-3:] == [
+        "direct_loose_build_routing",
+        "direct_tight_build_routing",
+        "direct_build_routing",
+    ]
+    assert fields.index("direct_tight_regular_order") < fields.index(
+        "direct_loose_build_routing"
+    )
     assert fields.index("benchmark_total_seconds") < fields.index(
         "zeta_phase_fraction"
     )
