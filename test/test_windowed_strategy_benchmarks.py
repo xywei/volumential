@@ -615,12 +615,36 @@ def test_non_finite_wave_numbers_are_refused(sweep, tmp_path):
             )
 
 
+def test_an_unknown_backend_is_refused_without_an_opencl_platform(sweep):
+    """``--backend`` is validated before the ICD loader is touched.
+
+    A misspelled backend must say so rather than surface whatever the driver
+    says, and on a machine with no OpenCL platform at all ``cl.get_platforms``
+    raises ``LogicError(PLATFORM_NOT_FOUND_KHR)`` before any later check could
+    run.  The fake below has no platforms *and* raises on the call, so
+    reaching the ``ValueError`` proves the check runs first.
+    """
+
+    class _NoPlatforms:
+        @staticmethod
+        def get_platforms():
+            raise AssertionError("device enumeration must not be reached")
+
+    with pytest.raises(ValueError, match="backend must be one of"):
+        sweep._select_opencl_device(_NoPlatforms(), "this-backend-does-not-exist")
+    # ... and the accepted values still pass the check and go on to enumerate
+    for backend in sweep.SUPPORTED_BACKENDS:
+        with pytest.raises(AssertionError, match="must not be reached"):
+            sweep._select_opencl_device(_NoPlatforms(), backend)
+
+
 def test_positive_parameters_still_pass_validation(sweep, tmp_path):
     """The guard must not reject the ordinary sweep it sits in front of.
 
     A nonexistent backend makes ``run_benchmark`` fail *after* validation, so
-    reaching the device-selection error is the evidence that the parameter
-    checks let a normal dispatch through.
+    reaching the backend error is the evidence that the parameter checks let a
+    normal dispatch through.  That error is raised before any device
+    enumeration (see the test above), so this stays queue-free.
     """
     with pytest.raises(ValueError, match="backend must be one of"):
         sweep.run_benchmark(

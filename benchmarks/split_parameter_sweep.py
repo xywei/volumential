@@ -472,8 +472,21 @@ def _device_supports_fp64(device) -> bool:
     )
 
 
+#: Values ``--backend`` accepts.
+SUPPORTED_BACKENDS = ("auto", "pocl-cpu", "cuda-gpu")
+
+
 def _select_opencl_device(cl, backend: str):
     backend = backend.lower()
+    # Validate the argument before touching the ICD loader: a misspelled
+    # --backend should say so rather than surface whatever the driver says,
+    # and on a machine with no OpenCL platform at all cl.get_platforms()
+    # raises LogicError(PLATFORM_NOT_FOUND_KHR) before this check could run.
+    if backend not in SUPPORTED_BACKENDS:
+        raise ValueError(
+            "backend must be one of: " + ", ".join(SUPPORTED_BACKENDS)
+        )
+
     platforms = cl.get_platforms()
 
     if backend == "pocl-cpu":
@@ -492,9 +505,7 @@ def _select_opencl_device(cl, backend: str):
                         return dev
         raise RuntimeError("NVIDIA CUDA GPU device with fp64 support not found")
 
-    if backend != "auto":
-        raise ValueError("backend must be one of: auto, pocl-cpu, cuda-gpu")
-
+    # only "auto" is left; the whitelist above rejected everything else
     for platform in platforms:
         for dev in platform.get_devices():
             if dev.type & cl.device_type.GPU and _device_supports_fp64(dev):
