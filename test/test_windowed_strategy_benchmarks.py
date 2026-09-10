@@ -1199,6 +1199,69 @@ def test_the_family_failure_outcome_charges_no_phase_twice(ks):
     assert set(info) == set(provisioned)
 
 
+@pytest.mark.parametrize("cfl", [0.5, 1.0e-12])
+def test_a_family_failure_is_counted_before_any_early_exit(
+        ks, ctx_factory, tmp_path, monkeypatch, cfl):
+    """``main`` reports windowed provisioning failures from
+    ``n_windowed_failed`` alone.
+
+    Counting it only where the step loop consumes the failure left it at
+    zero whenever the run exited earlier -- a failed radial preflight, or
+    ``dt_cfl`` under the theta floor, which a valid small positive
+    ``--cfl`` reaches -- so the driver returned success on a run whose
+    channel family never built.  ``cfl=0.5`` reaches the step block;
+    ``cfl=1e-12`` exits before it.
+    """
+    import pyopencl as cl
+
+    def explode(*args, **kwargs):
+        raise OSError("channel cache is unwritable")
+
+    monkeypatch.setattr(ks, "_prepare_windowed_channel_family", explode)
+
+    ctx = ctx_factory()
+    queue = cl.CommandQueue(ctx)
+    _steps, summary, _checkpoints = ks.run_case(
+        ctx, queue,
+        mode="smoke",
+        case_id="ks-family-failure",
+        mass_factor=0.85,
+        cache_dir=tmp_path / "cache",
+        q_order=2,
+        nlevels=4,
+        fmm_order=8,
+        split_order=1,
+        alpha=0.01,
+        initial_profile="gaussian",
+        profile_scale=0.3,
+        cfl=cfl,
+        theta_max=0.9,
+        t_end=1.0e-4,
+        max_steps=1,
+        blowup_factor=50.0,
+        dt_max=1.0e-4,
+        root_extent=1.0,
+        cutoff_inner_radius=0.2,
+        cutoff_outer_radius=0.4,
+        core_radius=0.05,
+        ladder_ratio=2.0,
+        rke_beta_mode="auto",
+        direct_only=False,
+        save_fields=None,
+        strategy="windowed",
+    )
+
+    assert int(summary["n_windowed_failed"]) == 1
+    assert int(summary["admissible"]) == 0
+    assert int(summary["n_steps"]) == 0
+    if cfl == 0.5:
+        assert summary["stop_reason"] == "windowed_provisioning_failed"
+    else:
+        # the theta-floor exit happens first, and the family failure is
+        # still reported
+        assert summary["stop_reason"] != "windowed_provisioning_failed"
+
+
 def test_compare_checkpoints_matches_shared_times_only(ks):
     weights = np.full(4, 0.25)
     baseline = {

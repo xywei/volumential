@@ -391,6 +391,57 @@ def test_strict_mode_refuses_a_cached_table_with_no_recorded_routing(
             table_manager.get_table(2, "Laplace", q_order=1, queue=queue)
 
 
+@pytest.mark.parametrize("routing", ["scalar-fallbac", "", "BATCHED", "42"])
+def test_strict_mode_refuses_an_unrecognized_cached_routing(
+    tmp_path, monkeypatch, routing
+):
+    """Provenance outside the recognized set is damaged, not verified.
+
+    Only the exact strings "scalar-fallback" and "unknown" used to be
+    refused, so a payload whose routing was corrupted to anything else --
+    "scalar-fallbac", say -- passed as a vouched-for batched build and
+    could enter a strict evidence run.
+    """
+    from volumential.nearfield_potential_table import (
+        DUFFY_BUILD_ROUTINGS,
+        DUFFY_NO_FALLBACK_ENV_VAR,
+        NearFieldInteractionTable,
+    )
+    from volumential.table_manager import (
+        UnverifiedBuildRoutingError,
+        _refuse_unverified_build_routing,
+    )
+
+    assert routing not in DUFFY_BUILD_ROUTINGS
+
+    class _Request:
+        dim = 2
+        kernel_type = "Laplace"
+        q_order = 1
+        source_box_level = 0
+
+    table = NearFieldInteractionTable.__new__(NearFieldInteractionTable)
+    table.build_routing = routing
+
+    monkeypatch.setenv(DUFFY_NO_FALLBACK_ENV_VAR, "1")
+    with pytest.raises(UnverifiedBuildRoutingError, match="unrecognized"):
+        _refuse_unverified_build_routing(table, _Request)
+
+    # every recognized non-fallback routing still loads
+    for good in DUFFY_BUILD_ROUTINGS:
+        table.build_routing = good
+        if good == "scalar-fallback":
+            with pytest.raises(UnverifiedBuildRoutingError, match="fallback"):
+                _refuse_unverified_build_routing(table, _Request)
+        else:
+            _refuse_unverified_build_routing(table, _Request)
+
+    # ... and without strict mode nothing is refused
+    monkeypatch.delenv(DUFFY_NO_FALLBACK_ENV_VAR)
+    table.build_routing = routing
+    _refuse_unverified_build_routing(table, _Request)
+
+
 def test_strict_mode_refusal_follows_the_compatibility_checks(
     ctx_factory, tmp_path, monkeypatch
 ):

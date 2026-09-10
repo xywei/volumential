@@ -301,8 +301,15 @@ def _refuse_unverified_build_routing(table, table_request, build_method=None):
 
     import volumential.opcounters as opcounters
 
+    from volumential.nearfield_potential_table import DUFFY_BUILD_ROUTINGS
+
     routing = opcounters.direct_build_routing(table)
-    if routing not in ("scalar-fallback", "unknown"):
+    # Anything outside the recognized set is corrupt provenance, not
+    # verified provenance: a damaged payload whose routing reads
+    # "scalar-fallbac" says nothing about which builder ran, so strict
+    # mode must not accept it as a batched build.
+    recognized = routing in DUFFY_BUILD_ROUTINGS
+    if recognized and routing != "scalar-fallback":
         return
 
     identity = (
@@ -316,10 +323,17 @@ def _refuse_unverified_build_routing(table, table_request, build_method=None):
             "was produced by the scalar Duffy fallback"
             + (f" ({reason})" if reason else "")
         )
-    else:
+    elif routing == "unknown":
         detail = (
             "records no build routing (its payload predates routing "
             "recording), so it cannot be shown to be a batched build"
+        )
+    else:
+        detail = (
+            f"records the unrecognized build routing {routing!r} (expected "
+            "one of " + ", ".join(DUFFY_BUILD_ROUTINGS) + "), so its "
+            "provenance is damaged and it cannot be shown to be a batched "
+            "build"
         )
 
     raise UnverifiedBuildRoutingError(
@@ -1835,6 +1849,24 @@ class NearFieldInteractionTableManager:
 
             assert abs(table.source_box_extent - record["source_box_extent"]) < 1e-15
             assert table_request.source_box_level == record["source_box_level_stored"]
+
+            # The payload's own dtype has to survive this manager, and
+            # the checks at registration only proved it fitted the manager
+            # that wrote it.  A complex Helmholtz table reopened through a
+            # default float manager would otherwise be cast element-wise
+            # by the assignments below -- every imaginary part discarded
+            # behind a ComplexWarning nobody reads -- and then serve wrong
+            # potentials from a payload that checksums perfectly.
+            _stored_values = _payload_checksum_arrays(payload)[1]
+            if not np.can_cast(
+                np.asarray(_stored_values).dtype, self.dtype, casting="safe"
+            ):
+                raise KeyError(
+                    "cached table data dtype "
+                    f"{np.asarray(_stored_values).dtype!s} cannot be safely "
+                    f"represented by this manager's dtype "
+                    f"{np.dtype(self.dtype)!s}"
+                )
 
             table.q_points[:] = payload["q_points"]
             if "data" in payload:

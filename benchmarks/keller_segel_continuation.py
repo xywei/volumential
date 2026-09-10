@@ -1162,7 +1162,9 @@ def run_case(
     max_centroid_radius = initial_diagnostics["centroid_radius"]
     min_half_mass_radius = initial_diagnostics["half_mass_radius"]
     cumulative_limiter_correction = 0.0
-    admissible = True
+    # A run whose channel family never built is inadmissible from the
+    # start, whatever the step loop later stops on
+    admissible = windowed_family_failure is None
     radial_preflight = None
     lambdas_seen = set()
     step_rows = []
@@ -1180,7 +1182,14 @@ def run_case(
         "solve_s": 0.0,
     }
     n_windowed_refused = 0
-    n_windowed_failed = 0
+    # Counted the moment the family failure is observed, not when the step
+    # loop first consumes it: any earlier exit -- a failed radial
+    # preflight, or dt_cfl under the theta floor, both reachable with
+    # perfectly valid arguments -- would otherwise skip the per-step block
+    # and leave the count at zero, so main() would omit its only
+    # provisioning-failure message and return success on a run whose
+    # channel family never built.
+    n_windowed_failed = 1 if windowed_family_failure is not None else 0
     windowed_strategy_total_s = windowed_channel_build_s
     checkpoint_index = 0
     checkpoint_fields: list[tuple[float, np.ndarray]] = []
@@ -1371,7 +1380,9 @@ def run_case(
                     n_windowed_refused += 1
                     stop_reason = "windowed_certificate_refusal"
                 else:
-                    n_windowed_failed += 1
+                    if windowed_family_failure is None:
+                        # a family failure was already counted above
+                        n_windowed_failed += 1
                     stop_reason = "windowed_provisioning_failed"
                 admissible = False
                 windowed_strategy_total_s += (

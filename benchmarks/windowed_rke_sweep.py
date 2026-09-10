@@ -61,6 +61,7 @@ import argparse
 import csv
 import json
 import logging
+import math
 import operator
 import sqlite3
 import time
@@ -205,6 +206,10 @@ def _parameter_identity_token(value: float) -> str:
     return f"{float(value):g}-{_exact_float_token(value)}"
 
 
+#: Largest ``mu`` whose square is a finite float64.
+_MAX_REPRESENTABLE_MU = math.sqrt(np.finfo(np.float64).max)
+
+
 def _damped_zeta(mu: float, phase_fraction: float) -> complex:
     """The E8 squared frequency ``zeta = mu^2 exp(-i pi f)``.
 
@@ -221,7 +226,18 @@ def _damped_zeta(mu: float, phase_fraction: float) -> complex:
     under which the assembled entries, the direct reference and therefore
     every measured column are conjugate-symmetric.
     """
-    return complex((float(mu) ** 2) * np.exp(-1j * np.pi * float(phase_fraction)))
+    squared = float(mu) ** 2 if abs(float(mu)) < _MAX_REPRESENTABLE_MU else (
+        math.inf
+    )
+    if not math.isfinite(squared):
+        # float(mu)**2 raises OverflowError, which no row taxonomy covers,
+        # and the damped block runs after the real-parameter rows of the
+        # same sweep, so it would take their measurements down with it
+        raise ValueError(
+            f"mu={float(mu):g} is too large: its square is not "
+            "representable in float64"
+        )
+    return complex(squared * np.exp(-1j * np.pi * float(phase_fraction)))
 
 
 def _damped_case_id(
@@ -552,6 +568,20 @@ def _windowed_assembly_result(
         }
     assemble_seconds = time.perf_counter() - start
     values = np.asarray(table.get_entry_data_for_full_indices(entry_ids))
+    # A row is only "ok" if its numbers are numbers.  The smooth-remainder
+    # integration and the recombination can overflow or produce nan --
+    # most easily on the damped complex-frequency path -- and
+    # _relative_deviations then propagates them while main() counts the
+    # row as usable from its status alone, so the benchmark would exit
+    # successfully carrying invalid evidence.
+    unusable = _nonfinite_assembly_reason(values, certificate)
+    if unusable is not None:
+        return {
+            "windowed_status": "failed",
+            "windowed_refusal": unusable,
+            "windowed_assemble_seconds": assemble_seconds,
+            "values": None,
+        }
     result = {
         "windowed_status": "ok",
         "windowed_refusal": "",
@@ -569,6 +599,27 @@ def _windowed_assembly_result(
     }
     result.update(_assembly_ops_fields(ops))
     return result
+
+
+def _nonfinite_assembly_reason(values, certificate) -> str | None:
+    """``None`` if the assembly is usable, else why it is not."""
+    array = np.asarray(values)
+    if array.size == 0:
+        return "assembled table carries no entries"
+    if not np.all(np.isfinite(array)):
+        return "assembled entries are not all finite"
+    for name in (
+        "condition_number",
+        "coefficient_bound",
+        "remainder_peak",
+        "truncation_tail_bound",
+    ):
+        if name not in certificate:
+            continue
+        value = float(certificate[name])
+        if not math.isfinite(value):
+            return f"certificate diagnostic '{name}' is not finite: {value}"
+    return None
 
 
 def _run_windowed(

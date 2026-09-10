@@ -510,6 +510,74 @@ def test_a_failed_kwargs_write_leaves_the_previous_entry_intact(
     assert loaded.build_method == EXTERNAL_TABLE_BUILD_METHOD
 
 
+def test_a_complex_table_refuses_to_load_through_a_float_manager(tmp_path):
+    """The registration dtype check only proves the payload fitted the
+    manager that wrote it.  Reopening a complex Helmholtz table through a
+    default float manager used to cast every imaginary part away behind a
+    ComplexWarning and serve wrong potentials from a payload that
+    checksums perfectly.
+    """
+    from sumpy.kernel import HelmholtzKernel
+
+    from volumential.rke_table_assembly import (
+        assemble_windowed_parameterized_table,
+    )
+
+    helmholtz_k = 4.0 / BOX_EXTENT
+    table, certificate = assemble_windowed_parameterized_table(
+        tmp_path / "chan.sqlite",
+        DIM,
+        "Helmholtz",
+        Q_ORDER,
+        helmholtz_k,
+        source_box_level=LEVEL,
+        root_extent=ROOT_EXTENT,
+        window_theta=WINDOW_THETA,
+        p_star=4,
+    )
+    _entry_ids, values = table.get_reduced_table_data()
+    assert np.asarray(values).dtype.kind == "c"
+    assert np.any(np.asarray(values).imag != 0.0)
+
+    knl = HelmholtzKernel(DIM)
+    cache = tmp_path / "registered.sqlite"
+    with NearFieldInteractionTableManager(
+        str(cache), root_extent=ROOT_EXTENT, dtype=np.complex128,
+    ) as manager:
+        manager.register_external_table(
+            DIM, "Helmholtz-Reference", Q_ORDER, table,
+            source_box_level=LEVEL,
+            provenance={"condition_number": certificate["condition_number"]},
+            sumpy_knl=knl,
+            **{knl.helmholtz_k_name: helmholtz_k},
+        )
+
+    # the default manager dtype is float64
+    with NearFieldInteractionTableManager(
+        str(cache), root_extent=ROOT_EXTENT,
+    ) as manager, pytest.raises(KeyError, match="cannot be safely"):
+        manager.load_saved_table(
+            DIM, "Helmholtz-Reference", Q_ORDER,
+            source_box_level=LEVEL,
+            sumpy_knl=knl,
+            **{knl.helmholtz_k_name: helmholtz_k},
+        )
+
+    # ... while the widening direction stays allowed
+    with NearFieldInteractionTableManager(
+        str(cache), root_extent=ROOT_EXTENT, dtype=np.complex128,
+    ) as manager:
+        loaded = manager.load_saved_table(
+            DIM, "Helmholtz-Reference", Q_ORDER,
+            source_box_level=LEVEL,
+            sumpy_knl=knl,
+            **{knl.helmholtz_k_name: helmholtz_k},
+        )
+    assert np.array_equal(
+        np.asarray(loaded.get_reduced_table_data()[1]), np.asarray(values)
+    )
+
+
 def _record_fields(**overrides):
     fields = {
         "n_q_points": 4,

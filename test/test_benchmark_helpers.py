@@ -1176,6 +1176,49 @@ def test_damped_phases_sweep_the_outgoing_half_plane():
     ) > mu
 
 
+@pytest.mark.parametrize(("values", "certificate", "expected"), [
+    ([1.0, 2.0], {}, None),
+    ([], {}, "no entries"),
+    ([1.0, float("nan")], {}, "not all finite"),
+    ([1.0, float("inf")], {}, "not all finite"),
+    ([1.0], {"condition_number": float("inf")}, "'condition_number'"),
+    ([1.0], {"remainder_peak": float("nan")}, "'remainder_peak'"),
+    ([1.0], {"condition_number": 2.0}, None),
+])
+def test_a_nonfinite_assembly_is_not_a_successful_row(
+        values, certificate, expected):
+    """The smooth-remainder integration and the recombination can
+    overflow or go nan -- most easily on the damped path -- and
+    _relative_deviations propagates that while main() counts the row as
+    usable from its status alone.
+    """
+    import numpy as np
+
+    module = _load_benchmark("windowed_rke_sweep")
+    reason = module._nonfinite_assembly_reason(np.asarray(values), certificate)
+    if expected is None:
+        assert reason is None
+    else:
+        assert reason is not None and expected in reason
+
+
+def test_an_unrepresentable_mu_is_refused_before_provisioning():
+    """float(mu)**2 raises OverflowError, which no row taxonomy covers,
+    and the damped block runs after the real-parameter rows of the same
+    sweep, so it would take their measurements down with it."""
+    import math
+
+    module = _load_benchmark("windowed_rke_sweep")
+
+    with pytest.raises(ValueError, match="square is not representable"):
+        module._damped_zeta(1.0e200, 0.5)
+
+    # the boundary is where the square stops being finite, and everything
+    # below it still works
+    assert math.isfinite(module._damped_zeta(1.0e150, 0.5).real)
+    assert math.isfinite(module._damped_zeta(1.0e150, 0.5).imag)
+
+
 def test_damped_case_ids_keep_close_phases_apart():
     """Two phases agreeing in the default six significant digits used to
     collide on one case id with every other field equal, so tooling keyed
