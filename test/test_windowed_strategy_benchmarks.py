@@ -27,6 +27,7 @@ THE SOFTWARE.
 """
 
 import importlib.util
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -785,6 +786,101 @@ def test_provision_windowed_yukawa_table_roundtrip(ks, tmp_path):
     assert refused_table is None
     assert refused_info["status"] == "refused"
     assert "RKEWindowCoverageError" in refused_info["detail"]
+
+
+@pytest.mark.parametrize("failing_phase", ["register", "load"])
+def test_provisioning_failures_report_the_time_they_spent(
+        ks, tmp_path, monkeypatch, failing_phase):
+    """``run_case`` sums ``register_s`` and ``load_s`` into
+    ``windowed_strategy_total_s``.  Both start preinitialized to ``0.0``,
+    so a failure that escapes registration or the reload must overwrite
+    the zero -- otherwise a failed campaign reports none of the wall time
+    it burned before failing, and the strategy comparison silently
+    understates the windowed cost of a failure.
+    """
+    import time as _time
+
+    from volumential.table_manager import NearFieldInteractionTableManager
+
+    def explode(self, *args, **kwargs):
+        # a positive elapsed time the assertion below can distinguish
+        # from the preinitialized zero
+        _time.sleep(1.0e-3)
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(
+        NearFieldInteractionTableManager,
+        {
+            "register": "register_external_table",
+            "load": "get_table",
+        }[failing_phase],
+        explode,
+    )
+
+    root_extent = 4.0
+    level = 3
+    box_extent = root_extent * 0.5**level
+    table, info = ks._provision_windowed_yukawa_table(
+        None,
+        tmp_path / "family.sqlite",
+        tmp_path / "registered.sqlite",
+        2,
+        4.0 / box_extent,
+        level,
+        root_extent,
+        16.0,
+        4,
+    )
+
+    assert table is None
+    assert info["status"] == "failed"
+    assert "OperationalError" in info["detail"]
+    assert info["assemble_s"] > 0.0
+    assert info["register_s"] > 0.0
+    if failing_phase == "register":
+        # the reload never started; charging it time would be a fiction
+        assert info["load_s"] == 0.0
+    else:
+        assert info["load_s"] > 0.0
+
+
+def test_a_recomputed_reload_still_reports_the_reload_time(
+        ks, tmp_path, monkeypatch):
+    """The 'not a pure cache hit' refusal is a failure verdict about a
+    reload that did run, so its time belongs in the total as much as a
+    successful reload's does.
+    """
+    from volumential.table_manager import NearFieldInteractionTableManager
+
+    original_get_table = NearFieldInteractionTableManager.get_table
+
+    def recomputed(self, *args, **kwargs):
+        loaded_table, _ = original_get_table(self, *args, **kwargs)
+        return loaded_table, True
+
+    monkeypatch.setattr(
+        NearFieldInteractionTableManager, "get_table", recomputed
+    )
+
+    root_extent = 4.0
+    level = 3
+    box_extent = root_extent * 0.5**level
+    table, info = ks._provision_windowed_yukawa_table(
+        None,
+        tmp_path / "family.sqlite",
+        tmp_path / "registered.sqlite",
+        2,
+        4.0 / box_extent,
+        level,
+        root_extent,
+        16.0,
+        4,
+    )
+
+    assert table is None
+    assert info["status"] == "failed"
+    assert "pure cache hit" in info["detail"]
+    assert info["load_s"] > 0.0
 
 
 def test_compare_checkpoints_matches_shared_times_only(ks):

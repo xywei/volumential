@@ -693,6 +693,7 @@ def _provision_windowed_yukawa_table(
     # checksum error would abort the whole continuation and lose the
     # diagnostic outcome rather than reporting it.
     register_start = time.perf_counter()
+    load_start = None
     try:
         with NearFieldInteractionTableManager(
             str(registered_cache_path), root_extent=float(root_extent),
@@ -737,15 +738,22 @@ def _provision_windowed_yukawa_table(
     ) as exc:
         info["status"] = "failed"
         info["detail"] = f"{type(exc).__name__}: {exc}"
-        info.setdefault("register_s", time.perf_counter() - register_start)
+        # Charge the elapsed time to the phase that was running.  Not
+        # setdefault: info preinitializes both to 0.0, so it never fires,
+        # and run_case sums these into windowed_strategy_total_s -- a
+        # failed campaign would report none of the time it actually spent.
+        if load_start is None:
+            info["register_s"] = time.perf_counter() - register_start
+        else:
+            info["load_s"] = time.perf_counter() - load_start
         return None, info
+    info["load_s"] = time.perf_counter() - load_start
     if is_recomputed:
         info["status"] = "failed"
         info["detail"] = (
             "registered windowed table did not load as a pure cache hit"
         )
         return None, info
-    info["load_s"] = time.perf_counter() - load_start
     return loaded_table, info
 
 # }}}

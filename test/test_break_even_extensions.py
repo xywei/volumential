@@ -643,6 +643,28 @@ def test_table_build_routing_counts_groups_by_recorded_routing():
     )
 
 
+@pytest.mark.parametrize("repeat_count", ["0", "-3"])
+def test_a_nonpositive_repeat_count_is_rejected_before_provisioning(
+        monkeypatch, repeat_count):
+    """``--repeat-count 0`` used to run the whole direct and RKE
+    provisioning and then measure nothing: ``_solve_statistics`` averaged
+    empty sample lists, so the summary carried ``nan`` timings and a
+    break-even point derived from them.
+    """
+    module = _load_break_even()
+    monkeypatch.setattr(sys, "argv", [
+        "break_even_validation.py", "--repeat-count", repeat_count,
+    ])
+    monkeypatch.setattr(
+        module,
+        "run_validation",
+        lambda **kwargs: pytest.fail("run_validation must not be called"),
+    )
+
+    with pytest.raises(ValueError, match="--repeat-count must be >= 1"):
+        module.main()
+
+
 # }}}
 
 

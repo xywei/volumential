@@ -1468,6 +1468,11 @@ def main() -> int:
     repeat_count = args.repeat_count
     if repeat_count is None:
         repeat_count = 6 if smoke else 400
+    if repeat_count < 1:
+        # Rejected before any provisioning: with no measured solve,
+        # _solve_statistics() averages empty sample lists and the summary
+        # reports nan timings and a meaningless break-even point.
+        raise ValueError("--repeat-count must be >= 1")
     warmup_count = 1 if smoke else 2
     phase_repeat_count = args.phase_repeat_count
     if phase_repeat_count is None:
