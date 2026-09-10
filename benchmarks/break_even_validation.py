@@ -350,10 +350,16 @@ PHASE_SECONDS_FIELDS = (
 #: (``';'``-joined).  ``ops_direct_build_routing`` is derived from it, so a
 #: ``scalar-fallback`` invalidates the batched node counts of that row.
 #:
+#: ``ops_rke_channel_build_routing`` is its RKE counterpart: the routing of
+#: the base and split-term channel tables, which price the RKE setup side.
+#:
 #: Appended after the phase columns rather than beside the other ``ops_*``
 #: fields: this CSV's layout is append-only, and inserting it earlier would
 #: shift every column #134 added by one position.
-PHASE_TRAILING_FIELDS = ("direct_build_routing",)
+PHASE_TRAILING_FIELDS = (
+    "direct_build_routing",
+    "ops_rke_channel_build_routing",
+)
 
 SUMMARY_FIELDS = (
     SUMMARY_FIELDS
@@ -575,12 +581,46 @@ def _operation_counters(
     rke_entry_counts = [
         opcounters.reduced_entry_count(table) for table in rke_tables
     ]
-    rke_nodes_per_entry = opcounters.batched_duffy_nodes_per_entry(
-        int(rke_base_table.dim),
-        rke_channel_build_config.regular_quad_order,
-        rke_channel_build_config.radial_quad_order,
-    )
+
+    # The RKE channel tables are priced under their own recorded routings for
+    # the same reason as the direct tables above: a permitted scalar fallback
+    # in any base or split-term build pays every Duffy region once per member
+    # entry, and pricing the whole family as batched would describe a build
+    # that did not run.  Unlike the direct side the tables differ from one
+    # another (base and split-term tables need not share a reduced entry
+    # set), so each is priced individually and the reported per-entry figure
+    # is the entry-weighted mean.
+    def _rke_nodes_per_entry(table, routing):
+        if routing in ("batched", "unknown"):
+            return opcounters.batched_duffy_nodes_per_entry(
+                int(table.dim),
+                rke_channel_build_config.regular_quad_order,
+                rke_channel_build_config.radial_quad_order,
+            )
+        geometry = opcounters.duffy_block_geometry(table)
+        return opcounters.scalar_duffy_singular_nodes(
+            table,
+            rke_channel_build_config.regular_quad_order,
+            rke_channel_build_config.radial_quad_order,
+            geometry=geometry,
+        ) / max(geometry["n_reduced_entries"], 1)
+
+    rke_routing_counts: dict[str, int] = {}
+    rke_node_evals = 0
+    for table, entry_count in zip(rke_tables, rke_entry_counts, strict=True):
+        table_routing = opcounters.direct_build_routing(table)
+        rke_routing_counts[table_routing] = (
+            rke_routing_counts.get(table_routing, 0) + 1
+        )
+        rke_node_evals += int(round(
+            entry_count * _rke_nodes_per_entry(table, table_routing)
+        ))
+    rke_channel_routing = ";".join(sorted(rke_routing_counts))
+
     rke_entries_built = int(np.sum(rke_entry_counts))
+    rke_nodes_per_entry = (
+        rke_node_evals / rke_entries_built if rke_entries_built else 0.0
+    )
 
     n_nf = opcounters.nearfield_point_pairs(queue, traversal)
     nmax_by_parameter = [
@@ -602,10 +642,9 @@ def _operation_counters(
         "ops_direct_special_function_evals": direct_node_evals,
         "ops_rke_channel_tables_built": len(rke_tables),
         "ops_rke_channel_entries_built": rke_entries_built,
+        "ops_rke_channel_build_routing": rke_channel_routing,
         "ops_rke_channel_singular_nodes_per_entry": rke_nodes_per_entry,
-        "ops_rke_channel_singular_node_evals": (
-            rke_entries_built * rke_nodes_per_entry
-        ),
+        "ops_rke_channel_singular_node_evals": rke_node_evals,
         # power/power-log channel integrands are elementary (log and radial
         # powers): no special-function quadrature anywhere in the family
         "ops_rke_channel_special_function_evals": 0,

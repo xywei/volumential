@@ -740,6 +740,129 @@ def test_gate_failure_carries_its_rows_for_the_csv(sweep):
 # }}}
 
 
+def _sweep_windowed_kwargs(sweep, tmp_path):
+    from volumential.nearfield_potential_table import DuffyBuildConfig
+
+    return {
+        "mode": "smoke",
+        "ctx": None,
+        "queue": None,
+        "traversal": None,
+        "cache_dir": tmp_path,
+        "q_order": 2,
+        "nlevels": 3,
+        "fmm_order": 8,
+        "dim": 2,
+        "fmm_order_rule": "fixed",
+        "max_fmm_order": None,
+        "kernel": "Yukawa",
+        "parameter_name": "lambda",
+        "thetas": [4.0],
+        "window_theta": 16.0,
+        "p_star": 4,
+        "chan_orders": (20, 61),
+        # "off" returns the skipped probe dict without touching a device
+        "classical_probe_kind": "off",
+        "classical_probe_tolerance": 1.0e-10,
+        "direct_build_config": DuffyBuildConfig(
+            radial_rule="tanh-sinh-fast",
+            regular_quad_order=8,
+            radial_quad_order=21,
+        ),
+        "repeat_count": 1,
+        "phase_repeat_count": 0,
+        "source_weights": None,
+        "q_points": None,
+        "coords_host": None,
+    }
+
+
+def _stub_sweep_windowed_assembly(sweep, monkeypatch):
+    import volumential.rke_table_assembly as rke
+
+    monkeypatch.setattr(
+        sweep,
+        "_prepare_windowed_family",
+        lambda **kwargs: {"build_s": 0.0, "was_cold": False},
+    )
+    # the assembler is imported from its own module inside the function
+    # under test, so the module attribute is what a stub has to replace
+    monkeypatch.setattr(
+        rke,
+        "assemble_windowed_parameterized_table",
+        lambda *args, **kwargs: (object(), {
+            "condition_number": 2.0,
+            "smooth_quad_order": 4,
+            "window_theta": 16.0,
+            "p_star": 4,
+        }),
+    )
+
+
+@pytest.mark.parametrize("exc", [
+    RuntimeError("registration refused"),
+    OSError("cache is unwritable"),
+    # sqlite3's exceptions descend from Exception, not OSError, and this
+    # phase is a SQLite round trip
+    sqlite3.OperationalError("database is locked"),
+])
+def test_sweep_transfer_failures_become_a_failed_row(
+        sweep, tmp_path, monkeypatch, exc):
+    """Registration and the pure-cache reload belong to the same taxonomy
+    as the assembly.  ``main()`` preserves rows only for
+    ``_BenchmarkGateError`` and otherwise writes the CSV after
+    ``run_benchmark()`` returns, so one escaping transfer error discards
+    every measurement the sweep already took, not just this row.
+    """
+    _stub_sweep_windowed_assembly(sweep, monkeypatch)
+
+    def _raise(**kwargs):
+        raise exc
+
+    monkeypatch.setattr(
+        sweep, "_register_and_load_windowed_table", _raise
+    )
+
+    rows = sweep._run_windowed_strategy(
+        **_sweep_windowed_kwargs(sweep, tmp_path)
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["windowed_status"] == "failed"
+    assert type(exc).__name__ in rows[0]["windowed_refusal"]
+    assert str(exc) in rows[0]["windowed_refusal"]
+    assert not issubclass(sqlite3.Error, OSError)
+
+
+def test_sweep_partial_transfer_metrics_reach_the_failed_row(
+        sweep, tmp_path, monkeypatch):
+    """Registration that completed before the reload failed is reported."""
+    _stub_sweep_windowed_assembly(sweep, monkeypatch)
+
+    def _register_then_fail(**kwargs):
+        exc = RuntimeError("cache reopen failed")
+        exc.partial_windowed_transfer = {
+            "register_s": 4.0,
+            "register_payload_bytes": 8000,
+            "load_s": 0.0,
+            "load_payload_bytes": 0,
+        }
+        raise exc
+
+    monkeypatch.setattr(
+        sweep, "_register_and_load_windowed_table", _register_then_fail
+    )
+
+    rows = sweep._run_windowed_strategy(
+        **_sweep_windowed_kwargs(sweep, tmp_path)
+    )
+
+    assert rows[0]["windowed_status"] == "failed"
+    assert rows[0]["windowed_register_s"] == pytest.approx(4.0)
+    assert rows[0]["windowed_register_payload_bytes"] == 8000
+    assert rows[0]["windowed_table_load_s"] == pytest.approx(0.0)
+
+
 # {{{ E4: keller_segel_continuation windowed strategy helpers
 
 def test_provision_windowed_yukawa_table_roundtrip(ks, tmp_path):

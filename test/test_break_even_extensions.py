@@ -196,11 +196,12 @@ def test_routing_column_is_appended_after_the_phase_columns():
     """
     module = _load_break_even()
     fields = list(module.SUMMARY_FIELDS)
+    n_trailing = len(module.PHASE_TRAILING_FIELDS)
 
-    assert fields[-1] == "direct_build_routing"
-    assert fields[-len(module.PHASE_SECONDS_FIELDS) - 1:-1] == list(
-        module.PHASE_SECONDS_FIELDS
-    )
+    assert fields[-n_trailing] == "direct_build_routing"
+    assert fields[
+        -len(module.PHASE_SECONDS_FIELDS) - n_trailing:-n_trailing
+    ] == list(module.PHASE_SECONDS_FIELDS)
     # ... and the phase ops columns still sit immediately before those
     ops_start = fields.index(module.PHASE_OPS_FIELDS[0])
     assert fields[ops_start:ops_start + len(module.PHASE_OPS_FIELDS)] == list(
@@ -484,8 +485,11 @@ def test_smooth_interp_price_degenerates_when_orders_match():
 
 
 class _FakeTable:
-    def __init__(self, dim=2):
+    def __init__(self, dim=2, build_routing=None):
         self.dim = dim
+        # None is what a table whose payload predates the recording has;
+        # opcounters.direct_build_routing reports it as "unknown"
+        self.build_routing = build_routing
 
 
 class _FakeBuildConfig:
@@ -543,7 +547,12 @@ def priced_counters(monkeypatch):
     parameters = [1.0, 2.0]
     direct_levels = [1, 2]
 
-    def price(routing_counts):
+    def price(routing_counts, *, rke_routings=(None,)):
+        # the RKE family is priced from the tables themselves, so its
+        # routings ride on the fake tables rather than on a count mapping
+        rke_tables = [
+            _FakeTable(build_routing=routing) for routing in rke_routings
+        ]
         return module._operation_counters(
             queue=None,
             traversal=None,
@@ -554,8 +563,10 @@ def priced_counters(monkeypatch):
             },
             direct_routing_counts=routing_counts,
             direct_build_config=_FakeBuildConfig(),
-            rke_base_table=_FakeTable(),
-            split_term_tables={},
+            rke_base_table=rke_tables[0],
+            split_term_tables=(
+                {"term": rke_tables[1:]} if len(rke_tables) > 1 else {}
+            ),
             rke_channel_build_config=_FakeBuildConfig(),
             rke_wranglers={
                 parameter: _FakeWrangler() for parameter in parameters
@@ -607,6 +618,66 @@ def test_uniform_fallback_prices_every_table_as_scalar(priced_counters):
     assert counters["ops_direct_singular_nodes_per_entry"] == 500.0
     assert counters["ops_direct_singular_node_evals"] == 20000
     assert counters["ops_direct_special_function"] == "kv0"
+
+
+def test_rke_channel_tables_are_priced_by_their_recorded_routing(
+    priced_counters,
+):
+    """A permitted scalar fallback in any base or split-term channel build
+    repriced the whole family as batched, so the emitted setup operation
+    totals described a build that did not run.
+
+    Two batched tables at 100 nodes/entry plus one scalar fallback at 500,
+    over 10 reduced entries each: 2*10*100 + 1*10*500 = 7000 node
+    evaluations, where pricing the family as batched gives 3000.
+    """
+    counters = priced_counters(
+        {"batched": 4},
+        rke_routings=("batched", "batched", "scalar-fallback"),
+    )
+    assert counters["ops_rke_channel_build_routing"] == (
+        "batched;scalar-fallback"
+    )
+    assert counters["ops_rke_channel_tables_built"] == 3
+    assert counters["ops_rke_channel_entries_built"] == 30
+    assert counters["ops_rke_channel_singular_node_evals"] == 7000
+    # the entry-weighted mean, between the two pure routings
+    assert counters["ops_rke_channel_singular_nodes_per_entry"] == (
+        pytest.approx(7000 / 30)
+    )
+    # the channel integrands stay elementary whichever builder ran
+    assert counters["ops_rke_channel_special_function_evals"] == 0
+
+
+@pytest.mark.parametrize("routing", ["batched", None])
+def test_a_uniform_batched_rke_family_prices_as_it_did_before(
+    priced_counters, routing,
+):
+    """The reprice moves no committed number: for a uniform batched family
+    the entry-weighted mean is the single routing's own value, so the
+    emitted counts are identical to the old unconditional formula.
+    ``None`` is the pre-recording payload, priced as batched under
+    ``unknown`` exactly as the direct path prices it.
+    """
+    counters = priced_counters(
+        {"batched": 4}, rke_routings=(routing, routing, routing)
+    )
+    assert counters["ops_rke_channel_build_routing"] == (
+        routing if routing else "unknown"
+    )
+    assert counters["ops_rke_channel_entries_built"] == 30
+    assert counters["ops_rke_channel_singular_nodes_per_entry"] == 100.0
+    assert counters["ops_rke_channel_singular_node_evals"] == 3000
+
+
+def test_the_rke_routing_column_is_appended_after_the_direct_one():
+    module = _load_break_even()
+    assert module.PHASE_TRAILING_FIELDS == (
+        "direct_build_routing", "ops_rke_channel_build_routing",
+    )
+    assert module.SUMMARY_FIELDS[-len(module.PHASE_TRAILING_FIELDS):] == (
+        module.PHASE_TRAILING_FIELDS
+    )
 
 
 def test_routing_counts_must_cover_every_provisioned_table(priced_counters):

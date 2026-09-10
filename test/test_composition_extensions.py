@@ -259,6 +259,39 @@ def test_windowed_composition_gates_small_theta_agreement(composition):
     )
 
 
+@pytest.mark.parametrize("max_theta", [0.5, 8.0])
+@pytest.mark.parametrize("rel_l2", [float("nan"), float("inf")])
+def test_windowed_composition_rejects_a_nonfinite_mismatch_at_every_theta(
+        composition, max_theta, rel_l2):
+    """The accuracy tolerance applies only at small theta, but finiteness
+    is not part of that scope restriction: a nan or inf mismatch is a
+    broken measurement wherever it happens, and a large-theta row used to
+    be written as valid evidence with windowed_status == "ok".
+    """
+    with pytest.raises(RuntimeError, match="non-finite mismatch"):
+        composition._validate_windowed_composition_rows(
+            [
+                _windowed_row(
+                    composition,
+                    max_theta=max_theta,
+                    windowed_vs_direct_weighted_rel_l2=rel_l2,
+                )
+            ]
+        )
+
+
+def test_windowed_composition_rejects_an_ok_row_without_a_mismatch(
+        composition):
+    with pytest.raises(RuntimeError, match="status ok without a mismatch"):
+        composition._validate_windowed_composition_rows(
+            [
+                _windowed_row(
+                    composition, windowed_vs_direct_weighted_rel_l2=""
+                )
+            ]
+        )
+
+
 def _online_row(composition, **overrides):
     row = dict.fromkeys(composition.FIELDS, "")
     row.update(

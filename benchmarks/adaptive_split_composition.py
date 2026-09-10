@@ -43,8 +43,9 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import sys
+import math
 import sqlite3
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -543,15 +544,36 @@ def _validate_windowed_composition_rows(rows: list[dict[str, Any]]) -> None:
                 f"{row['case_id']} (max theta={max_theta:g} <= Theta="
                 f"{window_theta:g}): {row['windowed_refusal']}"
             )
-        if status == "ok" and max_theta <= WINDOWED_SMALL_THETA_MAX:
-            gate = WINDOWED_SMALL_THETA_AGREEMENT[row["mode"]]
-            rel_l2 = float(row["windowed_vs_direct_weighted_rel_l2"])
-            if not rel_l2 <= gate:
+        if status == "ok":
+            # Finiteness is not part of the small-theta scope restriction.
+            # A nan or inf mismatch is a broken measurement at every theta,
+            # and the tolerance below would silently pass it through as
+            # valid evidence (nan <= gate is False, but inf > gate only
+            # trips inside the small-theta branch, and neither is checked
+            # at all at large theta).
+            try:
+                rel_l2 = float(row["windowed_vs_direct_weighted_rel_l2"])
+            except (TypeError, ValueError) as exc:
                 raise RuntimeError(
-                    "windowed-assembled composition path disagrees with the "
-                    f"direct reference at small theta for {row['case_id']}: "
-                    f"weighted_rel_l2={rel_l2:.3e} > {gate:.1e}"
+                    "windowed-assembled composition row reports status ok "
+                    f"without a mismatch for {row['case_id']}: "
+                    f"{row['windowed_vs_direct_weighted_rel_l2']!r}"
+                ) from exc
+            if not math.isfinite(rel_l2):
+                raise RuntimeError(
+                    "windowed-assembled composition path produced a "
+                    f"non-finite mismatch for {row['case_id']}: "
+                    f"weighted_rel_l2={rel_l2}"
                 )
+            if max_theta <= WINDOWED_SMALL_THETA_MAX:
+                gate = WINDOWED_SMALL_THETA_AGREEMENT[row["mode"]]
+                if not rel_l2 <= gate:
+                    raise RuntimeError(
+                        "windowed-assembled composition path disagrees with "
+                        "the direct reference at small theta for "
+                        f"{row['case_id']}: weighted_rel_l2={rel_l2:.3e} > "
+                        f"{gate:.1e}"
+                    )
 
 
 def _validate_split_order_convergence(rows: list[dict[str, Any]]) -> None:

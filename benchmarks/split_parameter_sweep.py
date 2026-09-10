@@ -36,6 +36,7 @@ import contextlib
 import csv
 import logging
 import math
+import sqlite3
 import time
 from contextlib import contextmanager
 from dataclasses import asdict
@@ -2405,17 +2406,44 @@ def _run_windowed_strategy(
             f"windowed-registered-{kernel.lower()}-{dim}d"
             f"-parameter{parameter_tag}-q{q_order}.sqlite"
         )
-        loaded_table, transfer = _register_and_load_windowed_table(
-            queue=queue,
-            cache_path=registered_cache,
-            dim=dim,
-            kernel=kernel,
-            q_order=q_order,
-            parameter=parameter,
-            source_box_level=nlevels,
-            table=assembled_table,
-            certificate=certificate,
-        )
+        try:
+            loaded_table, transfer = _register_and_load_windowed_table(
+                queue=queue,
+                cache_path=registered_cache,
+                dim=dim,
+                kernel=kernel,
+                q_order=q_order,
+                parameter=parameter,
+                source_box_level=nlevels,
+                table=assembled_table,
+                certificate=certificate,
+            )
+        except (
+            ValueError, RuntimeError, NotImplementedError, OSError, KeyError,
+            # sqlite3's exceptions descend from Exception, not OSError, and
+            # this phase is a SQLite round trip
+            sqlite3.Error,
+        ) as exc:
+            # Registration and the pure-cache reload belong to the same
+            # taxonomy as the assembly above.  main() preserves rows only
+            # for _BenchmarkGateError and otherwise writes the CSV after
+            # run_benchmark() returns, so an exception escaping here
+            # discards every measurement already taken, not just this row.
+            row["windowed_status"] = "failed"
+            row["windowed_refusal"] = f"{type(exc).__name__}: {exc}"
+            # whatever the helper got through before it raised
+            partial = getattr(exc, "partial_windowed_transfer", None)
+            if partial is not None:
+                row["windowed_register_s"] = float(partial["register_s"])
+                row["windowed_register_payload_bytes"] = int(
+                    partial["register_payload_bytes"]
+                )
+                row["windowed_table_load_s"] = float(partial["load_s"])
+                row["windowed_table_load_payload_bytes"] = int(
+                    partial["load_payload_bytes"]
+                )
+            rows.append(row)
+            continue
         row["windowed_register_s"] = transfer["register_s"]
         row["windowed_register_payload_bytes"] = transfer[
             "register_payload_bytes"
