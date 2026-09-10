@@ -100,12 +100,15 @@ separately here rather than folded away:
    ``ops_phase_split_correction_beta_p2p_pair_evals``.
 
 ``ops_phase_split_correction_remainder_term_evals`` multiplies the pair count
-by the *generated* remainder kernel's term count
-(``ops_phase_split_correction_remainder_terms_per_pair``), read off the
-expression rather than taken as the series length: in 2D the kernel emits a
-constant, one ``r**(2n)`` term for every ``n = 1 .. nmax``, and a second
-``r**(2n) log r`` term for every ``n >= p``, so ``nmax`` alone undercounts it
-by roughly a factor of two.
+by the *generated* remainder kernel's term count, read off the expression
+rather than taken as the series length: in 2D the kernel emits a constant, one
+``r**(2n)`` term for every ``n = 1 .. nmax``, and a second ``r**(2n) log r``
+term for every ``n >= p``, so ``nmax`` alone undercounts it by roughly a factor
+of two.  The count depends on the parameter, so
+``ops_phase_split_correction_remainder_terms_per_pair`` is the *mean* over the
+run's parameters -- the same set the profiled seconds beside it average over --
+and ``ops_phase_split_correction_remainder_terms_by_parameter`` keeps the
+per-parameter counts unaveraged.
 
 ``ops_phase_split_correction_remainder_term_evals`` (and therefore
 ``ops_phase_split_correction_rke`` and ``ops_phase_solve_total_rke``) uses
@@ -192,6 +195,7 @@ from split_parameter_sweep import (  # noqa: E402
     _gaussian_source_host,
     _prepare_direct_tables,
     _prepare_rke_channels,
+    _remainder_terms_per_pair,
     _select_opencl_device,
     _split_channel_build_config,
     _split_correction_operation_counts,
@@ -314,6 +318,7 @@ PHASE_OPS_FIELDS = (
     "ops_phase_split_correction_remainder_pair_evals",
     "ops_phase_split_correction_remainder_term_evals",
     "ops_phase_split_correction_remainder_terms_per_pair",
+    "ops_phase_split_correction_remainder_terms_by_parameter",
     "ops_phase_split_correction_beta_p2p_pair_evals",
     "ops_phase_split_correction_smooth_interp_fmas",
     "ops_phase_split_smooth_sources_per_box",
@@ -376,7 +381,7 @@ PHASE_COUNTING_RULE = (
     "e6-v3:far=dense_coefficient_touches_from_traversal_and_expansion_sizes;"
     "nearfield=fma_per_nearfield_pair_per_applied_table_dtype_blind;"
     "split_correction=extra_table_fmas"
-    "+remainder_pair_evals*generated_remainder_term_count"
+    "+remainder_pair_evals*mean_generated_remainder_term_count"
     "+beta_p2p_pair_evals+smooth_interp_fmas;"
     "smooth_interp=tensor_product_axis_by_axis_not_dense;"
     "recombination=0_per_solve_and_no_windowed_family_in_this_driver"
@@ -575,6 +580,7 @@ def _phase_operation_counts(
     smooth_quad_order,
     nmax_by_parameter,
     split_table_count,
+    rke_wranglers=None,
 ):
     """Per-phase operation counts of one end-to-end solve (E6).
 
@@ -605,7 +611,25 @@ def _phase_operation_counts(
     # undercounts it by roughly a factor of two.  _split_correction_
     # operation_counts reads it off the expression; fall back to the
     # series length only if it could not be interrogated, and say so.
-    terms_per_pair = correction.get("remainder_terms_per_pair", "")
+    # Averaged over the same parameter set as the profiled seconds these
+    # counts sit beside: the term count depends on the parameter through
+    # the series length, so pricing every parameter at the first one's
+    # count would put an operation numerator and a timing denominator from
+    # different sweeps in the same share.
+    terms_per_parameter = []
+    for wrangler in rke_wranglers or [rke_wrangler]:
+        try:
+            terms_per_parameter.append(
+                float(_remainder_terms_per_pair(wrangler))
+            )
+        except Exception:  # noqa: BLE001 - falls back below, never guessed
+            terms_per_parameter = []
+            break
+
+    if terms_per_parameter:
+        terms_per_pair = float(np.mean(terms_per_parameter))
+    else:
+        terms_per_pair = correction.get("remainder_terms_per_pair", "")
     if terms_per_pair == "":
         terms_per_pair = (
             float(np.mean(nmax_by_parameter)) if nmax_by_parameter else 0.0
@@ -649,7 +673,10 @@ def _phase_operation_counts(
             remainder_term_evals
         ),
         "ops_phase_split_correction_remainder_terms_per_pair": (
-            correction.get("remainder_terms_per_pair", "")
+            terms_per_pair
+        ),
+        "ops_phase_split_correction_remainder_terms_by_parameter": ";".join(
+            f"{terms:g}" for terms in terms_per_parameter
         ),
         "ops_phase_split_correction_beta_p2p_pair_evals": (
             correction["beta_p2p_pair_evals"]
@@ -1203,6 +1230,10 @@ def run_validation(
         traversal=traversal,
         direct_wrangler=paths[parameters[0]]["direct"],
         rke_wrangler=paths[parameters[0]]["rke"],
+        # every parameter's wrangler, because the generated remainder term
+        # count depends on the parameter and the profiled seconds these
+        # counts sit beside are a mean over the same set
+        rke_wranglers=[paths[parameter]["rke"] for parameter in parameters],
         q_order=q_order,
         smooth_quad_order=smooth_quad_order,
         nmax_by_parameter=nmax_by_parameter,

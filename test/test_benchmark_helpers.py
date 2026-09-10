@@ -1518,18 +1518,23 @@ def test_sweep_correction_counts_come_from_the_break_even_function():
         break_even._tensor_product_interp_fmas
         is sweep._tensor_product_interp_fmas
     )
-    # the two rules are now identical except for the recombination clause,
-    # which only the break-even driver can state (the sweep does provision
-    # windowed families)
+    # The two rules differ in exactly two documented ways: only the
+    # break-even driver can state the recombination clause (the sweep does
+    # provision windowed families), and only it averages the remainder term
+    # count, because the sweep's rows are one parameter each.
     assert sweep.PHASE_COUNTING_RULE.startswith("e6-v3:")
     assert break_even.PHASE_COUNTING_RULE.startswith("e6-v3:")
     assert break_even.PHASE_COUNTING_RULE == (
-        sweep.PHASE_COUNTING_RULE
+        sweep.PHASE_COUNTING_RULE.replace(
+            "*generated_remainder_term_count",
+            "*mean_generated_remainder_term_count",
+        )
         + ";recombination=0_per_solve_and_no_windowed_family_in_this_driver"
     )
     # the remainder multiplier is the generated term count, not nmax
     assert "generated_remainder_term_count" in sweep.PHASE_COUNTING_RULE
     assert "nmax" not in sweep.PHASE_COUNTING_RULE
+    assert "nmax" not in break_even.PHASE_COUNTING_RULE
 
 
 def test_sweep_non_split_paths_report_a_structural_zero_correction():

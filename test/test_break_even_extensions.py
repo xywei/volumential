@@ -81,6 +81,94 @@ def test_unknown_provisioning_is_rejected():
         )
 
 
+def test_remainder_term_count_averages_over_every_parameter(monkeypatch):
+    """The operation numerator must span the timing denominator's set.
+
+    The profiled RKE seconds are a mean over every parameter, so pricing
+    the remainder at the first parameter's term count would put an
+    operation numerator and a timing denominator from different sweeps
+    into the same share.
+    """
+    import numpy as np
+
+    import volumential.opcounters as opcounters
+    from volumential.expansion_wrangler_fpnd import (
+        _HelmholtzSplitSeriesRemainderKernel,
+    )
+
+    module = _load_break_even()
+
+    class _Wrangler:
+        def __init__(self, nmax):
+            self._kernel = _HelmholtzSplitSeriesRemainderKernel(
+                2, 4.0, 0.0, 3, nmax
+            )
+
+        def _get_helmholtz_split_remainder_kernel(self):
+            return self._kernel
+
+    wranglers = [_Wrangler(nmax) for nmax in (10, 20, 30)]
+    counts = [
+        module._remainder_terms_per_pair(wrangler) for wrangler in wranglers
+    ]
+    # the parameter really does change the count, so averaging matters
+    assert len(set(counts)) == len(counts)
+
+    monkeypatch.setattr(
+        opcounters,
+        "fmm_stage_operation_counts_from_traversal",
+        lambda queue, traversal, wrangler: dict.fromkeys(
+            (*module.PHASE_FAR_STAGES, "far_total"), 0
+        ),
+    )
+    monkeypatch.setattr(
+        opcounters, "expansion_coefficient_counts", lambda wrangler: ([1], [1])
+    )
+    monkeypatch.setattr(
+        opcounters, "nearfield_point_pairs", lambda queue, traversal: 100
+    )
+    monkeypatch.setattr(
+        module,
+        "_split_correction_operation_counts",
+        lambda **kwargs: {
+            "extra_table_fmas": 0,
+            "remainder_pair_evals": 100,
+            "beta_p2p_pair_evals": 0,
+            "smooth_interp_fmas": 0,
+            "smooth_sources_per_box": 4,
+            "remainder_terms_per_pair": counts[0],
+            "status": "base_quadrature",
+        },
+    )
+
+    columns = module._phase_operation_counts(
+        queue=None,
+        traversal=None,
+        direct_wrangler=None,
+        rke_wrangler=wranglers[0],
+        rke_wranglers=wranglers,
+        q_order=2,
+        smooth_quad_order=None,
+        nmax_by_parameter=[10, 20, 30],
+        split_table_count=1,
+    )
+
+    mean_terms = float(np.mean(counts))
+    assert columns[
+        "ops_phase_split_correction_remainder_terms_per_pair"
+    ] == pytest.approx(mean_terms)
+    assert columns[
+        "ops_phase_split_correction_remainder_terms_by_parameter"
+    ] == ";".join(f"{float(c):g}" for c in counts)
+    # ... and the evaluations use the mean, not the first parameter's count
+    assert columns[
+        "ops_phase_split_correction_remainder_term_evals"
+    ] == pytest.approx(100 * mean_terms)
+    assert columns[
+        "ops_phase_split_correction_remainder_term_evals"
+    ] != pytest.approx(100 * counts[0])
+
+
 def test_summary_fields_extend_the_committed_layout():
     module = _load_break_even()
     fields = list(module.SUMMARY_FIELDS)
@@ -124,6 +212,7 @@ def _phase_summary_row(module, *, with_seconds=True):
         "ops_phase_split_correction_remainder_pair_evals": 4000,
         "ops_phase_split_correction_remainder_term_evals": 4000.0,
         "ops_phase_split_correction_remainder_terms_per_pair": 1,
+        "ops_phase_split_correction_remainder_terms_by_parameter": "1",
         "ops_phase_split_correction_beta_p2p_pair_evals": 2000,
         "ops_phase_split_correction_smooth_interp_fmas": 1000,
         "ops_phase_split_smooth_sources_per_box": 16,
