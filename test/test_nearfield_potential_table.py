@@ -3047,184 +3047,24 @@ def test_complex_exponential_rewriter_visits_a_shared_cse_once():
     assert len(visits) == 1
 
 
-def test_kernel_arg_names_not_known_real_follows_the_declared_dtype():
-    from sumpy.kernel import HelmholtzKernel, LaplaceKernel, YukawaKernel
+def test_only_a_declared_double_argument_is_proven():
+    """One rule for every argument dtype, because loopy's inference is
+    not reproducible from the expression alone.
 
-    # a declared real dtype is proof enough
-    assert npt._kernel_arg_names_not_known_real(HelmholtzKernel(3)) == (
-        frozenset()
-    )
-    assert npt._kernel_arg_names_not_known_real(YukawaKernel(3)) == frozenset()
-    assert npt._kernel_arg_names_not_known_real(LaplaceKernel(3)) == (
-        frozenset()
-    )
-    assert npt._kernel_arg_names_not_known_real(None) == frozenset()
-    # ... a declared complex one is not
-    assert npt._kernel_arg_names_not_known_real(
-        HelmholtzKernel(3, allow_evanescent=True)
-    ) == frozenset({"k"})
-
-
-def test_an_integer_only_phase_keeps_its_complex_exponential():
-    """``exp(1j*n)`` with an integer ``n`` must not become ``cos(n)``.
-
-    ``cdouble_exp`` evaluates the phase as a double.  Handed an integer,
-    the C ``cos``/``sin`` overload resolution is not ours to predict, and
-    a single-precision one costs an order-one phase error past ``2**24``.
+    An argument is proven only when it is declared as a real floating
+    type at least as wide as a double.  Complex, narrow, integer and
+    undeclared dtypes are all unproven -- an integer alone narrows the
+    result of a floating builtin, and even a plain ``3.0`` beside an
+    integer comes out ``3.0f``, so this module does not try to model it.
     """
     import loopy as lp
     import numpy as _np
-    import pymbolic.primitives as prim
-    from sumpy.kernel import KernelArgument
-
-    class _IntegerArgKernel:
-        @staticmethod
-        def get_args():
-            return [KernelArgument(lp.ValueArg("n", _np.int32))]
-
-    kernel = _IntegerArgKernel()
-    # an integer argument is real, so the realness guard alone lets it pass
-    assert npt._kernel_arg_names_not_known_real(kernel) == frozenset()
-    integer_names = npt._kernel_arg_names_with_integer_dtype(kernel)
-    assert integer_names == frozenset({"n"})
-
-    n = prim.Variable("n")
-    assert npt._is_known_integer(n, integer_names)
-    assert npt._is_known_integer(prim.Product((3, n)), integer_names)
-    assert npt._is_known_integer(prim.Power(n, 2), integer_names)
-    # a float anywhere makes it a floating phase again
-    assert not npt._is_known_integer(
-        prim.Product((3.0, n)), integer_names
+    from sumpy.kernel import (
+        HelmholtzKernel,
+        KernelArgument,
+        LaplaceKernel,
+        YukawaKernel,
     )
-    assert not npt._is_known_integer(n, frozenset())
-
-    original = prim.Call(
-        prim.Variable("exp"), (prim.Product((np.complex128(1j), n)),)
-    )
-    assert npt.ComplexExponentialRewriter(
-        frozenset(), integer_names
-    )(original) == original
-    # ... while a floating phase over the same argument is still rewritten
-    floating = prim.Call(
-        prim.Variable("exp"),
-        (prim.Product((np.complex128(1j), n, prim.Variable("r"))),),
-    )
-    assert npt.ComplexExponentialRewriter(
-        frozenset(), integer_names
-    )(floating) != floating
-
-
-def test_a_complex_typed_constant_is_not_proof_of_realness():
-    """``np.complex128(0j)`` promotes the operation, whatever its value.
-
-    ``exp(1j*sqrt(x + complex128(0j)))`` reaches loopy as a
-    ``cdouble_sqrt``, which for ``x = -1600`` returns ``40j`` -- so the
-    phase is imaginary and the Euler rewrite cancels to zero against a
-    finite ``exp(-40)``.
-    """
-    import cmath
-
-    import pymbolic.primitives as prim
-
-    x = prim.Variable("x")
-    promoted = prim.Sum((x, np.complex128(0j)))
-    phase = prim.Call(prim.Variable("sqrt"), (promoted,))
-
-    # the value is real; the type is not
-    assert complex(np.complex128(0j)).imag == 0
-    assert not npt._is_known_real(np.complex128(0j))
-    assert not npt._is_known_real(promoted)
-    assert not npt._is_known_real(phase)
-    # a real-typed zero is still fine
-    assert npt._is_known_real(prim.Sum((x, np.float64(0.0))))
-
-    original = prim.Call(
-        prim.Variable("exp"), (prim.Product((np.complex128(1j), phase)),)
-    )
-    assert npt.ComplexExponentialRewriter()(original) == original
-
-    # ... and this is the arithmetic that would have been lost: at x =
-    # -1600 the phase is 40j, the true value is exp(-40), and the Euler
-    # form cancels to exactly zero -- every digit, as in the evanescent
-    # case above
-    imaginary_phase = cmath.sqrt(complex(-1600.0))
-    assert imaginary_phase == 40j
-    assert cmath.exp(1j * imaginary_phase) == pytest.approx(cmath.exp(-40.0))
-    assert cmath.exp(-40.0) != 0
-    assert cmath.cos(imaginary_phase) + 1j * cmath.sin(imaginary_phase) == 0
-
-    # further out it stops being finite at all
-    with np.errstate(over="ignore", invalid="ignore"):
-        far = np.sqrt(np.complex128(-1.0e6))
-        assert np.isfinite(np.exp(1j * far))
-        assert not np.isfinite(np.cos(far) + 1j * np.sin(far))
-
-
-def test_integer_preserving_calls_keep_a_phase_integral():
-    """``exp(1j*abs(n))`` is as integral as ``exp(1j*n)``.
-
-    ``_is_known_real`` accepts ``abs``, so without this the integer guard
-    fell through and the rewrite emitted ``cos(abs(n))`` over an integer.
-    """
-    import pymbolic.primitives as prim
-
-    n = prim.Variable("n")
-    integer_names = frozenset({"n"})
-
-    for build in (
-        lambda: prim.Call(prim.Variable("abs"), (n,)),
-        lambda: prim.Call(prim.Variable("max"), (n, 3)),
-        lambda: prim.Call(prim.Variable("min"), (n, 3)),
-        lambda: prim.FloorDiv(n, 2),
-        lambda: prim.Remainder(n, 7),
-    ):
-        phase = build()
-        assert npt._is_known_real(phase), phase
-        assert npt._is_known_integer(phase, integer_names), phase
-        original = prim.Call(
-            prim.Variable("exp"), (prim.Product((np.complex128(1j), phase)),)
-        )
-        assert npt.ComplexExponentialRewriter(
-            frozenset(), integer_names
-        )(original) == original
-
-    # floor/ceil/round/trunc are not integer-*valued* -- C has no integer
-    # overload for them -- but fed an integer, loopy types them at single
-    # precision, so they are not proven double either and the rewrite is
-    # declined for a different reason.  See
-    # test_an_integer_fed_builtin_is_not_proven_double.
-    for name in ("floor", "ceil", "round", "trunc"):
-        phase = prim.Call(prim.Variable(name), (n,))
-        assert not npt._is_known_integer(phase, integer_names)
-        original = prim.Call(
-            prim.Variable("exp"), (prim.Product((np.complex128(1j), phase)),)
-        )
-        assert npt.ComplexExponentialRewriter(
-            frozenset(), integer_names
-        )(original) == original
-        # ... and with a double operand mixed in, it is proven again
-        widened = prim.Call(
-            prim.Variable(name), (prim.Product((n, prim.Variable("r"))),)
-        )
-        rewritten = prim.Call(
-            prim.Variable("exp"), (prim.Product((np.complex128(1j), widened)),)
-        )
-        assert npt.ComplexExponentialRewriter(
-            frozenset(), integer_names
-        )(rewritten) != rewritten
-
-
-def test_a_narrow_float_phase_keeps_its_complex_exponential():
-    """``float32`` is real, but not the precision ``cdouble_exp`` used.
-
-    The rewrite would select OpenCL's single-precision ``cos``/``sin``
-    overloads where the complex exponential had promoted the argument to
-    double.
-    """
-    import loopy as lp
-    import numpy as _np
-    import pymbolic.primitives as prim
-    from sumpy.kernel import KernelArgument
 
     def _kernel(dtype):
         class _K:
@@ -3233,24 +3073,194 @@ def test_a_narrow_float_phase_keeps_its_complex_exponential():
                 return [KernelArgument(lp.ValueArg("k", dtype))]
         return _K()
 
+    # the kernels this table actually builds declare float64 parameters
+    assert npt._kernel_arg_names_not_known_real(HelmholtzKernel(3)) == (
+        frozenset()
+    )
+    assert npt._kernel_arg_names_not_known_real(YukawaKernel(3)) == frozenset()
+    assert npt._kernel_arg_names_not_known_real(LaplaceKernel(3)) == (
+        frozenset()
+    )
+    assert npt._kernel_arg_names_not_known_real(None) == frozenset()
+    assert npt._kernel_arg_names_not_known_real(_kernel(_np.float64)) == (
+        frozenset()
+    )
+
+    # everything else is unproven
     assert npt._kernel_arg_names_not_known_real(
-        _kernel(_np.float64)
-    ) == frozenset()
-    for narrow in (_np.float32, _np.float16):
+        HelmholtzKernel(3, allow_evanescent=True)
+    ) == frozenset({"k"})
+    for unproven in (
+        _np.complex128, _np.float32, _np.float16,
+        _np.int32, _np.int64, _np.uint32, None,
+    ):
         assert npt._kernel_arg_names_not_known_real(
-            _kernel(narrow)
-        ) == frozenset({"k"})
+            _kernel(unproven)
+        ) == frozenset({"k"}), unproven
+
+    # a bare lp.ValueArg has no dtype at all
+    assert KernelArgument(lp.ValueArg("k")).loopy_arg.dtype is None
+
+
+@pytest.mark.parametrize(
+    "build_phase",
+    [
+        # the bare integer argument
+        lambda prim, n, k: n,
+        # ... behind an integer-preserving call
+        lambda prim, n, k: prim.Call(prim.Variable("abs"), (n,)),
+        # ... behind a floating builtin, which loopy narrows anyway
+        lambda prim, n, k: prim.Call(prim.Variable("floor"), (n,)),
+        # ... scaled by a Python float, which loopy emits as 3.0f
+        lambda prim, n, k: prim.Product((3.0, n)),
+        # ... and mixed with a proven double, which does not rescue it
+        lambda prim, n, k: prim.Product((n, k)),
+    ],
+)
+def test_any_unproven_argument_declines_the_rewrite(build_phase):
+    """One rule covers every way an unproven argument can enter a phase.
+
+    Each of these used to need its own predicate branch, and each new
+    shape found the next gap; the dependency on an unproven argument is
+    the thing they have in common.
+    """
+    import pymbolic.primitives as prim
+
+    n = prim.Variable("n")
+    k = prim.Variable("k")
+    unproven = frozenset({"n"})
+    phase = build_phase(prim, n, k)
+
+    assert npt._is_known_real(phase)              # proven when n is a double
+    assert not npt._is_known_real(phase, unproven)
+
+    original = prim.Call(
+        prim.Variable("exp"), (prim.Product((np.complex128(1j), phase)),)
+    )
+    assert npt.ComplexExponentialRewriter(unproven)(original) == original
+    # ... and the same expression is rewritten when nothing is unproven
+    assert npt.ComplexExponentialRewriter()(original) != original
+
+
+def test_the_magnitude_obeys_the_same_argument_rule():
+    """``exp(re)`` is a bare real call too, so ``re`` clears the same bar."""
+    import pymbolic.primitives as prim
+
+    a = prim.Variable("a")
+    k = prim.Variable("k")
+    argument = prim.Sum((
+        prim.Product((-1, a)),
+        prim.Product((np.complex128(1j), k)),
+    ))
+    original = prim.Call(prim.Variable("exp"), (argument,))
+
+    assert npt.ComplexExponentialRewriter()(original) != original
+    assert npt.ComplexExponentialRewriter(frozenset({"a"}))(original) == (
+        original
+    )
+    # a purely imaginary exponent has no magnitude to prove
+    phase_only = prim.Call(
+        prim.Variable("exp"), (prim.Product((np.complex128(1j), k)),)
+    )
+    assert npt.ComplexExponentialRewriter(frozenset({"a"}))(phase_only) != (
+        phase_only
+    )
+
+
+def test_narrow_and_complex_constants_are_not_proof_of_a_double():
+    """A constant's *type* decides, not its value."""
+    import pymbolic.primitives as prim
+
+    n = prim.Variable("n")
+
+    assert npt._is_known_real(0.1)          # Python float is a double
+    assert npt._is_known_real(np.float64(0.1))
+    assert npt._is_known_real(3)            # an exact integer constant
+    assert not npt._is_known_real(np.float32(0.1))
+    assert not npt._is_known_real(np.float16(0.1))
+    assert not npt._is_known_real(np.complex128(0j))
+    assert not npt._is_known_real(prim.Product((np.float32(0.1), n)))
 
     original = prim.Call(
         prim.Variable("exp"),
-        (prim.Product((np.complex128(1j), prim.Variable("k"))),),
+        (prim.Product((np.complex128(1j), np.float32(0.1), n)),),
     )
-    assert npt.ComplexExponentialRewriter(
-        npt._kernel_arg_names_not_known_real(_kernel(_np.float32))
-    )(original) == original
-    assert npt.ComplexExponentialRewriter(
-        npt._kernel_arg_names_not_known_real(_kernel(_np.float64))
-    )(original) != original
+    assert npt.ComplexExponentialRewriter()(original) == original
+    widened = prim.Call(
+        prim.Variable("exp"),
+        (prim.Product((np.complex128(1j), np.float64(0.1), n)),),
+    )
+    assert npt.ComplexExponentialRewriter()(widened) != widened
+
+
+def test_a_complex_typed_constant_behind_a_call_is_not_proof_of_realness():
+    """``sqrt(x + complex128(0j))`` can come back imaginary.
+
+    At ``x = -1600`` it is ``40j``, the true value is ``exp(-40)``, and
+    the Euler form cancels to exactly zero.
+    """
+    import cmath
+
+    import pymbolic.primitives as prim
+
+    x = prim.Variable("x")
+    phase = prim.Call(
+        prim.Variable("sqrt"), (prim.Sum((x, np.complex128(0j))),)
+    )
+    assert not npt._is_known_real(phase)
+    # a real-typed zero in the same position is fine
+    assert npt._is_known_real(
+        prim.Call(prim.Variable("sqrt"), (prim.Sum((x, np.float64(0.0))),))
+    )
+
+    original = prim.Call(
+        prim.Variable("exp"), (prim.Product((np.complex128(1j), phase)),)
+    )
+    assert npt.ComplexExponentialRewriter()(original) == original
+
+    imaginary_phase = cmath.sqrt(complex(-1600.0))
+    assert imaginary_phase == 40j
+    assert cmath.exp(-40.0) != 0
+    assert cmath.cos(imaginary_phase) + 1j * cmath.sin(imaginary_phase) == 0
+    with np.errstate(over="ignore", invalid="ignore"):
+        far = np.sqrt(np.complex128(-1.0e6))
+        assert np.isfinite(np.exp(1j * far))
+        assert not np.isfinite(np.cos(far) + 1j * np.sin(far))
+
+
+def test_a_quotient_by_one_does_not_hide_the_phase():
+    """``SympyToPymbolicMapper`` wraps the scaling constant in a ``/1``.
+
+    ``exp(1j*k)`` arrives as ``exp((1j*k)/1)``; without walking the
+    quotient the exponent is opaque, the imaginary part is a structural
+    zero, and the ``cdouble_exp`` this PR exists to remove stays put.
+    """
+    import pymbolic.primitives as prim
+
+    k = prim.Variable("k")
+    wrapped = prim.Quotient(prim.Product((np.complex128(1j), k)), 1)
+
+    real_part, imag_part = npt._split_complex_expression(wrapped)
+    assert npt._is_structural_zero(real_part)
+    assert _pymbolic_eval(imag_part, {"k": 2.5}) == pytest.approx(2.5)
+
+    original = prim.Call(prim.Variable("exp"), (wrapped,))
+    rewritten = npt.ComplexExponentialRewriter()(original)
+    assert rewritten != original
+    for value in (0.4, 2.5, 7.0):
+        assert _pymbolic_eval(rewritten, {"k": value}) == pytest.approx(
+            _pymbolic_eval(original, {"k": value}), rel=1e-13
+        )
+
+    # a genuinely complex denominator is left alone rather than divided
+    # through, which would reintroduce the cancellation
+    complex_denominator = prim.Quotient(
+        prim.Product((np.complex128(1j), k)),
+        prim.Sum((1.0, np.complex128(1j))),
+    )
+    assert npt.ComplexExponentialRewriter()(
+        prim.Call(prim.Variable("exp"), (complex_denominator,))
+    ) == prim.Call(prim.Variable("exp"), (complex_denominator,))
 
 
 def test_splitting_a_product_chain_stays_linear():
@@ -3308,161 +3318,6 @@ def test_splitting_a_product_chain_stays_linear():
     assert _pymbolic_eval(real_part, context) + 1j * _pymbolic_eval(
         imag_part, context
     ) == pytest.approx(expected)
-
-
-def test_narrow_float_constants_are_not_proof_of_a_double_phase():
-    """``np.float32(0.1)`` narrows the operation just as complex widens it."""
-    import pymbolic.primitives as prim
-
-    n = prim.Variable("n")
-
-    assert npt._is_known_real(0.1)          # Python float is a double
-    assert npt._is_known_real(np.float64(0.1))
-    assert npt._is_known_real(3)            # integers are exact
-    assert npt._is_known_real(np.int32(3))
-    assert not npt._is_known_real(np.float32(0.1))
-    assert not npt._is_known_real(np.float16(0.1))
-    assert not npt._is_known_real(prim.Product((np.float32(0.1), n)))
-
-    original = prim.Call(
-        prim.Variable("exp"),
-        (prim.Product((np.complex128(1j), np.float32(0.1), n)),),
-    )
-    assert npt.ComplexExponentialRewriter()(original) == original
-    # the same expression at double precision is rewritten
-    widened = prim.Call(
-        prim.Variable("exp"),
-        (prim.Product((np.complex128(1j), np.float64(0.1), n)),),
-    )
-    assert npt.ComplexExponentialRewriter()(widened) != widened
-
-
-def test_an_integer_magnitude_keeps_its_complex_exponential():
-    """``exp(n + 1j*k)`` with an integer ``n`` keeps ``cdouble_exp`` too.
-
-    The integer guard used to apply to the phase alone, so an integer
-    magnitude reached a bare ``exp()`` where the complex exponential had
-    incorporated it as a double.
-    """
-    import pymbolic.primitives as prim
-
-    n = prim.Variable("n")
-    k = prim.Variable("k")
-    integer_names = frozenset({"n"})
-    argument = prim.Sum((n, prim.Product((np.complex128(1j), k))))
-    original = prim.Call(prim.Variable("exp"), (argument,))
-
-    # nothing declared integral: both halves are doubles, so it rewrites
-    assert npt.ComplexExponentialRewriter()(original) != original
-    # n declared int32: the magnitude is integral, so it does not
-    assert npt.ComplexExponentialRewriter(
-        frozenset(), integer_names
-    )(original) == original
-
-    # the phase-only case still rewrites under the same integer set, since
-    # there is no magnitude to prove
-    phase_only = prim.Call(
-        prim.Variable("exp"), (prim.Product((np.complex128(1j), k)),)
-    )
-    assert npt.ComplexExponentialRewriter(
-        frozenset(), integer_names
-    )(phase_only) != phase_only
-
-
-def test_the_magnitude_is_held_to_the_same_precision_proof():
-    """``exp(re)`` must be a double too, not only the phase.
-
-    With ``a`` float32 and ``k`` float64, the phase passes but the
-    magnitude would be emitted as a single-precision ``exp``, where
-    ``cdouble_exp`` promoted the whole exponent -- enough to underflow
-    ``exp(-200)`` to zero.
-    """
-    import pymbolic.primitives as prim
-
-    a = prim.Variable("a")
-    k = prim.Variable("k")
-    argument = prim.Sum((
-        prim.Product((-1, a)),
-        prim.Product((np.complex128(1j), k)),
-    ))
-    original = prim.Call(prim.Variable("exp"), (argument,))
-
-    # nothing unproven: both parts are double, so the rewrite happens
-    assert npt.ComplexExponentialRewriter()(original) != original
-
-    # a narrow magnitude declines it, even though the phase is fine
-    narrow_magnitude = npt.ComplexExponentialRewriter(frozenset({"a"}))
-    assert narrow_magnitude(original) == original
-
-    # ... and a purely imaginary exponent has no magnitude to prove, so an
-    # unproven name that does not appear in it is irrelevant
-    purely_imaginary = prim.Call(
-        prim.Variable("exp"), (prim.Product((np.complex128(1j), k)),)
-    )
-    assert narrow_magnitude(purely_imaginary) != purely_imaginary
-
-
-def test_an_integer_fed_builtin_is_not_proven_double():
-    """``floor(n)`` over an integer ``n`` is emitted at single precision.
-
-    loopy generates ``floor((float) (n))``, not the double promotion C
-    would suggest, so the rewritten magnitude would use a single-precision
-    ``exp`` where ``cdouble_exp`` had worked in double -- enough to
-    underflow ``exp(-200)``.
-    """
-    import pymbolic.primitives as prim
-
-    n = prim.Variable("n")
-    k = prim.Variable("k")
-    integer_names = frozenset({"n"})
-
-    magnitude = prim.Call(prim.Variable("floor"), (n,))
-    assert npt._is_known_real(magnitude)  # real, just not a double
-    assert not npt._is_known_real(magnitude, frozenset(), integer_names)
-
-    original = prim.Call(
-        prim.Variable("exp"),
-        (prim.Sum((magnitude, prim.Product((np.complex128(1j), k)))),),
-    )
-    assert npt.ComplexExponentialRewriter(
-        frozenset(), integer_names
-    )(original) == original
-    # nothing declared integral: the same expression is rewritten
-    assert npt.ComplexExponentialRewriter()(original) != original
-
-
-def test_an_inferred_argument_dtype_counts_as_potentially_complex():
-    """``lp.ValueArg("k")`` has no dtype, and accepts a complex value.
-
-    Loopy leaves such an argument as ``<auto/runtime>``, and
-    ``_extract_integral_kernel_runtime_kwargs`` accepts any ``numbers.Number``
-    for it, so an undeclared dtype must not be read as "real".
-    """
-    import loopy as lp
-    import pymbolic.primitives as prim
-    from sumpy.kernel import KernelArgument
-
-    class _UndeclaredArgKernel:
-        @staticmethod
-        def get_args():
-            return [KernelArgument(lp.ValueArg("k"))]
-
-    assert KernelArgument(lp.ValueArg("k")).loopy_arg.dtype is None
-    assert npt._kernel_arg_names_not_known_real(
-        _UndeclaredArgKernel()
-    ) == frozenset({"k"})
-
-    # ... so exp(1j*k*r) keeps its cdouble_exp for such a kernel
-    unproven = npt._kernel_arg_names_not_known_real(_UndeclaredArgKernel())
-    original = prim.Call(
-        prim.Variable("exp"),
-        (prim.Product((
-            np.complex128(1j), prim.Variable("k"), prim.Variable("r")
-        )),),
-    )
-    assert npt.ComplexExponentialRewriter(unproven)(original) == original
-    # and is rewritten only when nothing says the argument may be complex
-    assert npt.ComplexExponentialRewriter()(original) != original
 
 
 def test_complex_exponential_rewriter_keeps_a_possibly_complex_phase():

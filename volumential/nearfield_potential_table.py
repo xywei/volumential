@@ -131,6 +131,17 @@ def _add(left, right):
     return prim.Sum((*_terms(left), *_terms(right)))
 
 
+def _div(numerator, denominator):
+    """``numerator / denominator`` with structural 1 folding."""
+    if _is_structural_zero(numerator):
+        return 0
+    if _is_structural_one(denominator):
+        return numerator
+    if _is_numeric_constant(numerator) and _is_numeric_constant(denominator):
+        return numerator / denominator
+    return prim.Quotient(numerator, denominator)
+
+
 def _named_subexpression(expr):
     """*expr* behind a CSE, unless it is already a leaf or one."""
     if _is_numeric_constant(expr) or isinstance(
@@ -165,6 +176,19 @@ def _split_complex_expression(expr):
             re_total = _add(re_total, child_re)
             im_total = _add(im_total, child_im)
         return re_total, im_total
+
+    if isinstance(expr, prim.Quotient):
+        # (a + ib)/c = a/c + i b/c for a *real* c.  Worth walking because
+        # SympyToPymbolicMapper emits a "/1" wrapper -- exp(1j*k) arrives
+        # as exp((1j*k)/1) -- which would otherwise make the whole
+        # exponent opaque and leave the cdouble_exp in place.  A complex
+        # denominator is left alone: dividing through it would reintroduce
+        # exactly the cancellation this module exists to avoid.
+        den_re, den_im = _split_complex_expression(expr.denominator)
+        if _is_structural_zero(den_im):
+            num_re, num_im = _split_complex_expression(expr.numerator)
+            return _div(num_re, den_re), _div(num_im, den_re)
+        return expr, 0
 
     if isinstance(expr, prim.Product):
         re_total, im_total = 1, 0
@@ -212,8 +236,7 @@ _REAL_VALUED_FUNCTIONS = frozenset({
 })
 
 
-def _is_known_real(expr, unproven_names=frozenset(),
-                   integer_names=frozenset()):
+def _is_known_real(expr, unproven_names=frozenset()):
     """Whether *expr* can be *proved* real-valued, node by node.
 
     The guard on the Euler rewrite has to be positive rather than a
@@ -245,17 +268,15 @@ def _is_known_real(expr, unproven_names=frozenset(),
         return complex(expr).imag == 0
 
     if isinstance(expr, prim.CommonSubexpression):
-        return _is_known_real(expr.child, unproven_names, integer_names)
+        return _is_known_real(expr.child, unproven_names)
 
     if isinstance(expr, prim.Variable):
         # SpatialConstant and friends subclass Variable
         return expr.name not in unproven_names
 
     if isinstance(expr, prim.Subscript):
-        return _is_known_real(
-            expr.aggregate, unproven_names, integer_names
-        ) and all(
-            _is_known_real(index, unproven_names, integer_names)
+        return _is_known_real(expr.aggregate, unproven_names) and all(
+            _is_known_real(index, unproven_names)
             for index in (
                 expr.index
                 if isinstance(expr.index, tuple)
@@ -265,23 +286,15 @@ def _is_known_real(expr, unproven_names=frozenset(),
 
     if isinstance(expr, prim.Sum | prim.Product):
         return all(
-            _is_known_real(child, unproven_names, integer_names)
+            _is_known_real(child, unproven_names)
             for child in expr.children
         )
 
     if isinstance(expr, prim.Quotient | prim.FloorDiv | prim.Remainder):
-        return _is_known_real(
-            expr.numerator, unproven_names, integer_names
-        ) and _is_known_real(
-            expr.denominator, unproven_names, integer_names
-        )
+        return _is_known_real(expr.numerator, unproven_names) and _is_known_real(expr.denominator, unproven_names)
 
     if isinstance(expr, prim.Power):
-        return _is_known_real(
-            expr.base, unproven_names, integer_names
-        ) and _is_known_real(
-            expr.exponent, unproven_names, integer_names
-        )
+        return _is_known_real(expr.base, unproven_names) and _is_known_real(expr.exponent, unproven_names)
 
     if isinstance(expr, prim.Call):
         function = expr.function
@@ -290,116 +303,46 @@ def _is_known_real(expr, unproven_names=frozenset(),
             and function.name in _REAL_VALUED_FUNCTIONS
         ):
             return False
-        if expr.parameters and all(
-            _is_known_integer(parameter, integer_names)
-            for parameter in expr.parameters
-        ):
-            # Not the promotion one would expect: loopy types a floating
-            # builtin fed only by integers at *single* precision -- it
-            # emits floor((float) (n)) -- where the cdouble_exp being
-            # replaced promoted the result and worked in double.
-            return False
         return all(
-            _is_known_real(parameter, unproven_names, integer_names)
+            _is_known_real(parameter, unproven_names)
             for parameter in expr.parameters
         )
 
     return False
-
-
-#: Calls that return an integer when every argument is one.  ``floor``,
-#: ``ceil``, ``round`` and ``trunc`` are deliberately *absent*: C gives them
-#: no integer overload, so an integer argument is promoted and the result is
-#: a double, which is the precision the phase needs anyway.
-_INTEGER_PRESERVING_FUNCTIONS = frozenset({"abs", "max", "min"})
-
-
-def _is_known_integer(expr, integer_names=frozenset()):
-    """Whether *expr* provably evaluates in integer arithmetic.
-
-    The mirror image of :func:`_is_known_real`, and conservative in the
-    same direction: an expression this cannot classify answers *False*,
-    because the caller uses a *True* here to decline a rewrite.
-    """
-    if _is_numeric_constant(expr):
-        return isinstance(expr, int | np.integer)
-
-    if isinstance(expr, prim.CommonSubexpression):
-        return _is_known_integer(expr.child, integer_names)
-
-    if isinstance(expr, prim.Variable):
-        return expr.name in integer_names
-
-    if isinstance(expr, prim.Sum | prim.Product):
-        return all(
-            _is_known_integer(child, integer_names) for child in expr.children
-        )
-
-    if isinstance(expr, prim.Power):
-        return _is_known_integer(
-            expr.base, integer_names
-        ) and _is_known_integer(expr.exponent, integer_names)
-
-    if isinstance(expr, prim.FloorDiv | prim.Remainder):
-        return _is_known_integer(
-            expr.numerator, integer_names
-        ) and _is_known_integer(expr.denominator, integer_names)
-
-    if isinstance(expr, prim.Call):
-        function = expr.function
-        if not (
-            isinstance(function, prim.Variable)
-            and function.name in _INTEGER_PRESERVING_FUNCTIONS
-        ):
-            return False
-        return all(
-            _is_known_integer(parameter, integer_names)
-            for parameter in expr.parameters
-        )
-
-    return False
-
-
-def _kernel_arg_names_with_integer_dtype(kernel):
-    """Names of *kernel*'s runtime arguments declared with an integer dtype."""
-    return _kernel_arg_names_by_dtype_kind(kernel, np.integer)
 
 
 def _kernel_arg_names_not_known_real(kernel):
-    """Names of *kernel*'s runtime arguments that are not provably real.
+    """Names of *kernel*'s arguments that are not a proven ``float64``.
 
-    An argument counts as real only when its declared dtype *is* a real
-    numpy dtype.  ``HelmholtzKernel(dim, allow_evanescent=True)`` declares
-    its wave number ``k`` as ``complex128`` where the ordinary Helmholtz
-    kernel declares ``float64``, and only that dtype distinguishes them,
-    since both reach the table builder as the same symbolic
-    :class:`~pymbolic.primitives.Variable`.
+    The rewrite replaces one ``cdouble_exp``, which promotes its whole
+    argument to double, with bare real ``exp``/``cos``/``sin`` calls whose
+    precision loopy infers from the expression.  This module cannot
+    reproduce that inference -- an integer argument alone narrows the
+    result of a floating builtin, and even a plain ``3.0`` beside an
+    integer comes out ``3.0f`` -- so it does not try.  An argument is
+    proven only when its declared dtype is a real floating type at least
+    as wide as a ``double``; everything else, including
+    ``complex128`` (``HelmholtzKernel(dim, allow_evanescent=True)``),
+    ``float32``, every integer dtype, and the ``<auto/runtime>`` loopy
+    leaves on a bare ``lp.ValueArg("k")``, is unproven and declines the
+    rewrite for any exponent that touches it.
 
-    The default is deliberately "not real" rather than "not complex".  A
-    custom kernel may declare ``KernelArgument(lp.ValueArg("k"))`` with no
-    dtype at all, which loopy leaves as ``<auto/runtime>`` while
-    :meth:`NearFieldInteractionTable._extract_integral_kernel_runtime_kwargs`
-    happily accepts a complex value for it -- so an argument whose dtype is
-    absent, inferred, or of a kind this function does not recognize has to
-    be treated as potentially complex.
+    No sumpy kernel this table builds has such an argument -- Helmholtz's
+    ``k`` and Yukawa's ``lam`` are both ``float64`` -- so the rule costs
+    the optimization nothing in practice and buys a guarantee instead of a
+    model.
     """
     names = set()
-    for name in _kernel_arg_names_by_dtype_kind(
-        kernel, (np.floating, np.integer), match=False
-    ):
-        names.add(name)
-    # A float32 argument is real, but the rewrite would hand it to the
-    # single-precision cos/sin overloads where cdouble_exp had promoted it
-    # to double.  Only a double-width real dtype proves the phase.
     for name, dtype in _kernel_arg_dtypes(kernel).items():
         try:
-            narrow = bool(
-                np.issubdtype(dtype, np.floating)
-                and np.dtype(dtype).itemsize < 8
+            proven = bool(
+                dtype is not None
+                and np.issubdtype(dtype, np.floating)
+                and np.dtype(dtype).itemsize >= 8
             )
         except TypeError:
-            narrow = False
-        if narrow:
+            proven = False
+        if not proven:
             names.add(name)
     return frozenset(names)
 
@@ -422,46 +365,6 @@ def _kernel_arg_dtypes(kernel):
         dtype = getattr(loopy_arg, "dtype", None)
         dtypes[name] = getattr(dtype, "numpy_dtype", dtype)
     return dtypes
-
-
-def _kernel_arg_names_by_dtype_kind(kernel, kinds, *, match=True):
-    """Kernel argument names whose declared dtype is (not) one of *kinds*.
-
-    ``loopy`` wraps dtypes in :class:`loopy.types.NumpyType`, and leaves an
-    undeclared one as :class:`loopy.types.AutoType`, which carries no numpy
-    dtype at all -- so an argument declared ``lp.ValueArg("k")`` matches
-    nothing and lands in the *not*-matching set.
-    """
-    if kernel is None:
-        return frozenset()
-
-    get_args = getattr(kernel, "get_args", None)
-    if get_args is None:
-        return frozenset()
-
-    if not isinstance(kinds, tuple):
-        kinds = (kinds,)
-
-    names = set()
-    for kernel_arg in get_args():
-        loopy_arg = getattr(kernel_arg, "loopy_arg", None)
-        name = getattr(loopy_arg, "name", None)
-        if not name:
-            continue
-
-        dtype = getattr(loopy_arg, "dtype", None)
-        dtype = getattr(dtype, "numpy_dtype", dtype)
-        try:
-            matches = dtype is not None and any(
-                np.issubdtype(dtype, kind) for kind in kinds
-            )
-        except TypeError:
-            matches = False
-
-        if matches is match:
-            names.add(name)
-
-    return frozenset(names)
 
 
 class ComplexExponentialRewriter(CSECachingMapperMixin, IdentityMapper):
@@ -519,25 +422,20 @@ class ComplexExponentialRewriter(CSECachingMapperMixin, IdentityMapper):
     :meth:`map_common_subexpression_uncached` -- is never reached.
     """
 
-    def __init__(self, unproven_arg_names=frozenset(),
-                 integer_arg_names=frozenset()):
+    def __init__(self, unproven_arg_names=frozenset()):
         super().__init__()
         self.unproven_arg_names = frozenset(unproven_arg_names)
-        self.integer_arg_names = frozenset(integer_arg_names)
 
     def _is_double_precision_real(self, expr):
         """Whether *expr* is safe to hand to a real double-precision call.
 
-        Real by :func:`_is_known_real`, and not an integer-only expression
-        by :func:`_is_known_integer` -- an integer operand would select a
-        C overload of its own, where the ``cdouble_exp`` being replaced
-        promoted the whole exponent to double.
+        Every leaf must be a real double: a real-typed constant at least
+        as wide as a ``double``, or a variable the kernel has not left
+        unproven (see :func:`_kernel_arg_names_not_known_real`, which
+        treats a complex, narrow, integer or undeclared argument dtype as
+        unproven).
         """
-        if _is_known_integer(expr, self.integer_arg_names):
-            return False
-        return _is_known_real(
-            expr, self.unproven_arg_names, self.integer_arg_names
-        )
+        return _is_known_real(expr, self.unproven_arg_names)
 
     def map_common_subexpression_uncached(self, expr, /, *args, **kwargs):
         return IdentityMapper.map_common_subexpression(
@@ -2412,8 +2310,7 @@ class NearFieldInteractionTable:
     def _complex_exponential_rewriter(self):
         """This table's :class:`ComplexExponentialRewriter`, kernel-aware."""
         return ComplexExponentialRewriter(
-            _kernel_arg_names_not_known_real(self.integral_knl),
-            _kernel_arg_names_with_integer_dtype(self.integral_knl),
+            _kernel_arg_names_not_known_real(self.integral_knl)
         )
 
     def _rewrite_complex_exponentials(self, expr):

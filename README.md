@@ -96,38 +96,32 @@ of the exponent, so it is valid for genuinely complex exponents (the damped
 The rewrite is exact in value but not in conditioning once the *phase* `im`
 can itself be complex: for `z = x + i y`, `cos z` and `sin z` both grow like
 `exp(|y|)/2` while `exp(i z)` decays like `exp(-y)`, so Euler's formula turns
-a decaying exponential into a cancelling difference of two large terms.
-A phase that is not *provably* real therefore keeps its `cdouble_exp`, which
-evaluates the decaying result directly. The test is positive rather than a
-search for complex arguments, because the split hands any node it does not
-walk into — a post-CSE `CommonSubexpression`, say — to the real part
-wholesale, so `exp(1j*CSE((3+40j)*r))` has a complex phase without naming a
-complex argument anywhere. A phase passes only if every node in it is a
-double-precision real: a real-typed constant at least as wide as a double
-(a `float32` literal narrows the operation just as a `complex128(0j)` widens
-it) (a `complex128(0j)` does not qualify: its type
-promotes the operation, so `sqrt(x + 0j)` can come back imaginary), a
-variable the kernel does not leave unproven (a `float32` argument counts as
-unproven, because the rewrite would pick the single-precision `cos`/`sin`
-overloads where `cdouble_exp` promoted to double), an arithmetic combination
-of those, or a call to a function that is real for real arguments. The magnitude `exp(re)` is held to the same proof as the
-phase, by the same predicate, since it too becomes a bare real call. The global scaling constant is
-rewritten under the same guard, since it is evaluated inside both quadrature
-loops. A kernel argument counts as real only if its *declared* dtype is
-real: `HelmholtzKernel(dim, allow_evanescent=True)` declares a `complex128`
-wave number, and an argument declared with no dtype at all
-(`KernelArgument(lp.ValueArg("k"))`, which loopy leaves as `<auto/runtime>`
-and which accepts a complex value at run time) is likewise not proven real.
-A phase that is provably *integer* -- every node an integer constant, an
-argument declared with an integer dtype, or an integer-preserving operation
-over those (`abs`, `min`, `max`, floor division, remainder) -- also keeps its
-`cdouble_exp`, and so does an integer magnitude, and so does a floating
-builtin fed only by integers (loopy emits `floor((float) (n))`, not the
-double promotion C would suggest): the C
-`cos`/`sin` overload chosen for an integer argument is not ours to predict,
-and a single-precision one would cost an order-one phase error past `2**24`,
-where the complex exponential carries the precision explicitly. Ordinary
-Helmholtz and Yukawa pass and are rewritten as above.
+a decaying exponential into a cancelling difference of two large terms. It
+also replaces one `cdouble_exp`, which promotes its whole argument to double,
+with bare real calls whose precision loopy infers from the expression.
+
+So the rewrite happens only for a phase, and a magnitude, that are *provably*
+real doubles, checked node by node. Every leaf must be a real-typed constant
+at least as wide as a double, a variable the kernel has not left unproven, an
+arithmetic combination of those, or a call to a function that is real for real
+arguments; anything else -- an unrecognised node type, a `hankel1` call, a
+`complex128(0j)` that promotes the operation around it, a post-CSE
+`CommonSubexpression` wrapping any of those -- keeps its `cdouble_exp`.
+
+A kernel argument counts as proven only when its declared dtype is a real
+floating type at least as wide as a double. Complex (the wave number of
+`HelmholtzKernel(dim, allow_evanescent=True)`), narrow, integer, and
+undeclared dtypes are all unproven. That is deliberately blunt: loopy's
+constant-dtype inference cannot be reproduced from the expression tree — an
+integer argument alone narrows the result of a floating builtin, and even a
+plain `3.0` beside an integer is emitted as `3.0f` — so the guard does not try
+to model it. No sumpy kernel this table builds has such an argument
+(Helmholtz's `k` and Yukawa's `lam` are both `float64`), so the rule costs
+nothing in practice and gives a guarantee instead of an approximation.
+
+The global scaling constant is rewritten under the same guard, since it is
+evaluated inside both quadrature loops, and the split walks the `/1` wrapper
+`SympyToPymbolicMapper` leaves around it.
 
 Measured effect at 3D, `q = 3`, source box level 2: Helmholtz per
 (entry x node) cost drops from ~74 ns to ~8 ns, matching the real-valued
