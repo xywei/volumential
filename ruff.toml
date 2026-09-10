@@ -13,8 +13,8 @@
 # ``[lint.per-file-ignores]`` emptied, so entries appear and disappear as the
 # tree changes.
 #
-# ``ruff format`` is deliberately *not* adopted as a gate: it would reformat 76
-# of 93 files (~5.6k changed lines), and enabling flake8-quotes (``Q``) would
+# ``ruff format`` is deliberately *not* adopted as a gate: it would reformat 92
+# of 117 files (~5.7k changed lines), and enabling flake8-quotes (``Q``) would
 # rewrite 448 single-quoted literals.  Either one is a tree-wide rewrite that
 # collides with every open branch, so the ``[format]`` section below only
 # records the intended style for a future coordinated reformat.
