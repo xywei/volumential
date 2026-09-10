@@ -182,6 +182,26 @@ both Duffy policies, so the reference-floor semantics are unchanged. The
 polynomial-completion assembler has no complex path and is recorded as
 `skipped` on these rows, distinct from a certificate `refused`.
 
+Every driver that builds direct DuffyRadial reference tables
+(`windowed_rke_sweep.py`, `split_parameter_sweep.py`,
+`adaptive_split_composition.py`, `break_even_validation.py`) emits a
+`direct_build_routing` column (plus `direct_loose_build_routing` /
+`direct_tight_build_routing` where a row builds several direct tables) holding
+the routing the builder actually recorded on the table: `batched`, `scalar`,
+`scalar-adaptive`, or `scalar-fallback`. It is read from the table object (and
+survives the table-cache round trip), not re-derived from the routing
+predicate, so a batched build that failed and dropped to the slower per-entry
+builder is visible in the CSV instead of being reported as `batched`; in
+`break_even_validation.py` the `ops_direct_*` node counts follow the same
+recorded routing. Rows whose reference is not a DuffyRadial table carry a
+driver-level marker instead: `channel-grouped` for the windowed sweep's damped
+complex-frequency rows (built by the grouped channel builder), plus `skipped`
+and `failed`. The drivers also call `logging.basicConfig(level=INFO)` when
+no handlers are configured, so the `[duffy:start]`, `[duffy:builder]` and
+`[duffy:done]` lines land in run logs. Export
+`VOLUMENTIAL_DUFFY_NO_FALLBACK=1` for a campaign run to refuse the fallback
+outright (see the repository README).
+
 The complex Bessel driver additionally requires the benchmark extra:
 `python -m pip install -e ".[benchmark]"`.
 

@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import csv
+import logging
 import math
 import time
 from contextlib import contextmanager
@@ -266,6 +267,11 @@ FIELDS = (
     # interrogated (see ops_phase_split_correction_status) and the split
     # total is withheld rather than reported without its dominant phase.
     *PHASE_FIELDS,
+    # which DuffyRadial builder actually produced the direct reference tables
+    # of this row (';'-joined over the built levels).  A "scalar-fallback"
+    # here means the batched OpenCL build failed and the slower, differently
+    # converged per-entry builder produced the numbers.
+    "direct_build_routing",
 )
 
 
@@ -515,6 +521,45 @@ def _table_payload_bytes(table) -> int:
         data = np.asarray(table.data)
         return int(np.count_nonzero(np.isfinite(data)) * data.dtype.itemsize)
     return int(np.asarray(table.data).nbytes)
+
+
+def _configure_logging() -> None:
+    """Route library INFO/WARNING records to stderr for the run log.
+
+    Without this the ``[duffy:builder] mode=...`` routing lines are dropped and
+    a batched-to-scalar fallback warning only reaches stderr through Python's
+    last-resort handler.  Only configures the root logger when the embedding
+    process has not already installed handlers.
+    """
+    if logging.getLogger().handlers:
+        return
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+
+
+def _table_build_routing_counts(tables) -> dict[str, int]:
+    """How many of ``tables`` were produced by each recorded routing.
+
+    Eager provisioning can land on more than one routing across levels and
+    parameters -- one batched invocation succeeding while another falls back
+    -- and the two routings have different per-entry node counts, so a cost
+    model that prices the whole set has to know how many tables each routing
+    owns rather than sampling one of them.
+    """
+    import volumential.opcounters as opcounters
+
+    counts: dict[str, int] = {}
+    for table in tables:
+        routing = opcounters.direct_build_routing(table)
+        counts[routing] = counts.get(routing, 0) + 1
+    return counts
+
+
+def _table_build_routing(tables) -> str:
+    """The distinct recorded DuffyRadial routings of ``tables``, ';'-joined."""
+    return ";".join(sorted(_table_build_routing_counts(tables)))
 
 
 def _clear_sqlite_cache(path: Path) -> None:
@@ -1750,6 +1795,14 @@ def _prepare_direct_tables(
         "table_count": len(warm_tables),
         "payload_bytes": sum(_table_payload_bytes(table)
                              for table in warm_tables.values()),
+        # the routing recorded by the builder and carried through the cache
+        # round trip (these tables are the warm, cache-loaded ones)
+        "build_routing": _table_build_routing(warm_tables.values()),
+        # ... and per routing, so a caller pricing every provisioned table
+        # can weight the routings instead of sampling one of them
+        "build_routing_counts": _table_build_routing_counts(
+            warm_tables.values()
+        ),
     }
 
 
@@ -2419,6 +2472,9 @@ def _run_windowed_strategy(
                     "quadrature_build_s"
                 ],
                 "direct_table_load_s": direct_costs["load_s"],
+                "direct_build_routing": direct_costs.get(
+                    "build_routing", "unknown"
+                ),
             }
         )
 
@@ -2795,7 +2851,15 @@ def _row_from_result(
     direct_levels: list[int],
     repeat_count: int,
     dim: int = 2,
+    direct_build_routing: str | None = None,
 ) -> dict[str, Any]:
+    """``direct_build_routing`` defaults to the aggregate in *direct_costs*.
+
+    Pass this row's own routing where the caller has it: ``direct_costs``
+    carries a union over every parameter, which is right for the shared
+    setup-cost columns beside it and wrong for a column documented as the
+    routing of this row's direct reference tables.
+    """
     dim = _require_dimension(dim)
     diff = split_values - reference_values
     reference_norm = max(float(np.linalg.norm(reference_values)), 1.0e-300)
@@ -2854,6 +2918,11 @@ def _row_from_result(
         "direct_table_build_s": direct_costs["build_s"],
         "direct_table_quadrature_build_s": direct_costs["quadrature_build_s"],
         "direct_table_load_s": direct_costs["load_s"],
+        "direct_build_routing": (
+            direct_build_routing
+            if direct_build_routing is not None
+            else direct_costs.get("build_routing", "unknown")
+        ),
         "rke_channel_build_s": rke_costs["build_s"],
         "rke_channel_quadrature_build_s": rke_costs["quadrature_build_s"],
         "rke_channel_load_s": rke_costs["load_s"],
@@ -3032,6 +3101,9 @@ def run_benchmark(
             "table_count": 0,
             "payload_bytes": 0,
         }
+        # routings are unioned, not summed, so they stay out of direct_costs
+        # until the per-parameter loop is done
+        direct_routings: set[str] = set()
 
         for parameter in parameters:
             if kernel == "Helmholtz":
@@ -3056,6 +3128,12 @@ def run_benchmark(
             )
             for key in direct_costs:
                 direct_costs[key] += parameter_direct_costs[key]
+            direct_routings.update(
+                routing
+                for routing in
+                str(parameter_direct_costs["build_routing"]).split(";")
+                if routing
+            )
 
             reference_values, reference_timing, _ = _run_path(
                 ctx=ctx,
@@ -3081,8 +3159,20 @@ def run_benchmark(
                     "source_values_host": source_values_host,
                     "reference_values": reference_values,
                     "reference_timing": reference_timing,
+                    # this parameter's own routing, not the union below:
+                    # direct_build_routing is documented as the routing of
+                    # *this row's* direct reference tables, and one
+                    # parameter falling back must not relabel the rest
+                    "direct_build_routing": str(
+                        parameter_direct_costs["build_routing"]
+                    ),
                 }
             )
+
+        # The union over every parameter, describing the *aggregate* setup
+        # this kernel's shared cost columns account for.  Each row reports
+        # its own parameter's routing instead (see parameter_cases above).
+        direct_costs["build_routing"] = ";".join(sorted(direct_routings))
 
         direct_solve_total_s = sum(
             case["reference_timing"]["solve_total_s"] for case in parameter_cases
@@ -3204,6 +3294,7 @@ def run_benchmark(
                         amortization=amortization,
                         direct_levels=direct_levels,
                         repeat_count=repeat_count,
+                        direct_build_routing=case["direct_build_routing"],
                     )
                 )
 
@@ -3265,6 +3356,7 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
 
 
 def main() -> int:
+    _configure_logging()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("smoke", "full"), default="smoke")
     parser.add_argument("--backend", default="auto")

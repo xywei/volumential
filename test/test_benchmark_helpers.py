@@ -1625,4 +1625,121 @@ def test_sweep_phase_row_columns_are_empty_for_an_unprofiled_run():
         if key != "phase_profile_repeat_count"
     )
 
+
+# {{{ build-routing provenance
+
+
+def _minimal_split_row(module, *, direct_costs_routing, row_routing):
+    """One ``_row_from_result`` row over neutral inputs."""
+    from dataclasses import dataclass
+
+    import numpy as np
+
+    @dataclass
+    class _Accounting:
+        split_term_keys: tuple = ()
+
+    class _Timing(dict):
+        def __missing__(self, key):
+            return 0.0
+
+    class _BuildConfig:
+        regular_quad_order = 20
+        radial_quad_order = 40
+        n_levels = 1
+
+    values = np.zeros(4)
+    kwargs = dict(
+        mode="smoke",
+        kernel="Yukawa",
+        parameter_name="lambda",
+        parameter=4.0,
+        split_order=1,
+        power_log_beta_mode="p2p",
+        direct_build_config=_BuildConfig(),
+        rke_channel_build_config=_BuildConfig(),
+        split_smooth_quad_order=None,
+        q_order=2,
+        nlevels=2,
+        fmm_order=8,
+        reference_path="direct_fixed_parameter_table",
+        reference_values=values,
+        split_values=values,
+        reference_timing=_Timing(),
+        split_timing=_Timing(),
+        accounting=_Accounting(),
+        direct_costs=_Timing({"build_routing": direct_costs_routing}),
+        rke_costs=_Timing(),
+        amortization={},
+        direct_levels=[2],
+        repeat_count=1,
+        dim=2,
+    )
+    if row_routing is not None:
+        kwargs["direct_build_routing"] = row_routing
+    return module._row_from_result(**kwargs)
+
+
+def test_canonical_table_routing_reaches_the_reported_routing():
+    """Each adaptive row times the canonical table, so it must be reported.
+
+    ``direct_build_routing`` used to carry only the per-level tables'
+    routing, so a canonical build that fell back while the per-level builds
+    succeeded (or the reverse) was reported as ``batched``.
+    """
+    module = _load_benchmark("adaptive_timing")
+
+    class _Table:
+        def __init__(self, routing):
+            self.build_routing = routing
+
+    union = module._table_build_routing_union
+    assert union("batched", _Table("batched")) == "batched"
+    # the canonical table fell back, the per-level tables did not
+    assert union("batched", _Table("scalar-fallback")) == (
+        "batched;scalar-fallback"
+    )
+    # ... and the reverse
+    assert union("scalar-fallback", _Table("batched")) == (
+        "batched;scalar-fallback"
+    )
+    # an unrecorded canonical routing is still surfaced, not dropped
+    assert union("batched", _Table(None)) == "batched;unknown"
+    # no canonical table (an older caller) leaves the per-level set alone
+    assert union("batched;scalar", None) == "batched;scalar"
+
+
+def test_split_sweep_rows_report_their_own_parameter_s_routing():
+    """One parameter falling back must not relabel every other row.
+
+    ``direct_costs["build_routing"]`` is a union over the whole sweep,
+    which is right for the shared setup-cost columns and wrong for a
+    column documented as the routing of *this row's* reference tables.
+    """
+    module = _load_benchmark("split_parameter_sweep")
+
+    row = _minimal_split_row(
+        module,
+        direct_costs_routing="batched;scalar-fallback",
+        row_routing="batched",
+    )
+    assert row["direct_build_routing"] == "batched"
+
+    # the row of the parameter that actually fell back says so
+    fell_back = _minimal_split_row(
+        module,
+        direct_costs_routing="batched;scalar-fallback",
+        row_routing="scalar-fallback",
+    )
+    assert fell_back["direct_build_routing"] == "scalar-fallback"
+
+    # ... and a caller that has no per-row value still gets the aggregate
+    aggregate = _minimal_split_row(
+        module,
+        direct_costs_routing="batched;scalar-fallback",
+        row_routing=None,
+    )
+    assert aggregate["direct_build_routing"] == "batched;scalar-fallback"
+
+
 # }}}

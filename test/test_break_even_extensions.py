@@ -52,6 +52,25 @@ def _load_break_even():
     return module
 
 
+def _load_split_parameter_sweep():
+    path = _REPOSITORY_ROOT / "benchmarks" / "split_parameter_sweep.py"
+    spec = importlib.util.spec_from_file_location("split_parameter_sweep", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    previous_sys_path = list(sys.path)
+    sys.path.insert(0, str(path.parent))
+    try:
+        sys.modules[spec.name] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            sys.modules.pop(spec.name, None)
+            raise
+    finally:
+        sys.path[:] = previous_sys_path
+    return module
+
+
 def test_eager_provisioning_reproduces_committed_levels():
     module = _load_break_even()
     assert module._resolve_direct_levels(
@@ -167,6 +186,27 @@ def test_remainder_term_count_averages_over_every_parameter(monkeypatch):
     assert columns[
         "ops_phase_split_correction_remainder_term_evals"
     ] != pytest.approx(100 * counts[0])
+
+
+def test_routing_column_is_appended_after_the_phase_columns():
+    """The layout is append-only across PRs, not just within one.
+
+    Adding ``direct_build_routing`` to the pre-phase tuple would shift
+    every column #134 appended by one position.
+    """
+    module = _load_break_even()
+    fields = list(module.SUMMARY_FIELDS)
+
+    assert fields[-1] == "direct_build_routing"
+    assert fields[-len(module.PHASE_SECONDS_FIELDS) - 1:-1] == list(
+        module.PHASE_SECONDS_FIELDS
+    )
+    # ... and the phase ops columns still sit immediately before those
+    ops_start = fields.index(module.PHASE_OPS_FIELDS[0])
+    assert fields[ops_start:ops_start + len(module.PHASE_OPS_FIELDS)] == list(
+        module.PHASE_OPS_FIELDS
+    )
+    assert len(fields) == len(set(fields))
 
 
 def test_summary_fields_extend_the_committed_layout():
@@ -438,6 +478,170 @@ def test_smooth_interp_price_degenerates_when_orders_match():
     assert module._tensor_product_interp_fmas(dim=2, q=4, q_smooth=4) == (
         4 * 16 + 16 * 4
     )
+
+
+# {{{ mixed direct build routings
+
+
+class _FakeTable:
+    def __init__(self, dim=2):
+        self.dim = dim
+
+
+class _FakeBuildConfig:
+    regular_quad_order = 20
+    radial_quad_order = 40
+
+
+class _FakeWrangler:
+    @staticmethod
+    def _helmholtz_split_series_nmax(split_order):
+        return 4
+
+
+#: nodes per entry the fakes below price a batched and a scalar table at
+_BATCHED_NODES_PER_ENTRY = 100.0
+_SCALAR_NODES_PER_ENTRY = 500.0
+_REDUCED_ENTRIES = 10
+
+
+@pytest.fixture
+def priced_counters(monkeypatch):
+    """``_operation_counters`` with the opcounters primitives stubbed out.
+
+    Returns a callable taking the ``routing -> table count`` mapping, so a
+    test can price a provisioned set without building any table.
+    """
+    import volumential.opcounters as opcounters
+
+    module = _load_break_even()
+
+    monkeypatch.setattr(
+        opcounters, "reduced_entry_count", lambda table: _REDUCED_ENTRIES
+    )
+    monkeypatch.setattr(
+        opcounters,
+        "batched_duffy_nodes_per_entry",
+        lambda dim, reg, rad: _BATCHED_NODES_PER_ENTRY,
+    )
+    monkeypatch.setattr(
+        opcounters,
+        "duffy_block_geometry",
+        lambda table: {"n_reduced_entries": _REDUCED_ENTRIES},
+    )
+    monkeypatch.setattr(
+        opcounters,
+        "scalar_duffy_singular_nodes",
+        lambda table, reg, rad, geometry: (
+            _SCALAR_NODES_PER_ENTRY * _REDUCED_ENTRIES
+        ),
+    )
+    monkeypatch.setattr(
+        opcounters, "nearfield_point_pairs", lambda queue, traversal: 7
+    )
+
+    parameters = [1.0, 2.0]
+    direct_levels = [1, 2]
+
+    def price(routing_counts):
+        return module._operation_counters(
+            queue=None,
+            traversal=None,
+            parameters=parameters,
+            direct_levels=direct_levels,
+            direct_tables={
+                parameter: _FakeTable() for parameter in parameters
+            },
+            direct_routing_counts=routing_counts,
+            direct_build_config=_FakeBuildConfig(),
+            rke_base_table=_FakeTable(),
+            split_term_tables={},
+            rke_channel_build_config=_FakeBuildConfig(),
+            rke_wranglers={
+                parameter: _FakeWrangler() for parameter in parameters
+            },
+            split_order=2,
+        )
+
+    return price
+
+
+def test_uniform_batched_provisioning_prices_every_table_as_batched(
+    priced_counters,
+):
+    counters = priced_counters({"batched": 4})
+    assert counters["ops_direct_build_routing"] == "batched"
+    assert counters["ops_direct_tables_built"] == 4
+    assert counters["ops_direct_entries_built"] == 40
+    assert counters["ops_direct_singular_nodes_per_entry"] == 100.0
+    assert counters["ops_direct_singular_node_evals"] == 4000
+    assert counters["ops_direct_special_function"] == "hankel1_imaginary_ray"
+
+
+def test_mixed_provisioning_counts_each_table_under_its_own_routing(
+    priced_counters,
+):
+    """One batched invocation falling back must not reclassify the rest.
+
+    Three batched tables at 100 nodes/entry plus one scalar fallback at 500,
+    over 10 reduced entries each: 3*10*100 + 1*10*500 = 8000 node
+    evaluations.  Pricing the whole set as the sample's routing would give
+    4000 (all batched) or 20000 (all scalar) instead.
+    """
+    counters = priced_counters({"batched": 3, "scalar-fallback": 1})
+    assert counters["ops_direct_build_routing"] == "batched;scalar-fallback"
+    assert counters["ops_direct_tables_built"] == 4
+    assert counters["ops_direct_entries_built"] == 40
+    assert counters["ops_direct_singular_node_evals"] == 8000
+    assert counters["ops_direct_special_function_evals"] == 8000
+    # the entry-weighted mean, between the two pure routings
+    assert counters["ops_direct_singular_nodes_per_entry"] == 200.0
+    assert counters["ops_direct_special_function"] == (
+        "hankel1_imaginary_ray;kv0"
+    )
+
+
+def test_uniform_fallback_prices_every_table_as_scalar(priced_counters):
+    counters = priced_counters({"scalar-fallback": 4})
+    assert counters["ops_direct_build_routing"] == "scalar-fallback"
+    assert counters["ops_direct_singular_nodes_per_entry"] == 500.0
+    assert counters["ops_direct_singular_node_evals"] == 20000
+    assert counters["ops_direct_special_function"] == "kv0"
+
+
+def test_routing_counts_must_cover_every_provisioned_table(priced_counters):
+    with pytest.raises(RuntimeError, match="expected 4"):
+        priced_counters({"batched": 3})
+
+
+def test_table_build_routing_counts_groups_by_recorded_routing():
+    import volumential.opcounters as opcounters
+    from volumential.nearfield_potential_table import NearFieldInteractionTable
+
+    sweep = _load_split_parameter_sweep()
+
+    def _table(routing):
+        table = NearFieldInteractionTable.__new__(NearFieldInteractionTable)
+        table.build_routing = routing
+        return table
+
+    tables = [
+        _table("batched"),
+        _table("batched"),
+        _table("scalar-fallback"),
+        _table(None),
+    ]
+    assert opcounters.direct_build_routing(tables[-1]) == "unknown"
+    assert sweep._table_build_routing_counts(tables) == {
+        "batched": 2,
+        "scalar-fallback": 1,
+        "unknown": 1,
+    }
+    # the ';'-joined summary stays the union of the keys
+    assert sweep._table_build_routing(tables) == (
+        "batched;scalar-fallback;unknown"
+    )
+
 
 # }}}
 

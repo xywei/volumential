@@ -115,6 +115,139 @@ def test_register_and_load_roundtrip_is_exact(tmp_path, assembled_yukawa):
     assert np.array_equal(np.asarray(vals0), np.asarray(vals1))
 
 
+def test_series_assembly_does_not_inherit_the_channel_build_routing(tmp_path):
+    """An assembled table must not claim Duffy quadrature produced its data.
+
+    ``assemble_parameterized_table`` builds its result as
+    ``copy.deepcopy(base)`` and then replaces the table data.  ``base`` is
+    the Laplace channel table, which comes from
+    ``NearFieldInteractionTableManager.get_table`` and therefore *does*
+    carry a recorded DuffyRadial routing.  Without clearing it, the
+    assembled table -- and the cache entry it is registered as -- would
+    report ``batched`` or ``scalar-fallback`` for values no Duffy
+    quadrature ever touched.
+    """
+    import pyopencl as cl
+
+    import volumential.opcounters as opcounters
+    from volumential.rke_table_assembly import (
+        _get_channel_tables,
+        assemble_parameterized_table,
+    )
+    from volumential.nearfield_potential_table import DUFFY_BUILD_ROUTINGS
+
+    try:
+        ctx = cl.create_some_context(interactive=False)
+    except Exception as exc:
+        pytest.skip(f"no OpenCL context available: {exc}")
+    queue = cl.CommandQueue(ctx)
+
+    channel_cache = tmp_path / "series-channels.sqlite"
+    table, certificate = assemble_parameterized_table(
+        queue,
+        channel_cache,
+        DIM,
+        "Yukawa",
+        Q_ORDER,
+        LAM,
+        source_box_level=LEVEL,
+        root_extent=ROOT_EXTENT,
+    )
+
+    # the base the assembler deep-copies is a real DuffyRadial build, so
+    # there was something to inherit
+    base = _get_channel_tables(
+        queue, channel_cache, DIM, Q_ORDER, LEVEL, ROOT_EXTENT,
+        ["laplace"], None, False,
+    )["laplace"]
+    assert base.build_routing in DUFFY_BUILD_ROUTINGS
+
+    assert table.build_routing is None
+    assert table.build_fallback_reason is None
+    assert opcounters.direct_build_routing(table) == "unknown"
+
+    cache = tmp_path / "registered-routing.sqlite"
+    with NearFieldInteractionTableManager(
+        str(cache), root_extent=ROOT_EXTENT
+    ) as manager:
+        _register(
+            manager, table, certificate,
+            provenance={"kind": "rke_series_assembly"},
+        )
+
+    with NearFieldInteractionTableManager(
+        str(cache), root_extent=ROOT_EXTENT
+    ) as manager:
+        loaded, is_recomputed = manager.get_table(
+            DIM, "Yukawa", Q_ORDER, source_box_level=LEVEL, lam=LAM
+        )
+
+    assert not is_recomputed
+    assert loaded.build_routing is None
+    assert opcounters.direct_build_routing(loaded) == "unknown"
+
+
+def test_strict_mode_still_loads_a_registered_external_assembly(
+    tmp_path, assembled_yukawa, monkeypatch
+):
+    """The no-fallback switch must not reject externally assembled tables.
+
+    It governs one substitution: a batched DuffyRadial build silently
+    becoming a scalar one.  An assembled table was never a DuffyRadial
+    build -- which is why the assemblers clear ``build_routing`` -- so its
+    ``unknown`` routing is structural, not a missing record.  Its
+    provenance is the ``ExternalAssembly`` build method, the provenance
+    kind and the payload checksum the load path verifies.  Rejecting it
+    would break the documented ``--include-windowed`` campaign flow, which
+    is what sets this switch in the first place.
+    """
+    from volumential.nearfield_potential_table import DUFFY_NO_FALLBACK_ENV_VAR
+
+    table, certificate = assembled_yukawa
+    cache = tmp_path / "registered-strict.sqlite"
+    with NearFieldInteractionTableManager(
+        str(cache), root_extent=ROOT_EXTENT
+    ) as manager:
+        _register(manager, table, certificate)
+
+    monkeypatch.setenv(DUFFY_NO_FALLBACK_ENV_VAR, "1")
+    with NearFieldInteractionTableManager(
+        str(cache), root_extent=ROOT_EXTENT
+    ) as manager:
+        loaded, is_recomputed = manager.get_table(
+            DIM, "Yukawa", Q_ORDER, source_box_level=LEVEL, lam=LAM
+        )
+
+    assert not is_recomputed
+    assert loaded.build_method == EXTERNAL_TABLE_BUILD_METHOD
+    assert loaded.build_routing is None
+
+    # the exemption is keyed on the build method, not on the routing being
+    # unknown: an ordinary Duffy payload with the same unknown routing is
+    # still refused
+    from volumential.table_manager import (
+        _refuse_unverified_build_routing,
+        UnverifiedBuildRoutingError,
+    )
+    from volumential.table_manager import TableRequest
+
+    request = TableRequest.from_args(DIM, "Yukawa", Q_ORDER, LEVEL)
+    with pytest.raises(UnverifiedBuildRoutingError):
+        _refuse_unverified_build_routing(loaded, request, "DuffyRadial")
+
+
+def test_windowed_assembly_clears_the_build_routing_too(assembled_yukawa):
+    """The windowed base is a skeleton table, so it has nothing to inherit
+    today; the assembled result must still report no DuffyRadial routing so
+    a future change of base cannot leak one."""
+    import volumential.opcounters as opcounters
+
+    table, _ = assembled_yukawa
+    assert table.build_routing is None
+    assert table.build_fallback_reason is None
+    assert opcounters.direct_build_routing(table) == "unknown"
+
+
 def test_load_misses_on_parameter_mismatch(tmp_path, assembled_yukawa):
     table, certificate = assembled_yukawa
     cache = tmp_path / "registered.sqlite"

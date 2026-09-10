@@ -40,6 +40,44 @@ Debug tip: when validating source-node evaluations, set
 with separate-but-identical source/target arrays (use `targets=None` to build a
 true coincident tree).
 
+## Near-Field Table Build Routing
+
+Near-field DuffyRadial tables are built by a batched OpenCL kernel.  If that
+build raises, the table falls back to the scalar per-entry builder, which is
+orders of magnitude slower and converges differently at the same requested
+quadrature orders.  The fallback is therefore never silent:
+
+- it logs a `WARNING` plus a `[duffy:builder] mode=scalar-fallback` line and
+  emits a `RuntimeWarning` carrying the kernel class, dimension, exception
+  type and reason;
+- it records `table.build_routing` (`batched`, `scalar`, `scalar-adaptive` or
+  `scalar-fallback`) and `table.build_fallback_reason` on the table, and both
+  are persisted with the cached payload, so a warm, cache-loaded table still
+  reports how it was originally built
+  (`volumential.opcounters.direct_build_routing`);
+- the Paper 1 benchmark drivers emit it as a `direct_build_routing` CSV column.
+
+Set `VOLUMENTIAL_DUFFY_NO_FALLBACK=1` to turn the fallback into a
+`RuntimeError` instead — campaign runs use this so that a table which quietly
+dropped to the scalar builder cannot be recorded as a batched build.  Any
+value other than unset, `0`, `false`, `no` or `off` enables the strict mode.
+Strict mode also applies on the *load* path, where the builder never runs: a
+cached table whose recorded routing is `scalar-fallback`, or which records no
+routing at all (a payload written before routing was recorded, so its
+provenance cannot be verified), is refused with an
+`UnverifiedBuildRoutingError` naming the table and the remedy — rebuild it
+with `force_recompute=True`, or unset the switch to accept the cached data.
+Externally assembled tables (`build_method = ExternalAssembly`, e.g. a
+registered windowed RKE assembly) are exempt: they were never a DuffyRadial
+build, which is why the assemblers clear the routing, and their provenance is
+carried by the build method, the provenance kind and the payload checksum the
+load path verifies.
+Without that, a strict campaign whose cache had already been warmed would load
+and use exactly the data the switch exists to refuse.
+It is an environment switch rather than a `DuffyBuildConfig` field because the
+build config is hashed into the table-cache fingerprint, and an operational
+strictness policy should not invalidate cached numerical data.
+
 ## Near-Field Symmetry and Cache Format
 
 - Near-field table storage uses orbit canonicalization over

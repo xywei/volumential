@@ -50,7 +50,11 @@ import numpy as np
 from sumpy.kernel import ExpressionKernel
 
 import volumential as vm
-from volumential.nearfield_potential_table import NearFieldInteractionTable
+from volumential.nearfield_potential_table import (
+    DUFFY_NO_FALLBACK_ENV_VAR,
+    NearFieldInteractionTable,
+    _duffy_fallback_is_disabled,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -78,6 +82,14 @@ _TABLE_BUILD_METHOD = "DuffyRadial"
 # label keeps the provenance honest: a registered table is not a DuffyRadial
 # build, but it loads through the standard cache path exactly like one.
 EXTERNAL_TABLE_BUILD_METHOD = "ExternalAssembly"
+
+#: Table attributes that the serialized payload owns.  A cache kwarg of the
+#: same name must not overwrite them on load: they are provenance the
+#: builder recorded, not a request the caller made.
+_PAYLOAD_OWNED_ATTRIBUTES = frozenset({
+    "build_routing",
+    "build_fallback_reason",
+})
 _ACCEPTED_BUILD_METHODS = (_TABLE_BUILD_METHOD, EXTERNAL_TABLE_BUILD_METHOD)
 
 
@@ -210,6 +222,18 @@ def _serialize_table_payload(table):
             symmetry_source_direction, dtype=np.float64
         )
 
+    # Which DuffyRadial builder produced the data, so a cached table still
+    # answers "was this a batched build or a scalar fallback?".  Stored as
+    # one-element unicode arrays (npz-safe without pickle); both keys are
+    # absent from payloads written before the routing was recorded, and the
+    # loader treats absence as unknown.
+    build_routing = getattr(table, "build_routing", None)
+    if build_routing is not None:
+        payload["build_routing"] = np.array([str(build_routing)])
+    build_fallback_reason = getattr(table, "build_fallback_reason", None)
+    if build_fallback_reason is not None:
+        payload["build_fallback_reason"] = np.array([str(build_fallback_reason)])
+
     if table_data_is_symmetry_reduced:
         if hasattr(table, "get_reduced_table_data"):
             reduced_entry_ids, reduced_data = table.get_reduced_table_data()
@@ -234,6 +258,77 @@ def _deserialize_table_payload(blob):
     with BytesIO(blob) as f:
         with np.load(f, allow_pickle=False) as payload:
             return {name: payload[name] for name in payload.files}
+
+
+class UnverifiedBuildRoutingError(RuntimeError):
+    """A cached table's recorded build routing is refused by strict mode."""
+
+
+def _refuse_unverified_build_routing(table, table_request, build_method=None):
+    """Refuse a cached table whose routing strict mode would not have produced.
+
+    ``VOLUMENTIAL_DUFFY_NO_FALLBACK`` turns the batched-to-scalar Duffy
+    fallback into a build-time error, but a *cached* table skips the builder
+    entirely.  Without this check a strict campaign that had already warmed
+    its cache would load and use exactly the differently converged
+    scalar-fallback data the switch exists to refuse -- and, because the
+    routing is faithfully restored from the payload, would even report it
+    correctly while doing so.
+
+    ``unknown`` (a payload written before the routing was recorded) is
+    refused too: strict mode's contract is that every table in the campaign
+    has a verified provenance, and an unrecorded Duffy build cannot be
+    vouched for.  Both cases name the remedy, since the operator's options --
+    rebuild, or accept the table by unsetting the switch -- are a judgement
+    call and not ours to make silently.
+
+    An :data:`EXTERNAL_TABLE_BUILD_METHOD` record is exempt, and this is not
+    a loophole.  The switch governs one specific substitution: a batched
+    DuffyRadial build silently becoming a scalar one.  An externally
+    assembled table was not produced by DuffyRadial at all, which is exactly
+    why the assemblers clear ``build_routing``; its provenance is carried by
+    ``build_method``, ``provenance_kind`` and the payload checksum the load
+    path already verifies, not by a routing field that does not apply.
+    Without the exemption strict mode would reject every windowed RKE
+    assembly on reload, which is the documented ``--include-windowed``
+    campaign flow.
+    """
+    if not _duffy_fallback_is_disabled():
+        return
+
+    if build_method == EXTERNAL_TABLE_BUILD_METHOD:
+        return
+
+    import volumential.opcounters as opcounters
+
+    routing = opcounters.direct_build_routing(table)
+    if routing not in ("scalar-fallback", "unknown"):
+        return
+
+    identity = (
+        f"dim={table_request.dim} kernel={table_request.kernel_type} "
+        f"q_order={table_request.q_order} "
+        f"source_box_level={table_request.source_box_level}"
+    )
+    if routing == "scalar-fallback":
+        reason = opcounters.direct_build_fallback_reason(table)
+        detail = (
+            "was produced by the scalar Duffy fallback"
+            + (f" ({reason})" if reason else "")
+        )
+    else:
+        detail = (
+            "records no build routing (its payload predates routing "
+            "recording), so it cannot be shown to be a batched build"
+        )
+
+    raise UnverifiedBuildRoutingError(
+        f"cached near-field table [{identity}] {detail}, and "
+        f"{DUFFY_NO_FALLBACK_ENV_VAR} is set. Rebuild it with "
+        "force_recompute=True (which will fail loudly if the batched build "
+        f"still cannot run), or unset {DUFFY_NO_FALLBACK_ENV_VAR} to accept "
+        "the cached data."
+    )
 
 
 def _external_payload_checksum(entry_ids, values):
@@ -1668,6 +1763,13 @@ class NearFieldInteractionTableManager:
                     payload["table_data_is_symmetry_reduced"][0]
                 )
 
+            if "build_routing" in payload:
+                table.build_routing = str(payload["build_routing"][0])
+            if "build_fallback_reason" in payload:
+                table.build_fallback_reason = str(
+                    payload["build_fallback_reason"][0]
+                )
+
         except KeyError:
             raise
         except (OSError, EOFError, TypeError, ValueError, zipfile.BadZipFile) as exc:
@@ -1759,8 +1861,27 @@ class NearFieldInteractionTableManager:
                 raise KeyError(f"cached kernel parameter '{pname}' mismatch")
 
         for atkey, atval in loaded_kwargs.items():
+            if atkey in _PAYLOAD_OWNED_ATTRIBUTES:
+                # A caller can pass any scalar as a cache kwarg, and this
+                # loop would let one named build_routing overwrite the
+                # provenance the payload just restored -- so a
+                # scalar-fallback table could reload as "batched" and walk
+                # past the strict-mode refusal below.  The payload owns
+                # these names.
+                continue
             setattr(table, atkey, atval)
         t_kwargs_load_end = time.perf_counter()
+
+        # Last, after every compatibility check above.  Those raise KeyError,
+        # which get_table reads as a cache miss and recomputes; refusing the
+        # routing first would turn "this cached entry is for a different
+        # parameter" into a hard UnverifiedBuildRoutingError, so a strict
+        # request for lam=5 would fail merely because the slot still holds a
+        # fallback table for lam=3.  The refusal is only meaningful once the
+        # payload has been established as eligible to satisfy *this* request.
+        _refuse_unverified_build_routing(
+            table, table_request, stored_build_method
+        )
 
         table.is_built = True
 

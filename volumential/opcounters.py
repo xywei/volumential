@@ -59,6 +59,8 @@ __all__ = [
     "add",
     "batched_duffy_nodes_per_entry",
     "counting",
+    "direct_build_fallback_reason",
+    "direct_build_routing",
     "duffy_block_geometry",
     "expansion_coefficient_counts",
     "fmm_stage_operation_counts",
@@ -146,6 +148,37 @@ def add(category: str, label: str, count) -> None:
         return
     for counters in _ACTIVE:
         counters.add(category, label, count)
+
+
+# {{{ executed build routing
+
+def direct_build_routing(table) -> str:
+    """The DuffyRadial builder that actually produced ``table``'s data.
+
+    One of the recorded routings (``batched``, ``scalar``, ``scalar-adaptive``,
+    ``scalar-fallback``), or ``unknown`` for a table whose payload predates the
+    recording.  Read the *recorded* routing rather than re-evaluating the
+    routing predicate: ``_supports_batched_duffy_builder`` reports what was
+    attempted, and a batched build that failed and fell back to the scalar
+    per-entry builder has a different cost class and a different converged
+    accuracy at fixed orders.  A ``scalar-fallback`` here invalidates the
+    batched node counts of the cost model for that table.
+    """
+    routing = getattr(table, "build_routing", None)
+    if routing is None:
+        return "unknown"
+    return str(routing)
+
+
+def direct_build_fallback_reason(table) -> str:
+    """``"<ExceptionType>: <message>"`` of a recorded scalar fallback, else
+    the empty string."""
+    reason = getattr(table, "build_fallback_reason", None)
+    if reason is None:
+        return ""
+    return str(reason)
+
+# }}}
 
 
 # {{{ analytic counts from the executed configuration

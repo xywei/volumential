@@ -191,6 +191,7 @@ if str(_BENCH_DIR) not in sys.path:
 from split_parameter_sweep import (  # noqa: E402
     _build_geometry,
     _build_path,
+    _configure_logging,
     _coords_host,
     _gaussian_source_host,
     _prepare_direct_tables,
@@ -344,7 +345,22 @@ PHASE_SECONDS_FIELDS = (
     "s_phase_setup_recombination",
 )
 
-SUMMARY_FIELDS = SUMMARY_FIELDS + PHASE_OPS_FIELDS + PHASE_SECONDS_FIELDS
+#: The DuffyRadial routing recorded by the builder and carried through the
+#: cache round trip, unioned over every direct table this row provisioned
+#: (``';'``-joined).  ``ops_direct_build_routing`` is derived from it, so a
+#: ``scalar-fallback`` invalidates the batched node counts of that row.
+#:
+#: Appended after the phase columns rather than beside the other ``ops_*``
+#: fields: this CSV's layout is append-only, and inserting it earlier would
+#: shift every column #134 added by one position.
+PHASE_TRAILING_FIELDS = ("direct_build_routing",)
+
+SUMMARY_FIELDS = (
+    SUMMARY_FIELDS
+    + PHASE_OPS_FIELDS
+    + PHASE_SECONDS_FIELDS
+    + PHASE_TRAILING_FIELDS
+)
 
 #: Long-format companion CSV: one row per (scope, strategy, phase), so the
 #: component shares are a division inside a single row rather than a pivot
@@ -460,6 +476,7 @@ def _operation_counters(
     parameters,
     direct_levels,
     direct_tables,
+    direct_routing_counts,
     direct_build_config,
     rke_base_table,
     split_term_tables,
@@ -480,31 +497,69 @@ def _operation_counters(
 
     sample_direct = direct_tables[parameters[0]]
     n_rep = opcounters.reduced_entry_count(sample_direct)
-    routing = (
-        "batched"
-        if sample_direct._supports_batched_duffy_builder()
-        else "scalar"
-    )
-    if routing == "batched":
-        direct_nodes_per_entry = opcounters.batched_duffy_nodes_per_entry(
-            int(sample_direct.dim),
-            direct_build_config.regular_quad_order,
-            direct_build_config.radial_quad_order,
-        )
-        direct_special_function = "hankel1_imaginary_ray"
-    else:
+
+    # Price each provisioned table under *its own* recorded routing.  The
+    # routing recorded by the builder, not the routing predicate: a batched
+    # build that failed and fell back to the scalar per-entry builder pays
+    # every Duffy region once per member entry instead of once per block, so
+    # reading the predicate here would report the wrong node counts.  And
+    # eager provisioning can land on more than one routing across levels and
+    # parameters -- one batched invocation succeeding while another falls
+    # back -- so sampling one table's routing and multiplying it by every
+    # provisioned table would classify the whole set as the sample's route.
+    # The per-entry geometry is shared (same dim, quadrature orders and
+    # reduced entry set for every provisioned table); only the routing, and
+    # therefore the node count per entry, differs.
+    def _routing_cost(routing):
+        """``(nodes_per_entry, special_function)`` for one recorded routing."""
+        if routing in ("batched", "unknown"):
+            return (
+                opcounters.batched_duffy_nodes_per_entry(
+                    int(sample_direct.dim),
+                    direct_build_config.regular_quad_order,
+                    direct_build_config.radial_quad_order,
+                ),
+                "hankel1_imaginary_ray",
+            )
         geometry = opcounters.duffy_block_geometry(sample_direct)
-        direct_nodes_per_entry = opcounters.scalar_duffy_singular_nodes(
-            sample_direct,
-            direct_build_config.regular_quad_order,
-            direct_build_config.radial_quad_order,
-            geometry=geometry,
-        ) / max(geometry["n_reduced_entries"], 1)
-        direct_special_function = "kv0"
-    direct_tables_built = len(parameters) * len(direct_levels)
+        return (
+            opcounters.scalar_duffy_singular_nodes(
+                sample_direct,
+                direct_build_config.regular_quad_order,
+                direct_build_config.radial_quad_order,
+                geometry=geometry,
+            ) / max(geometry["n_reduced_entries"], 1),
+            "kv0",
+        )
+
+    direct_tables_built = sum(direct_routing_counts.values())
+    expected_tables = len(parameters) * len(direct_levels)
+    if direct_tables_built != expected_tables:
+        raise RuntimeError(
+            "direct build routing counts cover "
+            f"{direct_tables_built} tables, expected {expected_tables} "
+            f"({len(parameters)} parameters x {len(direct_levels)} levels)"
+        )
+
     direct_entries_built = direct_tables_built * n_rep
-    direct_node_evals = int(
-        round(direct_entries_built * direct_nodes_per_entry)
+    direct_node_evals = 0
+    special_functions = set()
+    for table_routing, table_count in direct_routing_counts.items():
+        nodes_per_entry, special_function = _routing_cost(table_routing)
+        direct_node_evals += int(
+            round(table_count * n_rep * nodes_per_entry)
+        )
+        special_functions.add(special_function)
+
+    routing = ";".join(sorted(direct_routing_counts))
+    direct_special_function = ";".join(sorted(special_functions))
+    # The entry-weighted mean over the provisioned set; identical to the
+    # single routing's value whenever the set is uniform, which is the
+    # ordinary case.
+    direct_nodes_per_entry = (
+        direct_node_evals / direct_entries_built
+        if direct_entries_built
+        else 0.0
     )
 
     # split_term_tables maps each term key to a per-level list of tables (the
@@ -1001,6 +1056,10 @@ def run_validation(
     direct_tables = {}
     direct_build_total_s = 0.0
     direct_load_total_s = 0.0
+    direct_routings: set[str] = set()
+    # routing -> how many provisioned direct tables it produced, over every
+    # parameter and level; the cost model prices each group separately
+    direct_routing_counts: dict[str, int] = {}
     for parameter in parameters:
         table, costs = _prepare_direct_tables(
             kernel="Yukawa",
@@ -1015,10 +1074,17 @@ def run_validation(
         direct_tables[parameter] = table
         direct_build_total_s += costs["build_s"]
         direct_load_total_s += costs["load_s"]
+        for routing, count in costs["build_routing_counts"].items():
+            direct_routing_counts[routing] = (
+                direct_routing_counts.get(routing, 0) + count
+            )
+        direct_routings.update(costs["build_routing_counts"])
         print(
-            f"direct cold build lam={parameter:g}: {costs['build_s']:.1f} s",
+            f"direct cold build lam={parameter:g}: {costs['build_s']:.1f} s "
+            f"({costs['build_routing']})",
             flush=True,
         )
+    direct_build_routing = ";".join(sorted(direct_routings))
 
     # cold phase: one RKE channel family for all parameters
     rke_table, split_term_tables, rke_costs = _prepare_rke_channels(
@@ -1191,6 +1257,7 @@ def run_validation(
         parameters=parameters,
         direct_levels=direct_levels,
         direct_tables=direct_tables,
+        direct_routing_counts=direct_routing_counts,
         direct_build_config=direct_build_config,
         rke_base_table=rke_table,
         split_term_tables=split_term_tables,
@@ -1336,6 +1403,7 @@ def run_validation(
         "max_rel_l2_rke_vs_direct": max_rel_l2,
         "benchmark_total_s": time.perf_counter() - benchmark_start,
         "direct_provisioning": direct_provisioning,
+        "direct_build_routing": direct_build_routing,
         **operation_counters,
         **phase_columns,
     }
@@ -1351,6 +1419,7 @@ def _write_csv(path: Path, fieldnames, rows) -> None:
 
 
 def main() -> int:
+    _configure_logging()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("smoke", "full"), default="smoke")
     parser.add_argument("--backend", default="auto")
