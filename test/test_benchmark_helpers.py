@@ -129,6 +129,7 @@ def test_split_benchmark_rejects_full_yukawa_order_plateau():
     common = {
         "mode": "full",
         "kernel": "Yukawa",
+        "dim": 2,
         "parameter_value": 8.0,
     }
 
@@ -143,6 +144,35 @@ def test_split_benchmark_rejects_full_yukawa_order_plateau():
             {**common, "split_order": 1, "rel_l2_error": 1.19446e-5},
             {**common, "split_order": 2, "rel_l2_error": 1.16870e-5},
             {**common, "split_order": 3, "rel_l2_error": 1.16778e-5},
+        ])
+
+
+def test_split_benchmark_yukawa_order_gate_is_dimension_aware():
+    """The 3D gate is one order of magnitude, not three.
+
+    The committed 3D field demo (data/benchmarks/rke-field-demo-3d) measures
+    p=1 -> p=2 improvements of 1332x, 355x and 97x at lambda = 2, 4, 8, so the
+    2D three-orders-of-magnitude gate would reject a healthy 3D run at the
+    largest parameter.
+    """
+    module = _load_benchmark("split_parameter_sweep")
+    common = {"mode": "full", "kernel": "Yukawa", "dim": 3}
+
+    # the committed lambda = 8 triple, which the 2D gate would reject
+    module._validate_yukawa_order_convergence([
+        {**common, "parameter_value": 8.0, "split_order": 1,
+         "rel_l2_error": 4.606911424028599e-4},
+        {**common, "parameter_value": 8.0, "split_order": 2,
+         "rel_l2_error": 4.747673362598595e-6},
+        {**common, "parameter_value": 8.0, "split_order": 3,
+         "rel_l2_error": 2.542248207701343e-6},
+    ])
+    with pytest.raises(RuntimeError, match="3D Yukawa"):
+        module._validate_yukawa_order_convergence([
+            {**common, "parameter_value": 8.0, "split_order": 1,
+             "rel_l2_error": 4.6e-4},
+            {**common, "parameter_value": 8.0, "split_order": 2,
+             "rel_l2_error": 2.3e-4},
         ])
 
 
