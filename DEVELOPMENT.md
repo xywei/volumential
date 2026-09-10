@@ -74,8 +74,18 @@ wheels have neither. The interim locally patched branch is retired; the recipe
 is a source build on a host with `gfortran` and `ninja`:
 
 ```bash
-uv sync --active --extra fmmlib
+uv pip install --active \
+    "pyfmmlib @ git+https://github.com/inducer/pyfmmlib.git"
 ```
+
+Not `uv sync --extra fmmlib`: the `fmmlib` extra is declared as
+`pyfmmlib>=2024.1` with no `[tool.uv.sources]` entry, so it resolves to the
+PyPI `2024.1.1` release — the very release that has neither the OpenMP option
+nor the batched wrappers. (#135 adds the Git source on `main`; once that has
+landed here, `uv sync --active --extra fmmlib` becomes the recipe and this
+note can go.) The `openmp` feature option defaults to `auto`, so a host with a
+usable OpenMP toolchain needs no extra build flag — the `ldd` check below is
+what confirms it took.
 
 Verify the build before trusting FMMLib timings -- `FPNDFMMLibExpansionWrangler`
 falls back to the serial per-box path without complaining when the batched
