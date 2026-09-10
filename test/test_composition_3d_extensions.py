@@ -441,12 +441,12 @@ def test_split_order_gate_rejects_non_finite_mismatches(composition3d, bad):
             composition3d, split_order=2, rke_vs_direct_weighted_rel_l2=1.0e-8
         ),
     ]
-    with pytest.raises(RuntimeError, match="non-finite mismatches"):
+    with pytest.raises(RuntimeError, match="non-finite mismatch"):
         composition3d._validate_split_order_convergence(rows)
 
     # a single non-finite row, with no second order to compare against, is
     # still evidence that must not be written
-    with pytest.raises(RuntimeError, match="non-finite mismatches"):
+    with pytest.raises(RuntimeError, match="non-finite mismatch"):
         composition3d._validate_split_order_convergence(rows[:1])
 
 
@@ -796,6 +796,105 @@ def test_partial_windowed_provisioning_metrics_survive_a_failure(
     assert 2.0 <= row["windowed_register_s"] < 2.1
     assert row["windowed_register_payload_bytes"] == 2000
     assert row["windowed_channel_build_s"] > 0.0
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+@pytest.mark.parametrize(
+    "scope",
+    [
+        {"mode": "smoke"},
+        {"kernel": "Helmholtz"},
+        {"quadrature_policy": "default"},
+    ],
+)
+def test_every_online_split_row_is_checked_for_finiteness(
+    composition3d, bad, scope
+):
+    """The convergence ratios are scoped; finiteness is not.
+
+    A smoke, Helmholtz or default-policy row with a nan mismatch used to
+    be skipped by the scope filters and written with a successful exit.
+    """
+    row = _online_row(
+        composition3d, rke_vs_direct_weighted_rel_l2=bad, **scope
+    )
+    with pytest.raises(RuntimeError, match="non-finite mismatch"):
+        composition3d._validate_split_order_convergence([row])
+
+
+def test_scoped_rows_with_finite_mismatches_are_still_ungated(composition3d):
+    """Widening the finiteness check must not widen the ratio gates.
+
+    A smoke row with a mismatch far outside the full-mode calibration is
+    still not the full-mode gate's business.
+    """
+    composition3d._validate_split_order_convergence([
+        _online_row(
+            composition3d, mode="smoke", split_order=1,
+            rke_vs_direct_weighted_rel_l2=1.0e-4,
+        ),
+        _online_row(
+            composition3d, mode="smoke", split_order=2,
+            rke_vs_direct_weighted_rel_l2=1.0e-4,
+        ),
+    ])
+
+
+@pytest.mark.parametrize("bad", ["0,61", "20,0", "-1,61"])
+def test_main_rejects_nonpositive_windowed_channel_orders(
+    composition3d, tmp_path, monkeypatch, capsys, bad
+):
+    monkeypatch.setattr(
+        composition3d.sys,
+        "argv",
+        [
+            "adaptive_split_composition_3d.py",
+            "--mode", "smoke",
+            "--include-windowed",
+            f"--windowed-chan-orders={bad}",
+            "--out", str(tmp_path / "unused.csv"),
+            "--cache-dir", str(tmp_path / "never-created"),
+        ],
+    )
+    monkeypatch.setattr(
+        composition3d,
+        "_select_opencl_device",
+        lambda *a, **k: pytest.fail("validation must precede device setup"),
+    )
+
+    with pytest.raises(SystemExit) as exited:
+        composition3d.main()
+
+    assert exited.value.code == 2
+    assert "--windowed-chan-orders must both be >= 1" in (
+        capsys.readouterr().err
+    )
+    assert not (tmp_path / "never-created").exists()
+
+
+def test_a_cold_channel_family_is_reported_on_a_later_failure(
+    composition3d, tmp_path, monkeypatch
+):
+    """A cold family build already paid for must appear in the failed row."""
+    levels = {"n": 0}
+
+    def flaky_family(**kwargs):
+        levels["n"] += 1
+        if levels["n"] > 1:
+            raise RuntimeError("channel build failed on the second level")
+        return {"build_s": 3.0, "was_cold": True}
+
+    monkeypatch.setattr(
+        composition3d, "_prepare_windowed_family", flaky_family
+    )
+
+    kwargs = _windowed_kwargs(tmp_path)
+    kwargs["source_levels"] = [1, 2]
+    row = composition3d._run_windowed_composition(None, **kwargs)
+
+    assert row["windowed_status"] == "failed"
+    assert row["windowed_channel_build_was_cold"] == 1
+    assert row["windowed_channel_build_s"] >= 3.0
 
 
 def test_sqlite_failures_become_rows_too(

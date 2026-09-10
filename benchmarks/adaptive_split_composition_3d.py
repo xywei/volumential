@@ -579,8 +579,12 @@ def _run_windowed_composition(
             )
             channel_build_s += family["build_s"]
             was_cold = was_cold or family["was_cold"]
-        result["windowed_channel_build_s"] = channel_build_s
-        result["windowed_channel_build_was_cold"] = int(was_cold)
+            # Published per level, like the register/load accumulators
+            # below: a later level's failure returns this dict as the
+            # failed row, and a cold family build that already happened is
+            # part of the provisioning evidence.
+            result["windowed_channel_build_s"] = channel_build_s
+            result["windowed_channel_build_was_cold"] = int(was_cold)
 
         parameter_tag = f"{parameter:.17g}".replace("-", "m").replace(".", "p")
         for level in source_levels:
@@ -737,9 +741,23 @@ def _validate_split_order_convergence(rows: list[dict[str, Any]]) -> None:
     """
     errors: dict[tuple[str, float], dict[int, float]] = {}
     for row in rows:
-        if row["mode"] != "full" or row["kernel"] != "Yukawa":
-            continue
         if row.get("table_strategy", "online_split") != "online_split":
+            continue
+
+        # Finiteness first, and for *every* online-split row: a nan or inf
+        # mismatch is a failed solve whatever the mode, kernel or
+        # quadrature policy, and the scope filters below would otherwise
+        # let a smoke or Helmholtz row carry it into the CSV with a
+        # successful exit.  Only the convergence *ratios* are scoped.
+        mismatch = float(row["rke_vs_direct_weighted_rel_l2"])
+        if not math.isfinite(mismatch):
+            raise RuntimeError(
+                "3D composition online-split solve produced a non-finite "
+                f"mismatch for {row['case_id']}: "
+                f"rke_vs_direct_weighted_rel_l2={mismatch}"
+            )
+
+        if row["mode"] != "full" or row["kernel"] != "Yukawa":
             continue
         if row.get("quadrature_policy") != "high-accuracy":
             continue
@@ -756,23 +774,11 @@ def _validate_split_order_convergence(rows: list[dict[str, Any]]) -> None:
     for (case_key, parameter), by_order in errors.items():
         orders = sorted(by_order)
         # Every gate below is a `>` comparison, and every comparison against
-        # nan is false, so a run whose mismatches came out nan would sail
-        # through a check that exists to catch exactly that kind of failure.
-        # An infinite p=1 error would likewise excuse any finite p=2 one.
-        # Reject non-finite evidence before, not through, the ratios.
-        non_finite = sorted(
-            order for order in orders if not math.isfinite(by_order[order])
-        )
-        if non_finite:
-            raise RuntimeError(
-                "full high-accuracy 3D Yukawa composition produced "
-                "non-finite mismatches at "
-                f"{case_key} lambda={parameter:g}: "
-                + ", ".join(
-                    f"p={order} gives {by_order[order]}"
-                    for order in non_finite
-                )
-            )
+        # nan is false, so a nan mismatch would sail through a check that
+        # exists to catch exactly that kind of failure, and an infinite p=1
+        # error would excuse any finite p=2 one.  Nothing non-finite reaches
+        # here: the per-row check above rejects it for every online-split
+        # row, scoped or not.
         if len(orders) < 2:
             continue
         if 1 in by_order and 2 in by_order and (
@@ -1374,6 +1380,10 @@ def main() -> int:
             parser.error(
                 "--windowed-chan-orders must be a 'regular,radial' pair"
             )
+        if any(part < 1 for part in parts):
+            # the assembler refuses these, but only after the geometry and
+            # every direct and online-split table have been built
+            parser.error("--windowed-chan-orders must both be >= 1")
         windowed_chan_orders = (parts[0], parts[1])
     if args.windowed_p_star < 1:
         parser.error("--windowed-p-star must be >= 1")
