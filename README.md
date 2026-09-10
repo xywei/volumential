@@ -92,6 +92,17 @@ times slower than the otherwise identical Yukawa build. The rewrite is
 `exp(a+b) = exp(a)exp(b)` with Euler's formula over an exact structural split
 of the exponent, so it is valid for genuinely complex exponents (the damped
 `exp((-a + i b) r)` form included) and leaves real exponents untouched.
+
+The rewrite is exact in value but not in conditioning once the *phase* `im`
+can itself be complex: for `z = x + i y`, `cos z` and `sin z` both grow like
+`exp(|y|)/2` while `exp(i z)` decays like `exp(-y)`, so Euler's formula turns
+a decaying exponential into a cancelling difference of two large terms.
+Exponents that reach a kernel argument declared complex — the wave number of
+`HelmholtzKernel(dim, allow_evanescent=True)` is the case that exists in
+sumpy — therefore keep their `cdouble_exp`, which evaluates the decaying
+result directly. Ordinary Helmholtz declares a real `k` and is rewritten as
+above.
+
 Measured effect at 3D, `q = 3`, source box level 2: Helmholtz per
 (entry x node) cost drops from ~74 ns to ~8 ns, matching the real-valued
 Yukawa kernel, with table entries agreeing to 3e-16 relative.

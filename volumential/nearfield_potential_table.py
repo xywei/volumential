@@ -34,6 +34,7 @@ import loopy as lp
 import pymbolic.primitives as prim
 import pyopencl as cl
 from pymbolic.mapper import CSECachingMapperMixin, IdentityMapper
+from pymbolic.mapper.dependency import CachedDependencyMapper
 from pytools import memoize_method
 
 import volumential.list1_gallery as gallery
@@ -174,6 +175,46 @@ def _split_complex_expression(expr):
     return expr, 0
 
 
+def _complex_valued_kernel_arg_names(kernel):
+    """Names of *kernel*'s runtime arguments that may carry complex values.
+
+    ``HelmholtzKernel(dim, allow_evanescent=True)`` declares its wave number
+    ``k`` as ``complex128``; the ordinary Helmholtz kernel declares it as
+    ``float64``.  Only the declared dtype distinguishes the two, since both
+    reach the table builder as the same symbolic
+    :class:`~pymbolic.primitives.Variable`.
+    """
+    if kernel is None:
+        return frozenset()
+
+    get_args = getattr(kernel, "get_args", None)
+    if get_args is None:
+        return frozenset()
+
+    names = set()
+    for kernel_arg in get_args():
+        loopy_arg = getattr(kernel_arg, "loopy_arg", None)
+        name = getattr(loopy_arg, "name", None)
+        if not name:
+            continue
+
+        dtype = getattr(loopy_arg, "dtype", None)
+        # loopy wraps dtypes in loopy.types.NumpyType
+        dtype = getattr(dtype, "numpy_dtype", dtype)
+        if dtype is None:
+            continue
+
+        try:
+            is_complex = np.issubdtype(dtype, np.complexfloating)
+        except TypeError:
+            continue
+
+        if is_complex:
+            names.add(name)
+
+    return frozenset(names)
+
+
 class ComplexExponentialRewriter(IdentityMapper, CSECachingMapperMixin):
     r"""Rewrite ``exp(re + 1j*im)`` as ``exp(re) * (cos(im) + 1j*sin(im))``.
 
@@ -200,9 +241,37 @@ class ComplexExponentialRewriter(IdentityMapper, CSECachingMapperMixin):
     Helmholtz kernel.  Exponents with no complex constant (Yukawa, Laplace)
     are left untouched and keep their plain real ``exp``.
 
+    The rewrite is *value*-exact but not *conditioning*-exact once the phase
+    itself may be complex.  For :math:`z = x + \mathrm{i}y`, both
+    :math:`\cos z` and :math:`\sin z` grow like :math:`e^{|y|}/2` while
+    :math:`e^{\mathrm{i}z}` decays like :math:`e^{-y}`, so Euler's formula
+    turns a decaying exponential into a cancelling difference of two large
+    terms: severe relative error for moderate :math:`|y|` and overflow to
+    infinity or NaN beyond that.  A complex exponent is not hypothetical --
+    ``HelmholtzKernel(dim, allow_evanescent=True)`` declares its wave number
+    ``k`` as ``complex128`` -- so exponents that reach any complex-valued
+    kernel argument keep their ``cdouble_exp``, which evaluates the decaying
+    result directly and stably.  *complex_arg_names* carries those argument
+    names; see :func:`_complex_valued_kernel_arg_names`.
+
     Mixes in the common-subexpression cache so a shared CSE node in the
     post-CSE expression DAG is visited once rather than once per reference.
     """
+
+    def __init__(self, complex_arg_names=frozenset()):
+        super().__init__()
+        self.complex_arg_names = frozenset(complex_arg_names)
+        self._dependency_mapper = CachedDependencyMapper(composite_leaves=False)
+
+    def _may_be_complex_valued(self, expr):
+        """Whether *expr* can evaluate to a complex number at run time."""
+        if not self.complex_arg_names:
+            return False
+
+        return any(
+            getattr(dependency, "name", None) in self.complex_arg_names
+            for dependency in self._dependency_mapper(expr)
+        )
 
     def map_common_subexpression_uncached(self, expr, /, *args, **kwargs):
         return IdentityMapper.map_common_subexpression(
@@ -222,6 +291,12 @@ class ComplexExponentialRewriter(IdentityMapper, CSECachingMapperMixin):
             return expr
 
         (argument,) = expr.parameters
+        if self._may_be_complex_valued(argument):
+            # The phase is not known to be real (an evanescent Helmholtz wave
+            # number, say).  cos/sin of a complex phase both blow up like
+            # exp(|imag|) and then cancel; cdouble_exp stays stable.
+            return expr
+
         real_part, imag_part = _split_complex_expression(argument)
         if _is_structural_zero(imag_part):
             # a real exponent: leave the plain real exp() alone
@@ -2062,8 +2137,11 @@ class NearFieldInteractionTable:
         # Runs last, after sumpy's own rewriters and the kernel's code
         # transformer, so it sees the final complex constants: it turns
         # cdouble_exp into real exp/cos/sin (see ComplexExponentialRewriter
-        # for the PoCL sincos pathology this avoids).
-        complex_exp_rewriter = ComplexExponentialRewriter()
+        # for the PoCL sincos pathology this avoids).  Exponents that reach a
+        # complex-valued kernel argument are left as cdouble_exp.
+        complex_exp_rewriter = ComplexExponentialRewriter(
+            _complex_valued_kernel_arg_names(self.integral_knl)
+        )
 
         if self.integral_knl is None:
             return [complex_exp_rewriter]
@@ -3697,7 +3775,9 @@ class NearFieldInteractionTable:
             pymbolic_expr_maps=[
                 self.integral_knl.get_code_transformer(),
                 # same cdouble_exp avoidance as the fused Duffy kernel
-                ComplexExponentialRewriter(),
+                ComplexExponentialRewriter(
+                    _complex_valued_kernel_arg_names(self.integral_knl)
+                ),
             ],
             retain_names=[result_name],
             complex_dtype=np.complex128,

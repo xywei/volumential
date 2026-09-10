@@ -3010,6 +3010,69 @@ def test_yukawa_fused_duffy_code_keeps_a_real_exp():
     assert "exp(" in code
 
 
+def test_complex_valued_kernel_arg_names_follows_the_declared_dtype():
+    from sumpy.kernel import HelmholtzKernel, LaplaceKernel, YukawaKernel
+
+    assert npt._complex_valued_kernel_arg_names(HelmholtzKernel(3)) == frozenset()
+    assert npt._complex_valued_kernel_arg_names(YukawaKernel(3)) == frozenset()
+    assert npt._complex_valued_kernel_arg_names(LaplaceKernel(3)) == frozenset()
+    assert npt._complex_valued_kernel_arg_names(None) == frozenset()
+    assert npt._complex_valued_kernel_arg_names(
+        HelmholtzKernel(3, allow_evanescent=True)
+    ) == frozenset({"k"})
+
+
+def test_complex_exponential_rewriter_keeps_a_possibly_complex_phase():
+    """A complex ``k`` must keep ``exp``; Euler's formula loses it to cancellation.
+
+    For ``z = x + 1j*y`` both ``cos z`` and ``sin z`` grow like
+    ``exp(|y|)/2`` while ``exp(1j*z)`` decays like ``exp(-y)``, so rewriting
+    a damped phase through Euler's formula subtracts two large numbers to get
+    a small one.
+    """
+    import pymbolic.primitives as prim
+
+    k = prim.Variable("k")
+    r = prim.Variable("r")
+    argument = prim.Product((np.complex128(1j), k, r))
+    original = prim.Call(prim.Variable("exp"), (argument,))
+
+    # a real k: the rewrite is safe and must still happen
+    assert npt.ComplexExponentialRewriter()(original) != original
+    # a complex k: the rewrite must be declined
+    guarded = npt.ComplexExponentialRewriter(frozenset({"k"}))
+    assert guarded(original) == original
+
+    # ... and this is why.  With an evanescent k, Euler's form is numerically
+    # worthless even though it is algebraically identical, in two stages:
+    def euler(phase):
+        with np.errstate(over="ignore", invalid="ignore"):
+            return np.cos(phase) + 1j * np.sin(phase)
+
+    # the rewrite would feed cos/sin the phase k*r, against exp(1j*k*r)
+    #
+    # moderate damping: cos and sin are each ~exp(|imag|)/2 and cancel to
+    # exactly zero, so every digit of the decaying answer is gone
+    phase = np.complex128(3.0 + 40.0j) * 12.0
+    assert np.exp(1j * phase) != 0
+    assert abs(np.exp(1j * phase)) < 1e-200
+    assert euler(phase) == 0
+
+    # heavier damping: cos and sin overflow before they can cancel
+    phase = np.complex128(3.0 + 100.0j) * 12.0
+    assert np.isfinite(np.exp(1j * phase))
+    assert not np.isfinite(euler(phase))
+
+
+def test_evanescent_helmholtz_fused_duffy_code_keeps_cdouble_exp():
+    from sumpy.kernel import HelmholtzKernel
+
+    queue = _make_build_queue_or_skip()
+    code = _fused_device_code(HelmholtzKernel(3, allow_evanescent=True), 3, queue)
+
+    assert "cdouble_exp" in code
+
+
 # }}}
 
 
