@@ -108,8 +108,15 @@ arguments; anything else -- an unrecognised node type, a `hankel1` call, a
 `complex128(0j)` that promotes the operation around it, a post-CSE
 `CommonSubexpression` wrapping any of those -- keeps its `cdouble_exp`.
 
+An expression made only of constants is refused whatever their Python types,
+because nothing in it fixes the emitted precision -- loopy writes the constant
+real half of `exp(-200 + 1j*k)` as `exp((float) (-200.0f))`, which underflows
+where `cdouble_exp` kept the finite `exp(-200)`.
+
 A kernel argument counts as proven only when its declared dtype is a real
-floating type at least as wide as a double. Complex (the wave number of
+floating type at least as wide as a double. Arguments a caller supplies
+through `extra_kernel_kwarg_types` are checked by the same rule, since they
+are not in `integral_knl.get_args()`. Complex (the wave number of
 `HelmholtzKernel(dim, allow_evanescent=True)`), narrow, integer, and
 undeclared dtypes are all unproven. That is deliberately blunt: loopy's
 constant-dtype inference cannot be reproduced from the expression tree — an

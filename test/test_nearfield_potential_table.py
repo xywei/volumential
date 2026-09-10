@@ -3142,6 +3142,81 @@ def test_any_unproven_argument_declines_the_rewrite(build_phase):
     assert npt.ComplexExponentialRewriter()(original) != original
 
 
+def test_a_constant_only_half_is_not_proven_double():
+    """Nothing in an all-constant expression fixes the emitted precision.
+
+    loopy writes the constant real half of ``exp(-200 + 1j*k)`` as
+    ``exp((float) (-200.0f))``, which underflows to zero, where the
+    ``cdouble_exp`` it replaces kept the finite ``exp(-200)``.
+    """
+    import pymbolic.primitives as prim
+
+    k = prim.Variable("k")
+    rewriter = npt.ComplexExponentialRewriter()
+
+    constant_magnitude = prim.Call(
+        prim.Variable("exp"),
+        (prim.Sum((-200, prim.Product((np.complex128(1j), k)))),),
+    )
+    assert rewriter(constant_magnitude) == constant_magnitude
+
+    # a variable in the magnitude fixes it as a double, so it rewrites
+    with_variable = prim.Call(
+        prim.Variable("exp"),
+        (prim.Sum((
+            prim.Product((-200, prim.Variable("r"))),
+            prim.Product((np.complex128(1j), k)),
+        )),),
+    )
+    assert rewriter(with_variable) != with_variable
+
+    # ... and the same rule on the phase side
+    constant_phase = prim.Call(
+        prim.Variable("exp"), (prim.Product((np.complex128(1j), 3.5)),)
+    )
+    assert rewriter(constant_phase) == constant_phase
+
+    # a purely imaginary exponent with a variable phase is unaffected: the
+    # magnitude is a structural zero, so there is no exp() to prove
+    ordinary = prim.Call(
+        prim.Variable("exp"), (prim.Product((np.complex128(1j), k)),)
+    )
+    assert rewriter(ordinary) != ordinary
+
+    # ... and this is the arithmetic at stake
+    assert np.exp(np.float64(-200.0)) > 0
+    assert np.exp(np.float32(-200.0)) == 0
+
+
+def test_extra_loopy_argument_dtypes_join_the_guard():
+    """``extra_kernel_kwarg_types`` are not in ``integral_knl.get_args()``.
+
+    A ``complex128`` parameter supplied that way would otherwise look like
+    a proven ``float64`` and the exponent would be rewritten into the
+    cancellation-prone form.
+    """
+    import loopy as lp
+    import numpy as _np
+
+    assert npt._loopy_arg_names_not_known_real(()) == frozenset()
+    assert npt._loopy_arg_names_not_known_real(
+        [lp.ValueArg("k", _np.float64)]
+    ) == frozenset()
+    for unproven in (_np.complex128, _np.float32, _np.int32, None):
+        assert npt._loopy_arg_names_not_known_real(
+            [lp.ValueArg("k", unproven)]
+        ) == frozenset({"k"}), unproven
+
+    # and the table threads them into the rewriter it builds
+    table = npt.NearFieldInteractionTable(quad_order=1, dim=2)
+    plain = table._complex_exponential_rewriter()
+    guarded = table._complex_exponential_rewriter(
+        [lp.ValueArg("k", _np.complex128)]
+    )
+    assert "k" not in plain.unproven_arg_names
+    assert "k" in guarded.unproven_arg_names
+
+
 def test_the_magnitude_obeys_the_same_argument_rule():
     """``exp(re)`` is a bare real call too, so ``re`` clears the same bar."""
     import pymbolic.primitives as prim

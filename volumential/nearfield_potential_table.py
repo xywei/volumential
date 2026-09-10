@@ -142,6 +142,27 @@ def _div(numerator, denominator):
     return prim.Quotient(numerator, denominator)
 
 
+def _has_variable(expr) -> bool:
+    """Whether *expr* mentions any variable at all."""
+    if isinstance(expr, prim.Variable):
+        return True
+    if isinstance(expr, prim.CommonSubexpression):
+        return _has_variable(expr.child)
+    if isinstance(expr, prim.Subscript):
+        return True
+    if isinstance(expr, prim.Sum | prim.Product):
+        return any(_has_variable(child) for child in expr.children)
+    if isinstance(expr, prim.Quotient | prim.FloorDiv | prim.Remainder):
+        return _has_variable(expr.numerator) or _has_variable(
+            expr.denominator
+        )
+    if isinstance(expr, prim.Power):
+        return _has_variable(expr.base) or _has_variable(expr.exponent)
+    if isinstance(expr, prim.Call):
+        return any(_has_variable(param) for param in expr.parameters)
+    return False
+
+
 def _named_subexpression(expr):
     """*expr* behind a CSE, unless it is already a leaf or one."""
     if _is_numeric_constant(expr) or isinstance(
@@ -311,6 +332,28 @@ def _is_known_real(expr, unproven_names=frozenset()):
     return False
 
 
+def _loopy_arg_names_not_known_real(loopy_args) -> frozenset:
+    """The same dtype rule, for loopy arguments given outside the kernel."""
+    names = set()
+    for loopy_arg in loopy_args or ():
+        name = getattr(loopy_arg, "name", None)
+        if not name:
+            continue
+        dtype = getattr(loopy_arg, "dtype", None)
+        dtype = getattr(dtype, "numpy_dtype", dtype)
+        try:
+            proven = bool(
+                dtype is not None
+                and np.issubdtype(dtype, np.floating)
+                and np.dtype(dtype).itemsize >= 8
+            )
+        except TypeError:
+            proven = False
+        if not proven:
+            names.add(name)
+    return frozenset(names)
+
+
 def _kernel_arg_names_not_known_real(kernel):
     """Names of *kernel*'s arguments that are not a proven ``float64``.
 
@@ -434,8 +477,18 @@ class ComplexExponentialRewriter(CSECachingMapperMixin, IdentityMapper):
         unproven (see :func:`_kernel_arg_names_not_known_real`, which
         treats a complex, narrow, integer or undeclared argument dtype as
         unproven).
+
+        An expression of *only* constants is refused whatever their
+        Python types, because nothing in it fixes the emitted precision:
+        loopy writes the constant real half of ``exp(-200 + 1j*k)`` as
+        ``exp((float) (-200.0f))``, which underflows, where the
+        ``cdouble_exp`` it replaces kept the finite ``exp(-200)``.  A
+        variable that this module has proven a ``float64`` is what makes
+        the surrounding arithmetic a double.
         """
-        return _is_known_real(expr, self.unproven_arg_names)
+        if not _is_known_real(expr, self.unproven_arg_names):
+            return False
+        return _has_variable(expr)
 
     def map_common_subexpression_uncached(self, expr, /, *args, **kwargs):
         return IdentityMapper.map_common_subexpression(
@@ -2307,15 +2360,23 @@ class NearFieldInteractionTable:
                 component_names.append(f"{dir_vec_name}{iaxis}")
         return tuple(component_names)
 
-    def _complex_exponential_rewriter(self):
-        """This table's :class:`ComplexExponentialRewriter`, kernel-aware."""
-        return ComplexExponentialRewriter(
-            _kernel_arg_names_not_known_real(self.integral_knl)
-        )
+    def _complex_exponential_rewriter(self, extra_arg_types=()):
+        """This table's :class:`ComplexExponentialRewriter`, kernel-aware.
 
-    def _rewrite_complex_exponentials(self, expr):
+        *extra_arg_types* are loopy arguments a caller supplies alongside
+        the kernel's own -- ``build_kernel_exterior_normalizer_table``
+        takes them as ``extra_kernel_kwarg_types``.  They are not in
+        ``integral_knl.get_args()``, so without them a ``complex128``
+        parameter supplied that way would look like a proven ``float64``
+        to the guard.
+        """
+        unproven = set(_kernel_arg_names_not_known_real(self.integral_knl))
+        unproven |= _loopy_arg_names_not_known_real(extra_arg_types)
+        return ComplexExponentialRewriter(frozenset(unproven))
+
+    def _rewrite_complex_exponentials(self, expr, extra_arg_types=()):
         """Apply the guarded rewrite to a single expression."""
-        return self._complex_exponential_rewriter()(expr)
+        return self._complex_exponential_rewriter(extra_arg_types)(expr)
 
     def _get_fused_duffy_expr_maps(self):
         # Runs last, after sumpy's own rewriters and the kernel's code
@@ -3946,6 +4007,13 @@ class NearFieldInteractionTable:
         from sumpy.codegen import to_loopy_insns
         from sumpy.symbolic import SympyToPymbolicMapper, make_sym_vector
 
+        # Read before the expression maps are built: the rewrite guard
+        # needs these argument dtypes, and they are not in
+        # integral_knl.get_args().
+        extra_kernel_kwarg_types = ()
+        if "extra_kernel_kwarg_types" in kwargs:
+            extra_kernel_kwarg_types = kwargs["extra_kernel_kwarg_types"]
+
         dvec = make_sym_vector("dist", self.dim)
         sac = SymbolicAssignmentCollection()
         result_name = sac.assign_unique(
@@ -3963,8 +4031,10 @@ class NearFieldInteractionTable:
             vector_names={"dist"},
             pymbolic_expr_maps=[
                 self.integral_knl.get_code_transformer(),
-                # same cdouble_exp avoidance as the fused Duffy kernel
-                self._complex_exponential_rewriter(),
+                # same cdouble_exp avoidance as the fused Duffy kernel; the
+                # caller's extra loopy arguments join the guard, since they
+                # are not in integral_knl.get_args()
+                self._complex_exponential_rewriter(extra_kernel_kwarg_types),
             ],
             retain_names=[result_name],
             complex_dtype=np.complex128,
@@ -3982,14 +4052,11 @@ class NearFieldInteractionTable:
             assignee="knl_scaling",
             # same guarded rewrite as the quadrature instructions above
             expression=self._rewrite_complex_exponentials(
-                sympy_conv(self.integral_knl.get_global_scaling_const())
+                sympy_conv(self.integral_knl.get_global_scaling_const()),
+                extra_kernel_kwarg_types,
             ),
             temp_var_type=lp.Optional(),
         )
-
-        extra_kernel_kwarg_types = ()
-        if "extra_kernel_kwarg_types" in kwargs:
-            extra_kernel_kwarg_types = kwargs["extra_kernel_kwarg_types"]
 
         use_target_minus_source = _kernel_uses_target_minus_source_displacement(
             self.integral_knl
