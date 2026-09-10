@@ -47,6 +47,7 @@ import argparse
 import csv
 import json
 import math
+import sqlite3
 import sys
 import time
 from pathlib import Path
@@ -68,6 +69,10 @@ from adaptive_timing import (  # noqa: E402
 from adaptive_timing_3d import (  # noqa: E402
     _build_adaptive_geometry,
 )
+from volumential.rke_table_assembly import (  # noqa: E402
+    WINDOW_COVERAGE_RELATIVE_TOLERANCE,
+)
+
 from rke_field_demo_3d import (  # noqa: E402
     _field_build_configs,
     _field_smooth_quad_order,
@@ -632,7 +637,11 @@ def _run_windowed_composition(
         # a certificate refusal: the declaration does not cover this row
         return _refused_or_failed("refused", exc)
     except (
-        ValueError, RuntimeError, NotImplementedError, OSError, KeyError
+        ValueError, RuntimeError, NotImplementedError, OSError, KeyError,
+        # sqlite3's exceptions descend from Exception, not OSError, so a
+        # locked, read-only, full or corrupt table cache would otherwise
+        # escape the taxonomy exactly like the cases above
+        sqlite3.Error,
     ) as exc:
         # anything else that provisioning can raise, including a cache I/O
         # error and a rejected registration
@@ -677,15 +686,32 @@ def _validate_windowed_composition_rows(rows: list[dict[str, Any]]) -> None:
                 f"windowed assembly failed for {row['case_id']}: "
                 f"{row['windowed_refusal']}"
             )
-        if status == "refused" and max_theta <= window_theta * (1.0 + 1.0e-9):
+        if status == "refused" and max_theta <= (
+            window_theta * (1.0 + WINDOW_COVERAGE_RELATIVE_TOLERANCE)
+        ):
             raise RuntimeError(
                 f"windowed assembly refused inside the declaration for "
                 f"{row['case_id']} (max theta={max_theta:g} <= Theta="
                 f"{window_theta:g}): {row['windowed_refusal']}"
             )
-        if status == "ok" and max_theta <= WINDOWED_SMALL_THETA_MAX:
+        if status != "ok":
+            continue
+
+        # Finiteness is checked at *every* theta.  The accuracy threshold
+        # below is only meaningful at small theta, but a nan or inf
+        # mismatch is a solve that failed, and writing it as
+        # windowed_status="ok" would be the same fail-open that the
+        # split-order gate had: every comparison against nan is false.
+        rel_l2 = float(row["windowed_vs_direct_weighted_rel_l2"])
+        if not math.isfinite(rel_l2):
+            raise RuntimeError(
+                "windowed-assembled composition produced a non-finite "
+                f"mismatch for {row['case_id']}: "
+                f"weighted_rel_l2={rel_l2}"
+            )
+
+        if max_theta <= WINDOWED_SMALL_THETA_MAX:
             gate = WINDOWED_SMALL_THETA_AGREEMENT[row["mode"]]
-            rel_l2 = float(row["windowed_vs_direct_weighted_rel_l2"])
             if not rel_l2 <= gate:
                 raise RuntimeError(
                     "windowed-assembled composition path disagrees with the "
@@ -1368,9 +1394,15 @@ def main() -> int:
                 windowed_chan_orders=windowed_chan_orders,
             )
         )
+    # The gates run *after* the CSV is written, not before.  Converting a
+    # provisioning problem into a failed row exists so a long run keeps the
+    # measurements of every case that already succeeded; raising before
+    # write_csv would discard exactly those, which is the same trap the
+    # split-parameter sweep avoids by collecting failure messages and
+    # reporting them after its write.
+    write_csv(args.out, rows)
     _validate_windowed_composition_rows(rows)
     _validate_split_order_convergence(rows)
-    write_csv(args.out, rows)
     return 0
 
 

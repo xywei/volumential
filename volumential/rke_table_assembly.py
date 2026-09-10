@@ -74,7 +74,17 @@ import numpy as np
 
 import volumential.opcounters as opcounters
 
+#: Relative slack on the declared-window coverage test.  The declaration
+#: certifies the *closed* disk ``|zeta| <= (Theta/b)**2``, so a local theta
+#: exactly at ``Theta`` must be accepted; this absorbs the rounding of
+#: ``parameter * root_extent * 0.5**level``, and nothing more.  Exported
+#: because a consumer that decides whether a refusal was legitimate has to
+#: use the same boundary the assembler refused on -- a looser one turns a
+#: correct out-of-window refusal into a reported gate failure.
+WINDOW_COVERAGE_RELATIVE_TOLERANCE = 1.0e-12
+
 __all__ = [
+    "WINDOW_COVERAGE_RELATIVE_TOLERANCE",
     "RKEConditioningError",
     "RKETruncationError",
     "RKEWindowConditioningError",
@@ -1803,7 +1813,7 @@ def _assemble_windowed_for_zeta(
     # coefficients (theta/Theta)^{2m}/m! grow and the conditioning contract
     # no longer holds, so refuse rather than certify an uncovered point
     # (the real-parameter wrapper's theta guard is the same condition).
-    if theta_abs > window_theta * (1.0 + 1.0e-12):
+    if theta_abs > window_theta * (1.0 + WINDOW_COVERAGE_RELATIVE_TOLERANCE):
         raise RKEWindowCoverageError(
             f"local parameter |zeta|**0.5 * b = {theta_abs:g} exceeds the "
             f"declared window Theta = {window_theta:g}; the "
@@ -2021,7 +2031,7 @@ NearFieldInteractionTable`
 
     box_extent = float(root_extent) * 0.5**source_box_level
     theta = parameter * box_extent
-    if theta > window_theta * (1.0 + 1.0e-12):
+    if theta > window_theta * (1.0 + WINDOW_COVERAGE_RELATIVE_TOLERANCE):
         raise RKEWindowCoverageError(
             f"local parameter theta = {theta:g} exceeds the declared window "
             f"Theta = {window_theta:g}; the requested parameter is "

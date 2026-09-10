@@ -657,6 +657,95 @@ def test_windowed_channel_refusal_is_classified_as_refused(
     assert "RKEWindowCoverageError" in row["windowed_refusal"]
 
 
+def test_sqlite_failures_become_rows_too(
+    composition3d, tmp_path, monkeypatch
+):
+    """sqlite3's exceptions are not OSError, and a table cache is SQLite.
+
+    A locked, read-only, full or corrupt cache must produce a failed row
+    like any other provisioning failure.
+    """
+    import sqlite3
+
+    def _raise(**kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(composition3d, "_prepare_windowed_family", _raise)
+    row = composition3d._run_windowed_composition(
+        None, **_windowed_kwargs(tmp_path)
+    )
+
+    assert row["windowed_status"] == "failed"
+    assert "database is locked" in row["windowed_refusal"]
+    # the premise: this would have escaped an OSError-only handler
+    assert not issubclass(sqlite3.Error, OSError)
+
+
+def test_windowed_gate_uses_the_assembler_s_coverage_tolerance(composition3d):
+    """A refusal just outside the declaration is legitimate, not a bug.
+
+    The assembler refuses above ``Theta * (1 + 1e-12)``; a gate using a
+    looser boundary would call that correct refusal an illegal one.
+    """
+    from volumential.rke_table_assembly import (
+        WINDOW_COVERAGE_RELATIVE_TOLERANCE,
+    )
+
+    assert WINDOW_COVERAGE_RELATIVE_TOLERANCE == 1.0e-12
+
+    window_theta = 16.0
+    # inside the assembler's boundary: a refusal here really is illegal
+    inside = window_theta * (1.0 + 0.5e-12)
+    # outside it, but inside the old 1e-9 slack: the assembler refuses and
+    # the gate must accept that refusal
+    outside = window_theta * (1.0 + 1.0e-10)
+
+    def _row(max_theta):
+        return _windowed_row(
+            composition3d,
+            windowed_status="refused",
+            windowed_refusal="RKEWindowCoverageError: outside",
+            max_theta=max_theta,
+            window_theta=window_theta,
+        )
+
+    with pytest.raises(RuntimeError, match="refused inside the declaration"):
+        composition3d._validate_windowed_composition_rows([_row(inside)])
+    composition3d._validate_windowed_composition_rows([_row(outside)])
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+def test_windowed_gate_rejects_non_finite_mismatches_at_any_theta(
+    composition3d, bad
+):
+    """A nan mismatch is a failed solve, whatever the theta.
+
+    The accuracy threshold is only meaningful at small theta, but the old
+    scoping skipped *all* inspection above it, so a non-finite result was
+    written as windowed_status="ok".
+    """
+    small_theta_max = composition3d.WINDOWED_SMALL_THETA_MAX
+    for max_theta in (0.5 * small_theta_max, 2.0 * small_theta_max):
+        row = _windowed_row(
+            composition3d,
+            windowed_status="ok",
+            max_theta=max_theta,
+            windowed_vs_direct_weighted_rel_l2=bad,
+        )
+        with pytest.raises(RuntimeError, match="non-finite mismatch"):
+            composition3d._validate_windowed_composition_rows([row])
+
+    # a finite mismatch above the small-theta band stays unjudged
+    composition3d._validate_windowed_composition_rows([
+        _windowed_row(
+            composition3d,
+            windowed_status="ok",
+            max_theta=2.0 * composition3d.WINDOWED_SMALL_THETA_MAX,
+            windowed_vs_direct_weighted_rel_l2=1.0,
+        )
+    ])
+
+
 def test_committed_helmholtz_parameters_are_resolved_at_the_fixed_order(
     composition3d,
 ):
