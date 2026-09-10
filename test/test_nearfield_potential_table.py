@@ -3202,6 +3202,102 @@ def test_integer_preserving_calls_keep_a_phase_integral():
         )(original) != original
 
 
+def test_a_narrow_float_phase_keeps_its_complex_exponential():
+    """``float32`` is real, but not the precision ``cdouble_exp`` used.
+
+    The rewrite would select OpenCL's single-precision ``cos``/``sin``
+    overloads where the complex exponential had promoted the argument to
+    double.
+    """
+    import loopy as lp
+    import numpy as _np
+    import pymbolic.primitives as prim
+    from sumpy.kernel import KernelArgument
+
+    def _kernel(dtype):
+        class _K:
+            @staticmethod
+            def get_args():
+                return [KernelArgument(lp.ValueArg("k", dtype))]
+        return _K()
+
+    assert npt._kernel_arg_names_not_known_real(
+        _kernel(_np.float64)
+    ) == frozenset()
+    for narrow in (_np.float32, _np.float16):
+        assert npt._kernel_arg_names_not_known_real(
+            _kernel(narrow)
+        ) == frozenset({"k"})
+
+    original = prim.Call(
+        prim.Variable("exp"),
+        (prim.Product((np.complex128(1j), prim.Variable("k"))),),
+    )
+    assert npt.ComplexExponentialRewriter(
+        npt._kernel_arg_names_not_known_real(_kernel(_np.float32))
+    )(original) == original
+    assert npt.ComplexExponentialRewriter(
+        npt._kernel_arg_names_not_known_real(_kernel(_np.float64))
+    )(original) != original
+
+
+def test_splitting_a_product_chain_stays_linear():
+    """The split must not build an exponentially large expression tree.
+
+    Each factor of a chain of complex sums embeds both accumulated
+    components into both of its outputs, so without naming them the DAG
+    doubles per factor and every later walk -- the realness proof, code
+    generation -- traverses it as a tree.
+    """
+    import pymbolic.primitives as prim
+    from pymbolic.mapper import WalkMapper
+
+    class _Counter(WalkMapper):
+        def __init__(self):
+            super().__init__()
+            self.n = 0
+
+        def visit(self, expr, *args, **kwargs):
+            self.n += 1
+            # do not descend into a named subexpression twice
+            return not isinstance(expr, prim.CommonSubexpression)
+
+    def chain(n_factors):
+        return prim.Product(tuple(
+            prim.Sum((
+                prim.Variable(f"a{i}"),
+                prim.Product((np.complex128(1j), prim.Variable(f"b{i}"))),
+            ))
+            for i in range(n_factors)
+        ))
+
+    sizes = []
+    for n_factors in (2, 4, 6, 8):
+        real_part, imag_part = npt._split_complex_expression(
+            chain(n_factors)
+        )
+        counter = _Counter()
+        counter(real_part)
+        counter(imag_part)
+        sizes.append(counter.n)
+
+    # linear, not doubling: 8 factors must not cost anything like 2**8
+    # times the 2-factor size
+    assert sizes[-1] < 6 * sizes[0], sizes
+
+    # ... and the split is still exact
+    context = {}
+    expected = 1.0 + 0j
+    for i in range(8):
+        context[f"a{i}"] = 0.5 + 0.1 * i
+        context[f"b{i}"] = 0.25 - 0.05 * i
+        expected *= context[f"a{i}"] + 1j * context[f"b{i}"]
+    real_part, imag_part = npt._split_complex_expression(chain(8))
+    assert _pymbolic_eval(real_part, context) + 1j * _pymbolic_eval(
+        imag_part, context
+    ) == pytest.approx(expected)
+
+
 def test_an_inferred_argument_dtype_counts_as_potentially_complex():
     """``lp.ValueArg("k")`` has no dtype, and accepts a complex value.
 

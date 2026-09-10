@@ -131,6 +131,15 @@ def _add(left, right):
     return prim.Sum((*_terms(left), *_terms(right)))
 
 
+def _named_subexpression(expr):
+    """*expr* behind a CSE, unless it is already a leaf or one."""
+    if _is_numeric_constant(expr) or isinstance(
+        expr, prim.Variable | prim.CommonSubexpression
+    ):
+        return expr
+    return prim.CommonSubexpression(expr)
+
+
 def _split_complex_expression(expr):
     """Split ``expr`` into ``(re, im)`` such that ``expr == re + 1j*im``.
 
@@ -169,6 +178,20 @@ def _split_complex_expression(expr):
                 _mul(re_total, child_im), _mul(im_total, child_re)
             )
             re_total, im_total = new_re, new_im
+            # Once *both* accumulated components are nonzero -- which needs
+            # at least two complex-carrying factors -- each subsequent
+            # factor embeds both of them into both of its outputs, so the
+            # DAG doubles per factor and everything downstream (the
+            # realness proof, code generation) walks it as a tree.  Naming
+            # them holds that to one node per factor.  Nothing happens in
+            # the ordinary case, where one side stays a structural zero
+            # until the last factor.
+            if not (
+                _is_structural_zero(re_total)
+                or _is_structural_zero(im_total)
+            ):
+                re_total = _named_subexpression(re_total)
+                im_total = _named_subexpression(im_total)
         return re_total, im_total
 
     return expr, 0
@@ -338,9 +361,45 @@ def _kernel_arg_names_not_known_real(kernel):
     absent, inferred, or of a kind this function does not recognize has to
     be treated as potentially complex.
     """
-    return _kernel_arg_names_by_dtype_kind(
+    names = set()
+    for name in _kernel_arg_names_by_dtype_kind(
         kernel, (np.floating, np.integer), match=False
-    )
+    ):
+        names.add(name)
+    # A float32 argument is real, but the rewrite would hand it to the
+    # single-precision cos/sin overloads where cdouble_exp had promoted it
+    # to double.  Only a double-width real dtype proves the phase.
+    for name, dtype in _kernel_arg_dtypes(kernel).items():
+        try:
+            narrow = bool(
+                np.issubdtype(dtype, np.floating)
+                and np.dtype(dtype).itemsize < 8
+            )
+        except TypeError:
+            narrow = False
+        if narrow:
+            names.add(name)
+    return frozenset(names)
+
+
+def _kernel_arg_dtypes(kernel):
+    """``name -> declared numpy dtype`` for *kernel*'s runtime arguments."""
+    if kernel is None:
+        return {}
+
+    get_args = getattr(kernel, "get_args", None)
+    if get_args is None:
+        return {}
+
+    dtypes = {}
+    for kernel_arg in get_args():
+        loopy_arg = getattr(kernel_arg, "loopy_arg", None)
+        name = getattr(loopy_arg, "name", None)
+        if not name:
+            continue
+        dtype = getattr(loopy_arg, "dtype", None)
+        dtypes[name] = getattr(dtype, "numpy_dtype", dtype)
+    return dtypes
 
 
 def _kernel_arg_names_by_dtype_kind(kernel, kinds, *, match=True):
@@ -2313,16 +2372,24 @@ class NearFieldInteractionTable:
                 component_names.append(f"{dir_vec_name}{iaxis}")
         return tuple(component_names)
 
+    def _complex_exponential_rewriter(self):
+        """This table's :class:`ComplexExponentialRewriter`, kernel-aware."""
+        return ComplexExponentialRewriter(
+            _kernel_arg_names_not_known_real(self.integral_knl),
+            _kernel_arg_names_with_integer_dtype(self.integral_knl),
+        )
+
+    def _rewrite_complex_exponentials(self, expr):
+        """Apply the guarded rewrite to a single expression."""
+        return self._complex_exponential_rewriter()(expr)
+
     def _get_fused_duffy_expr_maps(self):
         # Runs last, after sumpy's own rewriters and the kernel's code
         # transformer, so it sees the final complex constants: it turns
         # cdouble_exp into real exp/cos/sin (see ComplexExponentialRewriter
         # for the PoCL sincos pathology this avoids).  Exponents that reach a
         # complex-valued kernel argument are left as cdouble_exp.
-        complex_exp_rewriter = ComplexExponentialRewriter(
-            _kernel_arg_names_not_known_real(self.integral_knl),
-            _kernel_arg_names_with_integer_dtype(self.integral_knl),
-        )
+        complex_exp_rewriter = self._complex_exponential_rewriter()
 
         if self.integral_knl is None:
             return [complex_exp_rewriter]
@@ -2559,7 +2626,14 @@ class NearFieldInteractionTable:
         scaling_assignment = lp.Assignment(
             id=None,
             assignee="knl_scaling",
-            expression=sympy_conv(self.integral_knl.get_global_scaling_const()),
+            # The same rewrite as the quadrature instructions: this
+            # assignment is built outside to_loopy_insns, so the expression
+            # maps do not reach it, and it runs inside both ientry and
+            # inode -- one untouched cdouble_exp here is one per quadrature
+            # node, which is the whole cost this PR removes.
+            expression=self._rewrite_complex_exponentials(
+                sympy_conv(self.integral_knl.get_global_scaling_const())
+            ),
             temp_var_type=lp.Optional(),
             within_inames=frozenset(["ientry", "inode"]),
         )
@@ -3956,10 +4030,7 @@ class NearFieldInteractionTable:
             pymbolic_expr_maps=[
                 self.integral_knl.get_code_transformer(),
                 # same cdouble_exp avoidance as the fused Duffy kernel
-                ComplexExponentialRewriter(
-                    _kernel_arg_names_not_known_real(self.integral_knl),
-                    _kernel_arg_names_with_integer_dtype(self.integral_knl),
-                ),
+                self._complex_exponential_rewriter(),
             ],
             retain_names=[result_name],
             complex_dtype=np.complex128,
@@ -3975,7 +4046,10 @@ class NearFieldInteractionTable:
         scaling_assignment = lp.Assignment(
             id=None,
             assignee="knl_scaling",
-            expression=sympy_conv(self.integral_knl.get_global_scaling_const()),
+            # same guarded rewrite as the quadrature instructions above
+            expression=self._rewrite_complex_exponentials(
+                sympy_conv(self.integral_knl.get_global_scaling_const())
+            ),
             temp_var_type=lp.Optional(),
         )
 
