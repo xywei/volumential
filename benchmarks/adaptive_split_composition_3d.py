@@ -1337,10 +1337,9 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    device = _select_opencl_device(cl, args.backend)
-    ctx = cl.Context([device])
-    queue = cl.CommandQueue(ctx)
-
+    # Argument validation runs first, before a device is selected and long
+    # before any geometry or table is built: a bad argument should cost
+    # nothing, not a partial run.
     cases = SMOKE_CASES if args.mode == "smoke" else FULL_CASES
     parameters = args.parameters
     if parameters is None:
@@ -1373,6 +1372,15 @@ def main() -> int:
         parser.error("--windowed-p-star must be >= 1")
     if not (args.window_theta > 0.0):
         parser.error("--window-theta must be positive")
+    if not math.isfinite(args.window_theta):
+        # get_windowed_channel_table refuses a non-finite declaration, but
+        # only once the geometry and every direct and online-split table of
+        # the first case have already been built
+        parser.error("--window-theta must be finite")
+
+    device = _select_opencl_device(cl, args.backend)
+    ctx = cl.Context([device])
+    queue = cl.CommandQueue(ctx)
 
     args.cache_dir.mkdir(parents=True, exist_ok=True)
     rows = []

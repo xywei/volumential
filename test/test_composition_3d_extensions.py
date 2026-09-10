@@ -657,6 +657,45 @@ def test_windowed_channel_refusal_is_classified_as_refused(
     assert "RKEWindowCoverageError" in row["windowed_refusal"]
 
 
+@pytest.mark.parametrize("bad", ["inf", "nan", "-inf"])  # -inf needs "=" below
+def test_main_rejects_a_non_finite_window_declaration(
+    composition3d, tmp_path, monkeypatch, capsys, bad
+):
+    """``--window-theta inf`` must not survive to the first channel build.
+
+    ``get_windowed_channel_table`` does refuse it, but only after the
+    geometry and every direct and online-split table of the first case
+    have been built -- in full mode, a substantial run thrown away.
+    """
+    monkeypatch.setattr(
+        composition3d.sys,
+        "argv",
+        [
+            "adaptive_split_composition_3d.py",
+            "--mode", "smoke",
+            "--include-windowed",
+            # "=" so argparse does not read a leading "-" as a new flag
+            f"--window-theta={bad}",
+            "--out", str(tmp_path / "unused.csv"),
+            "--cache-dir", str(tmp_path / "never-created"),
+        ],
+    )
+    # a device would only be selected after argument validation
+    monkeypatch.setattr(
+        composition3d,
+        "_select_opencl_device",
+        lambda *a, **k: pytest.fail("validation must precede device setup"),
+    )
+
+    with pytest.raises(SystemExit) as exited:
+        composition3d.main()
+
+    assert exited.value.code == 2
+    message = capsys.readouterr().err
+    assert "--window-theta must be" in message
+    assert not (tmp_path / "never-created").exists()
+
+
 def test_sqlite_failures_become_rows_too(
     composition3d, tmp_path, monkeypatch
 ):
