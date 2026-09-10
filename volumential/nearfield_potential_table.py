@@ -3135,7 +3135,6 @@ class NearFieldInteractionTable:
                 self.dim,
                 kernel_name,
             )
-            self._record_build_routing("scalar-adaptive")
             return_value = self._build_table_via_duffy_radial_scalar(
                 radial_rule=build_config.radial_rule,
                 deg_theta=int(build_config.regular_quad_order),
@@ -3143,6 +3142,7 @@ class NearFieldInteractionTable:
                 mp_dps=build_config.mp_dps,
                 kernel_kwargs=kernel_kwargs,
             )
+            self._record_build_routing("scalar-adaptive")
             if self.last_duffy_build_timings is not None:
                 self.last_duffy_build_timings["normalizer_s"] = normalizer_s
                 self.last_duffy_build_timings["total_with_normalizer_s"] = (
@@ -3195,7 +3195,11 @@ class NearFieldInteractionTable:
                 kernel_name,
                 device_name,
             )
-            self._record_build_routing("batched")
+            # Not recorded here: the public batched builder records
+            # "batched" on its own completion.  A pre-call record would
+            # survive a failure that refuses the fallback, leaving a
+            # rebuilt-but-unchanged table claiming a batched provenance
+            # for data an earlier build produced.
             try:
                 return_value = self.build_table_via_duffy_radial_batched(
                     queue,
@@ -3248,7 +3252,6 @@ class NearFieldInteractionTable:
                     self.dim,
                     kernel_name,
                 )
-                self._record_build_routing("scalar-fallback", reason=reason)
                 return_value = self._build_table_via_duffy_radial_scalar(
                     build_config.radial_rule,
                     int(build_config.regular_quad_order),
@@ -3256,6 +3259,9 @@ class NearFieldInteractionTable:
                     build_config.mp_dps,
                     kernel_kwargs=kernel_kwargs,
                 )
+                # after the builder returned, so a fallback that itself
+                # failed does not leave its routing on the table
+                self._record_build_routing("scalar-fallback", reason=reason)
         else:
             if not self._scalar_duffy_fallback_is_safe():
                 raise RuntimeError(
@@ -3270,7 +3276,6 @@ class NearFieldInteractionTable:
                 self.dim,
                 kernel_name,
             )
-            self._record_build_routing("scalar")
             return_value = self._build_table_via_duffy_radial_scalar(
                 build_config.radial_rule,
                 int(build_config.regular_quad_order),
@@ -3278,6 +3283,7 @@ class NearFieldInteractionTable:
                 build_config.mp_dps,
                 kernel_kwargs=kernel_kwargs,
             )
+            self._record_build_routing("scalar")
         if self.last_duffy_build_timings is not None:
             self.last_duffy_build_timings["normalizer_s"] = normalizer_s
             self.last_duffy_build_timings["total_with_normalizer_s"] = (

@@ -188,6 +188,27 @@ def test_remainder_term_count_averages_over_every_parameter(monkeypatch):
     ] != pytest.approx(100 * counts[0])
 
 
+def test_routing_column_is_appended_after_the_phase_columns():
+    """The layout is append-only across PRs, not just within one.
+
+    Adding ``direct_build_routing`` to the pre-phase tuple would shift
+    every column #134 appended by one position.
+    """
+    module = _load_break_even()
+    fields = list(module.SUMMARY_FIELDS)
+
+    assert fields[-1] == "direct_build_routing"
+    assert fields[-len(module.PHASE_SECONDS_FIELDS) - 1:-1] == list(
+        module.PHASE_SECONDS_FIELDS
+    )
+    # ... and the phase ops columns still sit immediately before those
+    ops_start = fields.index(module.PHASE_OPS_FIELDS[0])
+    assert fields[ops_start:ops_start + len(module.PHASE_OPS_FIELDS)] == list(
+        module.PHASE_OPS_FIELDS
+    )
+    assert len(fields) == len(set(fields))
+
+
 def test_summary_fields_extend_the_committed_layout():
     module = _load_break_even()
     fields = list(module.SUMMARY_FIELDS)

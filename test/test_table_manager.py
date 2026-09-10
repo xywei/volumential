@@ -473,6 +473,111 @@ def test_public_batched_builder_records_its_own_routing(monkeypatch):
     assert opcounters.direct_build_routing(table) == "batched"
 
 
+def test_a_cache_kwarg_cannot_overwrite_the_recorded_routing(
+    ctx_factory, tmp_path, monkeypatch
+):
+    """The payload owns the provenance; a caller's kwarg does not.
+
+    Cache kwargs are restored onto the table by a generic ``setattr``
+    loop, so one named ``build_routing`` would have replaced the routing
+    the payload just restored -- and walked past strict mode with it.
+    """
+    import volumential.nearfield_potential_table as npt
+    from volumential.nearfield_potential_table import DUFFY_NO_FALLBACK_ENV_VAR
+    from volumential.table_manager import UnverifiedBuildRoutingError
+
+    queue = cl.CommandQueue(cl.Context([ctx_factory().devices[0]]))
+    cache_file = tmp_path / "nft-routing-kwarg.sqlite"
+
+    original = npt.NearFieldInteractionTable.\
+        build_table_via_duffy_radial_batched
+
+    def failing_batched(self, build_queue, *args, **kwargs):
+        raise RuntimeError("synthetic batched build failure")
+
+    npt.NearFieldInteractionTable.build_table_via_duffy_radial_batched = (
+        failing_batched
+    )
+    try:
+        with NFTable(str(cache_file), progress_bar=False) as table_manager:
+            with pytest.warns(RuntimeWarning, match="falling back to the"):
+                table_manager.get_table(
+                    2, "Laplace", q_order=1,
+                    force_recompute=True, queue=queue,
+                    build_routing="batched",
+                )
+    finally:
+        npt.NearFieldInteractionTable.build_table_via_duffy_radial_batched = (
+            original
+        )
+
+    with NFTable(str(cache_file), progress_bar=False) as table_manager:
+        loaded, is_recomputed = table_manager.get_table(
+            2, "Laplace", q_order=1, queue=queue, build_routing="batched"
+        )
+    assert not is_recomputed
+    # the payload's routing wins over the caller's kwarg
+    assert loaded.build_routing == "scalar-fallback"
+
+    # ... so strict mode still refuses it
+    monkeypatch.setenv(DUFFY_NO_FALLBACK_ENV_VAR, "1")
+    with NFTable(str(cache_file), progress_bar=False) as table_manager:
+        with pytest.raises(UnverifiedBuildRoutingError):
+            table_manager.get_table(
+                2, "Laplace", q_order=1, queue=queue,
+                build_routing="batched",
+            )
+
+
+def test_a_refused_batched_build_records_no_routing(ctx_factory, tmp_path,
+                                                    monkeypatch):
+    """A builder that raised produced nothing, so it claims nothing.
+
+    The dispatcher used to record "batched" before calling the builder,
+    so a failure with the fallback refused left that routing on a table
+    whose data an earlier build had produced.
+    """
+    import volumential.nearfield_potential_table as npt
+    from volumential.nearfield_potential_table import DUFFY_NO_FALLBACK_ENV_VAR
+    from sumpy.kernel import LaplaceKernel
+
+    table = npt.NearFieldInteractionTable(
+        quad_order=1, dim=2, sumpy_kernel=LaplaceKernel(2),
+        progress_bar=False,
+    )
+
+    def fake_batched_values(
+        queue, invariant_info, local_entry_indices, *args, **kwargs
+    ):
+        return np.asarray(local_entry_indices, dtype=table.dtype) + 1
+
+    monkeypatch.setattr(
+        table, "_batched_duffy_values_for_local_indices", fake_batched_values
+    )
+    table.build_table_via_duffy_radial_batched(queue=None)
+    assert table.build_routing == "batched"
+
+    # now a rebuild whose batched builder fails, with the fallback refused
+    monkeypatch.setenv(DUFFY_NO_FALLBACK_ENV_VAR, "1")
+
+    def failing_batched(*args, **kwargs):
+        raise RuntimeError("synthetic batched build failure")
+
+    monkeypatch.setattr(
+        table, "build_table_via_duffy_radial_batched", failing_batched
+    )
+    monkeypatch.setattr(
+        table, "_supports_batched_duffy_builder", lambda: True
+    )
+    with pytest.raises(RuntimeError, match="scalar fallback is refused"):
+        table.build_table_via_duffy_radial(queue=object())
+
+    # the earlier successful build's routing is untouched, and no new
+    # "batched" claim was recorded for the attempt that produced nothing
+    assert table.build_routing == "batched"
+    assert table.build_fallback_reason is None
+
+
 def test_strict_mode_accepts_a_cached_batched_build(
     ctx_factory, tmp_path, monkeypatch
 ):

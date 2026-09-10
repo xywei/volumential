@@ -274,11 +274,6 @@ SUMMARY_FIELDS = (
     "ops_split_series_nmax_per_parameter",
     "ops_split_remainder_pair_evals_per_solve",
     "ops_split_remainder_term_flops_per_solve_per_parameter",
-    # the DuffyRadial routing recorded by the builder and carried through the
-    # cache round trip, unioned over every direct table this row provisioned
-    # (';'-joined).  ``ops_direct_build_routing`` above is derived from it, so
-    # a "scalar-fallback" invalidates the batched node counts of that row.
-    "direct_build_routing",
 )
 
 # {{{ per-phase columns (E6)
@@ -350,7 +345,22 @@ PHASE_SECONDS_FIELDS = (
     "s_phase_setup_recombination",
 )
 
-SUMMARY_FIELDS = SUMMARY_FIELDS + PHASE_OPS_FIELDS + PHASE_SECONDS_FIELDS
+#: The DuffyRadial routing recorded by the builder and carried through the
+#: cache round trip, unioned over every direct table this row provisioned
+#: (``';'``-joined).  ``ops_direct_build_routing`` is derived from it, so a
+#: ``scalar-fallback`` invalidates the batched node counts of that row.
+#:
+#: Appended after the phase columns rather than beside the other ``ops_*``
+#: fields: this CSV's layout is append-only, and inserting it earlier would
+#: shift every column #134 added by one position.
+PHASE_TRAILING_FIELDS = ("direct_build_routing",)
+
+SUMMARY_FIELDS = (
+    SUMMARY_FIELDS
+    + PHASE_OPS_FIELDS
+    + PHASE_SECONDS_FIELDS
+    + PHASE_TRAILING_FIELDS
+)
 
 #: Long-format companion CSV: one row per (scope, strategy, phase), so the
 #: component shares are a division inside a single row rather than a pivot

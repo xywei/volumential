@@ -82,6 +82,14 @@ _TABLE_BUILD_METHOD = "DuffyRadial"
 # label keeps the provenance honest: a registered table is not a DuffyRadial
 # build, but it loads through the standard cache path exactly like one.
 EXTERNAL_TABLE_BUILD_METHOD = "ExternalAssembly"
+
+#: Table attributes that the serialized payload owns.  A cache kwarg of the
+#: same name must not overwrite them on load: they are provenance the
+#: builder recorded, not a request the caller made.
+_PAYLOAD_OWNED_ATTRIBUTES = frozenset({
+    "build_routing",
+    "build_fallback_reason",
+})
 _ACCEPTED_BUILD_METHODS = (_TABLE_BUILD_METHOD, EXTERNAL_TABLE_BUILD_METHOD)
 
 
@@ -1853,6 +1861,14 @@ class NearFieldInteractionTableManager:
                 raise KeyError(f"cached kernel parameter '{pname}' mismatch")
 
         for atkey, atval in loaded_kwargs.items():
+            if atkey in _PAYLOAD_OWNED_ATTRIBUTES:
+                # A caller can pass any scalar as a cache kwarg, and this
+                # loop would let one named build_routing overwrite the
+                # provenance the payload just restored -- so a
+                # scalar-fallback table could reload as "batched" and walk
+                # past the strict-mode refusal below.  The payload owns
+                # these names.
+                continue
             setattr(table, atkey, atval)
         t_kwargs_load_end = time.perf_counter()
 
