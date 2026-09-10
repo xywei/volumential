@@ -743,7 +743,7 @@ class HelmholtzSplitCorrectionMixin:
         self._helmholtz_split_kernel_wrapper_suffix = (
             self._format_helmholtz_split_kernel_wrapper_suffix(wrapper_chain)
         )
-        self._helmholtz_split_wrapper_derivative_order = int(len(wrapper_chain))
+        self._helmholtz_split_wrapper_derivative_order = len(wrapper_chain)
         self._helmholtz_split_kernels = (
             self._apply_helmholtz_split_kernel_wrappers(base_knl),
             self._apply_helmholtz_split_kernel_wrappers(LaplaceKernel(base_knl.dim)),
@@ -779,7 +779,7 @@ class HelmholtzSplitCorrectionMixin:
             return self.list1_extra_kwargs
 
         base_knl, wrapper_chain, _ = self._set_active_split_kernel(out_knl)
-        derivative_order = int(len(wrapper_chain))
+        derivative_order = len(wrapper_chain)
 
         list1_kwargs = dict(self.list1_extra_kwargs)
         user_kwargs = self._split_user_list1_extra_kwargs
@@ -953,8 +953,12 @@ class HelmholtzSplitCorrectionMixin:
             selected = max(order_min, min(order_max, selected))
 
         coverage_max = max(
-            float(thresholds_real[-1]) if len(thresholds_real) else 0.0,
-            float(thresholds_imag[-1]) if len(thresholds_imag) else 0.0,
+            # `len(...)` rather than truthiness: `rho_thresholds` can reach here
+            # straight out of `auto_cfg` as a numpy array, and truth-testing an
+            # array with more than one element raises.
+            # (PLC1802 wants the truthiness form; suppressed per line below.)
+            float(thresholds_real[-1]) if len(thresholds_real) else 0.0,  # noqa: PLC1802
+            float(thresholds_imag[-1]) if len(thresholds_imag) else 0.0,  # noqa: PLC1802
         )
         if coverage_max > 0.0 and rho_max > coverage_max:
             logger.warning(

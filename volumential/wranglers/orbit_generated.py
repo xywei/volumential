@@ -165,7 +165,7 @@ def _build_generated_orbit_reconstruction(table, table_entry_ids, table_entry_sc
         "sign_lookup_keys": sign_lookup_keys,
         "sign_lookup_values": sign_lookup_values,
         "sign_lookup_max_probe_count": int(sign_lookup_max_probe_count),
-        "sign_correction_count": int(len(sign_correction_entry_ids)),
+        "sign_correction_count": len(sign_correction_entry_ids),
         "metadata_bytes": int(sum(arr.nbytes for arr in metadata_arrays)),
         "representative_entry_ids": representative_entry_ids,
     }

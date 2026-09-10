@@ -713,7 +713,7 @@ class FPNDSumpyExpansionWrangler(
                     math.ceil(max(0.0, rho_imag - rho_boost_start) * rho_boost_scale)
                 )
 
-                rho_boost_cap = auto_cfg.get("smooth_quad_order_rho_boost_cap", None)
+                rho_boost_cap = auto_cfg.get("smooth_quad_order_rho_boost_cap")
                 if rho_boost_cap is not None:
                     rho_boost = min(rho_boost, int(rho_boost_cap))
 
@@ -734,9 +734,7 @@ class FPNDSumpyExpansionWrangler(
                         max(0.0, rho_real - rho_real_boost_start) * rho_real_boost_scale
                     )
                 )
-                rho_real_boost_cap = auto_cfg.get(
-                    "smooth_quad_order_real_boost_cap", None
-                )
+                rho_real_boost_cap = auto_cfg.get("smooth_quad_order_real_boost_cap")
                 if rho_real_boost_cap is not None:
                     rho_real_boost = min(rho_real_boost, int(rho_real_boost_cap))
 
@@ -751,7 +749,7 @@ class FPNDSumpyExpansionWrangler(
                     base_smooth_order + rho_boost,
                 )
 
-                smooth_quad_order_max = auto_cfg.get("smooth_quad_order_max", None)
+                smooth_quad_order_max = auto_cfg.get("smooth_quad_order_max")
                 if smooth_quad_order_max is not None:
                     helmholtz_split_smooth_quad_order = min(
                         helmholtz_split_smooth_quad_order,
@@ -796,7 +794,7 @@ class FPNDSumpyExpansionWrangler(
             self._helmholtz_split_kernel_wrapper_suffix = (
                 self._format_helmholtz_split_kernel_wrapper_suffix(wrapper_chain)
             )
-            self._helmholtz_split_wrapper_derivative_order = int(len(wrapper_chain))
+            self._helmholtz_split_wrapper_derivative_order = len(wrapper_chain)
 
             if base_knl.dim not in (2, 3):
                 raise NotImplementedError(
@@ -1060,13 +1058,12 @@ class FPNDSumpyExpansionWrangler(
                 eval_dtype = (
                     np.complex64 if configured_dtype == np.float32 else np.complex128
                 )
+        elif configured_dtype.kind == "f":
+            eval_dtype = configured_dtype
         else:
-            if configured_dtype.kind == "f":
-                eval_dtype = configured_dtype
-            else:
-                eval_dtype = (
-                    np.float32 if configured_dtype == np.complex64 else np.float64
-                )
+            eval_dtype = (
+                np.float32 if configured_dtype == np.complex64 else np.float64
+            )
 
         cache_key = (
             kname,

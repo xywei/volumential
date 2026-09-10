@@ -8,7 +8,10 @@
 # *baseline*: a per-file record of the rules a file still violates.  New files
 # start clean, existing files can be cleaned incrementally, and CI can run this
 # config today instead of the four-rule smoke check.  Removing a baseline entry
-# once a file is clean is the intended workflow.
+# once a file is clean is the intended workflow.  The block is re-measured, not
+# hand-edited: it is exactly the set of rules each file still trips with
+# ``[lint.per-file-ignores]`` emptied, so entries appear and disappear as the
+# tree changes.
 #
 # ``ruff format`` is deliberately *not* adopted as a gate: it would reformat 76
 # of 93 files (~5.6k changed lines), and enabling flake8-quotes (``Q``) would
@@ -31,12 +34,20 @@ extend-exclude = [
 # B    flake8-bugbear          SIM   flake8-simplify
 # C4   flake8-comprehensions   PIE   flake8-pie
 # RUF  ruff-specific           PL    pylint (subset, see the ignore list)
+# N    pep8-naming
+#
+# ``N`` costs nothing here: the only naming complaints in the tree are the 28
+# ``N806`` sites in ``function_extension.py``, where capitalised names track the
+# layer-potential notation of the paper and already carry ``# noqa: N806``.
+# Selecting ``N`` is what makes those directives meaningful; without it they are
+# unused-``noqa`` (``RUF100``) hits instead.
 select = [
     "B",
     "C4",
     "E",
     "F",
     "I",
+    "N",
     "PIE",
     "PL",
     "RUF",
@@ -124,86 +135,61 @@ line-ending = "lf"
 "examples/poisson2d_pytential_volumential.ipynb" = ["B905", "E501", "I001", "RUF059"]
 "examples/poisson3d.py" = ["E501", "I001", "PIE808", "RUF100", "SIM108"]
 "examples/poisson3d_volumential.ipynb" = ["E501", "I001", "RUF100"]
-"test/conftest.py" = ["E501", "I001"]
 "test/test_benchmark_helpers.py" = ["C420", "I001", "PLR0402"]
-"test/test_branched_flow_example.py" = ["I001"]
 "test/test_break_even_extensions.py" = ["I001"]
-"test/test_cahn_hilliard.py" = ["RUF059"]
-"test/test_composition_extensions.py" = ["C420"]
-"test/test_duffy_batched_manufactured.py" = ["E501", "E731", "I001"]
-"test/test_duffy_full_accuracy.py" = ["B905", "E501", "I001", "PLW3301"]
-"test/test_duffy_tanh_sinh.py" = ["E731"]
-"test/test_external_table_registration.py" = ["C408", "SIM117"]
-"test/test_fmmlib_batched_stages.py" = ["E402", "I001", "RUF100"]
-"test/test_function_extension.py" = ["I001"]
+"test/test_duffy_batched_manufactured.py" = ["E501"]
+"test/test_duffy_full_accuracy.py" = ["E501"]
 "test/test_function_extension_helpers.py" = ["E501"]
 "test/test_gaussian.py" = ["E501"]
-"test/test_graded_tree_convergence.py" = ["C420"]
-"test/test_interpolation.py" = ["E501", "I001", "PLR0402", "RUF059"]
-"test/test_laplace.py" = ["RUF059"]
-"test/test_nearfield_interaction_completeness.py" = ["I001", "RUF100"]
-"test/test_nearfield_potential_table.py" = ["B905", "E501", "F401", "I001", "UP031"]
-"test/test_opcounters.py" = ["I001", "SIM117"]
-"test/test_singular_integral_2d.py" = ["RUF059"]
-"test/test_table_manager.py" = ["E501", "I001", "SIM108", "SIM117"]
-"test/test_table_manager_sqlite_migration.py" = ["E501", "I001", "SIM117"]
-"test/test_tree_interactive_build.py" = [
-    "E501", "F401", "F841", "I001", "PLW2901", "RUF043",
-]
-"test/test_version.py" = ["PLR0402"]
-"test/test_volume_fmm.py" = [
-    "B905", "C420", "E501", "I001", "PLR0402", "PLR1704", "PLW2901", "RUF100",
-]
-"test/test_windowed_damped.py" = ["I001"]
-"test/test_windowed_rke.py" = ["B905", "C401", "E501", "I001", "RUF007"]
+"test/test_interpolation.py" = ["E501"]
+"test/test_nearfield_potential_table.py" = ["E501"]
+"test/test_table_manager.py" = ["E501"]
+"test/test_table_manager_sqlite_migration.py" = ["E501"]
+"test/test_tree_interactive_build.py" = ["E501"]
+"test/test_volume_fmm.py" = ["E501"]
+"test/test_windowed_rke.py" = ["I001"]
 "test/test_windowed_strategy_benchmarks.py" = ["C420"]
 # OPT_ENABLED/CACHING_ENABLED are module-level switches in the public
 # API, so their setters have to rebind globals.
 "volumential/__init__.py" = ["PLW0603"]
-"volumential/expansion_wrangler_fpnd.py" = [
-    "B026", "B905", "C408", "E501", "F841", "I001", "PLC1802", "PLR5501",
-    "PLW2901", "RUF046", "SIM102", "SIM105", "SIM108", "SIM114", "SIM910",
-    "UP031",
-]
-"volumential/expansion_wrangler_interface.py" = ["PIE790"]
-"volumential/function_extension.py" = [
-    "E501", "I001", "PIE794", "RUF100", "SIM223", "UP031",
-]
-"volumential/gaussian.py" = ["E501", "PLW2901"]
-"volumential/geometry.py" = ["B905", "E501", "I001", "SIM108"]
-"volumential/interpolation.py" = ["B028", "E501", "I001", "RUF005"]
+"volumential/function_extension.py" = ["E501", "I001"]
+"volumential/gaussian.py" = ["E501"]
+"volumential/geometry.py" = ["E501", "I001"]
+"volumential/interpolation.py" = ["E501", "I001"]
 "volumential/lagrange.py" = ["E501"]
-"volumential/list1.py" = ["E501", "PLW2901", "RUF005", "RUF046", "SIM108", "UP031"]
-"volumential/list1_gallery.py" = ["RUF059"]
-"volumential/list1_symmetry.py" = ["B905", "E501", "PLR5501", "UP031"]
-"volumential/meshgen.py" = ["B905", "E501", "F401", "I001", "RUF100", "SIM102"]
+"volumential/list1.py" = ["E501"]
+"volumential/list1_symmetry.py" = ["E501"]
+"volumential/meshgen.py" = ["E501", "I001"]
 "volumential/nearfield_potential_table.py" = [
     "B010", "B905", "C408", "E501", "I001", "RUF005", "RUF046", "RUF059",
     "SIM103", "SIM108", "SIM401", "UP031",
 ]
 "volumential/opcounters.py" = ["I001"]
-"volumential/orbit_arithmetic.py" = ["E501", "PLW2901", "SIM108"]
-"volumential/rke_table_assembly.py" = [
-    "B905", "I001", "PLR0402", "PLW2901", "RUF007",
-]
-"volumential/singular_integral_2d.py" = [
-    "B023", "B904", "B905", "E501", "PLW0603", "PLW2901", "RUF059",
-]
-"volumential/symbolic.py" = ["RUF100", "UP031"]
+"volumential/orbit_arithmetic.py" = ["E501"]
+"volumential/rke_table_assembly.py" = ["I001"]
+"volumential/singular_integral_2d.py" = ["E501"]
 "volumential/table_manager.py" = [
     "B028", "B904", "E501", "I001", "RUF046", "SIM102", "SIM117", "SIM118",
     "SIM201", "SIM910", "UP031", "UP032",
 ]
-"volumential/tools.py" = [
-    "B905", "C416", "E501", "I001", "PIE790", "RUF005", "RUF010", "RUF059",
-    "RUF100", "SIM105", "UP031",
-]
-"volumential/tree_interactive_build.py" = [
-    "B008", "E501", "I001", "PLW2901", "RUF005",
-]
+"volumential/tree_interactive_build.py" = ["E501", "I001"]
 "volumential/volume_fmm.py" = [
     "B009", "C408", "E501", "I001", "PLW0603", "RUF019", "RUF100", "SIM108",
 ]
+"volumential/wranglers/arithmetic_orbits.py" = ["E501", "PLW2901", "SIM108"]
+"volumential/wranglers/box_layout.py" = ["E501"]
+"volumential/wranglers/fmmlib_backend.py" = ["E501", "SIM102", "SIM108", "UP031"]
+"volumential/wranglers/helmholtz_split.py" = ["E501", "SIM105"]
+"volumential/wranglers/kernel_symmetry.py" = ["E501"]
+"volumential/wranglers/kernels.py" = ["E501"]
+"volumential/wranglers/nearfield_cache.py" = ["E501"]
+"volumential/wranglers/orbit_generated.py" = ["E501"]
+"volumential/wranglers/orbit_lookup.py" = ["E501", "RUF046"]
+"volumential/wranglers/split_terms.py" = ["E501"]
+"volumential/wranglers/sumpy_backend.py" = [
+    "B026", "C408", "E501", "PLW2901", "RUF046", "SIM102", "UP031",
+]
+"volumential/wranglers/table_data.py" = ["E501"]
 
 # }}}
 

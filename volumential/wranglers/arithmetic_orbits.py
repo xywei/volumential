@@ -766,7 +766,7 @@ def _build_arithmetic_orbit_reconstruction(
         else "scalar-arithmetic-orbit"
     )
     used_layout_entry_ids = layout_entry_ids[layout_entry_ids >= 0]
-    distinct_layout_entry_count = int(len(np.unique(used_layout_entry_ids)))
+    distinct_layout_entry_count = len(np.unique(used_layout_entry_ids))
 
     return {
         "kind": kind,
@@ -780,13 +780,13 @@ def _build_arithmetic_orbit_reconstruction(
         "direction_sign_axis": int(direction_sign_axis),
         "layout_entry_ids": layout_entry_ids,
         "layout_entry_scales": layout_entry_scales,
-        "n_case_orbits": int(len(unique_canonical_case_ids)),
+        "n_case_orbits": len(unique_canonical_case_ids),
         "metadata_bytes": int(sum(arr.nbytes for arr in metadata_arrays)),
         "dense_arithmetic_layout_entry_count": int(
             len(unique_canonical_case_ids) * table.n_pairs
         ),
         "compact_value_entry_count": int(n_compact_entries),
-        "representative_entry_count": int(len(representative_entry_ids)),
+        "representative_entry_count": len(representative_entry_ids),
         "distinct_layout_entry_count": distinct_layout_entry_count,
         "duplicate_layout_entry_count": int(
             len(used_layout_entry_ids) - distinct_layout_entry_count
@@ -841,7 +841,7 @@ def _build_fast_scalar_arithmetic_orbit_reconstruction(table):
         metadata_arrays += (axis_direction_signs,)
 
     n_case_orbits = int(metadata_arrays[5].size - 1)
-    distinct_layout_entry_count = int(len(np.unique(layout_entry_ids)))
+    distinct_layout_entry_count = len(np.unique(layout_entry_ids))
     return {
         "kind": "scalar-arithmetic-orbit",
         "case_orbit_ranks": metadata_arrays[0],
@@ -859,8 +859,8 @@ def _build_fast_scalar_arithmetic_orbit_reconstruction(table):
         "dense_arithmetic_layout_entry_count": int(
             n_case_orbits * table.n_pairs
         ),
-        "compact_value_entry_count": int(len(layout_entry_ids)),
-        "representative_entry_count": int(len(layout_entry_ids)),
+        "compact_value_entry_count": len(layout_entry_ids),
+        "representative_entry_count": len(layout_entry_ids),
         "distinct_layout_entry_count": distinct_layout_entry_count,
         "duplicate_layout_entry_count": int(
             len(layout_entry_ids) - distinct_layout_entry_count

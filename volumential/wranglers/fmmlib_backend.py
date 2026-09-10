@@ -589,9 +589,9 @@ class FPNDFMMLibExpansionWrangler(
 
         kname = out_kernel.__repr__()
 
-        if isinstance(self.n_tables, int) and self.n_tables > 1:
-            use_multilevel_tables = True
-        elif isinstance(self.n_tables, dict) and self.n_tables[kname] > 1:
+        if (isinstance(self.n_tables, int) and self.n_tables > 1) or (
+            isinstance(self.n_tables, dict) and self.n_tables[kname] > 1
+        ):
             use_multilevel_tables = True
         else:
             use_multilevel_tables = False
@@ -631,13 +631,12 @@ class FPNDFMMLibExpansionWrangler(
                 eval_dtype = (
                     np.complex64 if configured_dtype == np.float32 else np.complex128
                 )
+        elif configured_dtype.kind == "f":
+            eval_dtype = configured_dtype
         else:
-            if configured_dtype.kind == "f":
-                eval_dtype = configured_dtype
-            else:
-                eval_dtype = (
-                    np.float32 if configured_dtype == np.complex64 else np.float64
-                )
+            eval_dtype = (
+                np.float32 if configured_dtype == np.complex64 else np.float64
+            )
         cache_key = (
             kname,
             tuple(int(np.asarray(tbl.data).ctypes.data) for tbl in near_field_tables),

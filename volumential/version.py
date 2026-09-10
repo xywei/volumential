@@ -45,14 +45,24 @@ def _fallback_kernel_revision() -> str:
     source_root = Path(__file__).resolve().parent
     fingerprint = blake2b(digest_size=12)
 
-    for rel_path in (
+    rel_paths = [
         "version.py",
         "tools.py",
         "volume_fmm.py",
         "list1.py",
         "nearfield_potential_table.py",
+        # Kept for the installed layouts that still ship it: since the wrangler
+        # split this is a re-export shim, so on its own it no longer moves the
+        # token when wrangler code changes.  The modules below are what does.
         "expansion_wrangler_fpnd.py",
-    ):
+    ]
+    # Sorted so the digest does not depend on directory iteration order.
+    rel_paths += sorted(
+        f"wranglers/{module_path.name}"
+        for module_path in (source_root / "wranglers").glob("*.py")
+    )
+
+    for rel_path in rel_paths:
         try:
             payload = (source_root / rel_path).read_bytes()
         except OSError:
