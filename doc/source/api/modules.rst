@@ -55,7 +55,6 @@ Symmetry Discovery
 The set of symmetry operations that can be used to speed up precomputation depends on the dimension and symmetry properties of the kernel (e.g., is it a fundamental solution kernel or one of its derivatives?).
 
 .. automodule:: volumential.list1_symmetry
-   :members:
 
 The orbit bookkeeping used to canonicalize table entries under those symmetry
 operations lives in :py:mod:`volumential.orbit_arithmetic`.
@@ -148,7 +147,15 @@ Miscellaneous Tools
 -------------------
 
 .. automodule:: volumential.tools
-   :members:
+
+Most of what :py:mod:`volumential.tools` used to define now lives in a focused
+module and is re-exported from ``tools`` unchanged.
+
+.. automodule:: volumential.kernel_cache
+
+.. automodule:: volumential.expression_eval
+
+.. automodule:: volumential.box_operators
 
 .. automodule:: volumential.lagrange
 
