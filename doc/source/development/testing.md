@@ -12,7 +12,7 @@ what each tier currently covers; this page is how to run them.
 | Smoke and regression | `uv run pytest -q` | Pull-request CI and `main` |
 | Long-run | `uv run pytest --longrun` | Developer or dedicated runs |
 | Full accuracy | `uv run pytest -m full_accuracy --full-accuracy` | GPU-capable or dedicated runners |
-| Benchmarks | `python benchmarks/<name>.py --mode smoke` | Smoke in CI; full runs promoted manually |
+| Benchmarks | `python benchmarks/<name>.py --mode smoke` | Five drivers' smoke modes on a `main`-targeting pull request; full runs promoted manually |
 
 These assume `UV_PROJECT_ENVIRONMENT` points at the conda environment, as in
 {doc}`../getting-started/installation`; without it `uv run` uses the project's
@@ -67,8 +67,9 @@ needs it, and end-of-session cleanup of stray table caches.
 
 ## Examples as tests
 
-Three examples run per pull request in a reduced configuration —
-`laplace2d.py`, `helmholtz2d.py` and `helmholtz3d.py`:
+Three examples run in a reduced configuration on a pull request **targeting
+`main`** — `laplace2d.py`, `helmholtz2d.py` and `helmholtz3d.py`. On a stacked
+pull request nothing runs at all; see {doc}`ci`.
 
 ```bash
 VOLUMENTIAL_EXAMPLE_SMOKE=1 python examples/laplace2d.py
@@ -81,5 +82,12 @@ working in smoke mode is a broken example.
 The other maintained examples — `laplace3d.py`, `poisson3d.py`,
 `branched_flow_helmholtz2d.py` and the two `*_split_p_convergence.py` drivers —
 run at full settings in `CI Full`, which has no `pull_request` trigger. Nothing
-gates them on a pull request, so run the one you touched yourself. See
-{doc}`ci`.
+gates them on a pull request, so run the one you touched yourself.
+
+The pull-request job that runs those three examples also runs five benchmark
+drivers in `--mode smoke`:
+`table_equivalence_cache.py`, `accuracy_preservation.py`,
+`gaussian_free_space.py`, `dmk_effective_density.py` and `adaptive_timing.py`.
+The `performance_suite.py` lines beside them are `--list-cases` and
+`--dry-run`, which execute no case. Every other benchmark driver's smoke mode
+is ungated — run it yourself when you touch one.

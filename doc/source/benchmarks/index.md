@@ -57,7 +57,12 @@ different routes, and they are not interchangeable.
 **Per-driver sidecars.** Four drivers write a JSON sidecar themselves:
 `graded_tree_convergence.py`, `gaussian_free_space.py`,
 `dmk_effective_density.py` and `rke_field_demo_3d.py`. Every sidecar carries
-the case id, the mode, the problem definition and the full configuration.
+the mode, the problem, and the configuration of the run.
+
+Do not key a reader on more than that. Case identity is spelled three ways:
+`gaussian_free_space.py` and `dmk_effective_density.py` write `case_id`,
+`graded_tree_convergence.py` writes `case`, and `rke_field_demo_3d.py` has no
+top-level case field at all — it carries per-case data under `cases`.
 
 They all take `--metadata-out`, but their defaults differ, and the difference
 is a provenance trap: only `graded_tree_convergence.py` derives the default
@@ -84,12 +89,15 @@ knowing before promoting one:
   `rke_field_demo_3d.py` validates before it builds metadata, and the other
   two record errors and timings without a status field.
 
-**Every other driver has no `--metadata-out` at all** — the two adaptive
-timing drivers, `table_equivalence_cache.py`, `accuracy_preservation.py`,
-`split_parameter_sweep.py`, `windowed_rke_sweep.py`, both composition drivers,
-`break_even_validation.py`, `derivative_log_preservation.py` and
-`keller_segel_continuation.py`. Passing the option to one of them is an
-argparse error, and its run is not self-describing.
+**Every other driver in `benchmarks/` has no `--metadata-out` at all** — the
+two adaptive timing drivers, `table_equivalence_cache.py`,
+`accuracy_preservation.py`, `split_parameter_sweep.py`,
+`windowed_rke_sweep.py`, both composition drivers, `break_even_validation.py`,
+`derivative_log_preservation.py`, `keller_segel_continuation.py`,
+`complex_bessel_parameterized.py` and `complex_channel_closure.py`. Those four
+above are the closed set; treat everything else as sidecar-free, and check
+`--help` rather than this list if a driver is added. Passing the option to one
+of them is an argparse error, and its run is not self-describing.
 
 Two qualifications on that group, because "no sidecar" is not the same as "CSV
 only":
