@@ -145,7 +145,7 @@ of these:
 | User guide | Understanding a mechanism you are using | the Helmholtz split |
 | Design notes | Why a mechanism has its shape; no derivations | windowed channels |
 | Benchmarks | Producing and promoting evidence | metadata sidecars |
-| API reference | Generated; edit the docstring instead | — |
+| API reference | `api/generated/` is generated — edit the docstring; `api/index.rst` is the hand-written overview | the module map |
 | Development | The project, not the library | this page |
 
 When you add a kernel, a mode or a derivative path, update

@@ -154,7 +154,12 @@ quiet error.
 
 `direct_evaluation=True` replaces the whole evaluation with a global
 point-to-point sum over the quadrature nodes (`sumpy`'s `P2P`), and returns
-before the List 1 stage runs — it does **not** use the near-field tables. It is
+before the List 1 stage runs — it does **not** use the near-field tables. Use
+it only on a coincident source/target tree: the branch passes
+`target_to_source = arange(tree.ntargets)` unconditionally, so with distinct
+target arrays and `exclude_self=True` target `i` drops source `i` even though
+the two are unrelated points, and it also bypasses the automatic interpolation
+below. It is
 a diagnostic for the far-field path, not an accuracy oracle for the near field:
 point quadrature does not resolve the singular near-field integrand, so a
 disagreement with it says nothing on its own. The reference the near-field

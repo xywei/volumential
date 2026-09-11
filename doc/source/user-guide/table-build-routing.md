@@ -17,7 +17,14 @@ is never silent.
   are persisted with the cached payload, so a warm, cache-loaded table still
   reports how it was originally built
   (`volumential.opcounters.direct_build_routing`).
-- The Paper 1 benchmark drivers emit it as a `direct_build_routing` CSV column.
+- Seven drivers emit it as a `direct_build_routing` CSV column:
+  `adaptive_timing.py`, `adaptive_timing_3d.py`,
+  `adaptive_split_composition.py`, `adaptive_split_composition_3d.py`,
+  `break_even_validation.py`, `split_parameter_sweep.py` and
+  `windowed_rke_sweep.py`. Others that provision tables —
+  `graded_tree_convergence.py`, `keller_segel_continuation.py` — do not, so
+  their CSVs cannot be checked this way; read the routing off the table object
+  or run them under strict mode.
 
 ## Strict mode
 

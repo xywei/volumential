@@ -50,13 +50,20 @@ python benchmarks/performance_suite.py --mode smoke --backend cuda-gpu \
   --out-dir build/benchmarks/performance-suite
 ```
 
-Where a misspelled `--backend` is caught varies. `performance_suite.py`
-constrains the argument at the parser, and `split_parameter_sweep.py` validates
-against the whitelist before touching the ICD loader, so both name the typo.
-Most of the other drivers take an unconstrained `--backend BACKEND` and call
-`cl.get_platforms()` first, so on a host with broken ICD discovery a typo
-surfaces as `PLATFORM_NOT_FOUND_KHR` rather than as an argument error. If you
-get that message, check the spelling before you check the drivers.
+Where a misspelled `--backend` is caught varies, and it comes down to which
+selector a driver uses. `performance_suite.py` constrains the argument at the
+parser. `split_parameter_sweep.py` validates against the whitelist before
+touching the ICD loader, and the drivers that import its selector inherit that
+— the two composition drivers, `break_even_validation.py`,
+`keller_segel_continuation.py` and `rke_field_demo_3d.py`. All of those name
+the typo.
+
+`adaptive_timing.py` and `gaussian_free_space.py` carry their own selector,
+which calls `cl.get_platforms()` first, and `adaptive_timing_3d.py` and
+`dmk_effective_density.py` import theirs. On those four, on a host with broken
+ICD discovery, a typo surfaces as `PLATFORM_NOT_FOUND_KHR` rather than as an
+argument error — so if you see that message from one of them, check the
+spelling before you check the drivers.
 
 `--backend` does not replace `PYOPENCL_CTX`, it sits beside it. Several drivers
 — `table_equivalence_cache.py`, `accuracy_preservation.py`,

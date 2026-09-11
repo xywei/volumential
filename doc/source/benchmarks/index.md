@@ -33,7 +33,9 @@ python benchmarks/performance_suite.py --mode smoke \
 ```
 
 It currently covers canonical table equivalence and cache economics, accuracy
-preservation, split-parameter coverage, and adaptive timing. `--case <name>`
+preservation, split-parameter coverage, adaptive timing, and the controlled
+Gaussian split effective-density diagnostic (which emits NPZ arrays and a JSON
+sidecar alongside its CSV). `--case <name>`
 runs a subset, `--list-cases` inspects the registry without importing any
 OpenCL-dependent module, `--dry-run` emits the manifest without executing, and
 `--backend` propagates device selection to the cases that expose it. The
@@ -121,7 +123,9 @@ python /path/to/boxcode-paper/tools/run_benchmark_with_metadata.py \
 
 At minimum:
 
-- the locked dependency commits (`uv.lock`) and the `pyfmmlib` source revision;
+- the full locked resolution (`uv.lock`) — a commit for each Git-sourced
+  dependency, a version and artifact hashes for each PyPI one — and the
+  `pyfmmlib` source revision;
 - the resolved OpenCL platform and device with its driver or runtime build —
   for PoCL, its LLVM version;
 - the **CPU model class** and whether it has hardware FMA, plus the
@@ -224,7 +228,9 @@ to be reported, not retried until it passes.
 1. Run `--mode smoke` on the candidate host, and check the driver's own
    smoke-mode gates pass.
 2. Run `--mode full` under the metadata wrapper, on a host whose class matches
-   the claim being made, with thread caps and `--backend` set explicitly.
+   the claim being made, with thread caps set explicitly, `PYOPENCL_CTX`
+   exported, and `--backend` named for the drivers that have one — passing it
+   to a driver that does not is an argparse error, not a no-op.
 3. Check the exit status and the per-row status columns, not just the presence
    of output.
 4. Promote the CSV together with the wrapper metadata, and with the driver's
