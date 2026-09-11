@@ -1,17 +1,12 @@
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
-__doc__ = """
-.. autoclass:: KernelSpec
-   :members:
+__doc__ = """Near-field interaction tables and the manager that owns them.
 
-.. autoclass:: TableDiscretization
-   :members:
-
-.. autoclass:: TableRequest
-   :members:
-
-.. autoclass:: NearFieldInteractionTableManager
-   :members:
+Tables are stored in SQLite format and managed through
+:class:`NearFieldInteractionTableManager`, which resolves a
+:class:`TableRequest` -- a :class:`KernelSpec` plus a
+:class:`TableDiscretization` -- to a table that is built, loaded from the
+database, or reconstructed from a symmetry-reduced one.
 """
 
 __license__ = """
@@ -81,6 +76,9 @@ _TABLE_BUILD_METHOD = "DuffyRadial"
 # :meth:`NearFieldInteractionTableManager.register_external_table`.  The
 # label keeps the provenance honest: a registered table is not a DuffyRadial
 # build, but it loads through the standard cache path exactly like one.
+#: ``build_method`` recorded for a table handed to the manager from
+#: outside its own builders (see
+#: :meth:`NearFieldInteractionTableManager.register_external_table`).
 EXTERNAL_TABLE_BUILD_METHOD = "ExternalAssembly"
 
 #: Table attributes that the serialized payload owns.  A cache kwarg of the

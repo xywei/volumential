@@ -311,7 +311,7 @@ def phase(name: str):
 
     Returns a context manager rather than being one, so the inactive path is
     a :class:`~contextvars.ContextVar` read and a shared-singleton return
-    (see :class:`_InactivePhase` for why that matters).
+    (see the private ``_InactivePhase`` for why that matters).
     """
     profiles = _ACTIVE.get()
     if not profiles:

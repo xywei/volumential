@@ -438,11 +438,7 @@ def _map_to_simplex_barycentric(points, simplex_vertices):
     return np.ascontiguousarray(np.vstack([bary0, bary_rest]))
 
 
-__doc__ = r"""
-.. currentmodule:: volumential
-
-From :mod:`meshmode`
--------------------------
+__doc__ = r"""Interpolation between box meshes and :mod:`meshmode` discretizations.
 
 Interpolation from functions given by DoF vectors of :mod:`meshmode`.
 The underlying mesh on the :mod:`meshmode` side must be discretizing the
@@ -453,16 +449,6 @@ element types: each element is bounded inside the smallest :math:`l^\infty`
 ball that is centered at the element's center and covers all its vertices.
 This property might be broken, for example, by high order elements that
 warp the element boundary too much.
-
-.. autoclass:: ElementsToSourcesLookup
-
-.. autoclass:: LeavesToNodesLookup
-
-.. autofunction:: interpolate_from_meshmode
-
-To :mod:`meshmode`
----------------------------
-
 """
 
 
@@ -498,9 +484,7 @@ class ElementsToSourcesLookup(DeviceDataRecord):
 
     .. attribute:: sources_in_element_lists
 
-        Indices into :attr:`tree.sources`.
-
-    .. automethod:: get
+        Indices into ``tree.sources``.
     """
 
 
@@ -508,7 +492,7 @@ class LeavesToNodesLookup(DeviceDataRecord):
     """
     .. attribute:: trav
 
-        The :class:`boxtree.FMMTraversalInfo` instance representing the
+        The :class:`boxtree.traversal.FMMTraversalInfo` instance representing the
         box mesh with metadata needed for interpolation. It contains a
         reference to the underlying tree as `trav.tree`.
 
@@ -533,7 +517,7 @@ class LeavesToNodesLookup(DeviceDataRecord):
 
     .. attribute:: nodes_in_leaf_lists
 
-        Indices into :attr:`discr.nodes()`.
+        Indices into ``discr.nodes()``.
 
         .. note:: Unlike :class:`ElementsToSourcesLookup`, lists are not disjoint
             in the leaves-to-nodes lookup. :mod:`volumential` automatically computes
@@ -548,8 +532,6 @@ class LeavesToNodesLookup(DeviceDataRecord):
 
         Precomputed target-major lookup lists from the underlying area query,
         aligned with flattened discretization nodes.
-
-    .. automethod:: get
     """
 
 
@@ -560,7 +542,7 @@ class LeavesToNodesLookup(DeviceDataRecord):
 
 
 class ElementsToSourcesLookupBuilder:
-    """Given a :mod:`meshmod` mesh and a :mod:`boxtree.Tree`, both discretizing
+    """Given a :mod:`meshmode` mesh and a :class:`boxtree.Tree`, both discretizing
     the same bounding box, this class helps to build a look-up table from
     element to source nodes that are positioned inside the element.
     """
@@ -904,14 +886,14 @@ class ElementsToSourcesLookupBuilder:
 
 
 class LeavesToNodesLookupBuilder:
-    """Given a :mod:`meshmod` mesh and a :mod:`boxtree.Tree`, both discretizing
+    """Given a :mod:`meshmode` mesh and a :class:`boxtree.Tree`, both discretizing
     the same bounding box, this class helps to build a look-up table from
     leaf boxes to mesh nodes that are positioned inside the box.
     """
 
     def __init__(self, context, trav, discr):
         """
-        :arg trav: a :class:`boxtree.FMMTraversalInfo`
+        :arg trav: a :class:`boxtree.traversal.FMMTraversalInfo`
         :arg discr: a :class: `meshmode.discretization.Discretization`
 
         Boxes and elements can be non-aligned as long as the domains
@@ -1384,7 +1366,7 @@ def interpolate_to_meshmode(actx, potential, leaves_to_nodes_lookup, order="tree
     :arg leaves_to_nodes_lookup: a :class:`LeavesToNodesLookup`.
     :arg order: order of the input potential, either "tree" or "user".
 
-    :returns: a :class:`pyopencl.Array` of shape (nnodes, 1) containing the
+    :returns: a :class:`pyopencl.array.Array` of shape (nnodes, 1) containing the
         interpolated data.
     """
     if order == "tree":

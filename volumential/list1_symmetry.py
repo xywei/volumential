@@ -4,11 +4,6 @@ This module owns the description of the discrete symmetries a near-field
 interaction table may exploit (axis flips and axis swaps), and the reduction of
 a set of case vectors to the subset of symmetry representatives together with
 each representative's invariant group.
-
-.. autoclass:: SymmetryOperationBase
-.. autoclass:: Flip
-.. autoclass:: Swap
-.. autoclass:: CaseVecReduction
 """
 
 __copyright__ = "Copyright (C) 2018 Xiaoyu Wei"

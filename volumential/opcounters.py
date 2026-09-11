@@ -74,12 +74,32 @@ __all__ = [
     "surviving_radial_node_count",
 ]
 
+#: Counter category for singular-quadrature node evaluations (Duffy
+#: triangle/cone nodes at which a radial profile or kernel is evaluated).
 SINGULAR_NODES = "singular_quadrature_nodes"
+
+#: Counter category for smooth-rule (tensor Gauss-Legendre) node
+#: evaluations of the windowed remainder.
 SMOOTH_NODES = "smooth_rule_nodes"
+
+#: Counter category for nodes passed through a windowed channel profile
+#: ``psi_m``; each costs one special-function-class evaluation.
 PROFILE_NODES = "channel_profile_nodes"
+
+#: Counter category for kernel evaluations, keyed by the kernel's special
+#: function.
 KERNEL_EVALS = "kernel_evals"
+
+#: Counter category for special-function evaluations keyed by function
+#: (``expn``, ``erfc``, ``exp``, ``k0``, ``hankel1``, ...).
 SPECIAL_EVALS = "special_function_evals"
+
+#: Counter category for recombination fused multiply-adds and
+#: coefficient-recurrence steps of the assembly.
 RECOMBINATION_FLOPS = "recombination_flops"
+
+#: Counter category for table entries built (one singular quadrature per
+#: stored entry).
 TABLE_ENTRIES = "table_entries_built"
 
 
@@ -244,7 +264,7 @@ def duffy_block_geometry(table) -> dict:
     """Counts of the grouped Duffy entry enumeration for one table geometry.
 
     Mirrors the region-degeneracy predicates of the grouped channel builder
-    (:func:`volumential.rke_table_assembly._duffy_channel_entry_values`),
+    (``volumential.rke_table_assembly._duffy_channel_entry_values``),
     which agree with the scalar builder's collinear-triangle skip: 2D
     triangles are dropped when ``|det| < 1e-14 extent^2``, 3D sign-octants
     when any edge length vanishes (each surviving octant contributes the

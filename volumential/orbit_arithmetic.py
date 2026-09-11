@@ -11,9 +11,6 @@ The public entry points are :func:`build_arithmetic_case_metadata`, which
 builds the per-case descriptor arrays a table needs, and
 :func:`enumerate_scalar_arithmetic_representatives`, which lists the full-table
 entry id of every compact orbit representative.
-
-.. autofunction:: build_arithmetic_case_metadata
-.. autofunction:: enumerate_scalar_arithmetic_representatives
 """
 
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"

@@ -5,10 +5,6 @@ box mesh into the tree, traversal and quadrature data a volume FMM run needs.
 :class:`BoundingBoxFactory` decides the root box; :class:`BoxFMMGeometryFactory`
 drives the mesh generator and tree builders and hands back an immutable
 :class:`BoxFMMGeometryData` container.
-
-.. autoclass:: BoundingBoxFactory
-.. autoclass:: BoxFMMGeometryFactory
-.. autoclass:: BoxFMMGeometryData
 """
 
 __copyright__ = "Copyright (C) 2019 Xiaoyu Wei"
@@ -47,8 +43,8 @@ class BoundingBoxFactory:
     """Produces the root bounding box of a box FMM geometry.
 
     The box is either fully prescribed by *center* and *radius*, or adapted to
-    a mesh at call time. Calling the factory materializes :attr:`lbounds` and
-    :attr:`ubounds`, which downstream code reads directly.
+    a mesh at call time. Calling the factory materializes ``lbounds`` and
+    ``ubounds``, which downstream code reads directly.
     """
 
     def __init__(

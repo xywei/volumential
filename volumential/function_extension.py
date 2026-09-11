@@ -5,17 +5,8 @@ This module owns the extension operators that continue a function given on a
 :mod:`sumpy` kernels the biharmonic extension is written in.
 
 1. :math:`L^2`: extend with constant value
-
-.. autofunction:: compute_constant_extension
-
 2. :math:`C^0`: harmonic extension
-
-.. autofunction:: compute_harmonic_extension
-
 3. :math:`C^1`: biharmonic extension
-
-.. autofunction:: compute_biharmonic_extension
-
 """
 
 __copyright__ = "Copyright (C) 2018 Xiaoyu Wei"

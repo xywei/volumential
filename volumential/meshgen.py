@@ -6,17 +6,6 @@ weights, cell centers and cell measures a volume FMM run integrates over.
 and its quadrature; the dimension-specific subclasses only pin the dimension.
 The module also owns the small helpers that turn a generated mesh into boxtree
 tree/traversal data.
-
-.. autoclass:: MeshGenBase
-   :members:
-.. autoclass:: MeshGen1D
-   :members:
-.. autoclass:: MeshGen2D
-   :members:
-.. autoclass:: MeshGen3D
-   :members:
-.. autofunction:: make_uniform_cubic_grid
-.. autofunction:: build_geometry_info
 """
 
 __copyright__ = "Copyright (C) 2018 Xiaoyu Wei"

@@ -41,8 +41,6 @@ quadrature rules used to build near-field interaction tables:
   the affine maps feeding it (:func:`solve_affine_map_2d`), and
 * the Duffy-type radial rules built on top of them (:func:`tria_quad`,
   :func:`quadri_quad`, :func:`box_quad` and their ``_duffy_radial`` variants).
-
-.. autofunction:: box_quad
 """
 
 logger = logging.getLogger(__name__)
@@ -180,8 +178,8 @@ def update_qquad_leggauss_formula(deg1, deg2) -> None:
 
     .. warning::
 
-        Only :data:`quad_weights` is updated; the node arrays
-        :data:`quad_points_x` and :data:`quad_points_y` are shadowed by locals
+        Only ``quad_weights`` is updated; the node arrays
+        ``quad_points_x`` and ``quad_points_y`` are shadowed by locals
         here and therefore left untouched. None of the module's quadrature
         routines read these globals -- they build their own rules -- so this
         helper is kept only for backwards compatibility.
@@ -222,39 +220,39 @@ def qquad(
     tolerance tol.
 
     :param func: A double variable Python function or method to integrate.
-    :type func: function.
+    :type func: collections.abc.Callable
     :param a: Lower-left corner of integration region.
-    :type a: float.
+    :type a: float
     :param b: Lower-right corner of integration region.
-    :type b: float.
+    :type b: float
     :param c: Upper-left corner of integration region.
-    :type c: float.
+    :type c: float
     :param d: Upper-right corner of integration region.
-    :type d: float.
+    :type d: float
     :param args: Extra arguments to pass to function.
-    :type args: tuple, optional.
+    :type args: tuple
     :param tol: rtol Iteration stops when error between last two iterates is
                 less than tol OR the relative change is less than rtol.
-    :type tol: float, optional.
+    :type tol: float
     :param rtol: Iteration stops when error between last two iterates is less
                 than tol OR the relative change is less than rtol.
-    :type rtol: float, optional.
+    :type rtol: float
     :param maxitero: Maximum order of outer Gaussian quadrature.
-    :type maxitero: int, optional.
+    :type maxitero: int
     :param maxiteri: Maximum order of inner Gaussian quadrature.
-    :type maxiteri: int, optional.
+    :type maxiteri: int
     :param vec_func: True if func handles arrays as arguments (is a "vector"
                 function). Default is True.
-    :type vec_func: bool, optional.
+    :type vec_func: bool
     :param minitero: Minimum order of outer Gaussian quadrature.
-    :type minitero: int, optional.
+    :type minitero: int
     :param miniteri: Minimum order of inner Gaussian quadrature.
-    :type miniteri: int, optional.
+    :type miniteri: int
 
     :returns:
         - **val**: Gaussian quadrature approximation (within tolerance) to integral.
         - **err**: Difference between last two estimates of the integral.
-    :rtype: tuple(float,float).
+    :rtype: tuple[float, float]
     """
 
     l1 = b - a
@@ -329,10 +327,10 @@ def solve_affine_map_2d(source_tria, target_tria):
 
     :param source_tria: The triangle to be mapped.
     :type source_tria:
-         tuple(tuple(float,float),tuple(float,float),tuple(float,float)).
+         tuple[tuple[float, float], tuple[float, float], tuple[float, float]]
     :param target_tria: The triangle to map to.
     :type target_tria:
-         tuple(tuple(float,float),tuple(float,float),tuple(float,float)).
+         tuple[tuple[float, float], tuple[float, float], tuple[float, float]]
 
     :returns:
      - **mapping**: the forward map.
@@ -340,7 +338,7 @@ def solve_affine_map_2d(source_tria, target_tria):
      - **invmap**: the inverse map.
      - **invJ**: the Jacobian of inverse map.
     :rtype:
-     tuple(lambda, float, lambda, float)
+     tuple[collections.abc.Callable, float, collections.abc.Callable, float]
     """
     assert len(source_tria) == 3
     for p in source_tria:
@@ -424,7 +422,8 @@ def tria2rect_map_2d():
     :returns: The mapping, its Jacobian, its inverse, and the Jacobian of its
              inverse. Note that the Jacobians are returned as lambdas since
              they are not constants.
-    :rtype: tuple(lambda, lambda, lambda, lambda)
+    :rtype: tuple[collections.abc.Callable, collections.abc.Callable,
+        collections.abc.Callable, collections.abc.Callable]
     """
 
     # (x,y) --> (rho, theta): T --> R
@@ -449,10 +448,10 @@ def is_in_t(pt):
     """Checks if a point is in the template triangle T.
 
     :param pt: The point to be checked.
-    :type pt: tuple(float,float).
+    :type pt: tuple[float, float]
 
     :returns: True if pt is in T.
-    :rtype: bool.
+    :rtype: bool
     """
     flag = True
     if pt[0] < 0 or pt[1] < 0:
@@ -466,10 +465,10 @@ def is_in_r(pt, a=0, b=1, c=0, d=np.pi / 2):
     """Checks if a point is in the (template) rectangle R.
 
     :param pt: The point to be checked.
-    :type pt: tuple(float,float).
+    :type pt: tuple[float, float]
 
     :returns: True if pt is in R.
-    :rtype: bool.
+    :rtype: bool
     """
     flag = True
     if pt[0] < a or pt[1] < c:
@@ -527,31 +526,31 @@ def tria_quad(
     singular point. This function handles that automatically.
 
     :param func: A double variable Python function or method to integrate.
-    :type func: function.
+    :type func: collections.abc.Callable
     :param tria: The triangular region to do quadrature.
     :type tria:
-        tuple(tuple(float,float), tuple(float,float), tuple(float,float)).
+        tuple[tuple[float, float], tuple[float, float], tuple[float, float]]
     :param args: Extra arguments to pass to function.
-    :type args: tuple, optional.
+    :type args: tuple
     :param tol: rtol Iteration stops when error between last two iterates is
         less than tol OR the relative change is less than rtol.
-    :type tol: float, optional.
+    :type tol: float
     :param rtol: Iteration stops when error between last two iterates is less
         than tol OR the relative change is less than rtol.
-    :type rtol: float, optional.
+    :type rtol: float
     :param maxiter: Maximum order of Gaussian quadrature.
-    :type maxiter: int, optional.
+    :type maxiter: int
     :param vec_func: True if func handles arrays as arguments
         (is a "vector" function). Default is True.
-    :type vec_func: bool, optional.
+    :type vec_func: bool
     :param miniter: Minimum order of Gaussian quadrature.
-    :type miniter: int, optional.
+    :type miniter: int
 
     :returns:
         - **val**: Gaussian quadrature approximation (within tolerance)
             to integral.
         - **err**: Difference between last two estimates of the integral.
-    :rtype: tuple(float,float).
+    :rtype: tuple[float, float]
     """
 
     assert len(tria) == 3

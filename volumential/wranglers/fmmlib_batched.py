@@ -40,7 +40,11 @@ logger = logging.getLogger(__name__)
 
 
 class FMMLibBatchedStagesMixin:
-    """Batched P2M and GEMM-based L2P for :class:`FPNDFMMLibExpansionWrangler`."""
+    """Batched P2M and GEMM-based L2P.
+
+    Mixed into
+    :class:`~volumential.wranglers.fmmlib_backend.FPNDFMMLibExpansionWrangler`.
+    """
 
     def _get_batched_formmp_routine(self):
         """Return the per-level batched P2M routine

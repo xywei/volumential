@@ -26,13 +26,6 @@ A box-specific operator acts on the quadrature nodes of one leaf box at a time,
 independently of every other box.  This module owns those operators and the
 filter vectors they take; all of its public names are re-exported by
 :mod:`volumential.tools` for backwards compatibility.
-
-.. autoclass:: BoxSpecificMap
-.. autoclass:: DiscreteLegendreTransform
-.. autoclass:: InverseDiscreteLegendreTransform
-.. autoclass:: BoxSpecificReduction
-.. autoclass:: BoxSum
-.. autofunction:: generate_leading_order_filtering
 """
 
 import logging

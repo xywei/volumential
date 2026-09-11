@@ -26,8 +26,6 @@ This module owns :class:`ScalarFieldExpressionEvaluation` together with the
 :mod:`pymbolic`/:mod:`loopy` plumbing that turns ``math.foo(x)`` lookups from a
 symbolic expression into callables the OpenCL target understands.  It is
 re-exported by :mod:`volumential.tools` for backwards compatibility.
-
-.. autoclass:: ScalarFieldExpressionEvaluation
 """
 
 import logging
@@ -244,7 +242,7 @@ class ScalarFieldExpressionEvaluation(KernelCacheWrapper):
         return loopy_knl
 
     def get_normalised_expr(self):
-        """Return :attr:`expr` rewritten in terms of the ``x0, x1, ...`` names
+        """Return ``expr`` rewritten in terms of the ``x0, x1, ...`` names
         used by the generated kernel.
         """
         nexpr = self.expr

@@ -28,9 +28,6 @@ coarsen them upward, translate, refine locals downward, evaluate.  The
 interface here mirrors :mod:`boxtree.fmm` so that a volumential wrangler is a
 drop-in for a boxtree one; the concrete implementations live in
 :mod:`volumential.wranglers`.
-
-.. autoclass:: ExpansionWranglerInterface
-.. autoclass:: TreeIndependentDataForWranglerInterface
 """
 
 import logging
