@@ -247,18 +247,47 @@ def _damped_case_id(
     chan_tag: str,
     p_star: int,
     smooth_order: int,
+    *,
+    q_order: int,
+    source_box_level: int,
+    root_extent: float,
+    window_theta: float,
 ) -> str:
     """Case id of one damped row.
 
     Both the frequency and the phase carry the exact identity token: two
     phases agreeing in the default six significant digits would otherwise
     collide on one id with every other field equal.
+
+    The discretization and window settings that are not in the visible
+    part of the id -- the quadrature order, the source box level, the root
+    extent and the window declaration -- ride in an eight-hex-digit token,
+    because each of them changes the assembled table and therefore the
+    measurement: two campaigns differing only in ``--window-theta`` would
+    otherwise share every id.
     """
+    import hashlib
+
+    payload = json.dumps(
+        {
+            "q_order": int(q_order),
+            "source_box_level": int(source_box_level),
+            # repr round-trips a float64
+            "root_extent": repr(float(root_extent)),
+            "window_theta": repr(float(window_theta)),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    configuration = hashlib.blake2s(
+        payload.encode("utf-8"), digest_size=4
+    ).hexdigest()
     return (
         f"damped{int(dim)}d-mu{_parameter_identity_token(mu)}"
         f"-phi{_parameter_identity_token(phase_fraction)}"
         f"-{chan_tag}"
         f"-p{int(p_star)}-s{int(smooth_order)}"
+        f"-cfg{configuration}"
     )
 
 
@@ -1727,6 +1756,10 @@ def run_sweep(
                                         chan_tag,
                                         p_star,
                                         smooth_order,
+                                        q_order=q_order,
+                                        source_box_level=source_level,
+                                        root_extent=root_extent,
+                                        window_theta=window_theta,
                                     ),
                                     "mode": mode,
                                     "dim": dim,

@@ -1219,24 +1219,58 @@ def test_an_unrepresentable_mu_is_refused_before_provisioning():
     assert math.isfinite(module._damped_zeta(1.0e150, 0.5).imag)
 
 
+#: The discretization and window settings a damped case id fingerprints.
+_DAMPED_ID_CONFIG = {
+    "q_order": 2,
+    "source_box_level": 3,
+    "root_extent": 2.0,
+    "window_theta": 16.0,
+}
+
+
 def test_damped_case_ids_keep_close_phases_apart():
     """Two phases agreeing in the default six significant digits used to
     collide on one case id with every other field equal, so tooling keyed
     on it merged or overwrote independently measured rows."""
     module = _load_benchmark("windowed_rke_sweep")
     ids = {
-        module._damped_case_id(2, 8.0, phase, "c20r61", 4, 6)
+        module._damped_case_id(
+            2, 8.0, phase, "c20r61", 4, 6, **_DAMPED_ID_CONFIG
+        )
         for phase in (0.50000001, 0.50000002)
     }
     assert len(ids) == 2
     # the same readable-prefix-plus-exact-hex identity the mu token uses,
     # so the phase can no longer collide where mu could not
     assert "-phi0.5-0x" in module._damped_case_id(
-        2, 8.0, 0.5, "c20r61", 4, 6
+        2, 8.0, 0.5, "c20r61", 4, 6, **_DAMPED_ID_CONFIG
     )
-    assert module._damped_case_id(3, 8.0, 0.5, "c20r61", 4, 6).startswith(
-        "damped3d-mu8-0x"
+    assert module._damped_case_id(
+        3, 8.0, 0.5, "c20r61", 4, 6, **_DAMPED_ID_CONFIG
+    ).startswith("damped3d-mu8-0x")
+
+
+@pytest.mark.parametrize(("key", "changed"), [
+    ("q_order", 3),
+    ("source_box_level", 4),
+    ("root_extent", 2.0000001),
+    ("window_theta", 16.0000001),
+])
+def test_damped_case_ids_separate_discretization_settings(key, changed):
+    """Same mu, phase, channel orders, p_star and smooth order, different
+    quadrature order, source level, root extent or window declaration:
+    each changes the assembled table, so the ids must differ."""
+    module = _load_benchmark("windowed_rke_sweep")
+    base = module._damped_case_id(
+        2, 8.0, 0.5, "c20r61", 4, 6, **_DAMPED_ID_CONFIG
     )
+    other = module._damped_case_id(
+        2, 8.0, 0.5, "c20r61", 4, 6,
+        **{**_DAMPED_ID_CONFIG, key: changed},
+    )
+    assert base != other
+    # the visible part is identical; only the configuration token moves
+    assert base.rsplit("-cfg", 1)[0] == other.rsplit("-cfg", 1)[0]
 
 
 @pytest.mark.parametrize(("error_name", "expected_status"), [

@@ -24,15 +24,17 @@ main-branch Git sources rather than to released wheels, because those projects
 publish releases rarely and the wheels have shipped defects that silently
 corrupt adaptive-tree results.
 
-The FMMLib backend is the exception: `pyfmmlib` has no `tool.uv.sources` entry,
-so `--extra fmmlib` would resolve to the PyPI release, which lacks both the
-OpenMP option and the batched wrappers the backend needs (and
-`FPNDFMMLibExpansionWrangler` then falls back to its serial path in silence).
-Install it from upstream `main` instead:
+`pyfmmlib` is pinned the same way, and for the same reason: the PyPI release
+has neither the OpenMP option nor the batched wrappers the FMMLib backend
+needs, and `FPNDFMMLibExpansionWrangler` then falls back to its serial path in
+silence. Since #135 it has a `tool.uv.sources` entry, so the extra resolves to
+the Git source at the commit `uv.lock` pins, and the recipe is simply:
 
 ```bash
-uv pip install --active "pyfmmlib @ git+https://github.com/inducer/pyfmmlib.git"
+uv sync --active --extra fmmlib
 ```
+
+The source build needs a host with `gfortran` and `ninja`.
 
 See `DEVELOPMENT.md` for the full provisioning recipe, including the
 verification that the batched wrappers are present and the post-install

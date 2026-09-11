@@ -1262,6 +1262,39 @@ def test_a_family_failure_is_counted_before_any_early_exit(
         assert summary["stop_reason"] != "windowed_provisioning_failed"
 
 
+def test_the_terminal_checkpoint_is_exactly_t_end(ks):
+    """The step loop walks the checkpoint list by index while
+    ``t < t_end``, so a terminal checkpoint left just below ``t_end`` --
+    inside the acceptance tolerance, as ``--checkpoint-fractions
+    0.9999999999995`` gives -- is consumed while ``t < t_end`` still
+    holds and the next step indexes past the list.
+    """
+    t_end = 2.0
+
+    # inside the tolerance: snapped, not duplicated
+    nearly = t_end * 0.9999999999995
+    assert nearly != t_end
+    resolved = ks._resolved_checkpoint_times([0.5, nearly], t_end)
+    assert resolved[-1] == t_end
+    assert len(resolved) == 2
+
+    # below it: the terminal time is appended as before
+    resolved = ks._resolved_checkpoint_times([0.5], t_end)
+    assert resolved == [0.5, t_end]
+
+    # exactly t_end, and the default, are unchanged
+    assert ks._resolved_checkpoint_times([t_end], t_end) == [t_end]
+    assert ks._resolved_checkpoint_times(None, t_end) == [t_end]
+
+    # ... and every resolved list ends exactly at t_end, whatever came in
+    for requested in ([0.1], [0.1, 1.9], [nearly], [t_end], None):
+        assert ks._resolved_checkpoint_times(requested, t_end)[-1] == t_end
+
+    for bad in ([0.0], [-1.0], [t_end * 1.001], []):
+        with pytest.raises(ValueError, match=r"\(0, t_end\]"):
+            ks._resolved_checkpoint_times(bad, t_end)
+
+
 def test_compare_checkpoints_matches_shared_times_only(ks):
     weights = np.full(4, 0.25)
     baseline = {
@@ -1296,6 +1329,76 @@ def test_compare_checkpoints_matches_shared_times_only(ks):
     assert rows[0]["windowed_vs_direct_weighted_rel_l2"] == pytest.approx(
         0.01, rel=1e-12
     )
+
+
+def test_no_shared_checkpoint_is_a_failed_run(ks, tmp_path, monkeypatch):
+    """The direct-versus-windowed trajectory comparison is the windowed
+    experiment's requested outcome.
+
+    If either run stops before the first checkpoint -- a low --max-steps
+    reaches that with entirely valid arguments -- there is no comparison
+    at all, yet provisioning succeeded, so main() used to print a note
+    and return success having measured nothing the experiment asked for.
+    """
+    def _summary(case_id, strategy, regime):
+        row = dict.fromkeys(ks.SUMMARY_FIELDS, "")
+        row.update({
+            "case_id": case_id,
+            "strategy": strategy,
+            "regime": regime,
+            "n_steps": 0,
+            "stop_reason": "max_steps",
+            "rho_max_ratio": 1.0,
+            "n_windowed_failed": 0,
+            "n_windowed_refused": 0,
+            "go_no_go_binding_verdict": "inconclusive",
+            "binding_constraint_histogram_json": "{}",
+            "admissible": 1,
+            "second_moment_ratio": 1.0,
+            "trend_criterion_pass": 0,
+            "pair_outcome_pass": 0,
+        })
+        return row
+
+    def _run_case(ctx, queue, *, case_id, strategy, **kwargs):
+        regime = (
+            "below_8pi_reference" if "m0.85" in case_id
+            else "above_8pi_reference"
+        )
+        return [], _summary(case_id, strategy, regime), {
+            "checkpoints": [], "weights": np.ones(1),
+        }
+
+    monkeypatch.setattr(ks, "run_case", _run_case)
+    monkeypatch.setattr(
+        ks, "_compare_checkpoints", lambda *a, **k: ([], [])
+    )
+    monkeypatch.setattr(
+        ks, "_select_opencl_device", lambda *a, **k: None
+    )
+    monkeypatch.setattr(ks, "_build_ks_geometry", lambda *a, **k: None)
+
+    import pyopencl as cl
+
+    monkeypatch.setattr(cl, "Context", lambda devices: None)
+    monkeypatch.setattr(cl, "CommandQueue", lambda ctx: None)
+    monkeypatch.setattr(
+        ks.sys,
+        "argv",
+        [
+            "keller_segel_continuation.py",
+            "--strategy", "windowed",
+            "--max-steps", "1",
+            "--out-dir", str(tmp_path / "out"),
+            "--cache-dir", str(tmp_path / "cache"),
+        ],
+    )
+
+    assert ks.main() == 1
+
+    # ... and the measurements are still written before the verdict
+    assert (tmp_path / "out" / "ks_summary.csv").exists()
+    assert (tmp_path / "out" / "ks_windowed_checkpoints.csv").exists()
 
 
 def test_apply_pair_outcome_groups_by_strategy(ks):

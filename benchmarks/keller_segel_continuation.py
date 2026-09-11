@@ -633,6 +633,30 @@ def _prepare_windowed_channel_family(
     return time.perf_counter() - start
 
 
+def _resolved_checkpoint_times(checkpoint_times, t_end: float) -> list[float]:
+    """Sorted checkpoint times ending exactly at ``t_end``.
+
+    The step loop walks this list with an index while ``t < t_end``, so
+    the last entry has to *be* ``t_end``: a terminal checkpoint left just
+    below it -- inside the acceptance tolerance, as
+    ``--checkpoint-fractions 0.9999999999995`` gives -- is consumed while
+    ``t < t_end`` still holds, and the next step indexes past the list.
+    """
+    if checkpoint_times is None:
+        checkpoint_times = [t_end]
+    resolved = sorted(float(value) for value in checkpoint_times)
+    if not resolved or any(
+        value <= 0.0 or value > t_end * (1.0 + 1e-12) for value in resolved
+    ):
+        raise ValueError("checkpoint times must lie in (0, t_end]")
+    if abs(resolved[-1] - t_end) > 1e-12 * t_end:
+        resolved.append(t_end)
+    else:
+        # snap the within-tolerance terminal checkpoint exactly onto t_end
+        resolved[-1] = t_end
+    return resolved
+
+
 def _windowed_family_failure_info(detail: str) -> dict[str, Any]:
     """The per-step provisioning outcome a failed channel family produces.
 
@@ -983,16 +1007,7 @@ def run_case(
     direct_only = strategy != "paired"
     windowed = strategy == "windowed"
 
-    if checkpoint_times is None:
-        checkpoint_times = [t_end]
-    checkpoint_times = sorted(float(value) for value in checkpoint_times)
-    if not checkpoint_times or any(
-        value <= 0.0 or value > t_end * (1.0 + 1e-12)
-        for value in checkpoint_times
-    ):
-        raise ValueError("checkpoint times must lie in (0, t_end]")
-    if abs(checkpoint_times[-1] - t_end) > 1e-12 * t_end:
-        checkpoint_times.append(t_end)
+    checkpoint_times = _resolved_checkpoint_times(checkpoint_times, t_end)
 
     q_points, q_weights, tree, traversal = _build_ks_geometry(
         ctx, queue, q_order, nlevels, root_extent
@@ -2348,6 +2363,18 @@ def main() -> int:
                     f"{baseline_summary['stop_reason']}, windowed stop: "
                     f"{windowed_summary['stop_reason']})",
                     flush=True,
+                )
+                # The direct-versus-windowed trajectory comparison is the
+                # windowed experiment's requested outcome.  With no shared
+                # checkpoint there is none, so the run is incomplete even
+                # when every provisioning step succeeded -- otherwise a
+                # low --max-steps returns success having measured nothing
+                # the experiment asked for.
+                windowed_failure_messages.append(
+                    f"{windowed_summary['case_id']}: no shared checkpoint "
+                    "reached by both the direct baseline and the windowed "
+                    f"run (baseline stop: {baseline_summary['stop_reason']}, "
+                    f"windowed stop: {windowed_summary['stop_reason']})"
                 )
             print(
                 f"[{windowed_summary['case_id']}] binding-constraint "
