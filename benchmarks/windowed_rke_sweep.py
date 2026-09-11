@@ -1614,7 +1614,7 @@ def run_sweep(
                                 )
                             rows.append(row)
 
-        # Damped complex-frequency rows (E8): zeta = mu^2 exp(i pi f) with
+        # Damped complex-frequency rows (E8): zeta = mu^2 exp(-i pi f) with
         # phase fractions strictly between the Yukawa and Helmholtz rays,
         # assembled from the same real channel families as the real rows.
         # The rows are kernel-independent (the two real kernels are the
@@ -1934,7 +1934,7 @@ def main() -> int:
         const=DEFAULT_COMPLEX_PHASE_FRACTIONS,
         default=None,
         help="enable damped complex-frequency rows (E8) at "
-        "zeta = mu^2 exp(i pi f) for the given comma-separated phase "
+        "zeta = mu^2 exp(-i pi f) for the given comma-separated phase "
         "fractions f, each strictly between 0 (the Yukawa ray) and 1 (the "
         "Helmholtz ray); without a value, uses "
         f"'{DEFAULT_COMPLEX_PHASE_FRACTIONS}'",

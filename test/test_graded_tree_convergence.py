@@ -320,3 +320,58 @@ def test_main_writes_the_csv_before_reporting_a_failed_gate(
     assert out.exists()
     assert rows[0]["case_id"] in out.read_text()
     assert "GATE-FAILED" in capsys.readouterr().out
+
+
+def test_the_configuration_token_separates_different_campaigns(gtc):
+    """``q_order``, the refinement and the rung are in the id already, but
+    two campaigns differing only in the source, the refinement fraction,
+    the FMM order or the table quadrature orders measure different
+    problems under otherwise identical ids.
+    """
+    base = {
+        "mode": "smoke",
+        "base_nlevels": 3,
+        "nlevels": 3,
+        "adapt_steps": 1,
+        "adapt_fraction": 0.5,
+        "fmm_order": 10,
+        "regular_quad_order": 8,
+        "radial_quad_order": 20,
+        "mixture": gtc._source_mixture(40.0, (0.0, 0.0, 0.0)),
+    }
+    token = gtc._run_configuration_token(**base)
+    assert len(token) == 8
+    assert int(token, 16) >= 0
+    # stable across calls
+    assert gtc._run_configuration_token(**base) == token
+
+    for key, changed in (
+        ("mode", "full"),
+        ("base_nlevels", 4),
+        ("nlevels", 4),
+        ("adapt_steps", 2),
+        ("adapt_fraction", 0.5 + 1.0e-15),
+        ("fmm_order", 11),
+        ("regular_quad_order", 9),
+        ("radial_quad_order", 21),
+        ("mixture", gtc._source_mixture(40.0000001, (0.0, 0.0, 0.0))),
+        ("mixture", gtc._source_mixture(40.0, (0.1, 0.0, 0.0))),
+    ):
+        assert gtc._run_configuration_token(**{**base, key: changed}) != token
+
+
+def test_a_plateau_at_the_target_reports_the_cheaper_rung(gtc):
+    """Two rungs at exactly the target error is an error floor: the
+    lower-DOF rung already achieves it, so reporting the expensive one
+    moves the matched-error DOF advantage by the whole rung jump.
+    """
+    curve = [(1.0e-6, 1000), (1.0e-6, 8000)]
+    assert gtc._interpolate_dof_at_error(curve, 1.0e-6) == 1000.0
+
+    # the ordinary bracketed case is untouched
+    curve = [(1.0e-4, 1000), (1.0e-6, 8000)]
+    interpolated = gtc._interpolate_dof_at_error(curve, 1.0e-5)
+    assert 1000.0 < interpolated < 8000.0
+
+    # ... and an unbracketed target still reports nothing
+    assert gtc._interpolate_dof_at_error(curve, 1.0e-9) == ""

@@ -173,6 +173,53 @@ def _source_mixture(alpha: float, center: tuple[float, ...]) -> GaussianMixture:
     )
 
 
+def _run_configuration_token(
+    *,
+    mode: str,
+    base_nlevels: int,
+    nlevels: int,
+    adapt_steps: int,
+    adapt_fraction: float,
+    fmm_order: int,
+    regular_quad_order: int,
+    radial_quad_order: int,
+    mixture: GaussianMixture,
+) -> str:
+    """Eight hex digits identifying the run configuration behind a rung.
+
+    ``q_order``, the refinement and the rung are already in the case id,
+    but two campaigns differing only in ``--source-alpha``,
+    ``--source-center``, ``--adapt-fraction``, the FMM order or the table
+    quadrature orders measure different problems under otherwise
+    identical ids, so a collection keyed on the id merges or overwrites
+    them.  The values enter through a sorted JSON dump, so the token is
+    stable across runs and Python versions.
+    """
+    import hashlib
+
+    payload = json.dumps(
+        {
+            "mode": str(mode),
+            "base_nlevels": int(base_nlevels),
+            "nlevels": int(nlevels),
+            "adapt_steps": int(adapt_steps),
+            # repr round-trips a float64, so two adapt fractions that
+            # differ beyond six digits cannot share a token
+            "adapt_fraction": repr(float(adapt_fraction)),
+            "fmm_order": int(fmm_order),
+            "regular_quad_order": int(regular_quad_order),
+            "radial_quad_order": int(radial_quad_order),
+            "source": mixture.as_metadata(),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        default=repr,
+    )
+    return hashlib.blake2s(
+        payload.encode("utf-8"), digest_size=4
+    ).hexdigest()
+
+
 def _refinement_eta(
     values: np.ndarray,
     levels: np.ndarray,
@@ -263,7 +310,11 @@ def _interpolate_dof_at_error(
         if not error_lo <= target_error <= error_hi:
             continue
         if error_lo == error_hi:
-            return float(dof_hi)
+            # A plateau at exactly the target -- an FMM or table-error
+            # floor, say.  The cheaper rung already achieves the target,
+            # so reporting the expensive one would move the matched-error
+            # DOF advantage by the whole jump between the two rungs.
+            return float(min(dof_lo, dof_hi))
         fraction = (
             math.log(error_hi / target_error)
             / math.log(error_hi / error_lo)
@@ -559,8 +610,22 @@ def _run_rung(
         case_tail = f"a{adapt_steps}"
     else:
         case_tail = f"l{nlevels}"
+    configuration_token = _run_configuration_token(
+        mode=mode,
+        base_nlevels=base_nlevels,
+        nlevels=nlevels,
+        adapt_steps=adapt_steps,
+        adapt_fraction=adapt_fraction,
+        fmm_order=fmm_order,
+        regular_quad_order=regular_quad_order,
+        radial_quad_order=radial_quad_order,
+        mixture=mixture,
+    )
     row = {
-        "case_id": f"graded-laplace3d-q{q_order}-{refinement}-{case_tail}",
+        "case_id": (
+            f"graded-laplace3d-q{q_order}-{refinement}-{case_tail}"
+            f"-cfg{configuration_token}"
+        ),
         "mode": mode,
         "problem": "gaussian-free-space-manufactured-solution",
         "dim": 3,
