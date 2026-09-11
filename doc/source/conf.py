@@ -8,6 +8,8 @@ Build with::
 described in ``DEVELOPMENT.md``.
 """
 
+import html
+import json
 import posixpath
 import sys
 from datetime import UTC, datetime
@@ -216,13 +218,20 @@ _LEGACY_REDIRECTS = {
     "sphinx.html": "development/index.html",
 }
 
+# The script carries ``location.hash`` across, so a deep link into one of
+# the long moved pages (``helmholtz_split.html#automatic-regime-planner``)
+# lands on its section rather than at the top; the meta refresh is the
+# no-JavaScript fallback and loses the fragment.
 _REDIRECT_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="utf-8">
-    <meta http-equiv="refresh" content="0; url={target}">
+    <meta http-equiv="refresh" content="1; url={target}">
     <link rel="canonical" href="{target}">
     <title>Page moved</title>
+    <script>
+      window.location.replace({target_js} + window.location.hash);
+    </script>
   </head>
   <body>
     <p>This page has moved to <a href="{target}">{target}</a>.</p>
@@ -250,7 +259,11 @@ def _write_legacy_redirects(app, exception):
         stub.parent.mkdir(parents=True, exist_ok=True)
         href = posixpath.relpath(target, posixpath.dirname(source) or ".")
         stub.write_text(
-            _REDIRECT_TEMPLATE.format(target=href), encoding="utf-8"
+            _REDIRECT_TEMPLATE.format(
+                target=html.escape(href, quote=True),
+                target_js=json.dumps(href),
+            ),
+            encoding="utf-8",
         )
 
 
