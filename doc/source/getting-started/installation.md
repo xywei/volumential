@@ -8,11 +8,13 @@ user needs.
 
 ## Prerequisites
 
-- Python **3.12**. `requires-python` is still `>=3.11` and nothing in
-  Volumential itself needs 3.12, but `loopy` imports `override` from the
-  standard-library `typing` module, which gained it in 3.12, so `import loopy`
-  fails outright under 3.11. 3.11 is therefore unsupported in practice until
-  that upstream import moves to `typing_extensions`.
+- Python **3.12** — the version CI tests, and the only one exercised.
+  `requires-python` is `>=3.11` and nothing in Volumential itself needs 3.12.
+  `loopy` used to import `override` from the standard-library `typing` module,
+  which gained it only in 3.12, so `import loopy` failed outright under 3.11;
+  at the revision `uv.lock` pins that import now comes from
+  `typing_extensions`. Treat 3.11 as untested rather than as known-broken: no
+  job runs it.
 - An **OpenCL runtime**. [PoCL](https://portablecl.org/) is the default tested
   backend; a vendor ICD (CUDA, ROCm) works too.
 - **`uv`**.
@@ -124,10 +126,14 @@ re-measured after adoption.
 
 ### Imports and quick tests
 
+`uv run` defaults to the project's own `.venv`, not to the environment
+`uv sync --active` filled, so pass `--active` here too — otherwise `uv run`
+creates a second environment without the conda-provided OpenCL runtime.
+
 ```bash
-uv run pytest -q test/test_import.py
-uv run pytest -q test/test_public_surface.py
-uv run pytest -q test/test_duffy_tanh_sinh.py
+uv run --active pytest -q test/test_import.py
+uv run --active pytest -q test/test_public_surface.py
+uv run --active pytest -q test/test_duffy_tanh_sinh.py
 ```
 
 ### The traversal check

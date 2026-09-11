@@ -88,10 +88,13 @@ def clean_file(filename, new_name=None) -> None:
 def import_code(code, name, add_to_sys_modules=True) -> ModuleType:
     """Dynamically generates a module.
 
-    :arg code: can be any object containing code -- string, file object, or
-    compiled code object. Returns a new module object initialized
-    by dynamically importing the given code and optionally adds it
-    to sys.modules under the given name.
+    :arg code: any object containing code -- a string, a file object, or a
+        compiled code object.
+    :arg name: the name the new module is given.
+    :arg add_to_sys_modules: whether to register the module in
+        :data:`sys.modules` under *name*.
+    :returns: a new module object initialized by dynamically importing
+        *code*.
     """
     module = ModuleType(name)
 

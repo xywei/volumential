@@ -28,10 +28,15 @@ The project is pre-release (`Development Status :: 3 - Alpha`) and has no Git
 tags yet. Practically, "the current version" means `main`, and the change log
 is by merged pull request: {doc}`../changelog`.
 
-The documentation is published `latest`-only. `doc/source/_static/switcher.json`
-carries a single `latest` entry and the theme's version switcher is wired to
-it, so publishing tagged versions later is a matter of adding entries rather
-than of changing the build.
+The documentation is configured `latest`-only.
+`doc/source/_static/switcher.json` carries a single `latest` entry and the
+theme's version switcher is wired to it, so publishing tagged versions later is
+a matter of adding entries rather than of changing the build. That entry points
+at the GitHub Pages URL, which does not serve the site yet — the deployment is
+the last phase of
+[#145](https://github.com/xywei/volumential/issues/145), and until it lands the
+published build is the one at <https://xiaoyu-wei.com/docs/volumential/>. The
+switcher is forward configuration, not a live index.
 
 ## When tagging starts
 

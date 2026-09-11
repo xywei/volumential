@@ -45,12 +45,13 @@ therefore unsupported in practice until that upstream import moves to
    uv sync --active --extra test --extra doc
    ```
 
-4. Run targeted checks:
+4. Run targeted checks. `--active` keeps `uv run` in the environment step 3
+   filled, rather than the project's own `.venv`:
 
    ```bash
-   uv run pytest -q test/test_import.py
-   uv run pytest -q test/test_public_surface.py
-   uv run pytest -q test/test_duffy_tanh_sinh.py
+   uv run --active pytest -q test/test_import.py
+   uv run --active pytest -q test/test_public_surface.py
+   uv run --active pytest -q test/test_duffy_tanh_sinh.py
    ```
 
 ## Dependency Provisioning Rules
@@ -211,9 +212,9 @@ uvx ruff@0.13.0 check --fix          # fixable rules only; re-read every hunk
 uvx basedpyright -p pyproject.toml --level error
 
 # Tests.
-uv run pytest -q                     # default suite
-uv run pytest --longrun              # include long-running checks
-uv run pytest --full-accuracy        # include the high-cost accuracy markers
+uv run --active pytest -q                     # default suite
+uv run --active pytest --longrun              # include long-running checks
+uv run --active pytest --full-accuracy        # include the high-cost accuracy markers
 ```
 
 `ruff.toml` carries a `[lint.per-file-ignores]` baseline of pre-existing
@@ -231,7 +232,8 @@ environment with the OpenCL stack (`pyopencl`, `loopy`) installed.
 ```bash
 uv sync --active --extra doc
 
-# The gate CI runs: warnings are errors, and every warning is reported.
+# The build CI Full runs: -W makes every warning an error, --keep-going
+# reports all of them.  conf.py suppresses no warning class.
 sphinx-build -W --keep-going -b html doc/source doc/build/html
 
 # External links.

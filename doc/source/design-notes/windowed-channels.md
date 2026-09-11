@@ -63,9 +63,8 @@ terms and the certificate refuses before the accuracy target is met.
 
 ## The windowed channels
 
-The windowed assembler
-(`assemble_windowed_parameterized_table`) keeps the same table *count* but
-replaces the growing channels by Gaussian-windowed ones:
+The windowed assembler (`assemble_windowed_parameterized_table`) replaces the
+growing channels by Gaussian-windowed ones:
 
 - 2D: $\chi_m(r) = \tfrac12 (r^2/4)^m\, \Gamma(-m, x)$
 - 3D: $\chi_m(r) = \tfrac{1}{2\sqrt{\pi}} (r^2/4)^{m-1/2}\,
@@ -94,6 +93,13 @@ Two properties make this work:
    `truncation_tail_bound` is structurally `0.0`, and the only error terms left
    are the two the scheme already owns: singular channel quadrature and smooth
    remainder quadrature.
+
+It is also a smaller family. The windowed assembler builds exactly one channel
+table per retained order, $\psi_0 \ldots \psi_{p_\star - 1}$, so `p_star`
+tables in either dimension; the classical family needs $1 + n$ tables in 3D and
+$2 + 2n$ in 2D for $n$ retained terms, because each 2D term contributes both an
+$r^{2n}$ and an $r^{2n}\log r$ channel. The remainder is evaluated online
+rather than tabulated, so it adds none.
 
 The channel family depends on the declaration $\Theta$ only, never on the swept
 parameter, so one cached family serves every $\theta = |{\rm parameter}|\cdot b$

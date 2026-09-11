@@ -34,7 +34,7 @@ fresh environment — see [Installation][docs-install].
 
 ```bash
 export PYOPENCL_CTX=portable:0        # otherwise the example asks interactively
-uv run python examples/laplace2d.py
+uv run --active python examples/laplace2d.py
 ```
 
 That evaluates a 2D Laplace volume potential against a manufactured Gaussian

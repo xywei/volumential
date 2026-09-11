@@ -100,7 +100,7 @@ the excerpt takes the defaults — that is a tighter near-field table, and the
 reason the example's error is smaller than this one's:
 
 ```bash
-uv run python examples/laplace2d.py
+uv run --active python examples/laplace2d.py
 ```
 
 ## What just happened
@@ -115,9 +115,12 @@ rule converges on it.
 
 Step 4 is where the cost is. The first run builds the near-field table by
 Duffy-transformed quadrature and writes it to `nft_laplace2d.sqlite`; later
-runs load it in milliseconds. The table depends on the kernel, the dimension
-and `q_order`, not on the source density or the tree, so it is worth keeping
-the cache file around. See {doc}`../user-guide/table-build-routing` for how a
+runs load it in milliseconds. The table depends on the kernel, the dimension,
+`q_order` and the *scale* of the source box — the manager's `root_extent` and
+the request's `source_box_level`, from which `source_box_extent` is derived —
+but not on the source density, the tree's topology or the target points. So the
+cache file is worth keeping and reusing across runs of this example, and is
+**not** reusable at a different root extent. See {doc}`../user-guide/table-build-routing` for how a
 build is routed and how to tell a cached table's provenance, and
 {doc}`../user-guide/nearfield_symmetry` for why the stored table is much
 smaller than the number of interactions it serves.
@@ -130,7 +133,7 @@ That is what CI runs; it finishes in seconds and is accurate to about a
 percent.
 
 ```bash
-VOLUMENTIAL_EXAMPLE_SMOKE=1 uv run python examples/laplace2d.py
+VOLUMENTIAL_EXAMPLE_SMOKE=1 uv run --active python examples/laplace2d.py
 ```
 
 ## Next

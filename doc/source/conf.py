@@ -57,7 +57,6 @@ source_suffix = {
 root_doc = "index"
 language = "en"
 exclude_patterns = []
-suppress_warnings = ["docutils"]
 pygments_style = "sphinx"
 templates_path = ["_templates"]
 todo_include_todos = True

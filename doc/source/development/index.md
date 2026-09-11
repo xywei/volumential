@@ -63,7 +63,10 @@ environment with the OpenCL stack (`pyopencl`, `loopy`) installed.
 ```bash
 uv sync --active --extra doc
 
-# The gate CI runs: warnings are errors, and every warning is reported.
+# The build CI Full runs: -W makes every warning an error, and --keep-going
+# reports all of them instead of stopping at the first.  No warning class is
+# suppressed in conf.py, so a malformed docstring fails the build like a bad
+# cross-reference does.
 sphinx-build -W --keep-going -b html doc/source doc/build/html
 
 # External links.

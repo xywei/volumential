@@ -52,19 +52,29 @@ individually; `benchmarks/README.md` documents each one's flags and gates.
 A CSV on its own is not evidence. Metadata reaches a promoted result by two
 different routes, and they are not interchangeable.
 
-**Per-driver sidecars.** Some drivers write a JSON sidecar themselves —
+**Per-driver sidecars.** Four drivers write a JSON sidecar themselves:
 `graded_tree_convergence.py`, `gaussian_free_space.py`,
-`dmk_effective_density.py`, `rke_field_demo_3d.py`, and `performance_suite.py`
-for the cases it wraps. They take `--metadata-out` and otherwise default to
-`<out stem>-metadata.json` beside the CSV. The sidecar carries the case id, the
-mode, the selected backend, the problem definition, the full configuration, and
-the driver's own verdict on the run (convergence orders, asymptotic-regime
-statements, gate outcomes).
+`dmk_effective_density.py` and `rke_field_demo_3d.py`. They take
+`--metadata-out` and otherwise default to `<out stem>-metadata.json` beside the
+CSV. A sidecar carries the case id, the mode, the problem definition, the full
+configuration, and the driver's own verdict on the run (convergence orders,
+asymptotic-regime statements, gate outcomes).
 
-The rest — `table_equivalence_cache.py`, `accuracy_preservation.py`,
-`split_parameter_sweep.py`, `adaptive_timing.py` and the other composition and
-sweep drivers — write CSV only and have no `--metadata-out`. Passing the option
-to them is an error, and a run of one of them is not self-describing.
+What it does **not** reliably carry is the device: only
+`graded_tree_convergence.py` records the selected `--backend` in its metadata,
+so for the other three the device class has to come from the wrapper below.
+
+The remaining drivers — `table_equivalence_cache.py`,
+`accuracy_preservation.py`, `split_parameter_sweep.py`, `adaptive_timing.py`
+and the composition and sweep drivers — write CSV only and have no
+`--metadata-out`. Passing the option to them is an error, and a run of one of
+them is not self-describing.
+
+`performance_suite.py` is neither: it takes `--manifest`, not
+`--metadata-out`, and writes a JSON *command manifest* of what it ran. It
+forwards `--metadata-out` to exactly one wrapped case
+(`dmk-effective-density`, the only one that implements it); the others stay
+CSV-only. A manifest records the commands, not the environment.
 
 **The metadata wrapper.** Every full run, sidecar or not, is wrapped by
 the paper repository's metadata tool, which captures hardware, OpenCL,
@@ -141,9 +151,17 @@ Drivers that report cold and warm rows (`adaptive_timing.py`,
 
 Several drivers apply acceptance gates: a Yukawa split-order convergence gate,
 the windowed `failed`/in-declaration-refusal/small-theta gates, far-field
-resolution checks, grading checks on adaptive ladders. Every one of them
-reports **after** the CSV has been written, so a multi-hour run never trades
-its measurements for a verdict.
+resolution checks, grading checks on adaptive ladders.
+
+Most of them report **after** the CSV has been written, so a multi-hour run
+does not trade its measurements for a verdict — the composition drivers, the
+split-parameter sweep and `graded_tree_convergence.py` all write first and gate
+afterwards. That is a property of the individual driver, not a rule of the
+suite: `rke_field_demo_3d.py` still runs
+`_validate_full_order_convergence(rows)` *inside* `run_benchmark`, before
+`main` reaches `write_csv`, so a convergence-gate failure there leaves no CSV,
+no `.npz` and no sidecar. Check the driver before assuming a long run is
+recoverable.
 
 The consequence is the important part: **the presence of an output CSV is not
 evidence of a successful run.** Check the process exit status, and check the

@@ -16,9 +16,12 @@ export PYOPENCL_CTX=portable:0     # the PoCL ("Portable Computing Language") pl
 export PYOPENCL_TEST=portable:0    # the same, for the pytest fixtures
 ```
 
-Without it, `create_some_context()` asks interactively; in a batch job or a
-benchmark sweep that is a run that hangs instead of finishing. Set it even when
-the host has exactly one platform today.
+Without it, `create_some_context()` resolves the device on its own, and which
+way it goes depends on the session: at a TTY it queries interactively, and with
+`sys.stdin.isatty()` false — a batch job, a `tmux` pipeline, CI — it picks a
+device "in an implementation-defined manner" instead. Neither is what a
+reproducible run wants: one blocks on a prompt, the other silently records a
+device nobody chose. Set it even when the host has exactly one platform today.
 
 On NixOS, also point ICD discovery at a single vendor directory, otherwise
 `pyopencl` fails with `PLATFORM_NOT_FOUND_KHR` even when drivers are
