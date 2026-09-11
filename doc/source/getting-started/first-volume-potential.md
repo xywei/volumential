@@ -111,8 +111,10 @@ density is discretized at tensor-product Gauss-Legendre nodes inside each leaf
 box, and the particle weights handed to the FMM are `source_vals * q_weights`.
 Steps 3 and 5 are an ordinary `boxtree`/`sumpy` FMM, with one substitution —
 `FPNDExpansionWrangler` replaces the point-to-point near-field stage with a
-table lookup, because the true near-field integrand is singular and no point
-rule converges on it.
+table lookup. The reason is the integrand: over the box containing the target
+it is genuinely singular and point quadrature does not converge at all, and
+over the neighbouring boxes it is finite but near-singular and converges far
+too slowly to be useful at `q_order = 9`.
 
 Step 4 is where the cost is. The first run builds the near-field table by
 Duffy-transformed quadrature and writes it to `nft_laplace2d.sqlite`; later

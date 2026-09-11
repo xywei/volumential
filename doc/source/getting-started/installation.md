@@ -123,15 +123,24 @@ python -c "from pyfmmlib import \
     h2dformmp_imany, h3dformmp_imany, l2dformmp_imany, l3dformmp_imany"
 python - <<'PY'
 import pathlib
+import platform
 import subprocess
 
 import pyfmmlib
 
 so = next(pathlib.Path(pyfmmlib.__file__).parent.glob("_internal*.so"))
 print(so)
-subprocess.run(["ldd", str(so)], check=True)   # expect a libgomp line
+if platform.system() == "Darwin":
+    # macOS has no ldd, and the OpenMP runtime is libomp rather than libgomp.
+    subprocess.run(["otool", "-L", str(so)], check=True)
+else:
+    subprocess.run(["ldd", str(so)], check=True)
 PY
 ```
+
+Expect a `libgomp` line on Linux and a `libomp` one on macOS. A missing OpenMP
+runtime and an unavailable `ldd` look the same otherwise, which is why the
+check branches instead of assuming Linux.
 
 Batched P2M is bit-identical to the per-box path and GEMM L2P agrees at
 roundoff (`test/test_fmmlib_batched_stages.py`), so adopting them needs no

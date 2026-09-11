@@ -17,16 +17,16 @@ adaptively refined 2:1-balanced trees.
 
 ```bash
 micromamba create -n volumential-dev -c conda-forge -c nodefaults \
-  python=3.12 pyopencl pocl scipy numpy && micromamba activate volumential-dev
+  python=3.12 pyopencl pocl scipy numpy
+eval "$(micromamba shell hook -s bash)" && micromamba activate volumential-dev
 export UV_PROJECT_ENVIRONMENT="$CONDA_PREFIX"
 git clone https://github.com/xywei/volumential.git && cd volumential
 uv sync --extra test
 ```
 
-(`micromamba activate` is a shell function: in a shell that has not been
-`micromamba shell init`-ed, run `eval "$(micromamba shell hook -s bash)"`
-first. `UV_PROJECT_ENVIRONMENT` is what points `uv` at the conda environment —
-without it `uv` builds a `.venv` with no OpenCL runtime. See
+(`micromamba activate` is a shell function, hence the hook;
+`UV_PROJECT_ENVIRONMENT` is what points `uv` at the conda environment, without
+which `uv` builds a `.venv` with no OpenCL runtime. See
 [Installation][docs-install].)
 
 Released wheels of the `inducer` stack have shipped defects that corrupt
