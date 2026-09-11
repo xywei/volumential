@@ -11,11 +11,13 @@
 - Fortran toolchain (`gfortran`, `ninja`): required only for the `fmmlib` extra
 
 `requires-python` in `pyproject.toml` is still `>=3.11`, and nothing in
-Volumential itself needs 3.12. CI pins 3.12 only because `loopy` currently
-imports `override` from the standard-library `typing` module, which gained it
-in 3.12; under 3.11 `import loopy` fails outright. A 3.11 environment is
-therefore unsupported in practice until that upstream import moves to
-`typing_extensions`.
+Volumential itself needs 3.12. CI pins 3.12 because that is the environment
+the suite is exercised in. The original reason was harder than that: `loopy`
+imported `override` from the standard-library `typing` module, which gained it
+only in 3.12, so `import loopy` failed outright under 3.11. At the `loopy`
+revision `uv.lock` currently pins, that import comes from `typing_extensions`,
+so 3.11 is untested rather than known-broken -- but nothing runs it, so do not
+provision an evidence environment on it without re-measuring.
 
 ## Local Setup
 
