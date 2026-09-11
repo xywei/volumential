@@ -84,17 +84,23 @@ knowing before promoting one:
   `rke_field_demo_3d.py` validates before it builds metadata, and the other
   two record errors and timings without a status field.
 
-The remaining drivers — `table_equivalence_cache.py`,
-`accuracy_preservation.py`, `split_parameter_sweep.py`, `adaptive_timing.py`
-and the composition drivers — write CSV only and have no `--metadata-out`.
-Passing the option to them is an error, and a run of one of them is not
-self-describing.
+**Every other driver has no `--metadata-out` at all** — the two adaptive
+timing drivers, `table_equivalence_cache.py`, `accuracy_preservation.py`,
+`split_parameter_sweep.py`, `windowed_rke_sweep.py`, both composition drivers,
+`break_even_validation.py`, `derivative_log_preservation.py` and
+`keller_segel_continuation.py`. Passing the option to one of them is an
+argparse error, and its run is not self-describing.
 
-`windowed_rke_sweep.py` is a half-exception: it has no `--metadata-out` either,
-but it unconditionally writes `<out-dir>/windowed_rke_sweep_config.json` after
-the CSV, holding the resolved arguments and run information. That is a
-*configuration* record, not environment provenance — useful for reproducing the
-invocation, not for establishing what it ran on.
+Two qualifications on that group, because "no sidecar" is not the same as "CSV
+only":
+
+- `windowed_rke_sweep.py` unconditionally writes
+  `<out-dir>/windowed_rke_sweep_config.json` after its CSV, holding the
+  resolved arguments and run information. That is a *configuration* record,
+  useful for reproducing the invocation — not environment provenance.
+- `adaptive_timing_3d.py` writes visualization NPZ files by default, and
+  `keller_segel_continuation.py` can write field NPZ files. Those are results,
+  and a promotion has to carry them with the CSV.
 
 `performance_suite.py` is neither: it takes `--manifest`, not
 `--metadata-out`, and writes a JSON *command manifest* of what it ran. It
@@ -175,10 +181,11 @@ Three different recorders produce the seconds in these CSVs, and a column
 should never mix them:
 
 - `drive_volume_fmm`'s `timing_data` mapping — the per-stage FMM times.
-  `adaptive_timing.py` is the driver that asks for it.
+  `adaptive_timing.py` and `adaptive_timing_3d.py` ask for it.
 - `NearFieldInteractionTableManager.last_get_table_timings` — cold build and
-  warm load of a table, read by `adaptive_timing.py` and
-  `table_equivalence_cache.py`, which is where their cold/warm rows come from.
+  warm load of a table, read by `adaptive_timing.py`, `adaptive_timing_3d.py`
+  and `table_equivalence_cache.py`, which is where their cold/warm rows come
+  from.
 - `time.perf_counter()` around a whole phase or solve — what the composition
   drivers report, and what the other two use for the parts outside the FMM and
   the table manager.

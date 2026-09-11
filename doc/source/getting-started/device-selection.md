@@ -60,11 +60,11 @@ touching the ICD loader, and the drivers that import its selector inherit that
 the typo.
 
 `adaptive_timing.py` and `gaussian_free_space.py` carry their own selector,
-which calls `cl.get_platforms()` first, and `adaptive_timing_3d.py` and
-`dmk_effective_density.py` import theirs. On those four, on a host with broken
-ICD discovery, a typo surfaces as `PLATFORM_NOT_FOUND_KHR` rather than as an
-argument error — so if you see that message from one of them, check the
-spelling before you check the drivers.
+which calls `cl.get_platforms()` first, and `adaptive_timing_3d.py`,
+`graded_tree_convergence.py` and `dmk_effective_density.py` import theirs. On
+those five, on a host with broken ICD discovery, a typo surfaces as
+`PLATFORM_NOT_FOUND_KHR` rather than as an argument error — so if you see that
+message from one of them, check the spelling before you check the drivers.
 
 `--backend` does not replace `PYOPENCL_CTX`, it sits beside it. Several drivers
 — `table_equivalence_cache.py`, `accuracy_preservation.py`,

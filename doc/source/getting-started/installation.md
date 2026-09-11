@@ -19,12 +19,17 @@ user needs.
 - An **OpenCL runtime**. [PoCL](https://portablecl.org/) is the default tested
   backend; a vendor ICD (CUDA, ROCm) works too.
 - **`uv`**.
+- **`micromamba`** (or `conda`/`mamba`), which is how this recipe provides the
+  OpenCL runtime. Skip it only if the host already has a working ICD and a
+  3.12 interpreter, in which case create the environment however you normally
+  would and pick the recipe up at the `git clone`.
 - **`gfortran` and `ninja`**, only for the optional `fmmlib` extra.
 
 ## Install
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
+"${SHELL}" <(curl -L micro.mamba.pm/install.sh)      # if micromamba is absent
 ```
 
 The OpenCL runtime is easiest to obtain from conda-forge, so create the base
