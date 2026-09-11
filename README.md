@@ -21,6 +21,10 @@ git clone https://github.com/xywei/volumential.git && cd volumential
 uv sync --active --extra test
 ```
 
+(`micromamba activate` is a shell function: in a shell that has not been
+`micromamba shell init`-ed, run `eval "$(micromamba shell hook -s bash)"`
+first.)
+
 Released wheels of the `inducer` stack have shipped defects that corrupt
 adaptive-tree results *silently*, so `uv.lock` pins those dependencies (and
 `pyfmmlib`) to Git sources. Run the traversal sanity check before trusting a
@@ -29,6 +33,7 @@ fresh environment — see [Installation][docs-install].
 ## Run
 
 ```bash
+export PYOPENCL_CTX=portable:0        # otherwise the example asks interactively
 uv run python examples/laplace2d.py
 ```
 

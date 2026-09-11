@@ -30,14 +30,25 @@ that a table which quietly dropped to the scalar builder cannot be recorded as
 a batched build. Any value other than unset, `0`, `false`, `no` or `off`
 enables strict mode.
 
-Strict mode also applies on the **load** path, where the builder never runs: a
-cached table whose recorded routing is `scalar-fallback`, or which records no
-routing at all (a payload written before routing was recorded, so its
-provenance cannot be verified), is refused with an
-`UnverifiedBuildRoutingError` naming the table and the remedy — rebuild it with
+Strict mode also applies on the **load** path, where the builder never runs.
+A cached table is refused with an `UnverifiedBuildRoutingError` when its
+recorded routing is
+
+- `scalar-fallback` — it is exactly the differently converged data the switch
+  exists to refuse;
+- `unknown` — a payload written before routing was recorded, so the build
+  cannot be vouched for; or
+- anything outside the recognized set (`batched`, `scalar`, `scalar-adaptive`,
+  `scalar-fallback`, `unknown`) — a damaged payload whose routing reads
+  `scalar-fallbac` says nothing about which builder ran, so it is corrupt
+  provenance rather than verified provenance.
+
+In every case the error names the table and the remedy: rebuild it with
 `force_recompute=True`, or unset the switch to accept the cached data. Without
-that, a strict campaign whose cache had already been warmed would load and use
-exactly the data the switch exists to refuse.
+this check, a strict campaign whose cache had already been warmed would load
+and use exactly the data the switch exists to refuse — and, because the routing
+is faithfully restored from the payload, would report it correctly while doing
+so.
 
 Externally assembled tables (`build_method = ExternalAssembly`, for example a
 registered windowed RKE assembly; see

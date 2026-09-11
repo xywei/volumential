@@ -49,16 +49,27 @@ individually; `benchmarks/README.md` documents each one's flags and gates.
 
 ## Metadata sidecars
 
-A CSV on its own is not evidence. Drivers that produce promotable numbers write
-a JSON sidecar next to the CSV — by default `<out stem>-metadata.json`, or
-wherever `--metadata-out` points — carrying the case id, the mode, the selected
-backend, the problem definition, the full configuration, and the driver's own
-verdict on the run (convergence orders, asymptotic-regime statements, gate
-outcomes).
+A CSV on its own is not evidence. Metadata reaches a promoted result by two
+different routes, and they are not interchangeable.
 
-Around that, a full run is wrapped by the paper repository's metadata tool,
-which captures hardware, OpenCL, package, commit, parameter and result-file
-metadata:
+**Per-driver sidecars.** Some drivers write a JSON sidecar themselves —
+`graded_tree_convergence.py`, `gaussian_free_space.py`,
+`dmk_effective_density.py`, `rke_field_demo_3d.py`, and `performance_suite.py`
+for the cases it wraps. They take `--metadata-out` and otherwise default to
+`<out stem>-metadata.json` beside the CSV. The sidecar carries the case id, the
+mode, the selected backend, the problem definition, the full configuration, and
+the driver's own verdict on the run (convergence orders, asymptotic-regime
+statements, gate outcomes).
+
+The rest — `table_equivalence_cache.py`, `accuracy_preservation.py`,
+`split_parameter_sweep.py`, `adaptive_timing.py` and the other composition and
+sweep drivers — write CSV only and have no `--metadata-out`. Passing the option
+to them is an error, and a run of one of them is not self-describing.
+
+**The metadata wrapper.** Every full run, sidecar or not, is wrapped by
+the paper repository's metadata tool, which captures hardware, OpenCL,
+package, commit, parameter and result-file metadata. For the drivers with no
+sidecar of their own, this is the *only* provenance a promoted artifact has:
 
 ```bash
 python /path/to/boxcode-paper/tools/run_benchmark_with_metadata.py \
@@ -154,8 +165,9 @@ to be reported, not retried until it passes.
    the claim being made, with thread caps and `--backend` set explicitly.
 3. Check the exit status and the per-row status columns, not just the presence
    of output.
-4. Promote the CSV together with its sidecar and the wrapper metadata. A result
-   without its metadata is not promotable.
+4. Promote the CSV together with the wrapper metadata, and with the driver's
+   own sidecar where it writes one. A result without its metadata is not
+   promotable.
 5. If a driver's full-mode verdict states a limitation ("extend the ladder"),
    extend the ladder — do not requote a pre-asymptotic order.
 

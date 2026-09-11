@@ -31,8 +31,13 @@ therefore unsupported in practice until that upstream import moves to
    ```bash
    micromamba create -n volumential-dev -c conda-forge -c nodefaults \
      python=3.12 pyopencl pocl scipy numpy
+   eval "$(micromamba shell hook -s bash)"   # unless the shell is init'd
    micromamba activate volumential-dev
    ```
+
+   `micromamba activate` is a shell function, so a shell that has not been
+   `micromamba shell init`-ed needs the hook first; otherwise activation fails
+   and `uv sync --active` installs into the wrong interpreter.
 
 3. Sync project dependencies:
 
@@ -81,8 +86,11 @@ wheels have neither. The interim locally patched branch is retired; the recipe
 is a source build on a host with `gfortran` and `ninja`:
 
 ```bash
-uv sync --active --extra fmmlib
+uv sync --active --extra test --extra doc --extra fmmlib
 ```
+
+`uv sync` is an exact sync, so naming only `--extra fmmlib` uninstalls the
+`test` and `doc` extras: list every extra the environment needs on each sync.
 
 Since #135, `pyfmmlib` has a `[tool.uv.sources]` entry pointing at upstream
 `main`, so the `fmmlib` extra resolves to the Git source at the commit
@@ -99,7 +107,10 @@ falls back to the serial per-box path without complaining when the batched
 entry points are missing, so a mis-provisioned environment is correct but slow:
 
 ```bash
-python -c "from pyfmmlib import l3dformmp_imany"   # batched wrappers present
+# Batched wrappers present.  The backend selects {l,h}{2,3}dformmp_imany from
+# the equation and dimension, so check all four.
+python -c "from pyfmmlib import \
+    h2dformmp_imany, h3dformmp_imany, l2dformmp_imany, l3dformmp_imany"
 python - <<'PY'
 import pathlib
 import subprocess

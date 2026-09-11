@@ -30,12 +30,19 @@ environment there and let `uv` fill in the rest:
 ```bash
 micromamba create -n volumential-dev -c conda-forge -c nodefaults \
   python=3.12 pyopencl pocl scipy numpy
+
+eval "$(micromamba shell hook -s bash)"   # once per shell, if not shell-init'd
 micromamba activate volumential-dev
 
 git clone https://github.com/xywei/volumential.git
 cd volumential
 uv sync --active --extra test --extra doc
 ```
+
+`micromamba activate` is a shell function, not a binary, so a fresh shell has
+to evaluate the hook first — otherwise activation fails and `uv sync --active`
+then installs into the wrong interpreter. `micromamba shell init -s bash` makes
+it permanent; the `eval` line above is the per-shell form.
 
 `uv sync --active` installs into the activated environment rather than
 creating a second one, which is what keeps the conda-provided OpenCL runtime
@@ -65,8 +72,13 @@ branch, or vendored and committed.
 ## The FMMLib backend
 
 ```bash
-uv sync --active --extra fmmlib
+uv sync --active --extra test --extra doc --extra fmmlib
 ```
+
+`uv sync` is an *exact* sync: it uninstalls whatever the requested set does not
+include. Naming only `--extra fmmlib` would therefore remove the `test` and
+`doc` extras installed above, `pytest` included, so list every extra you want
+in the environment on each sync.
 
 This builds `pyfmmlib` from upstream `main`, which carries both the restored
 OpenMP feature option ([inducer/pyfmmlib#93](https://github.com/inducer/pyfmmlib/pull/93))
@@ -86,7 +98,11 @@ path *without complaining* when the batched entry points are missing, so a
 mis-provisioned environment is correct but slow:
 
 ```bash
-python -c "from pyfmmlib import l3dformmp_imany"   # batched wrappers present
+# Batched wrappers present.  The backend picks {l,h}{2,3}dformmp_imany from the
+# equation and the dimension, so check all four: a successful 3D Laplace import
+# does not rule out a 2D or Helmholtz fallback.
+python -c "from pyfmmlib import \
+    h2dformmp_imany, h3dformmp_imany, l2dformmp_imany, l3dformmp_imany"
 python - <<'PY'
 import pathlib
 import subprocess

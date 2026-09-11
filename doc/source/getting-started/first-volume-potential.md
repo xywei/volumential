@@ -13,6 +13,13 @@ for a source $f$ manufactured so that the answer is the Gaussian
 $u(\boldsymbol{x}) = e^{-\alpha \lVert \boldsymbol{x} \rVert^2}$, which is what
 the error print at the end compares against.
 
+Set `PYOPENCL_CTX` before running it, or `cl.create_some_context()` will stop
+and ask which device to use:
+
+```bash
+export PYOPENCL_CTX=portable:0
+```
+
 ```python
 import numpy as np
 import pymbolic as pmbl

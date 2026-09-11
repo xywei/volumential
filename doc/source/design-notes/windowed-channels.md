@@ -36,11 +36,22 @@ linear combination over the symmetry-reduced entries.
 
 The truncation order is chosen from the requested tolerance by an explicit
 majorant of the omitted series tail on the near-field separation region. The
-returned **certificate** records that bound together with the numerically
-computed $L^1$ norms of the source basis functions, which is what converts a
-kernel-space bound into a table-entry bound. A certificate is `ok`, `refused`
-(the bound cannot be met at any admissible order) or `failed`; a refusal is a
-measurement, not an error, and the drivers record it as such.
+assembler returns `(table, certificate)`, where the **certificate** is a
+provenance dictionary recording that bound together with the numerically
+computed $L^1$ norms of the source basis functions — which is what converts a
+kernel-space bound into a table-entry bound.
+
+There is no status field on it: an assembly that cannot meet the bound does not
+return a refused certificate, it *raises* — `RKETruncationError` or
+`RKEConditioningError` for the classical assembler, `RKEWindowCoverageError` or
+`RKEWindowConditioningError` for the windowed one. A caller branches on the
+exception, not on a field.
+
+The `ok` / `refused` / `failed` taxonomy that appears in the benchmark CSVs is
+a *driver-level* classification layered on top of that: the wrappers call the
+assembler, record `refused` when it raises one of the certified refusals above,
+and `failed` when it raises anything else. A refusal is a measurement, not an
+error, which is exactly why the drivers keep the row.
 
 ## Why the classical channels are not enough
 

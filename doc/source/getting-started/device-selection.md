@@ -31,9 +31,9 @@ export OPENCL_VENDOR_PATH=/run/opengl-driver/etc/OpenCL/vendors
 
 ## `--backend`
 
-The benchmark drivers under `benchmarks/` do not use `PYOPENCL_CTX`; they take
-`--backend`, which names a *device class* rather than a platform index, and
-fails loudly when that class is absent:
+Most benchmark drivers under `benchmarks/` additionally take `--backend`, which
+names a *device class* rather than a platform index and fails loudly when that
+class is absent:
 
 | `--backend` | selects |
 | --- | --- |
@@ -50,6 +50,16 @@ python benchmarks/performance_suite.py --mode smoke --backend cuda-gpu \
 A misspelled `--backend` is rejected before the ICD loader is touched, so the
 error says what you typed rather than surfacing a driver-level
 `PLATFORM_NOT_FOUND_KHR`.
+
+`--backend` does not replace `PYOPENCL_CTX`, it sits beside it. Several drivers
+— `table_equivalence_cache.py`, `accuracy_preservation.py`,
+`derivative_log_preservation.py`, `windowed_rke_sweep.py` — select their device
+with `cl.create_some_context(interactive=False)` and expose no `--backend` at
+all, and `performance_suite.py` deliberately does not propagate its own
+`--backend` to the cases that have none. For those, `PYOPENCL_CTX` is the only
+explicit selection there is, and without it the device is chosen in an
+implementation-defined way. Set the environment variable for every run, and add
+`--backend` where the driver offers it.
 
 Prefer an explicit class over `auto` for anything whose timings will be quoted.
 `auto` prefers whatever fp64 GPU it finds, so the same command can change cost

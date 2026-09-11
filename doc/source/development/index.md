@@ -109,9 +109,11 @@ module needs no edit there; the generated tree is not committed.
 
 The build is `nitpicky`, which means an unresolvable cross-reference in a
 docstring fails it. When the name belongs to a dependency, add an intersphinx
-target in `doc/source/conf.py`; add a `nitpick_ignore` entry — with a comment
-saying why — only when the third-party project publishes no inventory for it at
-all.
+target in `doc/source/conf.py`. Add a `nitpick_ignore` entry — with a comment
+saying why — only when no usable inventory target exists: either the project
+publishes no `objects.inv` at all (`mpmath`, `pyfmmlib`), or it publishes one
+that does not document the referenced object (`boxtree` no longer documents
+`boxtree.tools.DeviceDataRecord`, though its inventory is otherwise fine).
 
 ## Documentation layout
 

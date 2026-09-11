@@ -40,8 +40,14 @@ and accidental deselection surface instead of being mistaken for validation.
 
 Every new documentation dependency goes into the `doc` extra of
 `pyproject.toml`. The `Documentation` job of `CI Full` installs `.[test,doc]`,
-so an extra-only dependency is picked up automatically — but a dependency added
-anywhere *else* will not be, and the job will fail on `main` rather than on the
+so anything in the base dependencies, the `test` extra or the `doc` extra is
+installed for it; only an extra that job does not select (`benchmark`,
+`fmmlib`, `gmsh_support`) is missing. The `doc` extra is where a documentation
+dependency belongs regardless, because it is what
+`uv sync --active --extra doc` gives a contributor locally.
+
+Note where the failure would surface: `CI Full` has no `pull_request` trigger,
+so a documentation dependency that is not installed fails on `main`, not on the
 pull request that introduced it.
 
 ## The review bots

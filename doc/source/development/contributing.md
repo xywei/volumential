@@ -21,8 +21,18 @@ uv run pytest -q
 sphinx-build -W --keep-going -b html doc/source doc/build/html   # if docs changed
 ```
 
-All four are gates in CI ({doc}`ci`), so running them locally is strictly
-cheaper than finding out later.
+Two of those are pull-request gates and two are not, and the difference matters
+before you assume CI will catch something ({doc}`ci` has the full picture):
+
+- `basedpyright` and the default pytest suite run on every pull request, as
+  written above.
+- `ruff` runs on every pull request, but only as `ruff check --select
+  E9,F63,F7,F82` with an unpinned version — the error-level smoke subset, not
+  the `ruff.toml` rule set. The pinned full check above is a local check; it can
+  fail on baseline diagnostics that pull-request CI never looks at.
+- The documentation build runs in `CI Full`, which has **no** `pull_request`
+  trigger. A documentation change that breaks the `-W` build is not caught
+  until it is on `main`. Run it locally.
 
 ## What a change should carry
 

@@ -77,10 +77,16 @@ radial desingularization quadrature in 2D and 3D;
 {mod}`volumential.singular_integral_2d` carries an older 2D-only Duffy
 implementation specialized to `1/r`-type kernels.
 
-A table depends on the kernel, the dimension, `q_order` and the build
-configuration — not on the source density, the tree or the target points. It is
-built once and cached; this is by far the largest one-time cost and the reason
-the cache file is worth keeping. How a build is routed, and how to tell after
+A table depends on the kernel, the dimension, `q_order`, the build
+configuration, and the *scale* of the source box — the manager's `root_extent`
+together with the `source_box_level` of the request, which is what
+`TableRequest` carries and what the cache fingerprint hashes. It does not
+depend on the source density, on the tree's topology, or on the target points.
+So a table is built once per (kernel, dimension, order, level) and cached, but
+it is not portable to a geometry with a different root extent: the integral
+values, and the Helmholtz/Yukawa parameter scaling on top of them, are tied to
+that box extent. Building the table is by far the largest one-time cost, which
+is why the cache file is worth keeping. How a build is routed, and how to tell after
 the fact which path produced a cached table, is
 {doc}`table-build-routing`.
 
@@ -136,11 +142,25 @@ far field integrates); `src_func` is the bare density (what the near-field
 table contracts against). Passing the same array for both is a common and
 quiet error.
 
-`direct_evaluation=True` replaces the FMM with a direct sum over the same
-nodes, using the same near-field tables — the reference the accuracy tests
-compare against. `timing_data={}` collects per-stage times;
-{mod}`volumential.phase_profile` turns those into the per-phase shares the
-benchmark drivers report.
+`direct_evaluation=True` replaces the whole evaluation with a global
+point-to-point sum over the quadrature nodes (`sumpy`'s `P2P`), and returns
+before the List 1 stage runs — it does **not** use the near-field tables. It is
+a diagnostic for the far-field path, not an accuracy oracle for the near field:
+point quadrature does not resolve the singular near-field integrand, so a
+disagreement with it says nothing on its own. The reference the near-field
+accuracy checks actually use is a *table* comparison — direct per-level tables
+against a rescaled canonical level-0 table, and both against a manufactured
+solution — which is what `benchmarks/table_equivalence_cache.py` and
+`benchmarks/accuracy_preservation.py` measure.
+
+`timing_data={}` collects the per-stage times `drive_volume_fmm` records
+through its `TimingRecorder`. The per-phase *shares* the benchmark drivers
+report are a separate API: build a
+{class}`volumential.phase_profile.PhaseProfile`, activate it around the solve
+with {func}`volumential.phase_profile.profiling`, and call its `shares()`
+method. That path synchronizes the OpenCL queue at phase boundaries, so its
+numbers have different semantics from the `timing_data` stage times and the two
+are not interchangeable.
 
 ### 6. Get the values where you want them
 
