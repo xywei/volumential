@@ -230,6 +230,19 @@ Yukawa kernel, with table entries agreeing to 3e-16 relative.
 
 Build it locally with `uv sync --active --extra doc` and `make -C doc html`.
 
+## AI-Assisted Development
+
+Parts of this codebase, its tests, benchmark drivers and documentation were
+written or revised with AI assistance: Anthropic Claude models through Claude
+Code (including agentic sessions that implemented driver extensions, ran the
+benchmark drivers on the maintainers' compute pool and drafted the resulting
+documentation), and OpenAI GPT-5-series models through OpenCode. Pull requests
+are reviewed by the maintainer and by automated code-review services (OpenAI
+Codex and CodeRabbit). Every change is gated by the test suite and CI, and
+benchmark results carry metadata sidecars that pin the generating commit and
+environment; the maintainers review and remain responsible for all code and
+claims in this repository.
+
 ## License
 
 Volumential is developed and released under the terms of the MIT license,
