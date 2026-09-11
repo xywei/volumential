@@ -39,8 +39,10 @@ thing in seconds at reduced order. The
 
 ## Documentation
 
-The site is built from [`doc/source`](./doc/source); a rendered build is
-published at <https://xiaoyu-wei.com/docs/volumential/>.
+The site is built from [`doc/source`](./doc/source). The currently published
+build is at <https://xiaoyu-wei.com/docs/volumential/>; a GitHub Pages
+deployment from `main` is tracked by
+[#145](https://github.com/xywei/volumential/issues/145).
 
 - [Getting started][docs-getting-started] — install, a first volume potential,
   device selection
