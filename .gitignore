@@ -28,6 +28,7 @@ src/
 
 # Documentation build output
 doc/build/
+doc/source/api/generated/
 
 # Generated at install/run time
 _git_rev.py
