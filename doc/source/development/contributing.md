@@ -21,18 +21,23 @@ uv run --active pytest -q
 sphinx-build -W --keep-going -b html doc/source doc/build/html   # if docs changed
 ```
 
-Two of those are pull-request gates and two are not, and the difference matters
-before you assume CI will catch something ({doc}`ci` has the full picture):
+Run all four locally. None of them is a safety net you can lean on, and the
+difference matters before you assume CI will catch something ({doc}`ci` has the
+full picture):
 
-- `basedpyright` and the default pytest suite run on every pull request, as
-  written above.
-- `ruff` runs on every pull request, but only as `ruff check --select
-  E9,F63,F7,F82` with an unpinned version — the error-level smoke subset, not
-  the `ruff.toml` rule set. The pinned full check above is a local check; it can
-  fail on baseline diagnostics that pull-request CI never looks at.
+- On a pull request **targeting `main`**, `basedpyright` and the default pytest
+  suite run as written above.
+- `ruff` runs there too, but only as `ruff check --select E9,F63,F7,F82` with
+  an unpinned version — the error-level smoke subset, not the `ruff.toml` rule
+  set. The pinned full check above is a local check; it can fail on baseline
+  diagnostics that pull-request CI never looks at.
 - The documentation build runs in `CI Full`, which has **no** `pull_request`
   trigger. A documentation change that breaks the `-W` build is not caught
-  until it is on `main`. Run it locally.
+  until it is on `main`.
+- On a **stacked** pull request — one whose base is another branch — `CI` does
+  not run at all: its `pull_request` trigger is restricted to base `main`. A
+  stacked change gets no lint, type, test or example job until the stack
+  reaches `main`, so the local loop is the only check it has.
 
 ## What a change should carry
 
