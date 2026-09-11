@@ -44,14 +44,6 @@ kernel-introspection and layout-validation helpers.
 
 :mod:`volumential.expansion_wrangler_fpnd` remains importable and re-exports
 every name this package defines.
-
-.. autoclass:: FPNDExpansionWrangler
-.. autoclass:: FPNDTreeIndependentDataForWrangler
-.. autoclass:: FPNDSumpyExpansionWrangler
-.. autoclass:: FPNDSumpyTreeIndependentDataForWrangler
-.. autoclass:: FPNDFMMLibExpansionWrangler
-.. autoclass:: FPNDFMMLibTreeIndependentDataForWrangler
-.. autoclass:: HelmholtzSplitCacheAccounting
 """
 
 from volumential.wranglers.device_arrays import inverse_id_map, level_to_rscale

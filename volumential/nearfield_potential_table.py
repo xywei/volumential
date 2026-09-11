@@ -66,7 +66,7 @@ _ORBIT_CANONICAL_CACHE = {}
 #: operational strictness policy part of the numerical cache key.
 DUFFY_NO_FALLBACK_ENV_VAR = "VOLUMENTIAL_DUFFY_NO_FALLBACK"
 
-#: Recognized values of :data:`table.build_routing`.
+#: Recognized values of ``table.build_routing``.
 DUFFY_BUILD_ROUTINGS = (
     "batched",
     "scalar",
@@ -472,7 +472,7 @@ class ComplexExponentialRewriter(CSECachingMapperMixin, IdentityMapper):
     rewrite is ``exp(a + b) = exp(a) exp(b)`` composed with Euler's formula,
     both of which hold for complex ``a`` and ``b``, applied to an exact
     structural split of the exponent (see
-    :func:`_split_complex_expression`), so it is valid for genuinely complex
+    ``_split_complex_expression``), so it is valid for genuinely complex
     exponents too -- the damped complex-frequency form ``exp((-a + 1j b) r)``
     included -- and not only for the purely imaginary ``exp(1j k r)`` of the
     Helmholtz kernel.  Exponents with no complex constant (Yukawa, Laplace)
@@ -488,15 +488,15 @@ class ComplexExponentialRewriter(CSECachingMapperMixin, IdentityMapper):
     ``HelmholtzKernel(dim, allow_evanescent=True)`` declares its wave number
     ``k`` as ``complex128`` -- so a phase that is not *provably* real keeps
     its ``cdouble_exp``, which evaluates the decaying result directly and
-    stably.  The test is :func:`_is_known_real`, a positive node-by-node
+    stably.  The test is ``_is_known_real``, a positive node-by-node
     proof rather than a search for complex dependencies: the fused Duffy
     expressions are post-CSE, and
-    :func:`_split_complex_expression` hands an opaque
+    ``_split_complex_expression`` hands an opaque
     :class:`~pymbolic.primitives.CommonSubexpression` to the real part
     wholesale, so a phase can be complex without naming a complex argument
     anywhere the split can see.  *unproven_arg_names* names the kernel
     arguments that are not provably real; see
-    :func:`_kernel_arg_names_not_known_real`.
+    ``_kernel_arg_names_not_known_real``.
 
     Mixes in the common-subexpression cache so a shared CSE node in the
     post-CSE expression DAG is visited once rather than once per reference.

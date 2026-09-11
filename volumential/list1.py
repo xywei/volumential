@@ -9,13 +9,6 @@ contribution.
 
 :class:`NearFieldEvalBase` holds the table-shape bookkeeping and the kernel
 scaling policy; :class:`NearFieldFromCSR` generates and runs the kernel.
-
-.. autoclass:: KernelScalingPolicy
-   :members:
-.. autoclass:: NearFieldEvalBase
-   :members:
-.. autoclass:: NearFieldFromCSR
-   :members:
 """
 
 __copyright__ = "Copyright (C) 2018 Xiaoyu Wei"

@@ -9,8 +9,8 @@ channel tables:
 - 3D: ``T(k) = T[Laplace] + sum_n c_n(k) T[r^{n-1}]``
 
 with the exact small-argument series coefficients (the same series that
-defines :class:`~volumential.expansion_wrangler_fpnd.\
-_HelmholtzSplitSeriesRemainderKernel`).  Yukawa uses the principal-branch
+defines the private ``_HelmholtzSplitSeriesRemainderKernel`` of
+:mod:`volumential.wranglers`).  Yukawa uses the principal-branch
 substitution ``k = i lam``, under which the assembled table is real.
 
 Every channel integrand is elementary (powers and ``log``), so all channel
@@ -1882,12 +1882,12 @@ def get_windowed_channel_table(
     reason logged as a warning on this module's logger.
 
     ``chan_regular_order`` / ``chan_radial_order`` default (via ``None``) to
-    the tested per-dimension orders of :func:`_resolve_channel_orders`
+    the tested per-dimension orders of ``_resolve_channel_orders``
     (48/61 in 2D, 20/61 in 3D); orders the underlying node builders would
-    silently ignore are refused by :func:`_validate_channel_orders`.
+    silently ignore are refused by ``_validate_channel_orders``.
 
     Every table handed back — freshly built or loaded from cache — passes
-    :func:`_check_channel_table_values`, so a channel that violates the
+    ``_check_channel_table_values``, so a channel that violates the
     analytic entry bound can never reach the recombination (where a single
     blown-up channel would dominate both the peak sum and the assembled
     maximum, leaving the reported condition number at a reassuring 1.0).

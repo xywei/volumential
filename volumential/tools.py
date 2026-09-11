@@ -39,9 +39,6 @@ import ...`` keeps working:
   :class:`~volumential.box_operators.BoxSum` and
   :func:`~volumential.box_operators.generate_leading_order_filtering` --
   :mod:`volumential.box_operators`
-
-.. autofunction:: clean_file
-.. autofunction:: import_code
 """
 
 import logging

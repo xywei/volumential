@@ -27,9 +27,6 @@ Lagrange interpolation used by the near-field tables and the volume FMM
 wranglers.  The barycentric form is what keeps high-order weights finite:
 weights are normalized in log space, so orders in the hundreds survive a
 ``float32`` round trip.
-
-.. autofunction:: barycentric_lagrange_weights
-.. autofunction:: evaluate_lagrange_basis_1d
 """
 
 from typing import Any

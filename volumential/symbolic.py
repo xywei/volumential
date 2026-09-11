@@ -29,11 +29,8 @@ This module owns
 * the coordinate variables :data:`x`, :data:`y`, :data:`z`,
 * :func:`der_laplacian` for symbolic Laplacians, and
 * :func:`math_func_mangler` / :func:`get_evaluator`, which connect such
-  expressions to :class:`volumential.tools.ScalarFieldExpressionEvaluation`.
-
-.. autofunction:: der_laplacian
-.. autofunction:: math_func_mangler
-.. autofunction:: get_evaluator
+  expressions to
+  :class:`volumential.expression_eval.ScalarFieldExpressionEvaluation`.
 """
 
 from collections.abc import Callable, Sequence
@@ -48,11 +45,15 @@ from volumential.tools import ScalarFieldExpressionEvaluation
 
 # {{{ math functions
 
+#: Documentation of the OpenCL math functions listed in
+#: :data:`CL_MATH_FUNCS`.
 CL_MATH_URL = (
-    "https://www.khronos.org/registry/OpenCL/sdk/1.0/docs/man/xhtml/"
+    "https://registry.khronos.org/OpenCL/sdk/1.0/docs/man/xhtml/"
     "mathFunctions.html"
 )
 
+#: Names of the OpenCL math functions that are exposed as module-level
+#: symbols, each building a ``math.<name>(...)`` :mod:`pymbolic` call node.
 CL_MATH_FUNCS = [
     "acos",
     "acosh",
@@ -146,8 +147,13 @@ del fname
 
 # }}} End math functions
 
+#: The symbolic first coordinate variable.
 x = pmbl.var("x")
+
+#: The symbolic second coordinate variable.
 y = pmbl.var("y")
+
+#: The symbolic third coordinate variable.
 z = pmbl.var("z")
 
 

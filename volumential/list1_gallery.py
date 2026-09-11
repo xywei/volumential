@@ -6,9 +6,6 @@ box and one of its near neighbors in a level-restricted box tree. The gallery
 is expressed in integer units of a quarter box width so that all involved
 lengths stay exact integers, which lets downstream table code index cases by a
 cheap positional encoding.
-
-.. autoclass:: List1Gallery
-.. autofunction:: generate_list1_gallery
 """
 
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
@@ -180,25 +177,17 @@ def postprocess_interactions(
 
 
 class List1Gallery(NamedTuple):
-    """The list 1 gallery for one dimension.
+    """The list 1 gallery for one dimension."""
 
-    .. attribute:: vec_list
-
-        Sorted list of distinct case vectors, each a tuple of integers in units
-        of a quarter of the target box width.
-
-    .. attribute:: case_encode
-
-        Maps a case vector to its index into :attr:`case_indices`.
-
-    .. attribute:: case_indices
-
-        Lookup table from encoded case vector to case id, ``-1`` where no case
-        vector maps to that slot.
-    """
-
+    #: Sorted list of distinct case vectors, each a tuple of integers in units
+    #: of a quarter of the target box width.
     vec_list: list[tuple[int, ...]]
+
+    #: Maps a case vector to its index into :attr:`case_indices`.
     case_encode: Callable[[Sequence[int]], int]
+
+    #: Lookup table from encoded case vector to case id, ``-1`` where no case
+    #: vector maps to that slot.
     case_indices: np.ndarray
 
 

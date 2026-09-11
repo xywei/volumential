@@ -107,12 +107,20 @@ __all__ = [
     "VERSION_TEXT",
 ]
 
+#: The package version as a tuple of integers.
 VERSION = (2017, 1)
+
+#: Pre-release suffix appended to :data:`VERSION_TEXT`.
 VERSION_STATUS = "a0"
+
+#: The package version as a string.
 VERSION_TEXT = ".".join(str(i) for i in VERSION) + VERSION_STATUS
 
+#: Revision token mixed into generated-kernel cache keys, so that cached
+#: :mod:`loopy` binaries are not reused across source changes.
 KERNEL_VERSION = (VERSION, _git_rev, 0)
 
+#: The :mod:`loopy` language version the generated kernels are written in.
 LOOPY_LANG_VERSION = (2018, 2)
 
 # vim: ft=pyopencl

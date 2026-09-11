@@ -3,7 +3,7 @@ method.
 
 This module is the package entry point.  It owns
 
-- the re-exported top-level names listed in :data:`__all__`
+- the re-exported top-level names listed in ``__all__``
   (:class:`~volumential.nearfield_potential_table.NearFieldInteractionTable`,
   :class:`~volumential.table_manager.NearFieldInteractionTableManager` and
   :func:`~volumential.singular_integral_2d.box_quad`),
@@ -48,6 +48,8 @@ from volumential.table_manager import NearFieldInteractionTableManager
 from volumential.version import VERSION_TEXT
 
 
+#: The package version as a string, i.e.
+#: :data:`volumential.version.VERSION_TEXT`.
 volumential_version = VERSION_TEXT
 
 __all__ = [
@@ -64,6 +66,8 @@ __all__ = [
     "volumential_version",
 ]
 
+#: Persistent cache for the generated :mod:`loopy` kernels, keyed by the
+#: package version and the kernel revision.
 code_cache = WriteOncePersistentDict(
     "volumential-code-cache-v0-" + VERSION_TEXT,
     safe_sync=False,
@@ -71,6 +75,9 @@ code_cache = WriteOncePersistentDict(
 
 # {{{ optimization control
 
+#: Whether generated :mod:`loopy` kernels are optimized.  Set from the
+#: ``VOLUMENTIAL_NO_OPT`` environment variable at import time; change it
+#: through :func:`set_optimization_enabled`.
 OPT_ENABLED = True
 
 OPT_ENABLED = "VOLUMENTIAL_NO_OPT" not in os.environ
@@ -87,6 +94,10 @@ def set_optimization_enabled(flag: bool) -> None:
 # {{{ cache control
 
 
+#: Whether :mod:`loopy` may use its disk caches.  Set from the
+#: ``VOLUMENTIAL_NO_CACHE`` and ``CG_NO_CACHE`` environment variables at
+#: import time; change it through :func:`set_caching_enabled` or the
+#: :class:`CacheMode` context manager.
 CACHING_ENABLED = True
 
 CACHING_ENABLED = (

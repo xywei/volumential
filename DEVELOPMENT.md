@@ -213,11 +213,30 @@ once, so the `[format]` section only records the intended style.
 
 ## Documentation
 
+The site is built with Sphinx and `pydata-sphinx-theme`; the `doc` extra
+carries everything it needs. The build imports `volumential`, so it needs an
+environment with the OpenCL stack (`pyopencl`, `loopy`) installed.
+
 ```bash
 uv sync --active --extra doc
-make -C doc html                     # output in doc/build/html
-sphinx-build -W -b html doc/source doc/build/html   # warnings as errors
+
+# The gate CI runs: warnings are errors, and every warning is reported.
+sphinx-build -W --keep-going -b html doc/source doc/build/html
+
+# External links.
+sphinx-build -b linkcheck doc/source doc/build/linkcheck
+
+# Live preview at http://127.0.0.1:8000, rebuilding on save.
+sphinx-autobuild doc/source doc/build/html
 ```
+
+`doc/source/api/` is generated: `sphinx.ext.autosummary` writes one page per
+module from the templates in `doc/source/_templates/autosummary/`, so a new
+module needs no edit there. The build is `nitpicky`, which means an
+unresolvable cross-reference in a docstring fails it; add an intersphinx
+target when the name belongs to a dependency, and a commented
+`nitpick_ignore` entry in `doc/source/conf.py` only when a third-party project
+publishes no inventory for it.
 
 ## Notes
 

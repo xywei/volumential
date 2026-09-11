@@ -25,8 +25,6 @@ __doc__ = """Disk-cached :mod:`loopy` kernel generation.
 This module owns :class:`KernelCacheWrapper`, the mix-in that every
 :mod:`volumential` operator with a generated :mod:`loopy` kernel inherits from.
 It is re-exported by :mod:`volumential.tools` for backwards compatibility.
-
-.. autoclass:: KernelCacheWrapper
 """
 
 import logging

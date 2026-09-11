@@ -20,9 +20,13 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
-__doc__ = """
-.. autofunction:: drive_volume_fmm
-.. autofunction:: interpolate_volume_potential
+__doc__ = r"""Drive the volume FMM and interpolate its output.
+
+:func:`drive_volume_fmm` evaluates the volume potential over the internal box
+mesh; :func:`interpolate_volume_potential` carries those values to an
+arbitrary set of target points.  The interpolation is :math:`O(N \log N)`,
+but it is almost always indistinguishable from :math:`O(N)` in practice, since
+the geometry lookup takes a very small fraction of the total runtime.
 """
 
 import logging
