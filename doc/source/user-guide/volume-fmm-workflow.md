@@ -169,10 +169,18 @@ are not interchangeable.
 
 ### 6. Get the values where you want them
 
-`drive_volume_fmm` returns the potential at the box-mesh nodes.
+What `drive_volume_fmm` returns depends on the tree it was given. With a
+coincident source/target tree — the usual case, and the one the example builds
+with `targets=None` — it returns the potential at the box-mesh nodes. When the
+traversal carries distinct target arrays, the default
+`auto_interpolate_targets=True` does the second step for you: it solves on the
+source modes, interpolates to `tree.targets`, and returns values in the
+requested target layout. Interpolating that result again is a shape error
+waiting to happen.
 
-- {func}`volumential.volume_fmm.interpolate_volume_potential` evaluates it at
-  an arbitrary set of target points.
+- {func}`volumential.volume_fmm.interpolate_volume_potential` evaluates a
+  box-mesh potential at an arbitrary set of target points — the explicit form
+  of what the automatic path does.
 - {mod}`volumential.interpolation` transfers between the box mesh and a
   {mod}`meshmode` discretization in both directions, which is how Volumential
   couples to a `pytential` boundary-integral solve (see

@@ -54,7 +54,10 @@ different routes, and they are not interchangeable.
 
 **Per-driver sidecars.** Four drivers write a JSON sidecar themselves:
 `graded_tree_convergence.py`, `gaussian_free_space.py`,
-`dmk_effective_density.py` and `rke_field_demo_3d.py`. They all take `--metadata-out`, but their defaults differ, and the difference
+`dmk_effective_density.py` and `rke_field_demo_3d.py`. Every sidecar carries
+the case id, the mode, the problem definition and the full configuration.
+
+They all take `--metadata-out`, but their defaults differ, and the difference
 is a provenance trap: only `graded_tree_convergence.py` derives the default
 from `--out` (`<out stem>-metadata.json`, beside the CSV). The other three each
 default to a fixed `build/benchmarks/<case>-metadata.json`, so a run with a
@@ -62,13 +65,22 @@ custom `--out` and no `--metadata-out` puts the sidecar somewhere else than the
 CSV, and two such runs overwrite one another's metadata. **Pass
 `--metadata-out` explicitly whenever you pass `--out`.**
 
-A sidecar carries the case id, the mode, the problem definition, the full
-configuration, and the driver's own verdict on the run (convergence orders,
-asymptotic-regime statements, gate outcomes).
+Beyond that shared core, what a sidecar holds varies, and two axes are worth
+knowing before promoting one:
 
-What it does **not** reliably carry is the device: only
-`graded_tree_convergence.py` records the selected `--backend` in its metadata,
-so for the other three the device class has to come from the wrapper below.
+- **Device.** `gaussian_free_space.py`, `dmk_effective_density.py` and
+  `rke_field_demo_3d.py` record `environment.opencl_device` — the *resolved*
+  platform, device name, vendor, version and device type — which is stronger
+  provenance than a class label, and their `command.argv` preserves an
+  explicitly passed `--backend`. What they do not carry is a normalized
+  top-level backend field. `graded_tree_convergence.py` is the mirror image:
+  it records `"backend"` as a label and no resolved device.
+- **Verdict.** Only `graded_tree_convergence.py` writes one — observed orders,
+  the asymptotic-regime statement, the matched-error DOF advantage — and only
+  on a successful run: a gate failure there writes the CSV and re-raises
+  *before* the sidecar, so the failing verdict is not in a file at all.
+  `rke_field_demo_3d.py` validates before it builds metadata, and the other
+  two record errors and timings without a status field.
 
 The remaining drivers — `table_equivalence_cache.py`,
 `accuracy_preservation.py`, `split_parameter_sweep.py`, `adaptive_timing.py`

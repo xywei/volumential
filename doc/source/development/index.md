@@ -108,9 +108,13 @@ is a build warning — which, under `-W`, is a build failure.
 
 ### Where the API pages come from
 
-`doc/source/api/` is generated. `sphinx.ext.autosummary` writes one page per
-module from the templates in `doc/source/_templates/autosummary/`, so a new
-module needs no edit there; the generated tree is not committed.
+`doc/source/api/generated/` is generated — and only that subdirectory.
+`sphinx.ext.autosummary` writes one page per module there from the templates in
+`doc/source/_templates/autosummary/`, so a new module needs no edit and the
+tree is not committed. `doc/source/api/index.rst` above it *is* committed and
+hand-written: it holds the autosummary seed, the module map and the note about
+the unsupported `volumential.qbfem` package, so a change to how the API is
+introduced goes there.
 
 The build is `nitpicky`, which means an unresolvable cross-reference in a
 docstring fails it. When the name belongs to a dependency, add an intersphinx

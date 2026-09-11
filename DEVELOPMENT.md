@@ -254,9 +254,10 @@ New pages are MyST Markdown (`.md`); the remaining reStructuredText pages are
 substantial existing documents kept as they are. `doc/source/development/`
 documents the section layout and which section a new page belongs in.
 
-`doc/source/api/` is generated: `sphinx.ext.autosummary` writes one page per
-module from the templates in `doc/source/_templates/autosummary/`, so a new
-module needs no edit there. The build is `nitpicky`, which means an
+`doc/source/api/generated/` is generated -- only that subdirectory.
+`sphinx.ext.autosummary` writes one page per module there from the templates in
+`doc/source/_templates/autosummary/`, so a new module needs no edit; the
+`doc/source/api/index.rst` above it is committed and hand-written. The build is `nitpicky`, which means an
 unresolvable cross-reference in a docstring fails it; add an intersphinx
 target when the name belongs to a dependency, and a commented
 `nitpick_ignore` entry in `doc/source/conf.py` only when a third-party project
