@@ -7,8 +7,9 @@
 Volumential (VOLUME poteNTIAL) evaluates volume potentials over box-shaped
 domains with the Fast Multipole Method: the far field is an ordinary particle
 FMM over the volume quadrature nodes, while the near field — where the
-integrand is singular and no point rule converges — is read from precomputed,
-symmetry-reduced interaction tables. Laplace, Helmholtz and Yukawa are
+integrand is singular or near-singular and point quadrature will not resolve it
+at a usable order — is read from precomputed, symmetry-reduced interaction
+tables. Laplace, Helmholtz and Yukawa are
 supported in 2D and 3D, for potential and target gradient, on uniform and
 adaptively refined 2:1-balanced trees.
 

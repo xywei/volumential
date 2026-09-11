@@ -7,17 +7,20 @@ u(\boldsymbol{x}) = \int_{\Omega} G(\boldsymbol{x}, \boldsymbol{y})\,
 f(\boldsymbol{y})\,\mathrm{d}\boldsymbol{y}
 $$
 
-is not a particle sum: the integrand is singular wherever the target lies in or
-next to the source box, so no point quadrature converges there. Volumential's
-answer is to split the domain by *distance in the tree* rather than by
-quadrature rule.
+is not a particle sum. Where the target lies **inside** the source box the
+integrand is genuinely singular and no point quadrature converges on it at
+all; in the **neighbouring** boxes it is finite but near-singular, and point
+quadrature converges too slowly to be useful at the orders the method runs at.
+Volumential's answer to both is the same: split the domain by *distance in the
+tree* rather than by quadrature rule.
 
 - **Far field** — boxes well separated from the target — is an ordinary
   particle FMM over the volume quadrature nodes, weighted by the quadrature
   weights. Nothing about it is volume-specific.
 - **Near field** — the target's own box and its List 1 neighbours — is read
-  from a table of precomputed singular integrals, one entry per (source mode,
-  target node, interaction case).
+  from a table of precomputed integrals, one entry per (source mode, target
+  node, interaction case): singular ones for the self box, near-singular ones
+  for the neighbours, all built once by desingularizing quadrature.
 
 The code calls this `fpnd`: **f**ar field by **p**article approximation,
 **n**ear field **d**irect. Every wrangler in
@@ -71,7 +74,8 @@ building it on a cache miss and loading it from SQLite otherwise.
 The table holds, for each List 1 *interaction case* (the relative position of
 the source box to the target box, as a case vector) and each pair of source
 mode and target node, the integral of the kernel against that source basis
-function. The integrals are singular, and
+function. Those integrals are singular on the self box and near-singular on
+the neighbours, and
 {mod}`volumential.nearfield_potential_table` evaluates them with Duffy-type
 radial desingularization quadrature in 2D and 3D;
 {mod}`volumential.singular_integral_2d` carries an older 2D-only Duffy

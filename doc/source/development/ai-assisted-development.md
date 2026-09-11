@@ -17,3 +17,11 @@ The mechanics behind that paragraph are documented in the rest of this section:
 the gates are {doc}`ci`, the metadata sidecars and the promotion rules are
 {doc}`../benchmarks/index`, and what a contribution has to carry — whoever or
 whatever drafted it — is {doc}`contributing`.
+
+One scope note, since the statement above is deliberately kept as written. The
+metadata guarantee is about **promoted** results — a full run wrapped by the
+metadata tool, which is what pins the generating commit and the environment.
+A raw or smoke-mode driver run is not covered: most drivers write no sidecar of
+their own, only four do, and the suite's manifest records the commands rather
+than the environment. {doc}`../benchmarks/index` has the per-driver detail and
+the promotion sequence.
