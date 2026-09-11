@@ -61,7 +61,9 @@ carries everything it needs. The build imports `volumential`, so it needs an
 environment with the OpenCL stack (`pyopencl`, `loopy`) installed.
 
 ```bash
-uv sync --active --extra doc
+# Name every extra you want: uv sync is exact, so --extra doc alone would
+# uninstall pytest and the rest of the test extra.
+uv sync --active --extra test --extra doc
 
 # The build CI Full runs: -W makes every warning an error, and --keep-going
 # reports all of them instead of stopping at the first.  No warning class is
@@ -117,6 +119,16 @@ saying why — only when no usable inventory target exists: either the project
 publishes no `objects.inv` at all (`mpmath`, `pyfmmlib`), or it publishes one
 that does not document the referenced object (`boxtree` no longer documents
 `boxtree.tools.DeviceDataRecord`, though its inventory is otherwise fine).
+
+### Redirect stubs for the old flat URLs
+
+Before the 2026-09 restructure every page lived directly under the site root,
+and the published build is replaced in place, so an external link to
+`/nearfield_symmetry.html` would 404 against the new tree. `conf.py` writes a
+meta-refresh stub at each of those old paths on `build-finished`; the mapping
+is `_LEGACY_REDIRECTS`, it never shadows a real page, and an entry can be
+deleted once its inbound links have aged out. Moving a page again means adding
+an entry there in the same commit.
 
 ## Documentation layout
 

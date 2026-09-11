@@ -22,7 +22,9 @@ Before running anything, export `PYOPENCL_CTX`:
 export PYOPENCL_CTX=portable:0   # the PoCL platform, device 0
 ```
 
-Without it, `pyopencl.create_some_context()` — which the examples call — asks
-interactively, and in a non-interactive shell that is a run that hangs rather
-than one that finishes. {doc}`device-selection` covers the rest; this one line
-is enough to get through {doc}`first-volume-potential`.
+Without it, `pyopencl.create_some_context()` — which the examples call —
+decides for you: at a terminal it stops and asks, and anywhere else (a batch
+job, a pipeline, CI) it picks a device in an implementation-defined manner. The
+first wastes your time, the second quietly makes the run unreproducible.
+{doc}`device-selection` covers the rest; this one line is enough to get through
+{doc}`first-volume-potential`.

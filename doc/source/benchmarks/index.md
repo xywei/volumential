@@ -54,9 +54,15 @@ different routes, and they are not interchangeable.
 
 **Per-driver sidecars.** Four drivers write a JSON sidecar themselves:
 `graded_tree_convergence.py`, `gaussian_free_space.py`,
-`dmk_effective_density.py` and `rke_field_demo_3d.py`. They take
-`--metadata-out` and otherwise default to `<out stem>-metadata.json` beside the
-CSV. A sidecar carries the case id, the mode, the problem definition, the full
+`dmk_effective_density.py` and `rke_field_demo_3d.py`. They all take `--metadata-out`, but their defaults differ, and the difference
+is a provenance trap: only `graded_tree_convergence.py` derives the default
+from `--out` (`<out stem>-metadata.json`, beside the CSV). The other three each
+default to a fixed `build/benchmarks/<case>-metadata.json`, so a run with a
+custom `--out` and no `--metadata-out` puts the sidecar somewhere else than the
+CSV, and two such runs overwrite one another's metadata. **Pass
+`--metadata-out` explicitly whenever you pass `--out`.**
+
+A sidecar carries the case id, the mode, the problem definition, the full
 configuration, and the driver's own verdict on the run (convergence orders,
 asymptotic-regime statements, gate outcomes).
 
@@ -143,9 +149,15 @@ all three:
    less than the per-solve speedup suggests.
 3. **The solve itself** — the only number that scales with the problem.
 
-Drivers that report cold and warm rows (`adaptive_timing.py`,
-`table_equivalence_cache.py`, the composition drivers) do so per case, and
-`volumential.phase_profile` supplies the per-phase shares behind them.
+Drivers that report cold and warm rows — `adaptive_timing.py`,
+`table_equivalence_cache.py`, the composition drivers — do so per case, from
+the stage times `drive_volume_fmm` records in its `timing_data` mapping.
+
+`volumential.phase_profile` is a different measurement and only two drivers
+use it: `split_parameter_sweep.py` and `break_even_validation.py`, which
+activate a `PhaseProfile` and report its `shares()`. That path synchronizes the
+OpenCL queue at phase boundaries, so its numbers are not the wall or stage
+times the other drivers report and the two must not be put in one column.
 
 ## Gates, and why a CSV is not a pass
 
@@ -166,9 +178,15 @@ recoverable.
 The consequence is the important part: **the presence of an output CSV is not
 evidence of a successful run.** Check the process exit status, and check the
 rows' own status columns (`windowed_status`, `far_field_status`,
-`grading_status`, the mismatch columns). A gate failure prints `GATE-FAILED` on
-stdout and exits non-zero; a far-field resolution failure prints
-`FAR-FIELD-UNRESOLVED` and returns 2.
+`grading_status`, the mismatch columns).
+
+Do not key tooling on a message: how a gate failure announces itself is
+per-driver. `split_parameter_sweep.py` and `graded_tree_convergence.py` print
+`GATE-FAILED` on stdout and exit non-zero; `FAR-FIELD-UNRESOLVED` with exit
+code 2 is specific to the split sweep; `windowed_rke_sweep.py` prints an
+`[error]` line and returns 1; the two adaptive composition drivers let the
+validator raise, so the failure arrives as a traceback on stderr. The exit
+status is the one signal all of them share.
 
 A refusal is not a failure. A certificate that refuses, or a row that records
 `far_field_status = refused_order_cap`, is a measurement of where the mechanism

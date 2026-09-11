@@ -13,8 +13,9 @@ for a source $f$ manufactured so that the answer is the Gaussian
 $u(\boldsymbol{x}) = e^{-\alpha \lVert \boldsymbol{x} \rVert^2}$, which is what
 the error print at the end compares against.
 
-Set `PYOPENCL_CTX` before running it, or `cl.create_some_context()` will stop
-and ask which device to use:
+Set `PYOPENCL_CTX` before running it. Otherwise `cl.create_some_context()`
+stops and asks which device to use at a terminal, and picks one in an
+implementation-defined manner anywhere else:
 
 ```bash
 export PYOPENCL_CTX=portable:0

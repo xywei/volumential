@@ -33,7 +33,7 @@ fresh environment — see [Installation][docs-install].
 ## Run
 
 ```bash
-export PYOPENCL_CTX=portable:0        # otherwise the example asks interactively
+export PYOPENCL_CTX=portable:0        # otherwise the device is picked for you
 uv run --active python examples/laplace2d.py
 ```
 
@@ -63,7 +63,7 @@ deployment from `main` is tracked by
   review bots, release and versioning
 - [Changelog][docs-changelog]
 
-Build it locally with `uv sync --active --extra doc` and
+Build it locally with `uv sync --active --extra test --extra doc` and
 `sphinx-build -W --keep-going -b html doc/source doc/build/html`.
 
 ## Repository layout

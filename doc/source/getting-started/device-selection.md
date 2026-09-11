@@ -50,9 +50,13 @@ python benchmarks/performance_suite.py --mode smoke --backend cuda-gpu \
   --out-dir build/benchmarks/performance-suite
 ```
 
-A misspelled `--backend` is rejected before the ICD loader is touched, so the
-error says what you typed rather than surfacing a driver-level
-`PLATFORM_NOT_FOUND_KHR`.
+Where a misspelled `--backend` is caught varies. `performance_suite.py`
+constrains the argument at the parser, and `split_parameter_sweep.py` validates
+against the whitelist before touching the ICD loader, so both name the typo.
+Most of the other drivers take an unconstrained `--backend BACKEND` and call
+`cl.get_platforms()` first, so on a host with broken ICD discovery a typo
+surfaces as `PLATFORM_NOT_FOUND_KHR` rather than as an argument error. If you
+get that message, check the spelling before you check the drivers.
 
 `--backend` does not replace `PYOPENCL_CTX`, it sits beside it. Several drivers
 — `table_equivalence_cache.py`, `accuracy_preservation.py`,

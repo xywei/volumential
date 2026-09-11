@@ -232,7 +232,9 @@ carries everything it needs. The build imports `volumential`, so it needs an
 environment with the OpenCL stack (`pyopencl`, `loopy`) installed.
 
 ```bash
-uv sync --active --extra doc
+# uv sync is exact: name every extra the environment needs, or --extra doc
+# alone uninstalls the test extra.
+uv sync --active --extra test --extra doc
 
 # The build CI Full runs: -W makes every warning an error, --keep-going
 # reports all of them.  conf.py suppresses no warning class.

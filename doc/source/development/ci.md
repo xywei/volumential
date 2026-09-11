@@ -15,10 +15,16 @@ bounded in runtime.
 | Ruff | `ruff check --select E9,F63,F7,F82` — the error-level smoke subset, not the full `ruff.toml` rule set |
 | Type checking | `basedpyright -p pyproject.toml --level error` |
 | Testing (Linux) | the default pytest suite under a micromamba environment, with a wrapper timeout and a diagnostics artifact (`linux-pytest.log`, `pytest.xml`) uploaded on every outcome |
-| Examples (Smoke) | the maintained examples under `VOLUMENTIAL_EXAMPLE_SMOKE=1`, plus several benchmark drivers in `--mode smoke` |
+| Examples (Smoke) | three examples under `VOLUMENTIAL_EXAMPLE_SMOKE=1` — `laplace2d.py`, `helmholtz2d.py`, `helmholtz3d.py` — plus several benchmark drivers in `--mode smoke` |
 
 `PYOPENCL_CTX` and `PYOPENCL_TEST` are pinned to `portable:0` at the workflow
 level, so CI always runs on PoCL rather than on whatever enumerates first.
+
+Note what the smoke job does **not** cover: `laplace3d.py`, `poisson3d.py`,
+`branched_flow_helmholtz2d.py` and the two `*_split_p_convergence.py` drivers
+run only in the `Examples` job of `CI Full`, which has no `pull_request`
+trigger. A change that breaks one of those is not caught before it reaches
+`main`.
 
 ## `CI Full` — `main`, weekly, and on demand
 
@@ -44,7 +50,7 @@ so anything in the base dependencies, the `test` extra or the `doc` extra is
 installed for it; only an extra that job does not select (`benchmark`,
 `fmmlib`, `gmsh_support`) is missing. The `doc` extra is where a documentation
 dependency belongs regardless, because it is what
-`uv sync --active --extra doc` gives a contributor locally.
+`uv sync --active --extra test --extra doc` gives a contributor locally.
 
 Note where the failure would surface: `CI Full` has no `pull_request` trigger,
 so a documentation dependency that is not installed fails on `main`, not on the
