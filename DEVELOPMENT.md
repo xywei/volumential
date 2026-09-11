@@ -230,6 +230,10 @@ sphinx-build -b linkcheck doc/source doc/build/linkcheck
 sphinx-autobuild doc/source doc/build/html
 ```
 
+New pages are MyST Markdown (`.md`); the remaining reStructuredText pages are
+substantial existing documents kept as they are. `doc/source/development/`
+documents the section layout and which section a new page belongs in.
+
 `doc/source/api/` is generated: `sphinx.ext.autosummary` writes one page per
 module from the templates in `doc/source/_templates/autosummary/`, so a new
 module needs no edit there. The build is `nitpicky`, which means an
