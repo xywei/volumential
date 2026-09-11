@@ -87,13 +87,21 @@ see {doc}`../benchmarks/index`.
 `PYOPENCL_CTX` does not reach every example. `helmholtz2d.py`,
 `helmholtz3d.py`, `branched_flow_helmholtz2d.py` and the two
 `*_split_p_convergence.py` drivers each carry a `_select_opencl_device` that
-enumerates the platforms, prefers the first fp64-capable GPU and falls back to
-an fp64 CPU, then builds a `cl.Context` from it directly. On a host with both a
-CUDA GPU and PoCL they run on the GPU regardless of the variable.
+enumerates the platforms and builds a `cl.Context` directly, so the variable is
+ignored. What they then choose differs:
 
-That is usually what you want from those examples, but it means the variable is
-not a device policy for the whole tree. Read the device off the run rather than
-inferring it from the environment.
+- The first three, and `helmholtz2d_split_p_convergence.py`, take the `auto`
+  path: first fp64-capable GPU, else first fp64-capable CPU. On a host with
+  both a CUDA GPU and PoCL they run on the GPU.
+- `helmholtz3d_split_p_convergence.py` exposes `--backend` and defaults it by
+  mode — `auto` in smoke, **`pocl-cpu` at full settings**. A full run of it
+  therefore lands on the CPU on that same host unless you pass
+  `--backend cuda-gpu`, which is the opposite of the assumption the other four
+  invite.
+
+So the variable is not a device policy for the whole tree, and neither is the
+default. Read the device off the run rather than inferring it from the
+environment.
 
 ## Thread caps
 

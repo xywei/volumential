@@ -1,22 +1,43 @@
 # Near-field table build routing
 
-Near-field DuffyRadial tables are built by a batched OpenCL kernel. If that
-build raises, the table falls back to the scalar per-entry builder, which is
-orders of magnitude slower and converges differently at the same requested
-quadrature orders. A table that quietly dropped to the scalar path is therefore
-both a performance surprise and an accuracy surprise, which is why the fallback
-is never silent.
+Near-field DuffyRadial tables are built by a batched OpenCL kernel. The scalar
+per-entry builder that stands behind it is orders of magnitude slower and
+converges differently at the same requested quadrature orders, so which one ran
+is both a performance fact and an accuracy fact. Four routings are recorded:
 
-## The fallback is loud and recorded
+`batched`
+: the device kernel ran.
 
-- It logs a `WARNING` plus a `[duffy:builder] mode=scalar-fallback` line and
-  emits a `RuntimeWarning` carrying the kernel class, dimension, exception type
-  and reason.
-- It records `table.build_routing` (`batched`, `scalar`, `scalar-adaptive` or
-  `scalar-fallback`) and `table.build_fallback_reason` on the table, and both
-  are persisted with the cached payload, so a warm, cache-loaded table still
-  reports how it was originally built
-  (`volumential.opcounters.direct_build_routing`).
+`scalar`
+: the scalar builder was chosen **up front**, because the batched path was
+  never eligible: the kernel does not support it, or — the case that catches
+  people — `get_table` was called with neither a `queue` nor a `cl_ctx`, both
+  of which are optional in the public manager API. This route logs
+  `[duffy:builder] mode=scalar` at `INFO` and raises no warning. It is not a
+  failure, and it is not loud; if a build is unexpectedly slow, check that a
+  queue reached the manager.
+
+`scalar-adaptive`
+: the scalar builder ran because the build configuration asked for adaptive
+  quadrature.
+
+`scalar-fallback`
+: the batched build was attempted and **raised**. This one is never silent.
+
+## The fallback is loud
+
+A `scalar-fallback` — and only that routing — announces itself at the moment it
+happens: a logged `WARNING`, a `[duffy:builder] mode=scalar-fallback` line, and
+a `RuntimeWarning` carrying the kernel class, dimension, exception type and
+reason. The other three routings only log at `INFO`, so a slow build that was
+never a batched attempt looks exactly like a fast one in a default log.
+
+## Every routing is recorded
+
+- The builder records `table.build_routing` — one of the four above — and, for
+  a fallback, `table.build_fallback_reason`. Both are persisted with the cached
+  payload, so a warm, cache-loaded table still reports how it was originally
+  built (`volumential.opcounters.direct_build_routing`).
 - Seven drivers emit it as a `direct_build_routing` CSV column:
   `adaptive_timing.py`, `adaptive_timing_3d.py`,
   `adaptive_split_composition.py`, `adaptive_split_composition_3d.py`,
@@ -33,8 +54,8 @@ export VOLUMENTIAL_DUFFY_NO_FALLBACK=1
 ```
 
 turns the fallback into a `RuntimeError` instead. Campaign runs use this so
-that a table which quietly dropped to the scalar builder cannot be recorded as
-a batched build. Any value other than unset, `0`, `false`, `no` or `off`
+that a table which dropped to the scalar builder cannot end up recorded as a
+batched build by a run nobody was watching. Any value other than unset, `0`, `false`, `no` or `off`
 enables strict mode.
 
 Strict mode also applies on the **load** path, where the builder never runs.
