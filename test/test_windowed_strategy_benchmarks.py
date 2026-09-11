@@ -1262,6 +1262,80 @@ def test_a_family_failure_is_counted_before_any_early_exit(
         assert summary["stop_reason"] != "windowed_provisioning_failed"
 
 
+@pytest.mark.parametrize(("key", "changed"), [
+    ("window_theta", 16.0000001),
+    ("windowed_p_star", 5),
+])
+def test_the_ks_windowed_case_suffix_separates_campaigns(ks, key, changed):
+    """Two windowed campaigns with the same profile, level, alpha and mass
+    but a different declaration or p_star assemble different tables, run
+    against a different admissible step floor and can follow a different
+    trajectory -- and the id is also the --save-fields NPZ name."""
+    base = {"window_theta": 16.0, "windowed_p_star": 6}
+    suffix = ks._windowed_case_suffix(**base)
+    assert suffix.startswith("windowed-cfg")
+    assert ks._windowed_case_suffix(**base) == suffix
+    assert ks._windowed_case_suffix(**{**base, key: changed}) != suffix
+
+
+def test_a_windowed_solve_failure_is_an_outcome_not_an_exception(
+        ks, ctx_factory, tmp_path, monkeypatch):
+    """drive_volume_fmm raises RuntimeError when its List 1 result turns
+    non-finite.  The direct baseline has already run by then and main()
+    writes every CSV only after both runs return, so an escaping solve
+    error discarded the baseline and every earlier mass case.
+    """
+    import pyopencl as cl
+
+    real_drive = ks._drive
+    calls = {"n": 0}
+
+    def flaky_drive(queue, traversal, wrangler, weighted, source_vals):
+        calls["n"] += 1
+        # the chemoattractant solve comes first; fail the windowed one
+        if calls["n"] >= 2:
+            raise RuntimeError("non-finite List 1 result")
+        return real_drive(queue, traversal, wrangler, weighted, source_vals)
+
+    monkeypatch.setattr(ks, "_drive", flaky_drive)
+
+    ctx = ctx_factory()
+    queue = cl.CommandQueue(ctx)
+    _steps, summary, _checkpoints = ks.run_case(
+        ctx, queue,
+        mode="smoke",
+        case_id="ks-windowed-solve-failure",
+        mass_factor=0.85,
+        cache_dir=tmp_path / "cache",
+        q_order=2,
+        nlevels=4,
+        fmm_order=8,
+        split_order=1,
+        alpha=0.01,
+        initial_profile="gaussian",
+        profile_scale=0.3,
+        cfl=0.5,
+        theta_max=0.9,
+        t_end=1.0e-4,
+        max_steps=1,
+        blowup_factor=50.0,
+        dt_max=1.0e-4,
+        root_extent=1.0,
+        cutoff_inner_radius=0.2,
+        cutoff_outer_radius=0.4,
+        core_radius=0.05,
+        ladder_ratio=2.0,
+        rke_beta_mode="auto",
+        direct_only=False,
+        save_fields=None,
+        strategy="windowed",
+    )
+
+    assert summary["stop_reason"] == "windowed_solve_failed"
+    assert int(summary["n_windowed_failed"]) == 1
+    assert int(summary["admissible"]) == 0
+
+
 def test_the_terminal_checkpoint_is_exactly_t_end(ks):
     """The step loop walks the checkpoint list by index while
     ``t < t_end``, so a terminal checkpoint left just below ``t_end`` --

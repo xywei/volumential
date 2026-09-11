@@ -466,6 +466,38 @@ def _external_registration_checksum(
     )
 
 
+#: Payload arrays the loader assigns into ``dtype``-constrained table
+#: buffers.  The entry values are handled through
+#: :func:`_payload_checksum_arrays`, since they live under one of two
+#: layout-dependent names.
+_DTYPE_CONSTRAINED_PAYLOAD_ARRAYS = (
+    "mode_normalizers",
+    "kernel_exterior_normalizers",
+)
+
+
+def _unsafe_payload_dtype(payload, dtype):
+    """The first payload array that ``dtype`` cannot represent, or None.
+
+    Every one of these is assigned element-wise into a buffer allocated at
+    the table's ``dtype``, so a wider or complex array is cast on the way
+    in -- discarding the imaginary part behind a ``ComplexWarning``
+    nobody reads -- and the reloaded table then evaluates differently from
+    the registered one.
+    """
+    candidates = [("entry data", _payload_checksum_arrays(payload)[1])]
+    candidates += [
+        (name, payload[name])
+        for name in _DTYPE_CONSTRAINED_PAYLOAD_ARRAYS
+        if name in payload
+    ]
+    for name, array in candidates:
+        array_dtype = np.asarray(array).dtype
+        if not np.can_cast(array_dtype, dtype, casting="safe"):
+            return name, array_dtype
+    return None
+
+
 def _payload_checksum_arrays(payload):
     """``(entry_ids, values)`` arrays of a deserialized payload, whichever
     of the two data layouts it uses.
@@ -1857,14 +1889,11 @@ class NearFieldInteractionTableManager:
             # by the assignments below -- every imaginary part discarded
             # behind a ComplexWarning nobody reads -- and then serve wrong
             # potentials from a payload that checksums perfectly.
-            _stored_values = _payload_checksum_arrays(payload)[1]
-            if not np.can_cast(
-                np.asarray(_stored_values).dtype, self.dtype, casting="safe"
-            ):
+            _unsafe = _unsafe_payload_dtype(payload, self.dtype)
+            if _unsafe is not None:
                 raise KeyError(
-                    "cached table data dtype "
-                    f"{np.asarray(_stored_values).dtype!s} cannot be safely "
-                    f"represented by this manager's dtype "
+                    f"cached table {_unsafe[0]} dtype {_unsafe[1]!s} cannot "
+                    "be safely represented by this manager's dtype "
                     f"{np.dtype(self.dtype)!s}"
                 )
 
@@ -2504,6 +2533,18 @@ assemble_windowed_parameterized_table`) under the standard
                 "table data dtype cannot be safely represented by this "
                 f"manager's dtype {np.dtype(self.dtype)!r}"
             )
+        # The auxiliary arrays are reconstructed into dtype-constrained
+        # buffers too, so a complex normalizer on an otherwise float table
+        # would register and checksum cleanly and then lose its imaginary
+        # part on every reload.
+        for _name in _DTYPE_CONSTRAINED_PAYLOAD_ARRAYS:
+            _array_dtype = np.asarray(getattr(table, _name)).dtype
+            if not np.can_cast(_array_dtype, self.dtype, casting="safe"):
+                raise ValueError(
+                    f"table {_name} dtype {_array_dtype!s} cannot be safely "
+                    f"represented by this manager's dtype "
+                    f"{np.dtype(self.dtype)!r}"
+                )
 
         # Resolving the kernel bundle here mirrors the load path exactly, so
         # a registration missing a required kernel parameter (e.g. lam) fails

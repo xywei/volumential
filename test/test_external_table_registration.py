@@ -578,6 +578,64 @@ def test_a_complex_table_refuses_to_load_through_a_float_manager(tmp_path):
     )
 
 
+@pytest.mark.parametrize("array_name", [
+    "mode_normalizers",
+    "kernel_exterior_normalizers",
+])
+def test_register_refuses_an_unsafe_auxiliary_dtype(
+        tmp_path, assembled_yukawa, array_name):
+    """The auxiliary arrays are reconstructed into dtype-constrained
+    buffers too, so a complex normalizer on an otherwise float table
+    would register, checksum cleanly, and lose its imaginary part on
+    every reload behind a ComplexWarning.
+    """
+    import copy
+
+    table, certificate = assembled_yukawa
+    poisoned = copy.deepcopy(table)
+    values = np.asarray(getattr(poisoned, array_name), dtype=np.complex128)
+    values[0] = values[0] + 1j
+    setattr(poisoned, array_name, values)
+
+    cache = tmp_path / "registered.sqlite"
+    with NearFieldInteractionTableManager(
+        str(cache), root_extent=ROOT_EXTENT
+    ) as manager, pytest.raises(
+        ValueError, match=f"table {array_name} dtype"
+    ):
+        _register(manager, poisoned, certificate)
+
+
+def test_the_load_side_dtype_guard_covers_every_reconstructed_array():
+    """The loader assigns the entry values *and* the two normalizer arrays
+    into buffers allocated at the manager's dtype, so the guard has to
+    cover all three -- not only the entries."""
+    from volumential.table_manager import _unsafe_payload_dtype
+
+    payload = {
+        "reduced_entry_ids": np.arange(4, dtype=np.int64),
+        "reduced_data": np.zeros(4, dtype=np.float64),
+        "mode_normalizers": np.zeros(4, dtype=np.float64),
+        "kernel_exterior_normalizers": np.zeros(4, dtype=np.float64),
+    }
+    assert _unsafe_payload_dtype(payload, np.float64) is None
+    assert _unsafe_payload_dtype(payload, np.complex128) is None
+
+    for name, label in (
+        ("reduced_data", "entry data"),
+        ("mode_normalizers", "mode_normalizers"),
+        ("kernel_exterior_normalizers", "kernel_exterior_normalizers"),
+    ):
+        widened = dict(payload)
+        widened[name] = np.zeros(4, dtype=np.complex128)
+        unsafe = _unsafe_payload_dtype(widened, np.float64)
+        assert unsafe is not None
+        assert unsafe[0] == label
+        assert unsafe[1] == np.dtype(np.complex128)
+        # ... and a complex manager accepts the same payload
+        assert _unsafe_payload_dtype(widened, np.complex128) is None
+
+
 def _record_fields(**overrides):
     fields = {
         "n_q_points": 4,

@@ -633,6 +633,34 @@ def _prepare_windowed_channel_family(
     return time.perf_counter() - start
 
 
+def _windowed_case_suffix(
+    *, window_theta: float, windowed_p_star: int
+) -> str:
+    """``"windowed-cfg<token>"``: the windowed case-id suffix.
+
+    Two windowed campaigns with the same profile, level, alpha and mass
+    but a different window declaration or ``p_star`` assemble different
+    tables, run against a different admissible step floor and can follow
+    a different trajectory -- yet a bare ``"-windowed"`` gave them one
+    id, which is also the ``--save-fields`` NPZ name.
+    """
+    import hashlib
+
+    payload = json.dumps(
+        {
+            # repr round-trips a float64
+            "window_theta": repr(float(window_theta)),
+            "windowed_p_star": int(windowed_p_star),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    token = hashlib.blake2s(
+        payload.encode("utf-8"), digest_size=4
+    ).hexdigest()
+    return f"windowed-cfg{token}"
+
+
 def _resolved_checkpoint_times(checkpoint_times, t_end: float) -> list[float]:
     """Sorted checkpoint times ending exactly at ``t_end``.
 
@@ -1506,9 +1534,33 @@ def run_case(
         windowed_solve_s = 0.0
         if windowed:
             strategy_order = "windowed"
-            (rho_windowed,), windowed_solve_s = _drive(
-                queue, traversal, windowed_wrangler, weighted, source_vals
-            )
+            try:
+                (rho_windowed,), windowed_solve_s = _drive(
+                    queue, traversal, windowed_wrangler, weighted, source_vals
+                )
+            except (
+                ValueError, RuntimeError, NotImplementedError, TypeError,
+                OSError, KeyError,
+                # sqlite3's exceptions descend from Exception, not OSError
+                sqlite3.Error,
+            ) as exc:
+                # The solve is the windowed strategy's last mile:
+                # drive_volume_fmm raises RuntimeError when its List 1
+                # result turns non-finite.  The direct baseline run has
+                # already completed by now and main() writes every CSV
+                # only after both runs return, so an escaping error here
+                # discards the baseline and every earlier mass case
+                # instead of recording a failed windowed outcome.
+                n_windowed_failed += 1
+                stop_reason = "windowed_solve_failed"
+                admissible = False
+                print(
+                    f"[{case_id}] step {step}: windowed solve failed at "
+                    f"lambda={lam:.6g}: {type(exc).__name__}: {exc}; "
+                    "stopping",
+                    flush=True,
+                )
+                break
             windowed_totals["solve_s"] += windowed_solve_s
             # downstream state advance and diagnostics read rho_direct
             rho_direct = rho_windowed
@@ -2302,9 +2354,13 @@ def main() -> int:
         )
 
         if strategy == "windowed":
+            windowed_suffix = _windowed_case_suffix(
+                window_theta=args.window_theta,
+                windowed_p_star=args.windowed_p_star,
+            )
             case_specs = [
                 (f"{case_id}-direct-baseline", "direct"),
-                (f"{case_id}-windowed", "windowed"),
+                (f"{case_id}-{windowed_suffix}", "windowed"),
             ]
         else:
             case_specs = [(case_id, strategy)]
