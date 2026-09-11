@@ -1,41 +1,53 @@
+# Neutralize any user-global core.excludesFile so that a clone ignores exactly
+# what is listed below and nothing else.
 !*
-build
-.sw[po]
-.*.sw[po]
-*~
+
+# Python bytecode and build products
+__pycache__/
 *.pyc
 *.pyo
+*.so
+build/
+builds/
+dist/
 *.egg-info
 MANIFEST
-dist
 setuptools*egg
 setuptools.pth
 distribute*egg
 distribute*tar.gz
-a.out
-.mypy_cache
+src/
 
+# Environments and tool caches
+.venv*
 .cache
+.mypy_cache
 .pytest_cache
+.ruff_cache
+.ipynb_checkpoints/
 
+# Documentation build output
+doc/build/
+
+# Generated at install/run time
 _git_rev.py
 
-src/
-build/
-builds/
-*.so
+# Test and profiling output
+.coverage
+pytest.xml
+prof/
+a.out
 
+# Experiment/mesh/plot artifacts
 *.png
 *.hdf5
 *.vtu
 *.vts
 *.msh
-
-.ipynb_checkpoints/
-
-gmsh_tmp/
 *.meshmode
+gmsh_tmp/
 
-.coverage
-pytest.xml
-prof/
+# Editor scratch files
+.sw[po]
+.*.sw[po]
+*~

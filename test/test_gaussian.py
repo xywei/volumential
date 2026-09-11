@@ -1,3 +1,7 @@
+"""Tests for the Gaussian source utilities: mixture evaluation, closed-form
+Laplacian powers, DMK splitting, tail reports and slice-grid export.
+"""
+
 import math
 from types import SimpleNamespace
 

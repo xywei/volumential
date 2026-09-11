@@ -1,3 +1,16 @@
+"""Geometry construction for volume FMM evaluations.
+
+This module owns the bounding-box and box-FMM geometry factories that turn a
+box mesh into the tree, traversal and quadrature data a volume FMM run needs.
+:class:`BoundingBoxFactory` decides the root box; :class:`BoxFMMGeometryFactory`
+drives the mesh generator and tree builders and hands back an immutable
+:class:`BoxFMMGeometryData` container.
+
+.. autoclass:: BoundingBoxFactory
+.. autoclass:: BoxFMMGeometryFactory
+.. autoclass:: BoxFMMGeometryData
+"""
+
 __copyright__ = "Copyright (C) 2019 Xiaoyu Wei"
 
 __license__ = """
@@ -31,7 +44,20 @@ from pytools.obj_array import new_1d as obj_array_1d
 
 
 class BoundingBoxFactory:
-    def __init__(self, dim, center=None, radius=None, dtype=float):
+    """Produces the root bounding box of a box FMM geometry.
+
+    The box is either fully prescribed by *center* and *radius*, or adapted to
+    a mesh at call time. Calling the factory materializes :attr:`lbounds` and
+    :attr:`ubounds`, which downstream code reads directly.
+    """
+
+    def __init__(
+        self,
+        dim: int,
+        center: np.ndarray | None = None,
+        radius: float | None = None,
+        dtype: np.dtype | type = float,
+    ) -> None:
         self.dim = dim
         self.dtype = np.dtype(dtype)
 
@@ -44,13 +70,15 @@ class BoundingBoxFactory:
         self.ubounds = None
 
     @property
-    def materialized(self):
+    def materialized(self) -> bool:
         """Returns true if the bounding box is readily determined,
         i.e., the __call__() method has been called.
         """
         return self.box_center is not None
 
-    def __call__(self, ctx, expand_to_hold_mesh=None, mesh_padding_factor=0.05):
+    def __call__(
+        self, ctx, expand_to_hold_mesh=None, mesh_padding_factor: float = 0.05
+    ) -> np.ndarray:
         """If expand the box to be large enough to enclose a
         mesh object.
 
@@ -79,10 +107,7 @@ class BoundingBoxFactory:
             b = np.max(expand_to_hold_mesh.vertices, axis=1)
             c = (a + b) * 0.5
 
-            if self.center is None:
-                box_center = c
-            else:
-                box_center = self.center
+            box_center = c if self.center is None else self.center
 
             if self.radius is None:
                 box_radius = np.max(b - c)
@@ -101,9 +126,9 @@ class BoundingBoxFactory:
         bbox_type, _ = make_bounding_box_dtype(ctx.devices[0], self.dim, self.dtype)
 
         bbox = np.empty(1, bbox_type)
-        for ax, iaxis in zip(axis_names, range(self.dim)):
-            bbox["min_" + ax] = self.lbounds[iaxis]
-            bbox["max_" + ax] = self.ubounds[iaxis]
+        for iaxis, ax in enumerate(axis_names):
+            bbox[f"min_{ax}"] = self.lbounds[iaxis]
+            bbox[f"max_{ax}"] = self.ubounds[iaxis]
 
         return bbox
 
@@ -142,14 +167,14 @@ class BoxFMMGeometryFactory:
     def __init__(
         self,
         cl_ctx,
-        dim,
-        order,
-        nlevels,
-        bbox_getter,
+        dim: int,
+        order: int,
+        nlevels: int,
+        bbox_getter: BoundingBoxFactory,
         quadrature_formula=None,
         expand_to_hold_mesh=None,
-        mesh_padding_factor=0.05,
-    ):
+        mesh_padding_factor: float = 0.05,
+    ) -> None:
         """
         :arg bbox_getter: A :class:`BoundingBoxFactory` object.
 
@@ -198,12 +223,12 @@ class BoxFMMGeometryFactory:
 
     def reinit(
         self,
-        order=None,
-        nlevels=None,
+        order: int | None = None,
+        nlevels: int | None = None,
         quadrature_formula=None,
         expand_to_hold_mesh=None,
-        mesh_padding_factor=None,
-    ):
+        mesh_padding_factor: float | None = None,
+    ) -> None:
         """Resets the engine to its initial state, and optionally also
         changes some parameters.
         """
@@ -222,7 +247,7 @@ class BoxFMMGeometryFactory:
         b = np.asarray(self.bbox_getter.ubounds, dtype=self.bbox_getter.dtype)
         self.engine = self._engine_class(self.order, self.nlevels, a, b)
 
-    def _get_q_points(self, queue=None):
+    def _get_q_points(self, queue: cl.CommandQueue | None = None):
         q_points_pre = self.engine.get_q_points()
         q_points = np.ascontiguousarray(np.transpose(q_points_pre))
 
@@ -233,14 +258,14 @@ class BoxFMMGeometryFactory:
                 [cl.array.to_device(queue, q_points[i]) for i in range(self.dim)]
             )
 
-    def _get_q_weights(self, queue=None):
+    def _get_q_weights(self, queue: cl.CommandQueue | None = None):
         q_weights = self.engine.get_q_weights()
         if queue is None:
             return q_weights
         else:
             return cl.array.to_device(queue, q_weights)
 
-    def _get_active_cell_centers(self, queue=None):
+    def _get_active_cell_centers(self, queue: cl.CommandQueue | None = None):
         cell_centers_pre = self.engine.get_cell_centers()
         cell_centers = np.ascontiguousarray(np.transpose(cell_centers_pre))
 
@@ -251,29 +276,33 @@ class BoxFMMGeometryFactory:
                 [cl.array.to_device(queue, cell_centers[i]) for i in range(self.dim)]
             )
 
-    def _get_active_cell_measures(self, queue=None):
+    def _get_active_cell_measures(self, queue: cl.CommandQueue | None = None):
         cell_measures = self.engine.get_cell_measures()
         if queue is None:
             return cell_measures
         else:
             return cl.array.to_device(queue, cell_measures)
 
-    def _get_active_cell_extents(self, queue=None):
+    def _get_active_cell_extents(self, queue: cl.CommandQueue | None = None):
         return self._get_active_cell_measures(queue) ** (1 / self.dim)
 
     @property
-    def n_cells(self):
+    def n_cells(self) -> int:
+        """Upper bound on the number of cells the engine iterates over."""
         return self.engine.n_cells()
 
     @property
-    def n_active_cells(self):
+    def n_active_cells(self) -> int:
+        """Number of leaf cells currently carrying quadrature nodes."""
         return self.engine.n_active_cells()
 
     @property
-    def n_q_points_per_cell(self):
+    def n_q_points_per_cell(self) -> int:
+        """Number of quadrature nodes per cell."""
         return len(self.quadrature_formula.weights)
 
-    def __call__(self, queue=None):
+    def __call__(self, queue: cl.CommandQueue | None = None) -> "BoxFMMGeometryData":
+        """Build tree and traversal for the current mesh state."""
         if queue is None:
             queue = cl.CommandQueue(self.cl_context)
 
@@ -332,7 +361,7 @@ class BoxFMMGeometryData(FMMLibRotationData):
     .. attribute:: traversal
     """
 
-    def __init__(self, cl_context, q_points, q_weights, tree, trav):
+    def __init__(self, cl_context, q_points, q_weights, tree, trav) -> None:
         self.cl_context = cl_context
         self.queue = cl.CommandQueue(cl_context)
 

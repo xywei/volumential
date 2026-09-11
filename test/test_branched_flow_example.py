@@ -1,7 +1,12 @@
+"""Queue-free tests for the branched-flow example driver: its window and
+random-medium builders, its FMM/solver configuration validation, and its
+command line overrides.
+"""
+
 import importlib.util
+import sys
 from dataclasses import replace
 from pathlib import Path
-import sys
 
 import numpy as np
 import pytest

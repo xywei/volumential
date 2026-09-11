@@ -1,3 +1,24 @@
+"""Box mesh generation on top of the boxtree tree-of-boxes interface.
+
+This module owns the mesh generators that produce the quadrature nodes,
+weights, cell centers and cell measures a volume FMM run integrates over.
+:class:`MeshGenBase` wraps a :class:`volumential.tree_interactive_build.BoxTree`
+and its quadrature; the dimension-specific subclasses only pin the dimension.
+The module also owns the small helpers that turn a generated mesh into boxtree
+tree/traversal data.
+
+.. autoclass:: MeshGenBase
+   :members:
+.. autoclass:: MeshGen1D
+   :members:
+.. autoclass:: MeshGen2D
+   :members:
+.. autoclass:: MeshGen3D
+   :members:
+.. autofunction:: make_uniform_cubic_grid
+.. autofunction:: build_geometry_info
+"""
+
 __copyright__ = "Copyright (C) 2018 Xiaoyu Wei"
 
 __license__ = """
@@ -20,21 +41,21 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
-__doc__ = """
-Mesh generation
-
-.. autoclass:: MeshGenBase
-   :members:
-.. autoclass:: MeshGen2D
-   :members:
-.. autoclass:: MeshGen3D
-   :members:
-"""
-
 import logging
+from pathlib import Path
 
 import numpy as np
 import pyopencl as cl
+
+# Compatibility re-exports: these boxtree names have historically been
+# importable from ``volumential.meshgen`` and are kept reachable from here even
+# though this module does not use them itself.
+from boxtree import (  # noqa: F401
+    make_tree_of_boxes_root,
+    refine_and_coarsen_tree_of_boxes,
+    uniformly_refine_tree_of_boxes,
+)
+from modepy import LegendreGaussQuadrature
 from pytools.obj_array import new_1d as obj_array_1d
 
 from volumential.tree_interactive_build import BoxTree, QuadratureOnBoxTree
@@ -42,14 +63,8 @@ from volumential.tree_interactive_build import BoxTree, QuadratureOnBoxTree
 
 logger = logging.getLogger(__name__)
 
-provider = None
-
-from boxtree import (  # noqa: E402
-    make_tree_of_boxes_root,
-    refine_and_coarsen_tree_of_boxes,
-    uniformly_refine_tree_of_boxes,
-)
-from modepy import LegendreGaussQuadrature  # noqa: E402
+#: Name of the mesh generation backend in use.
+provider = "meshgen_boxtree"
 
 # {{{ meshgen Python provider
 
@@ -67,7 +82,14 @@ class MeshGenBase:
     that play well with boxtree-based workflows.
     """
 
-    def __init__(self, degree, nlevels, a=-1, b=1, queue=None):
+    def __init__(
+        self,
+        degree: int,
+        nlevels: int,
+        a=-1,
+        b=1,
+        queue: cl.CommandQueue | None = None,
+    ) -> None:
         assert degree > 0
         assert nlevels > 0
         self.degree = degree
@@ -105,25 +127,27 @@ class MeshGenBase:
         )
         self.quadrature = QuadratureOnBoxTree(self.boxtree, self.quadrature_formula)
 
-    def _leaf_boxes(self):
+    def _leaf_boxes(self) -> np.ndarray:
         return self.boxtree.active_boxes.get()
 
-    def _leaf_levels(self):
+    def _leaf_levels(self) -> np.ndarray:
         return self.boxtree.box_levels.get()[self._leaf_boxes()]
 
-    def _leaf_centers(self):
+    def _leaf_centers(self) -> np.ndarray:
         return self.boxtree.box_centers.get()[:, self._leaf_boxes()].T
 
-    def _leaf_side_lengths(self):
+    def _leaf_side_lengths(self) -> np.ndarray:
         return self.boxtree.root_extent / (2 ** self._leaf_levels())
 
-    def dimension_specific_setup(self):
-        pass
+    def dimension_specific_setup(self) -> None:
+        """Hook for subclasses to pin the mesh dimension."""
 
     def get_q_points_dev(self):
+        """Return the quadrature nodes as device arrays, one per axis."""
         return self.quadrature.get_q_points(self.queue)
 
-    def get_q_points(self):
+    def get_q_points(self) -> np.ndarray:
+        """Return the quadrature nodes on the host, shape ``(nnodes, dim)``."""
         q_points_dev = self.get_q_points_dev()
         n_all_q_points = len(q_points_dev[0])
         q_points = np.zeros((n_all_q_points, self.dim))
@@ -132,21 +156,27 @@ class MeshGenBase:
         return q_points
 
     def get_q_weights_dev(self):
+        """Return the quadrature weights as a device array."""
         return self.quadrature.get_q_weights(self.queue)
 
-    def get_q_weights(self):
+    def get_q_weights(self) -> np.ndarray:
+        """Return the quadrature weights on the host."""
         return self.get_q_weights_dev().get(self.queue)
 
     def get_cell_measures_dev(self):
+        """Return the per-cell measures as a device array."""
         return self.quadrature.get_cell_measures(self.queue)
 
-    def get_cell_measures(self):
+    def get_cell_measures(self) -> np.ndarray:
+        """Return the per-cell measures on the host."""
         return self.get_cell_measures_dev().get(self.queue)
 
     def get_cell_centers_dev(self):
+        """Return the cell centers as device arrays, one per axis."""
         return self.quadrature.get_cell_centers(self.queue)
 
-    def get_cell_centers(self):
+    def get_cell_centers(self) -> np.ndarray:
+        """Return the cell centers on the host, shape ``(ncells, dim)``."""
         cell_centers_dev = self.get_cell_centers_dev()
         n_active_cells = self.n_active_cells()
         cell_centers = np.zeros((n_active_cells, self.dim))
@@ -154,17 +184,29 @@ class MeshGenBase:
             cell_centers[:, d] = cell_centers_dev[d].get(self.queue)
         return cell_centers
 
-    def n_cells(self):
+    def n_cells(self) -> int:
         """Note that this value can be larger than the actual number
         of cells used in the boxtree. It mainly serves as the bound for
         iterators on cells.
         """
         return self.boxtree.nboxes
 
-    def n_active_cells(self):
+    def n_active_cells(self) -> int:
+        """Return the number of leaf cells carrying quadrature nodes."""
         return self.boxtree.n_active_boxes
 
-    def update_mesh(self, criteria, top_fraction_of_cells, bottom_fraction_of_cells):
+    def update_mesh(
+        self,
+        criteria,
+        top_fraction_of_cells: float,
+        bottom_fraction_of_cells: float,
+    ) -> None:
+        """Refine the highest-criteria cells and coarsen the lowest-criteria ones.
+
+        :arg criteria: One refinement indicator per active cell.
+        :arg top_fraction_of_cells: Fraction of active cells to refine.
+        :arg bottom_fraction_of_cells: Fraction of active cells to coarsen.
+        """
         criteria = np.asarray(criteria)
         leaf_boxes = self._leaf_boxes()
 
@@ -216,12 +258,13 @@ class MeshGenBase:
             error_on_ignored_flags=False,
         )
 
-    def print_info(self, logging_func=logger.info):
-        logging_func("Number of cells: " + str(self.n_cells()))
-        logging_func("Number of active cells: " + str(self.n_active_cells()))
-        logging_func("Number of quad points per cell: " + str(self.n_q_points))
+    def print_info(self, logging_func=logger.info) -> None:
+        """Report cell and quadrature counts through *logging_func*."""
+        logging_func(f"Number of cells: {self.n_cells()}")
+        logging_func(f"Number of active cells: {self.n_active_cells()}")
+        logging_func(f"Number of quad points per cell: {self.n_q_points}")
 
-    def generate_gmsh(self, filename):
+    def generate_gmsh(self, filename) -> None:
         """Write active boxes to a Gmsh v2 ASCII mesh file."""
 
         leaf_centers = self._leaf_centers()
@@ -255,7 +298,7 @@ class MeshGenBase:
             return node_ids[key]
 
         elements = []
-        for center, size in zip(leaf_centers, leaf_sizes):
+        for center, size in zip(leaf_centers, leaf_sizes, strict=True):
             half = 0.5 * float(size)
             if abs(size - h) > 1e-12 * max(1.0, abs(h)):
                 raise NotImplementedError(
@@ -292,7 +335,7 @@ class MeshGenBase:
             else:
                 raise ValueError("only supports 1 <= dim <= 3")
 
-        with open(filename, "w", encoding="ascii") as outf:
+        with Path(filename).open("w", encoding="ascii") as outf:
             outf.write("$MeshFormat\n")
             outf.write("2.2 0 8\n")
             outf.write("$EndMeshFormat\n")
@@ -313,15 +356,21 @@ class MeshGenBase:
 
 # }}} End meshgen Python provider
 
-provider = "meshgen_boxtree"
 logger.info("Using meshgen via current boxtree tree-of-boxes interface.")
 
 
-def greet():
+def greet() -> str:
+    """Return a greeting identifying the active meshgen backend."""
     return "Hello from Meshgen via BoxTree!"
 
 
-def make_uniform_cubic_grid(degree, nlevels=1, dim=2, queue=None, **kwargs):
+def make_uniform_cubic_grid(
+    degree: int,
+    nlevels: int = 1,
+    dim: int = 2,
+    queue: cl.CommandQueue | None = None,
+    **kwargs,
+) -> tuple[np.ndarray, np.ndarray, None]:
     """Uniform cubic grid in [-1,1]^dim."""
     if queue is None:
         ctx = cl.create_some_context()
@@ -370,7 +419,8 @@ class MeshGen3D(MeshGenBase):
 # {{{ mesh utils
 
 
-def _square_bbox_for_treebuilder(bbox):
+def _square_bbox_for_treebuilder(bbox) -> np.ndarray:
+    """Grow a ``(dim, 2)`` bounding box to a cube anchored at its lower corner."""
     bbox = np.asarray(bbox)
     if bbox.ndim != 2 or bbox.shape[1] != 2:
         raise ValueError("bbox must have shape (dim, 2)")
@@ -388,7 +438,9 @@ def _square_bbox_for_treebuilder(bbox):
     return np.ascontiguousarray(square_bbox)
 
 
-def build_geometry_info(ctx, queue, dim, q_order, mesh, bbox=None, a=None, b=None):
+def build_geometry_info(
+    ctx, queue, dim: int, q_order: int, mesh, bbox=None, a=None, b=None
+):
     """Build tree, traversal and other geo info for FMM computation,
     given the box mesh over/encompassing the domain.
 
@@ -397,9 +449,8 @@ def build_geometry_info(ctx, queue, dim, q_order, mesh, bbox=None, a=None, b=Non
     2. via bbox (e.g. np.array([[a1, b1], [a2, b2], [a3, b3]]))
     """
 
-    if dim == 1:
-        if not isinstance(mesh, MeshGen1D):
-            raise ValueError()
+    if dim == 1 and not isinstance(mesh, MeshGen1D):
+        raise ValueError()
 
     if dim == 2:
         if not isinstance(mesh, MeshGen2D):
@@ -414,7 +465,7 @@ def build_geometry_info(ctx, queue, dim, q_order, mesh, bbox=None, a=None, b=Non
 
     q_points = mesh.get_q_points()
     q_weights = mesh.get_q_weights()
-    q_points_org = q_points  # noqa: F841
+    q_points_org = q_points
     q_points = np.ascontiguousarray(np.transpose(q_points))
 
     q_points = obj_array_1d(
@@ -427,7 +478,6 @@ def build_geometry_info(ctx, queue, dim, q_order, mesh, bbox=None, a=None, b=Non
         bbox = np.array([[a, b]] * dim)
     bbox = np.ascontiguousarray(bbox)
 
-    from boxtree import TreeBuilder
     from boxtree.array_context import PyOpenCLArrayContext
     from volumential.tree_interactive_build import build_particle_tree_from_box_tree
 

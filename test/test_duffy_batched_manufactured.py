@@ -1,20 +1,25 @@
+"""Manufactured-solution tests for the batched (GPU) Duffy-radial table
+builder: constant, Laplace-derivative, Helmholtz plane-wave and Yukawa
+cases whose exact box integrals are known in closed form.
+"""
+
 import numpy as np
 import pytest
 from numpy.polynomial.legendre import leggauss
-from pymbolic import var
 
 import pyopencl as cl
-
-from sumpy.point_calculus import CalculusPatch
+from pymbolic import var
 from sumpy.kernel import (
     AxisTargetDerivative,
     ExpressionKernel,
     LaplaceKernel,
     YukawaKernel,
 )
+from sumpy.point_calculus import CalculusPatch
 
 import volumential.nearfield_potential_table as npt
 from volumential.table_manager import ConstantKernel
+
 
 try:
     from _duffy_test_utils import pick_far_positive_case_id
@@ -160,8 +165,13 @@ def test_duffy_batched_gpu_laplace_derivative_matches_finite_difference(
 
     if dim == 1:
         laplace_knl = _Laplace1DKernel()
-        laplace_func = lambda x: -0.5 * np.abs(np.asarray(x))
-        derivative_func = lambda x: 0.5 * np.sign(np.asarray(x))
+
+        def laplace_func(x):
+            return -0.5 * np.abs(np.asarray(x))
+
+        def derivative_func(x):
+            return 0.5 * np.sign(np.asarray(x))
+
         regular_quad_order = 6
         radial_quad_order = 21
         legendre_order = 250
@@ -227,8 +237,11 @@ def test_duffy_batched_gpu_helmholtz_plane_wave_matches_exact_values(ctx_factory
     helmholtz_knl = _HelmholtzPlaneWaveKernel(dim, k)
     helmholtz_dx_knl = AxisTargetDerivative(0, helmholtz_knl)
 
-    kernel_func = lambda x, *rest: np.cos(k * np.asarray(x))
-    kernel_dx_func = lambda x, *rest: k * np.sin(k * np.asarray(x))
+    def kernel_func(x, *rest):
+        return np.cos(k * np.asarray(x))
+
+    def kernel_dx_func(x, *rest):
+        return k * np.sin(k * np.asarray(x))
 
     table = npt.NearFieldInteractionTable(
         quad_order=1,

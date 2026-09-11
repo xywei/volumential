@@ -50,7 +50,11 @@ import numpy as np
 from sumpy.kernel import ExpressionKernel
 
 import volumential as vm
-from volumential.nearfield_potential_table import NearFieldInteractionTable
+from volumential.nearfield_potential_table import (
+    DUFFY_NO_FALLBACK_ENV_VAR,
+    NearFieldInteractionTable,
+    _duffy_fallback_is_disabled,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -71,6 +75,22 @@ _LEGACY_CACHE_BLOB_COLUMNS = {
 }
 _LEGACY_UNVERSIONED_SCHEMA_VERSION = "1.0.0"
 _TABLE_BUILD_METHOD = "DuffyRadial"
+
+# Build-method label recorded for tables that were assembled outside the
+# manager (e.g. windowed RKE offline assembly) and registered through
+# :meth:`NearFieldInteractionTableManager.register_external_table`.  The
+# label keeps the provenance honest: a registered table is not a DuffyRadial
+# build, but it loads through the standard cache path exactly like one.
+EXTERNAL_TABLE_BUILD_METHOD = "ExternalAssembly"
+
+#: Table attributes that the serialized payload owns.  A cache kwarg of the
+#: same name must not overwrite them on load: they are provenance the
+#: builder recorded, not a request the caller made.
+_PAYLOAD_OWNED_ATTRIBUTES = frozenset({
+    "build_routing",
+    "build_fallback_reason",
+})
+_ACCEPTED_BUILD_METHODS = (_TABLE_BUILD_METHOD, EXTERNAL_TABLE_BUILD_METHOD)
 
 
 @dataclass(frozen=True)
@@ -202,6 +222,18 @@ def _serialize_table_payload(table):
             symmetry_source_direction, dtype=np.float64
         )
 
+    # Which DuffyRadial builder produced the data, so a cached table still
+    # answers "was this a batched build or a scalar fallback?".  Stored as
+    # one-element unicode arrays (npz-safe without pickle); both keys are
+    # absent from payloads written before the routing was recorded, and the
+    # loader treats absence as unknown.
+    build_routing = getattr(table, "build_routing", None)
+    if build_routing is not None:
+        payload["build_routing"] = np.array([str(build_routing)])
+    build_fallback_reason = getattr(table, "build_fallback_reason", None)
+    if build_fallback_reason is not None:
+        payload["build_fallback_reason"] = np.array([str(build_fallback_reason)])
+
     if table_data_is_symmetry_reduced:
         if hasattr(table, "get_reduced_table_data"):
             reduced_entry_ids, reduced_data = table.get_reduced_table_data()
@@ -226,6 +258,259 @@ def _deserialize_table_payload(blob):
     with BytesIO(blob) as f:
         with np.load(f, allow_pickle=False) as payload:
             return {name: payload[name] for name in payload.files}
+
+
+class UnverifiedBuildRoutingError(RuntimeError):
+    """A cached table's recorded build routing is refused by strict mode."""
+
+
+def _refuse_unverified_build_routing(table, table_request, build_method=None):
+    """Refuse a cached table whose routing strict mode would not have produced.
+
+    ``VOLUMENTIAL_DUFFY_NO_FALLBACK`` turns the batched-to-scalar Duffy
+    fallback into a build-time error, but a *cached* table skips the builder
+    entirely.  Without this check a strict campaign that had already warmed
+    its cache would load and use exactly the differently converged
+    scalar-fallback data the switch exists to refuse -- and, because the
+    routing is faithfully restored from the payload, would even report it
+    correctly while doing so.
+
+    ``unknown`` (a payload written before the routing was recorded) is
+    refused too: strict mode's contract is that every table in the campaign
+    has a verified provenance, and an unrecorded Duffy build cannot be
+    vouched for.  Both cases name the remedy, since the operator's options --
+    rebuild, or accept the table by unsetting the switch -- are a judgement
+    call and not ours to make silently.
+
+    An :data:`EXTERNAL_TABLE_BUILD_METHOD` record is exempt, and this is not
+    a loophole.  The switch governs one specific substitution: a batched
+    DuffyRadial build silently becoming a scalar one.  An externally
+    assembled table was not produced by DuffyRadial at all, which is exactly
+    why the assemblers clear ``build_routing``; its provenance is carried by
+    ``build_method``, ``provenance_kind`` and the payload checksum the load
+    path already verifies, not by a routing field that does not apply.
+    Without the exemption strict mode would reject every windowed RKE
+    assembly on reload, which is the documented ``--include-windowed``
+    campaign flow.
+    """
+    if not _duffy_fallback_is_disabled():
+        return
+
+    if build_method == EXTERNAL_TABLE_BUILD_METHOD:
+        return
+
+    import volumential.opcounters as opcounters
+
+    from volumential.nearfield_potential_table import DUFFY_BUILD_ROUTINGS
+
+    routing = opcounters.direct_build_routing(table)
+    # Anything outside the recognized set is corrupt provenance, not
+    # verified provenance: a damaged payload whose routing reads
+    # "scalar-fallbac" says nothing about which builder ran, so strict
+    # mode must not accept it as a batched build.
+    recognized = routing in DUFFY_BUILD_ROUTINGS
+    if recognized and routing != "scalar-fallback":
+        return
+
+    identity = (
+        f"dim={table_request.dim} kernel={table_request.kernel_type} "
+        f"q_order={table_request.q_order} "
+        f"source_box_level={table_request.source_box_level}"
+    )
+    if routing == "scalar-fallback":
+        reason = opcounters.direct_build_fallback_reason(table)
+        detail = (
+            "was produced by the scalar Duffy fallback"
+            + (f" ({reason})" if reason else "")
+        )
+    elif routing == "unknown":
+        detail = (
+            "records no build routing (its payload predates routing "
+            "recording), so it cannot be shown to be a batched build"
+        )
+    else:
+        detail = (
+            f"records the unrecognized build routing {routing!r} (expected "
+            "one of " + ", ".join(DUFFY_BUILD_ROUTINGS) + "), so its "
+            "provenance is damaged and it cannot be shown to be a batched "
+            "build"
+        )
+
+    raise UnverifiedBuildRoutingError(
+        f"cached near-field table [{identity}] {detail}, and "
+        f"{DUFFY_NO_FALLBACK_ENV_VAR} is set. Rebuild it with "
+        "force_recompute=True (which will fail loudly if the batched build "
+        f"still cannot run), or unset {DUFFY_NO_FALLBACK_ENV_VAR} to accept "
+        "the cached data."
+    )
+
+
+def _external_payload_checksum(payload):
+    """Checksum over the *whole* numerical payload of an externally
+    registered table (PR #131 discipline: cached numerical evidence carries
+    a content checksum, not just a key).
+
+    Every array, not only the entry identities and values: ``q_points``,
+    ``interaction_case_vecs``, ``case_indices`` and the two normalizer
+    arrays decide which interaction case and which basis geometry the
+    evaluator reads an entry under, so a same-shape corruption in any of
+    them silently produces wrong potentials from data whose entries are
+    intact.  Keys are hashed in sorted order with their dtype and shape,
+    so a renamed, added or dropped array changes the digest too.
+
+    The payload is written and read back through ``np.savez`` with
+    ``allow_pickle=False``, so every value here is a plain non-object
+    ndarray and ``tobytes()`` is a faithful, reproducible encoding.
+    """
+    import hashlib
+
+    digest = hashlib.sha256()
+    for key in sorted(payload):
+        array = np.ascontiguousarray(np.asarray(payload[key]))
+        digest.update(str(key).encode("utf-8") + b"\0")
+        digest.update(str(array.dtype.str).encode("ascii"))
+        digest.update(np.asarray(array.shape, dtype="<i8").tobytes())
+        digest.update(array.tobytes())
+    return digest.hexdigest()
+
+
+#: Cache-kwarg keys the registration digest cannot cover: the digest is
+#: stored under this name, so hashing it would be self-referential.
+_CHECKSUM_EXCLUDED_KWARGS = frozenset({"external_payload_checksum"})
+
+
+#: Record columns the registration digest binds the payload to.  The
+#: case encoding is the load-bearing pair: the loader rebuilds
+#: ``table.case_encode`` from ``case_encoding_base`` and
+#: ``case_encoding_shift``, and symmetry-reduced reconstruction maps
+#: interaction cases through it, so an in-range mutation there
+#: reconstructs entries from the wrong cases.  The shape and extent
+#: columns ride along for the same reason.
+_CHECKSUMMED_RECORD_FIELDS = (
+    "n_q_points",
+    "quad_order",
+    "n_pairs",
+    "source_box_extent",
+    "case_encoding_base",
+    "case_encoding_shift",
+    "build_method",
+    "kernel_type_cached",
+)
+
+
+def _external_identity_checksum(table_request, cache_kwargs, record_fields):
+    """Digest of the identity an external payload is registered *under*.
+
+    The payload digest alone protects the numbers; it says nothing about
+    which request they answer.  The kernel parameters (``lam``, a
+    Helmholtz ``k``, ...) live in ``nearfield_cache_kwargs``, and the case
+    encoding lives in the record columns -- both outside the payload, and
+    the loader compares the parameters against the *request*: corrupt a
+    stored ``lam`` from A to B and a request for B matches, the payload
+    still verifies, and the table assembled for A is evaluated as B.
+
+    Hashed in the canonical ``(value_type, value_text)`` form the values
+    are stored in, so the digest computed here at registration and the one
+    recomputed from the stored row at load are identical by construction
+    -- ``repr`` round-trips a float64, and the int, bool, str and complex
+    forms round-trip exactly too.
+
+    Values ``_store_record_kwargs`` would not store are skipped exactly as
+    it skips them: ``None``, and anything ``_serialize_scalar`` refuses.
+    A caller may legitimately pass a reconstruction-only object such as a
+    ``sumpy_knl`` kernel among the cache kwargs; it never reaches the
+    table, so it must not reach the digest either.
+    """
+    import hashlib
+
+    digest = hashlib.sha256()
+    for label, value in (
+        ("dim", table_request.dim),
+        ("kernel_type", table_request.kernel_type),
+        ("q_order", table_request.q_order),
+        ("source_box_level", table_request.source_box_level),
+    ):
+        digest.update(f"{label}\0{value}\0".encode())
+
+    for name in _CHECKSUMMED_RECORD_FIELDS:
+        value = record_fields[name]
+        if value is None:
+            digest.update(f"{name}\0none\0\0".encode())
+            continue
+        value_type, value_text = _serialize_scalar(value)
+        digest.update(f"{name}\0{value_type}\0{value_text!s}\0".encode())
+
+    for key in sorted(cache_kwargs):
+        if key in _CHECKSUM_EXCLUDED_KWARGS:
+            continue
+        value = cache_kwargs[key]
+        if value is None:
+            continue
+        try:
+            value_type, value_text = _serialize_scalar(value)
+        except TypeError:
+            # not storable, so the loader never sees it: the digest must
+            # not depend on it either
+            continue
+        digest.update(f"{key}\0{value_type}\0{value_text!s}\0".encode())
+    return digest.hexdigest()
+
+
+def _external_registration_checksum(
+        payload, table_request, cache_kwargs, record_fields):
+    """The stored ``external_payload_checksum``: the payload digest bound
+    to the identity it was registered under."""
+    return (
+        f"{_external_payload_checksum(payload)}"
+        f":{_external_identity_checksum(table_request, cache_kwargs, record_fields)}"
+    )
+
+
+#: Payload arrays the loader assigns into ``dtype``-constrained table
+#: buffers.  The entry values are handled through
+#: :func:`_payload_checksum_arrays`, since they live under one of two
+#: layout-dependent names.
+_DTYPE_CONSTRAINED_PAYLOAD_ARRAYS = (
+    "mode_normalizers",
+    "kernel_exterior_normalizers",
+)
+
+
+def _unsafe_payload_dtype(payload, dtype):
+    """The first payload array that ``dtype`` cannot represent, or None.
+
+    Every one of these is assigned element-wise into a buffer allocated at
+    the table's ``dtype``, so a wider or complex array is cast on the way
+    in -- discarding the imaginary part behind a ``ComplexWarning``
+    nobody reads -- and the reloaded table then evaluates differently from
+    the registered one.
+    """
+    candidates = [("entry data", _payload_checksum_arrays(payload)[1])]
+    candidates += [
+        (name, payload[name])
+        for name in _DTYPE_CONSTRAINED_PAYLOAD_ARRAYS
+        if name in payload
+    ]
+    for name, array in candidates:
+        array_dtype = np.asarray(array).dtype
+        if not np.can_cast(array_dtype, dtype, casting="safe"):
+            return name, array_dtype
+    return None
+
+
+def _payload_checksum_arrays(payload):
+    """``(entry_ids, values)`` arrays of a deserialized payload, whichever
+    of the two data layouts it uses.
+
+    The checksum hashes the whole payload; this picks out the entry values
+    for the emptiness and finiteness checks at registration.
+    """
+    if "reduced_entry_ids" in payload and "reduced_data" in payload:
+        return payload["reduced_entry_ids"], payload["reduced_data"]
+    if "data" in payload:
+        data = np.asarray(payload["data"])
+        return np.arange(len(data), dtype=np.int64), data
+    raise KeyError("payload is missing table data arrays")
 
 
 def _to_stable_jsonable(value):
@@ -535,6 +820,7 @@ class NearFieldInteractionTableManager:
         self.last_compute_timings = None
         self.last_load_timings = None
         self.last_get_table_timings = None
+        self.last_register_timings = None
 
         if read_only == "auto":
             try:
@@ -1546,10 +1832,11 @@ class NearFieldInteractionTableManager:
         stored_build_method = record["build_method"]
         if (
             stored_build_method is not None
-            and stored_build_method != _TABLE_BUILD_METHOD
+            and stored_build_method not in _ACCEPTED_BUILD_METHODS
         ):
             raise KeyError(
-                "cached build_method is unsupported; expected " + _TABLE_BUILD_METHOD
+                "cached build_method is unsupported; expected one of "
+                + ", ".join(_ACCEPTED_BUILD_METHODS)
             )
 
         kernel_bundle = self._resolve_kernel_bundle(
@@ -1595,6 +1882,21 @@ class NearFieldInteractionTableManager:
             assert abs(table.source_box_extent - record["source_box_extent"]) < 1e-15
             assert table_request.source_box_level == record["source_box_level_stored"]
 
+            # The payload's own dtype has to survive this manager, and
+            # the checks at registration only proved it fitted the manager
+            # that wrote it.  A complex Helmholtz table reopened through a
+            # default float manager would otherwise be cast element-wise
+            # by the assignments below -- every imaginary part discarded
+            # behind a ComplexWarning nobody reads -- and then serve wrong
+            # potentials from a payload that checksums perfectly.
+            _unsafe = _unsafe_payload_dtype(payload, self.dtype)
+            if _unsafe is not None:
+                raise KeyError(
+                    f"cached table {_unsafe[0]} dtype {_unsafe[1]!s} cannot "
+                    "be safely represented by this manager's dtype "
+                    f"{np.dtype(self.dtype)!s}"
+                )
+
             table.q_points[:] = payload["q_points"]
             if "data" in payload:
                 table.data[:] = payload["data"]
@@ -1630,6 +1932,13 @@ class NearFieldInteractionTableManager:
                     payload["table_data_is_symmetry_reduced"][0]
                 )
 
+            if "build_routing" in payload:
+                table.build_routing = str(payload["build_routing"][0])
+            if "build_fallback_reason" in payload:
+                table.build_fallback_reason = str(
+                    payload["build_fallback_reason"][0]
+                )
+
         except KeyError:
             raise
         except (OSError, EOFError, TypeError, ValueError, zipfile.BadZipFile) as exc:
@@ -1662,12 +1971,46 @@ class NearFieldInteractionTableManager:
         table.n_pairs = record["n_pairs"]
         table.case_encoding_base = base
         table.case_encoding_shift = shift
-        table.build_method = _TABLE_BUILD_METHOD
+        table.build_method = (
+            stored_build_method
+            if stored_build_method in _ACCEPTED_BUILD_METHODS
+            else _TABLE_BUILD_METHOD
+        )
         table.kernel_type_cached = record["kernel_type_cached"]
         table.source_box_extent = record["source_box_extent"]
 
         t_kwargs_load_start = time.perf_counter()
         loaded_kwargs = self._load_record_kwargs(table_request)
+
+        stored_payload_checksum = loaded_kwargs.get("external_payload_checksum")
+        if (
+            stored_payload_checksum is None
+            and stored_build_method == EXTERNAL_TABLE_BUILD_METHOD
+        ):
+            # Every external registration writes this row, so its absence
+            # on an ExternalAssembly record is a damaged cache, not a
+            # legacy record to accept unchecked -- and accepting it
+            # unchecked is exactly the hole the checksum exists to close.
+            raise KeyError(
+                "externally registered table is missing its payload "
+                "checksum; discarding the cached data"
+            )
+        if stored_payload_checksum is not None:
+            # Recomputed from the row as stored, not from the request, so a
+            # corrupted kernel parameter fails here rather than passing the
+            # request comparison below against a table assembled for a
+            # different parameter.
+            computed_checksum = _external_registration_checksum(
+                payload,
+                table_request,
+                loaded_kwargs,
+                {name: record[name] for name in _CHECKSUMMED_RECORD_FIELDS},
+            )
+            if computed_checksum != stored_payload_checksum:
+                raise KeyError(
+                    "externally registered table payload failed its checksum; "
+                    "discarding the cached data"
+                )
 
         requested_symmetry_dir = _normalize_symmetry_source_direction(
             kwargs.get("symmetry_source_direction", None)
@@ -1705,8 +2048,27 @@ class NearFieldInteractionTableManager:
                 raise KeyError(f"cached kernel parameter '{pname}' mismatch")
 
         for atkey, atval in loaded_kwargs.items():
+            if atkey in _PAYLOAD_OWNED_ATTRIBUTES:
+                # A caller can pass any scalar as a cache kwarg, and this
+                # loop would let one named build_routing overwrite the
+                # provenance the payload just restored -- so a
+                # scalar-fallback table could reload as "batched" and walk
+                # past the strict-mode refusal below.  The payload owns
+                # these names.
+                continue
             setattr(table, atkey, atval)
         t_kwargs_load_end = time.perf_counter()
+
+        # Last, after every compatibility check above.  Those raise KeyError,
+        # which get_table reads as a cache miss and recomputes; refusing the
+        # routing first would turn "this cached entry is for a different
+        # parameter" into a hard UnverifiedBuildRoutingError, so a strict
+        # request for lam=5 would fail merely because the slot still holds a
+        # fallback table for lam=3.  The refusal is only meaningful once the
+        # payload has been established as eligible to satisfy *this* request.
+        _refuse_unverified_build_routing(
+            table, table_request, stored_build_method
+        )
 
         table.is_built = True
 
@@ -2065,6 +2427,285 @@ class NearFieldInteractionTableManager:
         table.kernel_type_cached = kernel_bundle.kernel_scale_type
 
         return table
+
+    def register_external_table(
+        self,
+        dim,
+        kernel_type,
+        q_order,
+        table,
+        source_box_level=0,
+        provenance=None,
+        **kwargs,
+    ):
+        """Register an externally assembled table for a cache slot.
+
+        Stores a built :class:`~volumential.nearfield_potential_table.\
+NearFieldInteractionTable` (for example the product of
+        :func:`volumential.rke_table_assembly.\
+assemble_windowed_parameterized_table`) under the standard
+        ``(dim, kernel_type, q_order, source_box_level)`` cache slot, so that
+        subsequent :meth:`get_table` calls load and apply it exactly like a
+        direct-built fixed-parameter table.  As for direct builds, the kernel
+        parameter itself (e.g. ``lam`` or ``k``) is carried in the stored
+        scalar kwargs and validated on load, so a load request with a
+        different parameter value misses the cache instead of silently
+        returning the wrong table.
+
+        The stored payload keeps the table's compact symmetry-reduced (ORBIT)
+        representation and carries a content checksum over the entry IDs and
+        values that is verified on every load; the record's build method is
+        :data:`EXTERNAL_TABLE_BUILD_METHOD`, so the provenance remains
+        distinguishable from a DuffyRadial build.
+
+        :arg table: a built table whose geometry (dimension, quadrature
+            order, source-box extent for the requested level under this
+            manager's root extent) matches the requested slot.
+        :arg provenance: optional dict of scalar provenance entries (e.g.
+            certificate fields); stored as ``provenance_<key>`` kwargs.
+        :arg kwargs: stored alongside the record like build kwargs; must
+            include the kernel parameters the slot's kernel type requires
+            (validated exactly as on load).
+        :returns: the normalized :class:`TableRequest` of the stored slot.
+        """
+        if self._read_only:
+            raise RuntimeError(
+                "register_external_table is not supported in read-only mode"
+            )
+
+        table_request = self._normalize_table_request(
+            dim=dim,
+            kernel_type=kernel_type,
+            q_order=q_order,
+            source_box_level=source_box_level,
+        )
+        self._reject_removed_compute_method_kwarg(
+            kwargs, "register_external_table"
+        )
+        self._reject_removed_top_level_duffy_knobs(
+            kwargs, "register_external_table"
+        )
+        self._reject_removed_knl_func_kwarg(kwargs, "register_external_table")
+
+        if not isinstance(table, NearFieldInteractionTable):
+            raise TypeError(
+                "register_external_table requires a NearFieldInteractionTable"
+            )
+        if not bool(getattr(table, "is_built", False)):
+            raise ValueError("cannot register a table that is not built")
+        if int(table.dim) != table_request.dim:
+            raise ValueError(
+                f"table dimension {int(table.dim)} does not match the "
+                f"requested dimension {table_request.dim}"
+            )
+        if int(table.quad_order) != table_request.q_order:
+            raise ValueError(
+                f"table quadrature order {int(table.quad_order)} does not "
+                f"match the requested q_order {table_request.q_order}"
+            )
+        expected_extent = self._source_box_extent_for_level(
+            table_request.source_box_level
+        )
+        if not abs(float(table.source_box_extent) - expected_extent) < (
+            1e-13 * max(1.0, expected_extent)
+        ):
+            raise ValueError(
+                f"table source-box extent {float(table.source_box_extent):g} "
+                f"does not match {expected_extent:g} for source_box_level "
+                f"{table_request.source_box_level} under root extent "
+                f"{float(self.root_extent):g}"
+            )
+        expected_n_q_points = table_request.q_order**table_request.dim
+        if int(table.n_q_points) != expected_n_q_points or int(
+            table.n_pairs
+        ) != expected_n_q_points**2:
+            raise ValueError(
+                "table mode/pair counts do not match the requested "
+                "discretization"
+            )
+        if not np.can_cast(
+            np.asarray(table.data if not table.table_data_is_symmetry_reduced
+                       else table.get_reduced_table_data()[1]).dtype,
+            self.dtype,
+            casting="safe",
+        ):
+            raise ValueError(
+                "table data dtype cannot be safely represented by this "
+                f"manager's dtype {np.dtype(self.dtype)!r}"
+            )
+        # The auxiliary arrays are reconstructed into dtype-constrained
+        # buffers too, so a complex normalizer on an otherwise float table
+        # would register and checksum cleanly and then lose its imaginary
+        # part on every reload.
+        for _name in _DTYPE_CONSTRAINED_PAYLOAD_ARRAYS:
+            _array_dtype = np.asarray(getattr(table, _name)).dtype
+            if not np.can_cast(_array_dtype, self.dtype, casting="safe"):
+                raise ValueError(
+                    f"table {_name} dtype {_array_dtype!s} cannot be safely "
+                    f"represented by this manager's dtype "
+                    f"{np.dtype(self.dtype)!r}"
+                )
+
+        # Resolving the kernel bundle here mirrors the load path exactly, so
+        # a registration missing a required kernel parameter (e.g. lam) fails
+        # now rather than on first load.
+        kernel_bundle = self._resolve_kernel_bundle(
+            table_request, kwargs, require_sumpy_kernel=False
+        )
+        if kernel_bundle.sumpy_kernel is not None:
+            self._extract_kernel_parameter_values(
+                kernel_bundle.sumpy_kernel, kwargs
+            )
+
+        t_register_start = time.perf_counter()
+        payload_blob = _serialize_table_payload(table)
+        # Checksum exactly what was stored (round-tripped through the
+        # serializer), not what the caller handed in, and refuse non-finite
+        # payloads: a poisoned registered table would otherwise apply at full
+        # direct-warm speed with no build step left to catch it.
+        payload = _deserialize_table_payload(payload_blob)
+        _checksum_ids, checksum_values = _payload_checksum_arrays(payload)
+        if np.asarray(checksum_values).size == 0:
+            raise ValueError("cannot register a table with no entry data")
+        # Every floating array of the payload, not only the entry values:
+        # the List 1 evaluator also consumes q_points and the two
+        # normalizer arrays, so a table with finite entries and one nan
+        # normalizer would register, checksum cleanly, and produce
+        # non-finite solves on every reload with no build step left to
+        # catch it.
+        entry_value_key = (
+            "reduced_data" if "reduced_data" in payload else "data"
+        )
+        for name in sorted(payload):
+            array = np.asarray(payload[name])
+            if array.dtype.kind not in "fc":
+                continue
+            if not np.all(np.isfinite(array)):
+                raise ValueError(
+                    "cannot register a table with non-finite "
+                    + ("entry data" if name == entry_value_key
+                       else f"values in '{name}'")
+                )
+
+        distinct_numbers = set()
+        for vec in table.interaction_case_vecs:
+            for case_vec_comp in vec:
+                distinct_numbers.add(case_vec_comp)
+        base = int(len(range(min(distinct_numbers), max(distinct_numbers) + 1)))
+        shift = int(-min(distinct_numbers))
+
+        record_values = (
+            table_request.dim,
+            table_request.kernel_type,
+            table_request.q_order,
+            table_request.source_box_level,
+            int(table.n_q_points),
+            int(table.quad_order),
+            int(table.n_pairs),
+            expected_extent,
+            table_request.source_box_level,
+            base,
+            shift,
+            EXTERNAL_TABLE_BUILD_METHOD,
+            kernel_bundle.kernel_scale_type,
+            payload_blob,
+        )
+
+        cache_kwargs = self._kwargs_for_cache_storage(kwargs)
+        cache_kwargs.setdefault("table_provenance", "external_assembly")
+        if provenance is not None:
+            if not isinstance(provenance, dict):
+                raise TypeError("provenance must be a dict of scalars")
+            for key, value in provenance.items():
+                if value is None:
+                    continue
+                # validate eagerly so a non-scalar provenance entry fails
+                # loudly instead of being dropped by the kwargs writer
+                _serialize_scalar(value)
+                cache_kwargs[f"provenance_{key}"] = value
+        # Last, once every stored kwarg exists: the digest binds the payload
+        # to the whole identity it is registered under, so tampering with
+        # any of it -- a kernel parameter, the build config, the recorded
+        # provenance -- invalidates the entry instead of silently
+        # re-labelling the table.
+        cache_kwargs["external_payload_checksum"] = (
+            _external_registration_checksum(
+                payload,
+                table_request,
+                cache_kwargs,
+                {
+                    "n_q_points": int(table.n_q_points),
+                    "quad_order": int(table.quad_order),
+                    "n_pairs": int(table.n_pairs),
+                    # SQLite REAL round-trips a float64 exactly, but the
+                    # column is only float when what goes in is
+                    "source_box_extent": float(expected_extent),
+                    "case_encoding_base": base,
+                    "case_encoding_shift": shift,
+                    "build_method": EXTERNAL_TABLE_BUILD_METHOD,
+                    "kernel_type_cached": kernel_bundle.kernel_scale_type,
+                },
+            )
+        )
+
+        # The record and its kwargs are one entry: a payload committed
+        # without its checksum rows destroys whatever valid entry the slot
+        # held and reloads as corruption, and __exit__ commits
+        # unconditionally, so a failure between the two writes would be
+        # committed on the way out.  SAVEPOINT scopes both, and the
+        # rollback restores the previous entry intact.
+        self.datafile.execute("SAVEPOINT volumential_register_external")
+        try:
+            self._write_external_record(record_values)
+            self._store_record_kwargs(table_request, cache_kwargs)
+        except BaseException:
+            self.datafile.execute(
+                "ROLLBACK TO SAVEPOINT volumential_register_external"
+            )
+            self.datafile.execute(
+                "RELEASE SAVEPOINT volumential_register_external"
+            )
+            raise
+        self.datafile.execute(
+            "RELEASE SAVEPOINT volumential_register_external"
+        )
+        self.datafile.commit()
+
+        self.last_register_timings = {
+            "total_s": time.perf_counter() - t_register_start,
+            "payload_bytes": len(payload_blob),
+        }
+
+        return table_request
+
+    def _write_external_record(self, record_values):
+        """The record upsert alone; the caller scopes it together with the
+        kwargs write so the pair is atomic."""
+        self.datafile.execute(
+            """
+            INSERT INTO nearfield_cache (
+                dim, kernel_type, q_order, source_box_level,
+                n_q_points, quad_order, n_pairs,
+                source_box_extent, source_box_level_stored,
+                case_encoding_base, case_encoding_shift,
+                build_method, kernel_type_cached, payload
+            ) VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            )
+            ON CONFLICT(dim, kernel_type, q_order, source_box_level) DO UPDATE SET
+                n_q_points=excluded.n_q_points,
+                quad_order=excluded.quad_order,
+                n_pairs=excluded.n_pairs,
+                source_box_extent=excluded.source_box_extent,
+                source_box_level_stored=excluded.source_box_level_stored,
+                case_encoding_base=excluded.case_encoding_base,
+                case_encoding_shift=excluded.case_encoding_shift,
+                build_method=excluded.build_method,
+                kernel_type_cached=excluded.kernel_type_cached,
+                payload=excluded.payload
+            """,
+            record_values,
+        )
 
 
 # }}} End table dataset manager class

@@ -24,6 +24,7 @@ import itertools
 import logging
 import math
 from functools import lru_cache
+from warnings import warn
 
 import numpy as np
 
@@ -32,12 +33,35 @@ import pyopencl as cl
 from arraycontext import flatten
 from boxtree.array_context import PyOpenCLArrayContext as BoxtreePyOpenCLArrayContext
 from boxtree.tools import DeviceDataRecord
-from meshmode.array_context import PyOpenCLArrayContext as MeshmodePyOpenCLArrayContext
+from meshmode.array_context import (
+    PyOpenCLArrayContext as MeshmodePyOpenCLArrayContext,
+)
 from meshmode.dof_array import DOFArray
 from pytools import ProcessLogger, memoize_method
 from pytools.obj_array import new_1d as obj_array_1d
 
+
 logger = logging.getLogger(__name__)
+
+
+def _as_meshmode_actx(actx):
+    """Return *actx* as a :mod:`meshmode` array context.
+
+    A bare :class:`pyopencl.CommandQueue` is accepted (with a warning) for
+    backwards compatibility; anything else is rejected.
+    """
+    if isinstance(actx, MeshmodePyOpenCLArrayContext):
+        return actx
+
+    if isinstance(actx, cl.CommandQueue):
+        warn(
+            "Command queue passed to the interpolator. "
+            "Supply an array context to enable proper caching.",
+            stacklevel=3,
+        )
+        return MeshmodePyOpenCLArrayContext(actx)
+
+    raise ValueError
 
 
 def _get_boxtree_actx(context):
@@ -751,17 +775,7 @@ class ElementsToSourcesLookupBuilder:
 
     def compute_short_lists(self, actx, wait_for=None):
         """balls --> overlapping leaves"""
-        if not isinstance(actx, MeshmodePyOpenCLArrayContext):
-            if isinstance(actx, cl.CommandQueue):
-                from warnings import warn
-
-                warn(
-                    "Command queue passed to the interpolator. "
-                    "Supply an array context to enable proper caching."
-                )
-                actx = MeshmodePyOpenCLArrayContext(actx)
-            else:
-                raise ValueError
+        actx = _as_meshmode_actx(actx)
 
         mesh = self.discr.mesh
         if len(mesh.groups) > 1:
@@ -797,17 +811,7 @@ class ElementsToSourcesLookupBuilder:
         """
         :arg queue: a :class:`pyopencl.CommandQueue`
         """
-        if not isinstance(actx, MeshmodePyOpenCLArrayContext):
-            if isinstance(actx, cl.CommandQueue):
-                from warnings import warn
-
-                warn(
-                    "Command queue passed to the interpolator. "
-                    "Supply an array context to enable proper caching."
-                )
-                actx = MeshmodePyOpenCLArrayContext(actx)
-            else:
-                raise ValueError
+        actx = _as_meshmode_actx(actx)
 
         slk_plog = ProcessLogger(logger, "element-to-source lookup: run area query")
 
@@ -932,17 +936,7 @@ class LeavesToNodesLookupBuilder:
         :tol: nodes close enough to the boundary will be treated as
             lying on the boundary, whose interpolated values are averaged.
         """
-        if not isinstance(actx, MeshmodePyOpenCLArrayContext):
-            if isinstance(actx, cl.CommandQueue):
-                from warnings import warn
-
-                warn(
-                    "Command queue passed to the interpolator. "
-                    "Supply an array context to enable proper caching."
-                )
-                actx = MeshmodePyOpenCLArrayContext(actx)
-            else:
-                raise ValueError
+        actx = _as_meshmode_actx(actx)
 
         nodes = flatten(actx.thaw(self.discr.nodes()), actx, leaf_class=DOFArray)
         nodes = obj_array_1d([coord.with_queue(actx.queue) for coord in nodes])
@@ -1069,6 +1063,168 @@ def invert_affine_transform(mat_a, disp_b):
 # {{{ from meshmode interpolation
 
 
+def _from_meshmode_source_barycentric_coords(
+    actx,
+    *,
+    dim,
+    coord_dtype,
+    mesh,
+    megroup,
+    tree,
+    nelements,
+    nsources,
+    n_source_slots,
+    source_element_indices_dev,
+    sources_in_element_lists_dev,
+):
+    """Map every source node to barycentric coordinates in its element.
+
+    :returns: an object array of ``dim + 1`` device arrays, one per
+        barycentric coordinate, indexed by source slot.
+    """
+    mesh_vertices_dev = obj_array_1d(
+        [
+            cl.array.to_device(
+                actx.queue,
+                np.ascontiguousarray(mesh.vertices[iaxis], dtype=coord_dtype),
+            )
+            for iaxis in range(dim)
+        ]
+    )
+    barycentric_dev = obj_array_1d(
+        [
+            cl.array.empty(actx.queue, n_source_slots, dtype=coord_dtype)
+            for _ in range(dim + 1)
+        ]
+    )
+
+    if n_source_slots == 0:
+        return barycentric_dev
+
+    map_knl = _build_from_meshmode_map_to_template_kernel(dim, coord_dtype.str)
+    map_executor = map_knl.executor(actx.queue.context)
+
+    map_kwargs = {
+        "source_element_indices": source_element_indices_dev,
+        "sources_in_element_lists": sources_in_element_lists_dev,
+        "mesh_vertex_indices": np.ascontiguousarray(
+            megroup.vertex_indices, dtype=np.int32
+        ),
+        "n_source_slots": np.int32(n_source_slots),
+        "nelements": np.int32(nelements),
+        "nsources": np.int32(nsources),
+        "n_mesh_vertices": np.int32(mesh.vertices.shape[1]),
+    }
+
+    for iaxis in range(dim):
+        map_kwargs[f"mesh_vertices_{iaxis}"] = mesh_vertices_dev[iaxis]
+        map_kwargs[f"source_points_{iaxis}"] = tree.sources[iaxis]
+
+    for iaxis in range(dim + 1):
+        map_kwargs[f"barycentric_{iaxis}"] = barycentric_dev[iaxis]
+
+    evt, map_res = map_executor(actx.queue, **map_kwargs)
+    barycentric_dev = obj_array_1d(
+        [map_res[f"barycentric_{iaxis}"] for iaxis in range(dim + 1)]
+    )
+    for iaxis in range(dim + 1):
+        barycentric_dev[iaxis].add_event(evt)
+
+    return barycentric_dev
+
+
+def _from_meshmode_resampling_matrix(
+    actx,
+    *,
+    dim,
+    degree,
+    coord_dtype,
+    value_dtype,
+    degroup,
+    template_simplex,
+    barycentric_dev,
+    n_source_slots,
+    nunit_dofs,
+):
+    """Tabulate the element-to-source-slot resampling matrix.
+
+    The element's nodal basis is expressed in the Bernstein basis of the
+    template simplex (whose values at the barycentric coordinates the
+    :mod:`loopy` kernel evaluates), so one row of the result resamples an
+    element's DoFs onto one source node.
+
+    :returns: a device array of shape ``(n_source_slots, nunit_dofs)``.
+    """
+    rsplm = cl.array.empty(
+        actx.queue, (n_source_slots, nunit_dofs), dtype=value_dtype
+    )
+    if n_source_slots == 0:
+        return rsplm
+
+    bernstein_indices = _get_from_meshmode_simplex_bernstein_indices(dim, degree)
+    if len(bernstein_indices) != nunit_dofs:
+        raise ValueError(
+            "unexpected simplex polynomial space size: "
+            f"got {len(bernstein_indices)}, expected {nunit_dofs}"
+        )
+
+    unit_nodes = np.ascontiguousarray(degroup.unit_nodes, dtype=coord_dtype)
+    unit_barycentric = _map_to_simplex_barycentric(unit_nodes, template_simplex)
+
+    bernstein_coeffs_real = _get_from_meshmode_simplex_bernstein_coefficients(
+        bernstein_indices, np.float64
+    )
+    bernstein_basis_old = np.ones(
+        (len(bernstein_indices), nunit_dofs), dtype=np.float64
+    )
+    for iaxis in range(dim + 1):
+        bernstein_basis_old *= (
+            unit_barycentric[iaxis][None, :] ** bernstein_indices[:, iaxis][:, None]
+        )
+    bernstein_basis_old *= bernstein_coeffs_real[:, None]
+
+    basis_old_inverse = np.ascontiguousarray(
+        np.linalg.inv(bernstein_basis_old.T), dtype=value_dtype
+    )
+    bernstein_coeffs = np.ascontiguousarray(bernstein_coeffs_real, dtype=value_dtype)
+
+    bernstein_alpha_dev = obj_array_1d(
+        [
+            cl.array.to_device(
+                actx.queue,
+                np.ascontiguousarray(bernstein_indices[:, iaxis], dtype=np.int32),
+            )
+            for iaxis in range(dim + 1)
+        ]
+    )
+    bernstein_coeffs_dev = cl.array.to_device(actx.queue, bernstein_coeffs)
+    basis_old_inverse_dev = cl.array.to_device(actx.queue, basis_old_inverse)
+
+    basis_knl = _build_from_meshmode_basis_tabulation_kernel(
+        dim, coord_dtype.str, value_dtype.str
+    )
+    basis_executor = basis_knl.executor(actx.queue.context)
+
+    basis_kwargs = {
+        "bernstein_coeffs": bernstein_coeffs_dev,
+        "basis_old_inverse": basis_old_inverse_dev,
+        "rsplm": rsplm,
+        "n_source_slots": np.int32(n_source_slots),
+        "n_basis": np.int32(len(bernstein_indices)),
+        "nunit_dofs": np.int32(nunit_dofs),
+    }
+
+    for iaxis in range(dim + 1):
+        basis_kwargs[f"barycentric_{iaxis}"] = barycentric_dev[iaxis]
+        basis_kwargs[f"bernstein_alpha_{iaxis}"] = bernstein_alpha_dev[iaxis]
+
+    evt, basis_res = basis_executor(actx.queue, **basis_kwargs)
+    rsplm = basis_res["rsplm"]
+    rsplm.add_event(evt)
+
+    return rsplm
+
+
 def interpolate_from_meshmode(actx, dof_vec, elements_to_sources_lookup, order="tree"):
     """Interpolate a DoF vector from :mod:`meshmode`.
 
@@ -1086,17 +1242,7 @@ def interpolate_from_meshmode(actx, dof_vec, elements_to_sources_lookup, order="
     if not isinstance(dof_vec, cl.array.Array):
         raise TypeError("non-array passed to interpolator")
 
-    if not isinstance(actx, MeshmodePyOpenCLArrayContext):
-        if isinstance(actx, cl.CommandQueue):
-            from warnings import warn
-
-            warn(
-                "Command queue passed to the interpolator. "
-                "Supply an array context to enable proper caching."
-            )
-            actx = MeshmodePyOpenCLArrayContext(actx)
-        else:
-            raise ValueError
+    actx = _as_meshmode_actx(actx)
 
     assert len(elements_to_sources_lookup.discr.groups) == 1
     assert len(elements_to_sources_lookup.discr.mesh.groups) == 1
@@ -1139,118 +1285,34 @@ def interpolate_from_meshmode(actx, dof_vec, elements_to_sources_lookup, order="
         actx.queue, sources_in_element_lists
     )
 
-    mesh_vertices_dev = obj_array_1d(
-        [
-            cl.array.to_device(
-                actx.queue,
-                np.ascontiguousarray(mesh.vertices[iaxis], dtype=coord_dtype),
-            )
-            for iaxis in range(dim)
-        ]
-    )
     n_source_slots = len(sources_in_element_lists)
-    barycentric_dev = obj_array_1d(
-        [
-            cl.array.empty(actx.queue, n_source_slots, dtype=coord_dtype)
-            for _ in range(dim + 1)
-        ]
+
+    barycentric_dev = _from_meshmode_source_barycentric_coords(
+        actx,
+        dim=dim,
+        coord_dtype=coord_dtype,
+        mesh=mesh,
+        megroup=megroup,
+        tree=tree,
+        nelements=degroup.nelements,
+        nsources=nsources,
+        n_source_slots=n_source_slots,
+        source_element_indices_dev=source_element_indices_dev,
+        sources_in_element_lists_dev=sources_in_element_lists_dev,
     )
 
-    if n_source_slots > 0:
-        map_knl = _build_from_meshmode_map_to_template_kernel(dim, coord_dtype.str)
-        map_executor = map_knl.executor(actx.queue.context)
-
-        map_kwargs = {
-            "source_element_indices": source_element_indices_dev,
-            "sources_in_element_lists": sources_in_element_lists_dev,
-            "mesh_vertex_indices": np.ascontiguousarray(
-                megroup.vertex_indices, dtype=np.int32
-            ),
-            "n_source_slots": np.int32(n_source_slots),
-            "nelements": np.int32(degroup.nelements),
-            "nsources": np.int32(nsources),
-            "n_mesh_vertices": np.int32(mesh.vertices.shape[1]),
-        }
-
-        for iaxis in range(dim):
-            map_kwargs[f"mesh_vertices_{iaxis}"] = mesh_vertices_dev[iaxis]
-            map_kwargs[f"source_points_{iaxis}"] = tree.sources[iaxis]
-
-        for iaxis in range(dim + 1):
-            map_kwargs[f"barycentric_{iaxis}"] = barycentric_dev[iaxis]
-
-        evt, map_res = map_executor(actx.queue, **map_kwargs)
-        barycentric_dev = obj_array_1d(
-            [map_res[f"barycentric_{iaxis}"] for iaxis in range(dim + 1)]
-        )
-        for iaxis in range(dim + 1):
-            barycentric_dev[iaxis].add_event(evt)
-
-    degree = int(degroup.order)
-    rsplm = cl.array.empty(actx.queue, (n_source_slots, nunit_dofs), dtype=value_dtype)
-    if n_source_slots > 0:
-        bernstein_indices = _get_from_meshmode_simplex_bernstein_indices(dim, degree)
-        if len(bernstein_indices) != nunit_dofs:
-            raise ValueError(
-                "unexpected simplex polynomial space size: "
-                f"got {len(bernstein_indices)}, expected {nunit_dofs}"
-            )
-
-        unit_nodes = np.ascontiguousarray(degroup.unit_nodes, dtype=coord_dtype)
-        unit_barycentric = _map_to_simplex_barycentric(unit_nodes, template_simplex)
-
-        bernstein_coeffs_real = _get_from_meshmode_simplex_bernstein_coefficients(
-            bernstein_indices, np.float64
-        )
-        bernstein_basis_old = np.ones(
-            (len(bernstein_indices), nunit_dofs), dtype=np.float64
-        )
-        for iaxis in range(dim + 1):
-            bernstein_basis_old *= (
-                unit_barycentric[iaxis][None, :] ** bernstein_indices[:, iaxis][:, None]
-            )
-        bernstein_basis_old *= bernstein_coeffs_real[:, None]
-
-        basis_old_inverse = np.ascontiguousarray(
-            np.linalg.inv(bernstein_basis_old.T), dtype=value_dtype
-        )
-        bernstein_coeffs = np.ascontiguousarray(
-            bernstein_coeffs_real, dtype=value_dtype
-        )
-
-        bernstein_alpha_dev = obj_array_1d(
-            [
-                cl.array.to_device(
-                    actx.queue,
-                    np.ascontiguousarray(bernstein_indices[:, iaxis], dtype=np.int32),
-                )
-                for iaxis in range(dim + 1)
-            ]
-        )
-        bernstein_coeffs_dev = cl.array.to_device(actx.queue, bernstein_coeffs)
-        basis_old_inverse_dev = cl.array.to_device(actx.queue, basis_old_inverse)
-
-        basis_knl = _build_from_meshmode_basis_tabulation_kernel(
-            dim, coord_dtype.str, value_dtype.str
-        )
-        basis_executor = basis_knl.executor(actx.queue.context)
-
-        basis_kwargs = {
-            "bernstein_coeffs": bernstein_coeffs_dev,
-            "basis_old_inverse": basis_old_inverse_dev,
-            "rsplm": rsplm,
-            "n_source_slots": np.int32(n_source_slots),
-            "n_basis": np.int32(len(bernstein_indices)),
-            "nunit_dofs": np.int32(nunit_dofs),
-        }
-
-        for iaxis in range(dim + 1):
-            basis_kwargs[f"barycentric_{iaxis}"] = barycentric_dev[iaxis]
-            basis_kwargs[f"bernstein_alpha_{iaxis}"] = bernstein_alpha_dev[iaxis]
-
-        evt, basis_res = basis_executor(actx.queue, **basis_kwargs)
-        rsplm = basis_res["rsplm"]
-        rsplm.add_event(evt)
+    rsplm = _from_meshmode_resampling_matrix(
+        actx,
+        dim=dim,
+        degree=int(degroup.order),
+        coord_dtype=coord_dtype,
+        value_dtype=value_dtype,
+        degroup=degroup,
+        template_simplex=template_simplex,
+        barycentric_dev=barycentric_dev,
+        n_source_slots=n_source_slots,
+        nunit_dofs=nunit_dofs,
+    )
 
     from arraycontext.impl.pyopencl.taggable_cl_array import to_tagged_cl_array
 
@@ -1288,7 +1350,7 @@ def interpolate_from_meshmode(actx, dof_vec, elements_to_sources_lookup, order="
     if len(sym_shape) == 0:
         source_vec = source_vec[0]
     else:
-        source_vec = source_vec.reshape(sym_shape + (nsources,))
+        source_vec = source_vec.reshape((*sym_shape, nsources))
 
     if order == "tree":
         pass  # no need to do anything
@@ -1302,7 +1364,7 @@ def interpolate_from_meshmode(actx, dof_vec, elements_to_sources_lookup, order="
             )
             for ivec in range(nvecs):
                 source_vec_user[ivec] = source_vec_flat[ivec][tree.sorted_target_ids]
-            source_vec = source_vec_user.reshape(sym_shape + (nsources,))
+            source_vec = source_vec_user.reshape((*sym_shape, nsources))
     else:
         raise ValueError(f"order must be 'tree' or 'user' (got {order}).")
 
@@ -1332,17 +1394,7 @@ def interpolate_to_meshmode(actx, potential, leaves_to_nodes_lookup, order="tree
     else:
         raise ValueError(f"order must be 'tree' or 'user' (got {order}).")
 
-    if not isinstance(actx, MeshmodePyOpenCLArrayContext):
-        if isinstance(actx, cl.CommandQueue):
-            from warnings import warn
-
-            warn(
-                "Command queue passed to the interpolator. "
-                "Supply an array context to enable proper caching."
-            )
-            actx = MeshmodePyOpenCLArrayContext(actx)
-        else:
-            raise ValueError
+    actx = _as_meshmode_actx(actx)
 
     target_points = flatten(
         actx.thaw(leaves_to_nodes_lookup.discr.nodes()),

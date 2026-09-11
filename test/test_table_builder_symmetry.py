@@ -1,3 +1,5 @@
+"""Smoke test that the symmetry-aware table builder module imports."""
+
 
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 

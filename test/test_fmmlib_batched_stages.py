@@ -1,3 +1,12 @@
+"""Exact-agreement tests for the batched far-field stages of
+FPNDFMMLibExpansionWrangler (batched P2M via ``*formmp_imany`` and
+GEMM-based L2P) against the inherited per-box implementations from
+:mod:`boxtree.pyfmmlib_integration`.
+
+These stages do not touch near-field tables, so the wrangler is built with a
+minimal stand-in table object (an established pattern in this test suite).
+"""
+
 __copyright__ = "Copyright (C) 2026 Xiaoyu Wei"
 
 __license__ = """
@@ -20,15 +29,6 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
-"""Exact-agreement tests for the batched far-field stages of
-FPNDFMMLibExpansionWrangler (batched P2M via ``*formmp_imany`` and
-GEMM-based L2P) against the inherited per-box implementations from
-:mod:`boxtree.pyfmmlib_integration`.
-
-These stages do not touch near-field tables, so the wrangler is built with a
-minimal stand-in table object (an established pattern in this test suite).
-"""
-
 import logging
 from types import SimpleNamespace
 
@@ -36,8 +36,7 @@ import numpy as np
 import pytest
 
 import pyopencl as cl
-import pyopencl.array  # noqa: F401
-
+import pyopencl.array
 from boxtree.pyfmmlib_integration import FMMLibExpansionWrangler
 
 import volumential.meshgen as mg
@@ -273,6 +272,87 @@ def test_eval_locals_fallback_path(monkeypatch):
     ref_norm = np.linalg.norm(pot_fallback)
     assert ref_norm > 0
     assert np.linalg.norm(pot_gemm - pot_fallback) / ref_norm <= 1e-12
+
+
+# {{{ L2P level layout validation
+
+
+def _layout_checker(n_boxes, n_targets_per_box, dim=2):
+    """A stand-in exposing just what ``_l2p_level_layout_ok`` reads.
+
+    The targets of box ``b`` are its center plus a fixed offset pattern,
+    so the level is uniform until a caller perturbs one box.
+    """
+    from volumential.wranglers.fmmlib_batched import (
+        FMMLibBatchedStagesMixin,
+    )
+
+    rng = np.random.default_rng(20260910)
+    pattern = rng.uniform(-0.2, 0.2, size=(dim, n_targets_per_box))
+    centers = rng.uniform(-1.0, 1.0, size=(dim, n_boxes))
+    targets = np.concatenate(
+        [centers[:, b][:, None] + pattern for b in range(n_boxes)], axis=1
+    )
+    starts = np.arange(n_boxes) * n_targets_per_box
+
+    checker = SimpleNamespace(
+        tree=SimpleNamespace(root_extent=2.0, box_centers=centers),
+        box_target_starts=lambda: starts,
+        _get_targets=lambda pslice: targets[:, pslice],
+        _L2P_OFFSET_RTOL=FMMLibBatchedStagesMixin._L2P_OFFSET_RTOL,
+    )
+    checker.targets = targets
+    checker.pattern = pattern
+    checker.ok = lambda: (
+        FMMLibBatchedStagesMixin._l2p_level_layout_ok(
+            checker,
+            lev=1,
+            boxes=np.arange(n_boxes),
+            counts=np.full(n_boxes, n_targets_per_box),
+            ref_offsets=pattern,
+        )
+    )
+    return checker
+
+
+def test_l2p_layout_check_accepts_a_uniform_level():
+    checker = _layout_checker(n_boxes=9, n_targets_per_box=4)
+    assert checker.ok()
+
+
+@pytest.mark.parametrize("bad_box", [0, 1, 2, 4, 5, 7, 8])
+def test_l2p_layout_check_rejects_any_misplaced_box(bad_box):
+    """Every box is checked, not a sample of four.
+
+    ``_eval_locals_gemm`` applies the reference box's matrix to every box
+    on the level, so a box with the right target *count* but a different
+    layout would have its potential evaluated at the wrong offsets. The
+    old check sampled boxes 0, 3, 6 and 8 of nine, so a perturbation at
+    1, 2, 4, 5 or 7 passed silently.
+    """
+    checker = _layout_checker(n_boxes=9, n_targets_per_box=4)
+    assert checker.ok()
+
+    # move one target of one box well beyond the tolerance
+    checker.targets[0, bad_box * 4] += 0.5
+    assert not checker.ok()
+
+
+def test_l2p_layout_check_rejects_a_mismatched_count():
+    checker = _layout_checker(n_boxes=5, n_targets_per_box=4)
+    from volumential.wranglers.fmmlib_batched import (
+        FMMLibBatchedStagesMixin,
+    )
+
+    counts = np.full(5, 4)
+    counts[2] = 3
+    assert not FMMLibBatchedStagesMixin._l2p_level_layout_ok(
+        checker, lev=1, boxes=np.arange(5), counts=counts,
+        ref_offsets=checker.pattern,
+    )
+
+
+# }}}
 
 
 if __name__ == "__main__":

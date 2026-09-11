@@ -21,6 +21,7 @@ THE SOFTWARE.
 """
 
 import logging
+from itertools import permutations, product
 from numbers import Number
 
 import mpmath
@@ -30,6 +31,16 @@ import scipy as sp
 
 __doc__ = """The 2D singular integrals are computed using the transform
 described in http://link.springer.com/10.1007/BF00370482.
+
+This module owns the host-side (:mod:`numpy`/:mod:`scipy`/:mod:`mpmath`)
+quadrature rules used to build near-field interaction tables:
+
+* tensor-product Gauss rules for regular integrands (:func:`adaptive_quadrature`,
+  :func:`qquad`),
+* the triangle-to-rectangle desingularizing map (:func:`tria2rect_map_2d`) and
+  the affine maps feeding it (:func:`solve_affine_map_2d`), and
+* the Duffy-type radial rules built on top of them (:func:`tria_quad`,
+  :func:`quadri_quad`, :func:`box_quad` and their ``_duffy_radial`` variants).
 
 .. autofunction:: box_quad
 """
@@ -44,6 +55,7 @@ quad_weights = np.array([])
 
 
 def _to_float_or_array(value):
+    """Collapse a size-one array-like to a Python scalar, pass arrays through."""
     if isinstance(value, Number):
         if np.iscomplexobj(value):
             return complex(value)
@@ -60,6 +72,7 @@ def _to_float_or_array(value):
 
 
 def _meets_tolerance(current, previous, tol, rtol):
+    """Return ``(converged, err)`` for two successive quadrature iterates."""
     delta = np.asarray(current) - np.asarray(previous)
     err = np.linalg.norm(np.ravel(delta), ord=np.inf)
     scale = np.linalg.norm(np.ravel(np.asarray(current)), ord=np.inf)
@@ -137,6 +150,7 @@ quad = adaptive_quadrature
 def _tensor_product_fixed_quad(
     func, a, b, c, d, args=(), order_o=1, order_i=1, vec_func=False
 ):
+    """Integrate *func* on ``[a, b] x [c, d]`` with a fixed Gauss rule."""
     x_nodes, x_weights = np.polynomial.legendre.leggauss(order_i)
     y_nodes, y_weights = np.polynomial.legendre.leggauss(order_o)
 
@@ -161,8 +175,17 @@ def _tensor_product_fixed_quad(
     return 0.25 * (b - a) * (d - c) * np.sum(weights * values, axis=(-2, -1))
 
 
-def update_qquad_leggauss_formula(deg1, deg2):
+def update_qquad_leggauss_formula(deg1, deg2) -> None:
+    """Refresh the module-level tensor-product Gauss-Legendre weights.
 
+    .. warning::
+
+        Only :data:`quad_weights` is updated; the node arrays
+        :data:`quad_points_x` and :data:`quad_points_y` are shadowed by locals
+        here and therefore left untouched. None of the module's quadrature
+        routines read these globals -- they build their own rules -- so this
+        helper is kept only for backwards compatibility.
+    """
     x1, w1 = np.polynomial.legendre.leggauss(deg1)
     x1 = (x1 + 1) / 2
     w1 = w1 / 2
@@ -171,9 +194,9 @@ def update_qquad_leggauss_formula(deg1, deg2):
     x2 = (x2 + 1) / 2
     w2 = w2 / 2
 
-    quad_points_x, quad_points_y = np.meshgrid(x1, x2)
+    _quad_points_x, _quad_points_y = np.meshgrid(x1, x2)
     ww1, ww2 = np.meshgrid(w1, w2)
-    global quad_weights
+    global quad_weights  # noqa: PLW0603
     quad_weights = ww1 * ww2
 
 
@@ -354,24 +377,31 @@ def solve_affine_map_2d(source_tria, target_tria):
     # assert (np.allclose(residuals, 0))
     try:
         x = np.linalg.solve(coef, rhs)
-    except np.linalg.linalg.LinAlgError:
-        print("")
-        print("source:", source_tria)
-        print("target:", target_tria)
-        raise SystemExit("Error: Singular source triangle encountered")
+    except np.linalg.LinAlgError as exc:
+        logger.error(
+            "singular source triangle: source=%s, target=%s",
+            source_tria,
+            target_tria,
+        )
+        raise SystemExit("Error: Singular source triangle encountered") from exc
     assert len(x) == 6
     assert np.allclose(np.dot(coef, x), rhs)
 
     a = np.array([[x[0], x[1]], [x[2], x[3]]])
     b = np.array([x[4], x[5]])
 
-    # Using default value is the idiomatic way to "capture by value"
-    mapping = lambda x, a=a, b=b: a.dot(np.array(x)) + b  # noqa: E731
+    # Using default values is the idiomatic way to "capture by value"
+    def mapping(x, a=a, b=b):
+        return a.dot(np.array(x)) + b
+
     jacob = np.linalg.det(a)
 
     inva = np.linalg.inv(a)
     invb = -inva.dot(b)
-    invmap = lambda x, a=inva, b=invb: inva.dot(np.array(x)) + invb  # noqa: E731
+
+    def invmap(x, a=inva, b=invb):
+        return a.dot(np.array(x)) + b
+
     inv_jacob = np.linalg.det(inva)
 
     assert np.abs(jacob * inv_jacob - 1) < 1e-12
@@ -454,7 +484,8 @@ def is_in_r(pt, a=0, b=1, c=0, d=np.pi / 2):
 # {{{ quadrature on arbitrary triangle
 
 
-def is_collinear(p0, p1, p2):
+def is_collinear(p0, p1, p2) -> bool:
+    """Return whether the three 2D points are (numerically) collinear."""
     # v1 = p0 --> p1
     x1, y1 = p1[0] - p0[0], p1[1] - p0[1]
     # v2 = p0 --> p2
@@ -463,7 +494,8 @@ def is_collinear(p0, p1, p2):
     return np.abs(x1 * y2 - x2 * y1) < 1e-16
 
 
-def is_positive_triangle(tria):
+def is_positive_triangle(tria) -> bool:
+    """Return whether the triangle's vertices are counter-clockwise ordered."""
     p0 = tria[0]
     p1 = tria[1]
     p2 = tria[2]
@@ -600,6 +632,17 @@ def tria_quad_duffy_radial(
     radial_quad_order=61,
     mp_dps=50,
 ):
+    """Integrate *func* over a triangle with a Duffy-type radial rule.
+
+    The triangle is mapped to the template rectangle by
+    :func:`solve_affine_map_2d` followed by :func:`tria2rect_map_2d`, so an
+    integrable singularity at ``tria[0]`` is absorbed into the Jacobian.
+
+    :arg radial_rule: one of ``"tanh-sinh"`` (:mod:`mpmath`, most accurate),
+        ``"tanh-sinh-fast"`` (precomputed double-precision nodes) or
+        ``"adaptive"`` (Gauss order refinement).
+    :returns: ``(value, error_estimate)``; the error estimate is always zero.
+    """
     assert len(tria) == 3
     for p in tria:
         assert len(p) == 2
@@ -611,8 +654,8 @@ def tria_quad_duffy_radial(
     assert np.isfinite(func(tria[2][0], tria[2][1], *args))
 
     template_tria = ((0, 0), (1, 0), (0, 1))
-    afmp, j_afmp, inv_afmp, j_inv_afmp = solve_affine_map_2d(tria, template_tria)
-    nlmp, j_nlmp, inv_nlmp, j_inv_nlmp = tria2rect_map_2d()
+    _afmp, _j_afmp, inv_afmp, j_inv_afmp = solve_affine_map_2d(tria, template_tria)
+    _nlmp, _j_nlmp, inv_nlmp, j_inv_nlmp = tria2rect_map_2d()
 
     def inv_mapping(rho, theta):
         return inv_afmp(inv_nlmp((rho, theta)))
@@ -642,40 +685,27 @@ def tria_quad_duffy_radial(
         old_dps = mpmath.mp.dps
         mpmath.mp.dps = mp_dps
         try:
-            for theta, wt in zip(th_nodes, th_weights):
+            for theta, wt in zip(th_nodes, th_weights, strict=True):
                 radial_val = mpmath.quadts(
-                    lambda rho: integrand(float(rho), theta), [0, 1]
+                    lambda rho, theta=theta: integrand(float(rho), theta), [0, 1]
                 )
                 total += wt * float(radial_val)
         finally:
             mpmath.mp.dps = old_dps
     elif radial_rule == "tanh-sinh-fast":
-        n = max(3, int(radial_quad_order))
-        h = 1.0 / np.sqrt(n)
-        k = np.arange(-n, n + 1, dtype=np.float64)
-        t = h * k
-        sh_t = np.sinh(t)
-        ch_t = np.cosh(t)
-        arg = 0.5 * np.pi * sh_t
-        rho_nodes = 0.5 * (1.0 + np.tanh(arg))
-        abs_arg = np.abs(arg)
-        exp_term = np.exp(-2.0 * abs_arg)
-        sech2 = 4.0 * exp_term / (1.0 + exp_term) ** 2
-        rho_weights = 0.25 * np.pi * h * ch_t * sech2
+        rho_nodes, rho_weights = _duffy_radial_nodes_weights(
+            radial_rule, radial_quad_order, mp_dps
+        )
 
-        mask = (rho_nodes > 0.0) & (rho_nodes < 1.0) & np.isfinite(rho_weights)
-        rho_nodes = rho_nodes[mask]
-        rho_weights = rho_weights[mask]
-
-        for theta, wt in zip(th_nodes, th_weights):
+        for theta, wt in zip(th_nodes, th_weights, strict=True):
             vals = np.array(
                 [integrand(rho, theta) for rho in rho_nodes], dtype=np.float64
             )
             total += wt * np.dot(rho_weights, vals)
     elif radial_rule == "adaptive":
-        for theta, wt in zip(th_nodes, th_weights):
+        for theta, wt in zip(th_nodes, th_weights, strict=True):
             radial_val, _ = adaptive_quadrature(
-                lambda rho: integrand(rho, theta),
+                lambda rho, theta=theta: integrand(rho, theta),
                 0,
                 1,
                 tol=1.0e-12,
@@ -701,6 +731,10 @@ def quadri_quad_duffy_radial(
     radial_quad_order=61,
     mp_dps=50,
 ):
+    """Duffy-type quadrature over a quadrilateral split at *singular_point*.
+
+    :returns: ``(value, error_estimate)``.
+    """
     assert len(quadrilateral) == 4
     for p in quadrilateral:
         assert len(p) == 2
@@ -741,6 +775,12 @@ def box_quad_duffy_radial(
     radial_quad_order=61,
     mp_dps=50,
 ):
+    """Duffy-type quadrature over ``[a, b] x [c, d]``.
+
+    A *singular_point* outside the box is projected onto its boundary.
+
+    :returns: ``(value, error_estimate)``.
+    """
     box = ((a, c), (b, c), (b, d), (a, d))
 
     if not isinstance(singular_point, tuple):
@@ -762,6 +802,7 @@ def box_quad_duffy_radial(
 
 
 def tria_quad_tanh_sinh_radial(func, tria, args=(), deg_theta=20, mp_dps=50):
+    """:func:`tria_quad_duffy_radial` with the ``"tanh-sinh"`` radial rule."""
     return tria_quad_duffy_radial(
         func,
         tria,
@@ -776,6 +817,7 @@ def tria_quad_tanh_sinh_radial(func, tria, args=(), deg_theta=20, mp_dps=50):
 def quadri_quad_tanh_sinh_radial(
     func, quadrilateral, singular_point, args=(), deg_theta=20, mp_dps=50
 ):
+    """:func:`quadri_quad_duffy_radial` with the ``"tanh-sinh"`` radial rule."""
     return quadri_quad_duffy_radial(
         func,
         quadrilateral,
@@ -790,6 +832,7 @@ def quadri_quad_tanh_sinh_radial(
 def box_quad_tanh_sinh_radial(
     func, a, b, c, d, singular_point, args=(), deg_theta=20, mp_dps=50
 ):
+    """:func:`box_quad_duffy_radial` with the ``"tanh-sinh"`` radial rule."""
     return box_quad_duffy_radial(
         func,
         a,
@@ -805,6 +848,12 @@ def box_quad_tanh_sinh_radial(
 
 
 def _duffy_regular_nodes_weights(dim_minus_one, deg_regular):
+    """Tensor-product Gauss rule on ``[0, 1]**dim_minus_one``.
+
+    :returns: ``(nodes, weights)``, with ``nodes`` of shape
+        ``(npoints, dim_minus_one)``. For ``dim_minus_one == 0`` this is the
+        one-point rule carrying the empty node.
+    """
     if dim_minus_one == 0:
         return [np.array([], dtype=np.float64)], [1.0]
 
@@ -820,6 +869,10 @@ def _duffy_regular_nodes_weights(dim_minus_one, deg_regular):
 
 
 def _duffy_radial_nodes_weights(radial_rule, radial_quad_order, mp_dps):
+    """Radial (tanh-sinh) rule on ``[0, 1]`` for the Duffy transform.
+
+    :returns: ``(nodes, weights)``, both 1D :class:`numpy.ndarray`.
+    """
     if radial_rule == "tanh-sinh-fast":
         n = max(3, int(radial_quad_order))
         h = 1.0 / np.sqrt(n)
@@ -853,6 +906,44 @@ def _duffy_radial_nodes_weights(radial_rule, radial_quad_order, mp_dps):
         raise ValueError(f"unsupported radial_rule node set: {radial_rule}")
 
 
+def _make_duffy_nd_evaluator(
+    func, args, dim, singular_point, signs, lengths, box_scale, perm
+):
+    """Return the Duffy integrand for one orthant/axis-ordering of a box.
+
+    The returned ``eval_at_r(radial_r, tail_rs)`` maps the radial coordinate
+    and the ``dim - 1`` tail coordinates to ``func`` times the Duffy Jacobian.
+    """
+
+    def eval_at_r(radial_r, tail_rs):
+        rs = np.empty(dim, dtype=np.float64)
+        rs[0] = radial_r
+        if dim > 1:
+            rs[1:] = tail_rs
+
+        u = np.empty(dim, dtype=np.float64)
+        cumulative = 1.0
+        for i, axis in enumerate(perm):
+            cumulative *= rs[i]
+            u[axis] = cumulative
+
+        x = (
+            np.array(singular_point, dtype=np.float64)
+            + np.array(signs) * lengths * u
+        )
+        jac = box_scale * np.prod([rs[i] ** (dim - 1 - i) for i in range(dim - 1)])
+        val = np.asarray(func(*x, *args))
+        val = _to_float_or_array(val.reshape(-1)[0])
+        prior = val * jac
+        if not np.isfinite(prior):
+            if radial_r < 1.0e-14:
+                return 0.0
+            raise FloatingPointError((radial_r, tail_rs, prior, x))
+        return prior
+
+    return eval_at_r
+
+
 def box_quad_duffy_radial_nd(
     func,
     bounds,
@@ -863,6 +954,19 @@ def box_quad_duffy_radial_nd(
     radial_quad_order=61,
     mp_dps=50,
 ):
+    """Duffy-type quadrature over an axis-aligned box in any dimension.
+
+    The box is split into orthants around *singular_point* and each orthant is
+    integrated once per axis ordering, so that the radial coordinate always
+    absorbs the singularity.
+
+    :arg bounds: per-axis ``(lower, upper)`` pairs; their number sets the
+        dimension.
+    :arg singular_point: singular point, projected into the box.
+    :arg radial_rule: see :func:`tria_quad_duffy_radial`; additionally accepts
+        ``"adaptive"``.
+    :returns: ``(value, error_estimate)``; the error estimate is always zero.
+    """
     dim = len(bounds)
     assert len(singular_point) == dim
     singular_point = tuple(
@@ -880,7 +984,6 @@ def box_quad_duffy_radial_nd(
         )
 
     total = 0.0
-    from itertools import permutations, product
 
     for signs in product([-1.0, 1.0], repeat=dim):
         lengths = np.array(
@@ -898,40 +1001,23 @@ def box_quad_duffy_radial_nd(
         box_scale = float(np.prod(lengths))
 
         for perm in permutations(range(dim)):
-            perm = list(perm)
-
-            def eval_at_r(radial_r, tail_rs):
-                rs = np.empty(dim, dtype=np.float64)
-                rs[0] = radial_r
-                if dim > 1:
-                    rs[1:] = tail_rs
-
-                u = np.empty(dim, dtype=np.float64)
-                cumulative = 1.0
-                for i, axis in enumerate(perm):
-                    cumulative *= rs[i]
-                    u[axis] = cumulative
-
-                x = (
-                    np.array(singular_point, dtype=np.float64)
-                    + np.array(signs) * lengths * u
-                )
-                jac = box_scale * np.prod(
-                    [rs[i] ** (dim - 1 - i) for i in range(dim - 1)]
-                )
-                val = np.asarray(func(*x, *args))
-                val = _to_float_or_array(val.reshape(-1)[0])
-                prior = val * jac
-                if not np.isfinite(prior):
-                    if radial_r < 1.0e-14:
-                        return 0.0
-                    raise FloatingPointError((radial_r, tail_rs, prior, x))
-                return prior
+            eval_at_r = _make_duffy_nd_evaluator(
+                func,
+                args,
+                dim,
+                singular_point,
+                signs,
+                lengths,
+                box_scale,
+                list(perm),
+            )
 
             if radial_rule == "adaptive":
-                for tail_rs, w_tail in zip(regular_nodes, regular_weights):
+                for tail_rs, w_tail in zip(
+                    regular_nodes, regular_weights, strict=True
+                ):
                     radial_val, _ = adaptive_quadrature(
-                        lambda rho: eval_at_r(rho, tail_rs),
+                        lambda rho, tail_rs=tail_rs, ev=eval_at_r: ev(rho, tail_rs),
                         0,
                         1,
                         tol=1.0e-12,
@@ -942,7 +1028,9 @@ def box_quad_duffy_radial_nd(
                     )
                     total += w_tail * radial_val
             else:
-                for tail_rs, w_tail in zip(regular_nodes, regular_weights):
+                for tail_rs, w_tail in zip(
+                    regular_nodes, regular_weights, strict=True
+                ):
                     vals = np.array([eval_at_r(rho, tail_rs) for rho in radial_nodes])
                     total += w_tail * np.dot(radial_weights, vals)
 
@@ -1060,19 +1148,5 @@ def quadri_quad(
 
 
 # }}}
-'''
-class DesingularizationMapping:
-    def __init__(self, nquad_points_1d):
-
-def build_singular_box_quadrature(
-        kernel,
-        design_mapping,
-
-        ):
-    """
-    :arg kernel: an instance of :class:`sumpy.kernel.Kernel`
-    :arg design_mapping: an instance of :class:`sumpy.kernel.Kernel`
-    """
-'''
 
 # vim: filetype=pyopencl.python:fdm=marker

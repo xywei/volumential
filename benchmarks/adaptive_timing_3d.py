@@ -36,6 +36,7 @@ from adaptive_timing import (  # noqa: E402
     _populated_source_levels,
     _sample_statistics,
     _select_opencl_device,
+    _table_build_routing,
     _table_build_seconds,
     _table_payload_bytes,
     _table_phase_seconds,
@@ -252,6 +253,7 @@ def _get_per_level_tables(
         "per_level_table_count": len(tables),
         "per_level_table_build_s": build_s,
         "per_level_table_payload_bytes": payload_bytes,
+        "direct_build_routing": _table_build_routing(tables),
     }
 
 
@@ -461,6 +463,7 @@ def run_case(
     fmm_order = max(8, 4 * q_order)
     rows = []
     canonical_table_timings = None
+    canonical_table = None
     canonical_potential = None
     for cache_state, force_recompute in (("cold", True), ("warm", False)):
         mesh, q_points, q_weights, tree, traversal, mesh_init_s, adapt_s, geometry_s = (
@@ -486,6 +489,7 @@ def run_case(
         )
         if cache_state == "cold":
             canonical_table_timings = table_timings
+            canonical_table = table
         rows.append(
             _row(
                 mode=mode,
@@ -547,6 +551,7 @@ def run_case(
         source_levels,
         canonical_table_timings,
         per_level_table_diagnostics,
+        canonical_table,
     )
     for row in rows:
         row.update(equivalence_diagnostics)

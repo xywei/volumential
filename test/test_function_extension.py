@@ -1,16 +1,20 @@
+"""Accuracy and smoke tests for the harmonic, biharmonic and constant
+function extensions built on top of pytential QBX layer potentials.
+"""
+
 import os
 import sys
 
 import numpy as np
 import pytest
+from arraycontext import flatten, unflatten
 
 import pyopencl as cl
-from arraycontext import flatten, unflatten
-from meshmode.dof_array import DOFArray
 from meshmode.discretization import Discretization
 from meshmode.discretization.poly_element import (
     InterpolatoryQuadratureSimplexGroupFactory,
 )
+from meshmode.dof_array import DOFArray
 from pytential.array_context import PyOpenCLArrayContext
 from pytential.target import PointsTarget
 
@@ -22,11 +26,22 @@ from volumential.function_extension import (
 
 
 def _skip_unstable_backend(ctx):
+    """Skip on the Intel OpenCL CPU backend, which crashes on QBX paths."""
     platform_names = {dev.platform.name for dev in ctx.devices}
     if any(name == "Intel(R) OpenCL" for name in platform_names):
-        import pytest
-
         pytest.skip("QBX function-extension tests are unstable on Intel(R) OpenCL")
+
+
+def _skip_unstable_on_darwin(subject):
+    """Skip `subject` on macOS OpenCL CI unless it is explicitly enabled."""
+    if (
+        sys.platform == "darwin"
+        and os.environ.get("VOLUMENTIAL_RUN_UNSTABLE_DARWIN_TESTS") != "1"
+    ):
+        pytest.skip(
+            f"{subject} is unstable on macOS OpenCL CI "
+            "(set VOLUMENTIAL_RUN_UNSTABLE_DARWIN_TESTS=1 to run)"
+        )
 
 
 def _make_closed_curve_mesh_skip_orientation(curve_f, element_boundaries, order):
@@ -111,16 +126,7 @@ def test_constant_extension_geometry_collection(ctx_factory):
 
 
 def test_harmonic_extension_geometry_collection_smoke(ctx_factory):
-    if (
-        sys.platform == "darwin"
-        and os.environ.get("VOLUMENTIAL_RUN_UNSTABLE_DARWIN_TESTS") != "1"
-    ):
-        import pytest
-
-        pytest.skip(
-            "harmonic extension test is unstable on macOS OpenCL CI "
-            "(set VOLUMENTIAL_RUN_UNSTABLE_DARWIN_TESTS=1 to run)"
-        )
+    _skip_unstable_on_darwin("harmonic extension test")
 
     ctx = ctx_factory()
     _skip_unstable_backend(ctx)
@@ -157,16 +163,7 @@ def test_harmonic_extension_geometry_collection_smoke(ctx_factory):
 
 
 def test_harmonic_extension_to_volume_mesh_points_smoke(ctx_factory):
-    if (
-        sys.platform == "darwin"
-        and os.environ.get("VOLUMENTIAL_RUN_UNSTABLE_DARWIN_TESTS") != "1"
-    ):
-        import pytest
-
-        pytest.skip(
-            "harmonic extension test is unstable on macOS OpenCL CI "
-            "(set VOLUMENTIAL_RUN_UNSTABLE_DARWIN_TESTS=1 to run)"
-        )
+    _skip_unstable_on_darwin("harmonic extension test")
 
     ctx = ctx_factory()
     _skip_unstable_backend(ctx)
@@ -205,16 +202,7 @@ def test_harmonic_extension_to_volume_mesh_points_smoke(ctx_factory):
 
 
 def test_harmonic_extension_interior_linear_accuracy(ctx_factory):
-    if (
-        sys.platform == "darwin"
-        and os.environ.get("VOLUMENTIAL_RUN_UNSTABLE_DARWIN_TESTS") != "1"
-    ):
-        import pytest
-
-        pytest.skip(
-            "harmonic extension test is unstable on macOS OpenCL CI "
-            "(set VOLUMENTIAL_RUN_UNSTABLE_DARWIN_TESTS=1 to run)"
-        )
+    _skip_unstable_on_darwin("harmonic extension test")
 
     ctx = ctx_factory()
     _skip_unstable_backend(ctx)
@@ -252,16 +240,7 @@ def test_harmonic_extension_interior_linear_accuracy(ctx_factory):
 
 
 def test_biharmonic_extension_linear_accuracy(ctx_factory):
-    if (
-        sys.platform == "darwin"
-        and os.environ.get("VOLUMENTIAL_RUN_UNSTABLE_DARWIN_TESTS") != "1"
-    ):
-        import pytest
-
-        pytest.skip(
-            "biharmonic extension test is unstable on macOS OpenCL CI "
-            "(set VOLUMENTIAL_RUN_UNSTABLE_DARWIN_TESTS=1 to run)"
-        )
+    _skip_unstable_on_darwin("biharmonic extension test")
 
     ctx = ctx_factory()
     _skip_unstable_backend(ctx)
@@ -333,14 +312,7 @@ def test_biharmonic_extension_linear_accuracy(ctx_factory):
 
 
 def test_biharmonic_extension_cubic_accuracy(ctx_factory):
-    if (
-        sys.platform == "darwin"
-        and os.environ.get("VOLUMENTIAL_RUN_UNSTABLE_DARWIN_TESTS") != "1"
-    ):
-        pytest.skip(
-            "biharmonic extension test is unstable on macOS OpenCL CI "
-            "(set VOLUMENTIAL_RUN_UNSTABLE_DARWIN_TESTS=1 to run)"
-        )
+    _skip_unstable_on_darwin("biharmonic extension test")
 
     ctx = ctx_factory()
     _skip_unstable_backend(ctx)

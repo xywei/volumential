@@ -164,3 +164,63 @@ def test_assembled_matches_direct_batched(
     # the assembled table must not inherit the base channel's scale-reuse
     # identity (a fixed-parameter table is not scale reusable)
     assert assembled.kernel_type is None
+
+
+def test_classical_assembly_refuses_non_o1_box_extents(tmp_path):
+    # The float64 recombination is certified only on an O(1) source-box
+    # extent, and the refusal must come from the validation prologue --
+    # before any channel table (or OpenCL queue) is touched.
+    cache = tmp_path / "chan2d.sqlite"
+    for kwargs in (
+        {"source_box_level": 30},
+        {"root_extent": 1.0e-6, "source_box_level": 5},
+        {"root_extent": 1.0e6},
+    ):
+        with pytest.raises(ValueError, match="outside the supported"):
+            assemble_parameterized_table(
+                None, cache, 2, "Yukawa", 2, 1.0, **kwargs
+            )
+    assert not cache.exists()
+
+
+def test_classical_assembly_validation_order_is_queue_free(tmp_path):
+    # Every rejected request must be refused without a queue: unsupported
+    # kernel families, the undefined zero-parameter 2D series, and
+    # unsupported dimensions all raise from the prologue.
+    cache = tmp_path / "chan2d.sqlite"
+    with pytest.raises(NotImplementedError, match="Helmholtz and Yukawa"):
+        assemble_parameterized_table(None, cache, 2, "Stokeslet", 2, 1.0)
+    with pytest.raises(ValueError, match="zero-parameter 2D assembly"):
+        assemble_parameterized_table(None, cache, 2, "Yukawa", 2, 0.0)
+    with pytest.raises(NotImplementedError, match="only 2D and 3D"):
+        assemble_parameterized_table(None, cache, 4, "Yukawa", 2, 1.0)
+    assert not cache.exists()
+
+
+def test_public_annotations_resolve_at_runtime():
+    """``typing.get_type_hints`` must not raise on the typed RKE API.
+
+    ``from __future__ import annotations`` makes every annotation a string,
+    so a name that exists only under ``TYPE_CHECKING`` turns any
+    introspection of these signatures -- a documentation build, a runtime
+    validator, an IDE's runtime inspector -- into a ``NameError``.
+    """
+    import typing
+
+    import volumential.rke_table_assembly as rke
+
+    # the aliases the annotations name must exist at import time
+    assert rke._AssemblyResult is not None
+    assert rke._RadialProfile is not None
+
+    resolved = 0
+    for name in rke.__all__:
+        member = getattr(rke, name)
+        if not callable(member) or isinstance(member, type):
+            continue
+        hints = typing.get_type_hints(member)
+        assert hints, f"{name} advertises no resolvable annotations"
+        resolved += 1
+
+    # every non-exception entry point in __all__
+    assert resolved >= 7

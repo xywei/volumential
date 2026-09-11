@@ -1,0 +1,196 @@
+# Ruff configuration for Volumential.
+#
+# This file is the single source of truth for lint conventions; it replaces the
+# former ``[flake8]``/``[isort]``/``[pycodestyle]`` sections of ``setup.cfg``.
+#
+# The rule set below is what the project wants long term.  Because the tree
+# predates it, the ``[lint.per-file-ignores]`` block at the bottom is a
+# *baseline*: a per-file record of the rules a file still violates.  New files
+# start clean, existing files can be cleaned incrementally, and CI can run this
+# config today instead of the four-rule smoke check.  Removing a baseline entry
+# once a file is clean is the intended workflow.  The block is re-measured, not
+# hand-edited: it is exactly the set of rules each file still trips with
+# ``[lint.per-file-ignores]`` emptied, so entries appear and disappear as the
+# tree changes.
+#
+# ``ruff format`` is deliberately *not* adopted as a gate: it would reformat 92
+# of 117 files (~5.7k changed lines), and enabling flake8-quotes (``Q``) would
+# rewrite 448 single-quoted literals.  Either one is a tree-wide rewrite that
+# collides with every open branch, so the ``[format]`` section below only
+# records the intended style for a future coordinated reformat.
+
+line-length = 85
+target-version = "py311"
+
+extend-exclude = [
+    ".venv",
+    "build",
+    "doc/build",
+]
+
+[lint]
+# E,W  pycodestyle             F     pyflakes
+# I    isort                   UP    pyupgrade
+# B    flake8-bugbear          SIM   flake8-simplify
+# C4   flake8-comprehensions   PIE   flake8-pie
+# RUF  ruff-specific           PL    pylint (subset, see the ignore list)
+# N    pep8-naming
+#
+# ``N`` costs nothing here: the only naming complaints in the tree are the 28
+# ``N806`` sites in ``function_extension.py``, where capitalised names track the
+# layer-potential notation of the paper and already carry ``# noqa: N806``.
+# Selecting ``N`` is what makes those directives meaningful; without it they are
+# unused-``noqa`` (``RUF100``) hits instead.
+select = [
+    "B",
+    "C4",
+    "E",
+    "F",
+    "I",
+    "N",
+    "PIE",
+    "PL",
+    "RUF",
+    "SIM",
+    "UP",
+    "W",
+]
+
+ignore = [
+    # Heavy dependencies (pyopencl, loopy, sumpy, pyfmmlib) are imported inside
+    # functions on purpose, so that ``import volumential`` stays cheap and
+    # optional backends stay optional.
+    "PLC0415",
+    # Complexity and arity metrics: numerical kernels legitimately take many
+    # parameters and compare against dimension/order literals.  Chasing these
+    # produces cosmetic churn rather than clarity.
+    "PLR0911",
+    "PLR0912",
+    "PLR0913",
+    "PLR0915",
+    "PLR2004",
+]
+
+[lint.isort]
+# Migrated from the former ``[isort]`` section of setup.cfg.  ``multi_line_output
+# = 4`` has no ruff equivalent (ruff always emits vertical-hanging-indent), and
+# ``line_length`` is the global ``line-length`` above.
+known-first-party = [
+    "boxtree",
+    "loopy",
+    "meshmode",
+    "modepy",
+    "pymbolic",
+    "pyopencl",
+    "pytential",
+    "pytools",
+    "sumpy",
+]
+known-local-folder = ["volumential"]
+lines-after-imports = 2
+combine-as-imports = true
+
+[format]
+# Recorded intent only; see the note at the top of this file.
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+# {{{ baseline: pre-existing violations, clean up file by file
+
+[lint.per-file-ignores]
+# Notebooks put imports after prose and setup cells by nature.
+"*.ipynb" = ["E402"]
+"benchmarks/accuracy_preservation.py" = ["E501", "I001", "RUF007"]
+"benchmarks/adaptive_split_composition.py" = ["C420", "I001", "RUF007"]
+"benchmarks/adaptive_timing.py" = ["E501", "I001", "RUF046"]
+"benchmarks/adaptive_timing_3d.py" = ["E501", "I001"]
+"benchmarks/break_even_validation.py" = ["I001", "PLR0402", "RUF046"]
+"benchmarks/complex_bessel_parameterized.py" = ["I001"]
+"benchmarks/complex_channel_closure.py" = ["E501", "I001", "RUF046"]
+"benchmarks/derivative_log_preservation.py" = ["C420", "I001", "RUF007"]
+"benchmarks/dmk_effective_density.py" = ["E501", "I001", "RUF100"]
+"benchmarks/gaussian_free_space.py" = ["E501", "I001"]
+"benchmarks/graded_tree_convergence.py" = ["I001", "RUF007", "SIM108"]
+"benchmarks/keller_segel_continuation.py" = [
+    "C408", "I001", "RUF046", "RUF059", "SIM117",
+]
+"benchmarks/performance_suite.py" = ["E501"]
+"benchmarks/rke_field_demo_3d.py" = ["E501", "I001"]
+"benchmarks/split_parameter_sweep.py" = ["C420", "E501", "I001", "RUF100", "SIM117"]
+"benchmarks/table_equivalence_cache.py" = ["E501"]
+"benchmarks/windowed_rke_sweep.py" = ["C420", "I001", "PLR0402", "PLW2901"]
+"examples/branched_flow_helmholtz2d.py" = ["I001"]
+"examples/helmholtz2d.py" = ["E501", "I001", "RUF100"]
+"examples/helmholtz2d_split_p_convergence.py" = [
+    "E501", "I001", "PLW2901", "RUF100", "SIM102",
+]
+"examples/helmholtz3d.py" = ["E501", "I001", "RUF100"]
+"examples/helmholtz3d_split_p_convergence.py" = [
+    "E501", "I001", "PLW2901", "RUF100", "SIM102",
+]
+"examples/helmholtz3d_volumential.ipynb" = ["I001"]
+"examples/laplace2d.py" = ["E402", "E501", "PIE808", "RUF100"]
+"examples/laplace3d.py" = ["E501", "PIE808", "RUF100", "SIM105"]
+"examples/poisson2d_pytential_volumential.ipynb" = ["B905", "E501", "I001", "RUF059"]
+"examples/poisson3d.py" = ["E501", "I001", "PIE808", "RUF100", "SIM108"]
+"examples/poisson3d_volumential.ipynb" = ["E501", "I001", "RUF100"]
+"test/test_benchmark_helpers.py" = ["C420", "I001", "PLR0402"]
+"test/test_break_even_extensions.py" = ["I001"]
+"test/test_duffy_batched_manufactured.py" = ["E501"]
+"test/test_duffy_full_accuracy.py" = ["E501"]
+"test/test_function_extension_helpers.py" = ["E501"]
+"test/test_gaussian.py" = ["E501"]
+"test/test_interpolation.py" = ["E501"]
+"test/test_nearfield_potential_table.py" = ["E501"]
+"test/test_table_manager.py" = ["E501"]
+"test/test_table_manager_sqlite_migration.py" = ["E501"]
+"test/test_tree_interactive_build.py" = ["E501"]
+"test/test_volume_fmm.py" = ["E501"]
+"test/test_windowed_rke.py" = ["I001"]
+"test/test_windowed_strategy_benchmarks.py" = ["C420"]
+# OPT_ENABLED/CACHING_ENABLED are module-level switches in the public
+# API, so their setters have to rebind globals.
+"volumential/__init__.py" = ["PLW0603"]
+"volumential/function_extension.py" = ["E501", "I001"]
+"volumential/gaussian.py" = ["E501"]
+"volumential/geometry.py" = ["E501", "I001"]
+"volumential/interpolation.py" = ["E501", "I001"]
+"volumential/lagrange.py" = ["E501"]
+"volumential/list1.py" = ["E501"]
+"volumential/list1_symmetry.py" = ["E501"]
+"volumential/meshgen.py" = ["E501", "I001"]
+"volumential/nearfield_potential_table.py" = [
+    "B010", "B905", "C408", "E501", "I001", "RUF005", "RUF046", "RUF059",
+    "SIM103", "SIM108", "SIM401", "UP031",
+]
+"volumential/opcounters.py" = ["I001"]
+"volumential/orbit_arithmetic.py" = ["E501"]
+"volumential/rke_table_assembly.py" = ["I001"]
+"volumential/singular_integral_2d.py" = ["E501"]
+"volumential/table_manager.py" = [
+    "B028", "B904", "E501", "I001", "RUF046", "SIM102", "SIM117", "SIM118",
+    "SIM201", "SIM910", "UP031", "UP032",
+]
+"volumential/tree_interactive_build.py" = ["E501", "I001"]
+"volumential/volume_fmm.py" = [
+    "B009", "C408", "E501", "I001", "PLW0603", "RUF019", "RUF100", "SIM108",
+]
+"volumential/wranglers/arithmetic_orbits.py" = ["E501", "PLW2901", "SIM108"]
+"volumential/wranglers/box_layout.py" = ["E501"]
+"volumential/wranglers/fmmlib_backend.py" = ["E501", "SIM102", "SIM108", "UP031"]
+"volumential/wranglers/helmholtz_split.py" = ["E501", "SIM105"]
+"volumential/wranglers/kernel_symmetry.py" = ["E501"]
+"volumential/wranglers/kernels.py" = ["E501"]
+"volumential/wranglers/nearfield_cache.py" = ["E501"]
+"volumential/wranglers/orbit_generated.py" = ["E501"]
+"volumential/wranglers/orbit_lookup.py" = ["E501", "RUF046"]
+"volumential/wranglers/split_terms.py" = ["E501"]
+"volumential/wranglers/sumpy_backend.py" = [
+    "B026", "C408", "E501", "PLW2901", "RUF046", "SIM102", "UP031",
+]
+"volumential/wranglers/table_data.py" = ["E501"]
+
+# }}}
+
+# vim: foldmethod=marker

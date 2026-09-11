@@ -1,8 +1,14 @@
+"""Tests for interactive box-tree construction: refinement/coarsening flag
+handling and remapping, topology rebuilds from geometry, unreachable-box
+pruning and level restriction.
+"""
+
+import contextlib
+
 import numpy as np
 import pytest
 
 import pyopencl as cl
-
 from boxtree import (
     make_tree_of_boxes_root,
     refine_and_coarsen_tree_of_boxes,
@@ -12,11 +18,10 @@ from boxtree import (
 from volumential.tree_interactive_build import (
     BoxTree,
     QuadratureOnBoxTree,
-    _are_adjacent,
-    _box_paths_from_topology,
-    _compute_box_flags,
     _box_keys_from_geometry,
+    _box_paths_from_topology,
     _coarsen_tree_of_boxes_compat,
+    _compute_box_flags,
     _enforce_level_restriction,
     _prune_unreachable_boxes,
     _rebuild_tob_from_geometry,
@@ -375,20 +380,16 @@ def test_box_tree_mixed_refine_coarsen_remaps_coarsen_flags(ctx_factory):
     expected_with_remap = canonicalize_tob(expected_with_remap)
     expected_with_remap_keys = _box_keys_from_tob(expected_with_remap)
 
-    expected_without_remap_keys = None
+    # Exercise the un-remapped ("naive") flag path as well.  It is allowed to
+    # fail outright, and its result is deliberately not compared against: the
+    # assertion below is only about the remapped expectation.
     naive_coarsen_flags = _resize_bool_flags(coarsen_flags, refined_tob.nboxes)
-    try:
-        expected_without_remap = _coarsen_tree_of_boxes_compat(
+    with contextlib.suppress(ValueError, RuntimeError):
+        _coarsen_tree_of_boxes_compat(
             refined_tob,
             naive_coarsen_flags,
             error_on_ignored_flags=True,
         )
-    except (ValueError, RuntimeError):
-        expected_without_remap = None
-
-    if expected_without_remap is not None:
-        expected_without_remap = canonicalize_tob(expected_without_remap)
-        expected_without_remap_keys = _box_keys_from_tob(expected_without_remap)
 
     tree._tree = old_tob
 
@@ -556,8 +557,8 @@ def test_rebuild_tob_from_geometry_ignores_nonroot_center_collisions():
     rebuilt_levels = np.asarray(rebuilt.box_levels, dtype=np.int32)
     for parent_id in range(rebuilt.nboxes):
         parent_level = int(rebuilt_levels[parent_id])
-        for child_id in np.asarray(rebuilt.box_child_ids)[:, parent_id]:
-            child_id = int(child_id)
+        for raw_child_id in np.asarray(rebuilt.box_child_ids)[:, parent_id]:
+            child_id = int(raw_child_id)
             if child_id != 0:
                 assert int(rebuilt_levels[child_id]) == parent_level + 1
 
@@ -602,7 +603,7 @@ def test_rebuild_tob_from_geometry_rejects_cyclic_child_links():
 
     with pytest.raises(
         ValueError,
-        match="(cyclic or repeated (?:child|parent) links|multiple parent paths)",
+        match=r"(cyclic or repeated (?:child|parent) links|multiple parent paths)",
     ):
         _rebuild_tob_from_geometry(cyclic_tob)
 

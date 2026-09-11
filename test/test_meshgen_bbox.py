@@ -1,3 +1,7 @@
+"""Tests for the square bounding box that the mesh generator hands to the
+box tree builder.
+"""
+
 import numpy as np
 
 from volumential.meshgen import _square_bbox_for_treebuilder

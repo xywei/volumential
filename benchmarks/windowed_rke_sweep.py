@@ -29,6 +29,28 @@ recorded separately.  The windowed channel quadrature orders are themselves
 sweepable via ``--chan-orders``; the classical and direct reference builds do
 not depend on them and are computed once per ``(dim, kernel, parameter)``.
 
+Damped complex-frequency rows (``--complex-phases``, experiment E8) sweep
+squared-frequency points ``zeta = mu^2 exp(-i pi f)`` at phase fractions
+``f`` strictly between the Yukawa ray (``f = 0``) and the Helmholtz ray
+(``f = 1``), assembled through
+:func:`~volumential.rke_table_assembly.assemble_windowed_damped_table` from
+the *same real channel family* as the real rows.  Their direct reference is
+the scalar-node-set Duffy quadrature of the selected-branch kernel
+(outgoing lower-half-plane square root, exactly the branch contract of the
+assembler -- which is why the path is swept through the lower half plane:
+the selected root is then the outgoing continuation at every sampled
+phase, rather than an incoming wave that flips branch at ``f = 1``),
+evaluated separately for the real and imaginary parts at both
+direct policies, so the rows carry the same certificate, policy-floor, and
+deviation columns as the real rows plus the phase.  Classical assembly has
+no complex-parameter path and is recorded as skipped on those rows.
+
+Every row also carries instrumented operation counters (experiment E3):
+smooth-rule node evaluations, singular-quadrature node evaluations, kernel
+and channel special-function evaluations by function, and recombination
+flops, measured by explicit increments in the assembly code next to
+analytic counts recomputed from the executed configuration.
+
 Smoke mode is intended for CI/local validation.  Full mode is intended for
 metadata-wrapped runs on a controlled remote compute host.
 """
@@ -38,7 +60,10 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import logging
+import math
 import operator
+import sqlite3
 import time
 from pathlib import Path
 from typing import Any
@@ -101,9 +126,43 @@ FIELDS = (
     "classical_vs_direct_rel_max_entry",
     "classical_vs_direct_rel_l2",
     "benchmark_total_seconds",
+    # damped complex-frequency identification (E8); real rows carry their
+    # ray's phase fraction (0 Yukawa, 1 Helmholtz) for uniform slicing
+    "zeta_phase_fraction",
+    "zeta_real",
+    "zeta_imag",
+    # instrumented operation counters (E3), measured next to analytic counts
+    # recomputed from the executed configuration
+    "ops_n_duffy_blocks",
+    "ops_n_active_duffy_regions",
+    "ops_smooth_rule_nodes",
+    "ops_smooth_rule_nodes_analytic",
+    "ops_kernel_evals",
+    "ops_kernel_eval_functions",
+    "ops_channel_profile_nodes",
+    "ops_recombination_flops",
+    "ops_recombination_flops_analytic",
+    "ops_assembly_singular_quadrature_nodes",
+    "ops_special_function_evals",
+    "ops_channel_build_singular_nodes",
+    "ops_channel_build_singular_nodes_analytic",
+    "ops_channel_build_special_function_evals",
+    # Which DuffyRadial builder actually produced the reference table used
+    # by this row (a "scalar-fallback" changes both the cost class and the
+    # converged accuracy at the requested orders), and the same for each
+    # policy's own build.  Appended after the historical 72 columns: this
+    # CSV has an append-only layout contract, so inserting them beside the
+    # other direct_* fields would shift every column after them and make a
+    # positional reader mix old and new runs.
+    "direct_loose_build_routing",
+    "direct_tight_build_routing",
+    "direct_build_routing",
 )
 
 PARAMETER_NAMES = {"Helmholtz": "k", "Yukawa": "lambda"}
+DAMPED_KERNEL_NAME = "Damped"
+DAMPED_PARAMETER_NAME = "mu"
+DEFAULT_COMPLEX_PHASE_FRACTIONS = "0.25,0.5,0.75"
 DEFAULT_Q_ORDER = {2: 3, 3: 2}
 DEFAULT_SOURCE_LEVEL = {2: 3, 3: 2}
 CLASSICAL_TOLERANCE = 1.0e-11
@@ -147,6 +206,82 @@ def _parameter_identity_token(value: float) -> str:
     return f"{float(value):g}-{_exact_float_token(value)}"
 
 
+def _damped_zeta(mu: float, phase_fraction: float) -> complex:
+    """The E8 squared frequency ``zeta = mu^2 exp(-i pi f)``.
+
+    The *lower* half plane, so the branch the assembler and the reference
+    both select -- :func:`~volumential.rke_table_assembly.
+    _selected_decay_root`, which takes ``Re >= 0`` and ``Im <= 0`` on the
+    imaginary axis -- is the outgoing continuation at every sampled phase.
+    Sampling ``exp(+i pi f)`` instead puts the selected root in the upper
+    half plane, i.e. ``exp(-decay r) = exp(-a r) exp(-i b r)``: an
+    *incoming* wave, which then flips discontinuously to the outgoing
+    ``-i k`` at the ``f = 1`` endpoint, so the sweep would measure a path
+    that changes branch halfway through.  The endpoints are unchanged
+    (both are real), and every interior point moves to its conjugate,
+    under which the assembled entries, the direct reference and therefore
+    every measured column are conjugate-symmetric.
+    """
+    # Also checked at argument validation, before anything is measured;
+    # this is the backstop for a programmatic caller, and it raises
+    # ValueError rather than the OverflowError no taxonomy covers.
+    _require_representable_square(mu, "mu")
+    return complex(
+        (float(mu) ** 2) * np.exp(-1j * np.pi * float(phase_fraction))
+    )
+
+
+def _damped_case_id(
+    dim: int,
+    mu: float,
+    phase_fraction: float,
+    chan_tag: str,
+    p_star: int,
+    smooth_order: int,
+    *,
+    q_order: int,
+    source_box_level: int,
+    root_extent: float,
+    window_theta: float,
+) -> str:
+    """Case id of one damped row.
+
+    Both the frequency and the phase carry the exact identity token: two
+    phases agreeing in the default six significant digits would otherwise
+    collide on one id with every other field equal.
+
+    The discretization and window settings that are not in the visible
+    part of the id -- the quadrature order, the source box level, the root
+    extent and the window declaration -- ride in an eight-hex-digit token,
+    because each of them changes the assembled table and therefore the
+    measurement: two campaigns differing only in ``--window-theta`` would
+    otherwise share every id.
+    """
+    import hashlib
+
+    payload = json.dumps(
+        {
+            "q_order": int(q_order),
+            "source_box_level": int(source_box_level),
+            # repr round-trips a float64
+            "root_extent": repr(float(root_extent)),
+            "window_theta": repr(float(window_theta)),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    configuration = hashlib.blake2s(
+        payload.encode("utf-8"), digest_size=4
+    ).hexdigest()
+    return (
+        f"damped{int(dim)}d-mu{_parameter_identity_token(mu)}"
+        f"-phi{_parameter_identity_token(phase_fraction)}"
+        f"-{chan_tag}"
+        f"-p{int(p_star)}-s{int(smooth_order)}"
+        f"-cfg{configuration}"
+    )
+
+
 def _classical_cache_path(
     cache_dir: Path,
     dim: int,
@@ -163,9 +298,23 @@ def _classical_cache_path(
     )
 
 
+#: Largest ``mu`` whose square is a finite float64.
+_MAX_REPRESENTABLE_MU = math.sqrt(np.finfo(np.float64).max)
+
+
 def _require_finite_positive(value: float, name: str) -> None:
     if not np.isfinite(value) or value <= 0:
         raise ValueError(f"{name} must be finite and positive")
+
+
+def _require_representable_square(value: float, name: str) -> None:
+    """The damped rows form ``zeta = mu^2 ...``; refuse a mu whose square
+    is not a finite float64 before any of it is measured."""
+    if abs(float(value)) >= _MAX_REPRESENTABLE_MU:
+        raise ValueError(
+            f"{name}={float(value):g} is too large: its square is not "
+            "representable in float64"
+        )
 
 
 def _require_unique(values, name: str) -> None:
@@ -281,6 +430,22 @@ def _parse_order_pair(raw: str) -> tuple[int, int]:
     )
 
 
+def _configure_logging() -> None:
+    """Route library INFO/WARNING records to stderr for the run log.
+
+    Without this the ``[duffy:builder] mode=...`` routing lines are dropped and
+    a batched-to-scalar fallback warning only reaches stderr through Python's
+    last-resort handler.  Only configures the root logger when the embedding
+    process has not already installed handlers.
+    """
+    if logging.getLogger().handlers:
+        return
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+
+
 def _clear_sqlite_cache(path: Path) -> None:
     for suffix in ("", "-shm", "-wal"):
         Path(f"{path}{suffix}").unlink(missing_ok=True)
@@ -318,37 +483,45 @@ def _prepare_windowed_channels(
     chan_regular_order: int,
     chan_radial_order: int,
 ) -> dict[str, Any]:
-    """Build (or reload) the windowed channel family once and time it."""
+    """Build (or reload) the windowed channel family once and time it.
+
+    The build (or cache reload) runs inside an operation-counter context, so
+    a cold family reports its measured singular-quadrature node evaluations
+    and special-function evaluations (a warm reload measures zero of each).
+    """
+    import volumential.opcounters as opcounters
     from volumential.rke_table_assembly import get_windowed_channel_table
 
     was_cold = False
+    build_ops = opcounters.OpCounters()
     start = time.perf_counter()
     base_channel = None
-    for m in range(max_p_star):
-        channel = get_windowed_channel_table(
-            cache_path,
-            dim,
-            q_order,
-            m,
-            source_box_level=source_box_level,
-            root_extent=root_extent,
-            window_theta=window_theta,
-            chan_regular_order=chan_regular_order,
-            chan_radial_order=chan_radial_order,
-        )
-        disposition = getattr(
-            channel,
-            "_windowed_cache_disposition",
-            getattr(channel, "_cache_disposition", None),
-        )
-        if disposition not in ("hit", "rebuilt"):
-            raise RuntimeError(
-                "windowed channel table did not report a valid private "
-                "cache disposition"
+    with opcounters.counting(build_ops):
+        for m in range(max_p_star):
+            channel = get_windowed_channel_table(
+                cache_path,
+                dim,
+                q_order,
+                m,
+                source_box_level=source_box_level,
+                root_extent=root_extent,
+                window_theta=window_theta,
+                chan_regular_order=chan_regular_order,
+                chan_radial_order=chan_radial_order,
             )
-        was_cold = was_cold or disposition == "rebuilt"
-        if m == 0:
-            base_channel = channel
+            disposition = getattr(
+                channel,
+                "_windowed_cache_disposition",
+                getattr(channel, "_cache_disposition", None),
+            )
+            if disposition not in ("hit", "rebuilt"):
+                raise RuntimeError(
+                    "windowed channel table did not report a valid private "
+                    "cache disposition"
+                )
+            was_cold = was_cold or disposition == "rebuilt"
+            if m == 0:
+                base_channel = channel
     build_seconds = time.perf_counter() - start
 
     entry_ids = np.asarray(base_channel.get_reduced_entry_ids(), dtype=np.int64)
@@ -357,7 +530,130 @@ def _prepare_windowed_channels(
         "n_reduced_entries": int(entry_ids.size),
         "channel_build_seconds": build_seconds,
         "channel_build_was_cold": was_cold,
+        "channel_build_singular_nodes": build_ops.total(
+            opcounters.SINGULAR_NODES
+        ),
+        "channel_build_special_function_evals": build_ops.by_function(
+            opcounters.SPECIAL_EVALS
+        ),
     }
+
+
+def _assembly_ops_fields(ops) -> dict[str, Any]:
+    """Instrumented per-assembly operation counts as row fields (E3)."""
+    import volumential.opcounters as opcounters
+
+    return {
+        "ops_smooth_rule_nodes": ops.total(opcounters.SMOOTH_NODES),
+        "ops_kernel_evals": ops.total(opcounters.KERNEL_EVALS),
+        "ops_kernel_eval_functions": ";".join(
+            sorted(ops.labels(opcounters.KERNEL_EVALS))
+        ),
+        "ops_channel_profile_nodes": ops.total(opcounters.PROFILE_NODES),
+        "ops_recombination_flops": ops.total(opcounters.RECOMBINATION_FLOPS),
+        "ops_assembly_singular_quadrature_nodes": ops.total(
+            opcounters.SINGULAR_NODES
+        ),
+        "ops_special_function_evals": ops.by_function(
+            opcounters.SPECIAL_EVALS
+        ),
+    }
+
+
+def _windowed_assembly_result(
+    assemble, entry_ids, n_reduced_entries: int, p_star: int
+) -> dict[str, Any]:
+    """Run one windowed assembly callable under the shared refusal taxonomy
+    and operation-counter context; shared by the real-parameter and damped
+    complex-frequency paths so their rows stay column-compatible."""
+    import volumential.opcounters as opcounters
+    from volumential.rke_table_assembly import (
+        RKEWindowConditioningError,
+        RKEWindowCoverageError,
+    )
+
+    ops = opcounters.OpCounters()
+    start = time.perf_counter()
+    try:
+        with opcounters.counting(ops):
+            table, certificate = assemble()
+    except (RKEWindowCoverageError, RKEWindowConditioningError) as exc:
+        return {
+            "windowed_status": "refused",
+            "windowed_refusal": f"{type(exc).__name__}: {exc}",
+            "windowed_assemble_seconds": time.perf_counter() - start,
+            "values": None,
+        }
+    except (
+        ValueError, RuntimeError, NotImplementedError, KeyError,
+        # the channel family is an .npz cache: creating, writing or
+        # atomically replacing one of its files can fail, and main()
+        # writes the CSV only after run_sweep() returns, so an escaping
+        # I/O error loses every row the sweep already completed
+        OSError,
+        # sqlite3's exceptions descend from Exception, not OSError
+        sqlite3.Error,
+    ) as exc:
+        return {
+            "windowed_status": "failed",
+            "windowed_refusal": f"{type(exc).__name__}: {exc}",
+            "windowed_assemble_seconds": time.perf_counter() - start,
+            "values": None,
+        }
+    assemble_seconds = time.perf_counter() - start
+    values = np.asarray(table.get_entry_data_for_full_indices(entry_ids))
+    # A row is only "ok" if its numbers are numbers.  The smooth-remainder
+    # integration and the recombination can overflow or produce nan --
+    # most easily on the damped complex-frequency path -- and
+    # _relative_deviations then propagates them while main() counts the
+    # row as usable from its status alone, so the benchmark would exit
+    # successfully carrying invalid evidence.
+    unusable = _nonfinite_assembly_reason(values, certificate)
+    if unusable is not None:
+        return {
+            "windowed_status": "failed",
+            "windowed_refusal": unusable,
+            "windowed_assemble_seconds": assemble_seconds,
+            "values": None,
+        }
+    result = {
+        "windowed_status": "ok",
+        "windowed_refusal": "",
+        "windowed_assemble_seconds": assemble_seconds,
+        "windowed_condition_number": certificate["condition_number"],
+        "windowed_coefficient_bound": certificate["coefficient_bound"],
+        "windowed_remainder_peak": certificate["remainder_peak"],
+        "windowed_truncation_tail_bound": (
+            certificate["truncation_tail_bound"]
+        ),
+        "smooth_quad_order_used": certificate["smooth_quad_order"],
+        # p_star real float64 channel tables over the reduced entries
+        "windowed_payload_bytes": int(n_reduced_entries * 8 * p_star),
+        "values": values,
+    }
+    result.update(_assembly_ops_fields(ops))
+    return result
+
+
+def _nonfinite_assembly_reason(values, certificate) -> str | None:
+    """``None`` if the assembly is usable, else why it is not."""
+    array = np.asarray(values)
+    if array.size == 0:
+        return "assembled table carries no entries"
+    if not np.all(np.isfinite(array)):
+        return "assembled entries are not all finite"
+    for name in (
+        "condition_number",
+        "coefficient_bound",
+        "remainder_peak",
+        "truncation_tail_bound",
+    ):
+        if name not in certificate:
+            continue
+        value = float(certificate[name])
+        if not math.isfinite(value):
+            return f"certificate diagnostic '{name}' is not finite: {value}"
+    return None
 
 
 def _run_windowed(
@@ -378,14 +674,11 @@ def _run_windowed(
     n_reduced_entries: int,
 ) -> dict[str, Any]:
     from volumential.rke_table_assembly import (
-        RKEWindowConditioningError,
-        RKEWindowCoverageError,
         assemble_windowed_parameterized_table,
     )
 
-    start = time.perf_counter()
-    try:
-        table, certificate = assemble_windowed_parameterized_table(
+    def assemble():
+        return assemble_windowed_parameterized_table(
             cache_path,
             dim,
             kernel,
@@ -399,36 +692,135 @@ def _run_windowed(
             chan_regular_order=chan_regular_order,
             chan_radial_order=chan_radial_order,
         )
-    except (RKEWindowCoverageError, RKEWindowConditioningError) as exc:
-        return {
-            "windowed_status": "refused",
-            "windowed_refusal": f"{type(exc).__name__}: {exc}",
-            "windowed_assemble_seconds": time.perf_counter() - start,
-            "values": None,
+
+    return _windowed_assembly_result(
+        assemble, entry_ids, n_reduced_entries, p_star
+    )
+
+
+def _run_damped(
+    *,
+    cache_path: Path,
+    dim: int,
+    q_order: int,
+    zeta: complex,
+    source_box_level: int,
+    root_extent: float,
+    window_theta: float,
+    p_star: int,
+    smooth_quad_order: int,
+    chan_regular_order: int,
+    chan_radial_order: int,
+    entry_ids,
+    n_reduced_entries: int,
+) -> dict[str, Any]:
+    """Windowed assembly at a damped complex squared frequency (E8), from
+    the same real channel family as the real-parameter rows."""
+    from volumential.rke_table_assembly import assemble_windowed_damped_table
+
+    def assemble():
+        return assemble_windowed_damped_table(
+            cache_path,
+            dim,
+            q_order,
+            zeta,
+            source_box_level=source_box_level,
+            root_extent=root_extent,
+            window_theta=window_theta,
+            p_star=p_star,
+            smooth_quad_order=smooth_quad_order,
+            chan_regular_order=chan_regular_order,
+            chan_radial_order=chan_radial_order,
+        )
+
+    return _windowed_assembly_result(
+        assemble, entry_ids, n_reduced_entries, p_star
+    )
+
+
+def _build_damped_reference(
+    *,
+    dim: int,
+    q_order: int,
+    source_box_level: int,
+    root_extent: float,
+    window_theta: float,
+    zeta: complex,
+    regular_order: int,
+    radial_order: int,
+    entry_ids,
+) -> dict[str, Any]:
+    """Direct reference entries for a complex squared frequency.
+
+    The table manager has no complex-parameter build path, so the reference
+    follows the validated prototype: the scalar-node-set DuffyRadial rule
+    (evaluated vectorized per block) applied to the selected-branch kernel's
+    real and imaginary parts separately.  The node set matches the scalar
+    direct builder's to roundoff, so the two direct policies retain their
+    policy-floor semantics on these rows.
+    """
+    from volumential.rke_table_assembly import (
+        _duffy_channel_entry_values,
+        _windowed_channel_skeleton,
+        damped_kernel_radial,
+    )
+
+    start = time.perf_counter()
+    try:
+        skeleton = _windowed_channel_skeleton(
+            dim, q_order, source_box_level, root_extent, window_theta, 0
+        )
+        kernel_radial = damped_kernel_radial(dim, zeta)
+        parts = {}
+        part_entry_ids = None
+        for part in ("real", "imag"):
+
+            def part_profile(r, _part=part):
+                return getattr(np, _part)(kernel_radial(r))
+
+            part_entry_ids, parts[part] = _duffy_channel_entry_values(
+                skeleton, part_profile, regular_order, radial_order
+            )
+        values = parts["real"].astype(np.complex128) + 1j * parts["imag"]
+        # _duffy_channel_entry_values enumerates entries in invariant orbit
+        # order while the channel family reports them sorted; align by the
+        # full entry ID, which is the shared canonical addressing
+        positions = {
+            int(full_id): position
+            for position, full_id in enumerate(
+                np.asarray(part_entry_ids, dtype=np.int64)
+            )
         }
-    except (ValueError, RuntimeError, NotImplementedError) as exc:
+        try:
+            order = np.asarray(
+                [positions[int(full_id)] for full_id in entry_ids],
+                dtype=np.int64,
+            )
+        except KeyError as exc:
+            raise RuntimeError(
+                "damped direct reference disagrees with the channel "
+                f"family on the reduced entry index set (missing {exc})"
+            ) from None
+        values = values[order]
+        if not np.all(np.isfinite(values)):
+            raise RuntimeError(
+                "damped direct reference contains non-finite values"
+            )
+    except Exception as exc:
         return {
-            "windowed_status": "failed",
-            "windowed_refusal": f"{type(exc).__name__}: {exc}",
-            "windowed_assemble_seconds": time.perf_counter() - start,
+            "status": f"failed: {type(exc).__name__}: {exc}",
+            "build_seconds": time.perf_counter() - start,
             "values": None,
+            "routing": "failed",
         }
-    assemble_seconds = time.perf_counter() - start
-    values = np.asarray(table.get_entry_data_for_full_indices(entry_ids))
     return {
-        "windowed_status": "ok",
-        "windowed_refusal": "",
-        "windowed_assemble_seconds": assemble_seconds,
-        "windowed_condition_number": certificate["condition_number"],
-        "windowed_coefficient_bound": certificate["coefficient_bound"],
-        "windowed_remainder_peak": certificate["remainder_peak"],
-        "windowed_truncation_tail_bound": (
-            certificate["truncation_tail_bound"]
-        ),
-        "smooth_quad_order_used": certificate["smooth_quad_order"],
-        # p_star real float64 channel tables over the reduced entries
-        "windowed_payload_bytes": int(n_reduced_entries * 8 * p_star),
+        "status": "ok",
+        "build_seconds": time.perf_counter() - start,
         "values": values,
+        # damped rows never build a DuffyRadial table: the reference comes
+        # from the grouped channel builder, so it has no batched/scalar
+        # routing of its own
+        "routing": "channel-grouped",
     }
 
 
@@ -580,6 +972,7 @@ def _build_direct_table(
     radial_order: int,
     entry_ids,
 ) -> dict[str, Any]:
+    import volumential.opcounters as opcounters
     from volumential.nearfield_potential_table import DuffyBuildConfig
     from volumential.table_manager import NearFieldInteractionTableManager
 
@@ -633,9 +1026,58 @@ def _build_direct_table(
             "status": f"failed: {type(exc).__name__}: {exc}",
             "build_seconds": time.perf_counter() - start,
             "values": None,
+            "routing": "failed",
         }
     build_seconds = time.perf_counter() - start
-    return {"status": "ok", "build_seconds": build_seconds, "values": values}
+    return {
+        "status": "ok",
+        "build_seconds": build_seconds,
+        "values": values,
+        "routing": opcounters.direct_build_routing(table),
+    }
+
+
+def _reference_build_routing(
+    loose: dict[str, Any], tight: dict[str, Any], reference_policy: str
+) -> str:
+    """The recorded DuffyRadial routing of the policy that supplied values.
+
+    When neither policy did -- both builds failed, which strict no-fallback
+    mode can cause for both at once -- the row has no Duffy reference at
+    all.  That is reported as the ``failed`` marker the policy results
+    already carry, joined when the two differ, and never as the empty
+    string: blank is what a legacy row without the column reads as, and a
+    provenance consumer must be able to tell "no reference was built" from
+    "this run predates the column".
+    """
+    if reference_policy == "tight":
+        return str(tight.get("routing", ""))
+    if reference_policy == "loose":
+        return str(loose.get("routing", ""))
+
+    markers = sorted({
+        str(result.get("routing", "")) or "failed"
+        for result in (loose, tight)
+    })
+    return ";".join(markers)
+
+
+def _reference_from_policies(
+    loose: dict[str, Any], tight: dict[str, Any]
+) -> tuple[Any, str, Any]:
+    """(policy floor, reference policy name, reference values) from the two
+    direct-policy results, preferring the tight policy."""
+    if loose["values"] is not None and tight["values"] is not None:
+        floor_rel_max, _ = _relative_deviations(
+            loose["values"], tight["values"]
+        )
+    else:
+        floor_rel_max = ""
+    if tight["values"] is not None:
+        return floor_rel_max, "tight", tight["values"]
+    if loose["values"] is not None:
+        return floor_rel_max, "loose", loose["values"]
+    return floor_rel_max, "", None
 
 
 def run_sweep(
@@ -655,6 +1097,7 @@ def run_sweep(
     chan_orders: list[tuple[int, int]] | None,
     cache_dir: Path,
     skip_3d_tight: bool,
+    complex_phases: list[float] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     if mode not in ("smoke", "full"):
         raise ValueError("mode must be 'smoke' or 'full'")
@@ -703,6 +1146,14 @@ def run_sweep(
         for mu in mus:
             _require_finite_positive(mu, "mu")
         _require_unique(mus, "mu entries")
+    # Checked here, against whichever mus this run will use -- the defaults
+    # included -- rather than only inside _damped_zeta: the damped block
+    # runs after the real-parameter rows, and main() writes the CSV only
+    # after run_sweep() returns, so raising there would still discard every
+    # row already measured.
+    if complex_phases is not None:
+        for mu in mus if mus is not None else []:
+            _require_representable_square(mu, "mu")
     direct_policies = [
         _require_usable_order_pair(policy, "direct policy")
         for policy in direct_policies
@@ -736,10 +1187,28 @@ def run_sweep(
                 "is provided"
             )
         _require_unique(chan_orders, "channel-order policies")
+    if complex_phases is not None:
+        complex_phases = [float(phase) for phase in complex_phases]
+        if not complex_phases:
+            raise ValueError(
+                "at least one phase fraction is required when "
+                "complex_phases is provided"
+            )
+        for phase in complex_phases:
+            if not np.isfinite(phase) or not 0.0 < phase < 1.0:
+                raise ValueError(
+                    "complex phase fractions must lie strictly between 0 "
+                    "and 1 (0 is the Yukawa ray, 1 the Helmholtz ray; both "
+                    "are covered by the real-parameter rows)"
+                )
+        _require_unique(complex_phases, "complex phase fractions")
+        complex_phases = sorted(complex_phases)
 
+    import volumential.opcounters as opcounters
     from volumential.rke_table_assembly import (
         _require_o1_box_extent,
         _resolve_channel_orders,
+        _windowed_channel_skeleton,
     )
 
     dimension_configs: dict[int, tuple[int, int, float, list[float]]] = {}
@@ -770,6 +1239,10 @@ def run_sweep(
         )
         for mu in dim_mus:
             _require_finite_positive(mu, "mu")
+            if complex_phases is not None:
+                # covers the defaults too, which are derived from the
+                # window declaration and the box extent
+                _require_representable_square(mu, "mu")
         dimension_configs[dim] = (
             q_order, source_level, box_extent, dim_mus
         )
@@ -812,6 +1285,14 @@ def run_sweep(
             flush=True,
         )
 
+        # Executed-configuration geometry for the analytic operation counts
+        # (E3): distinct (case, target) Duffy blocks and their non-degenerate
+        # regions, from the same skeleton the channel builders enumerate.
+        ops_skeleton = _windowed_channel_skeleton(
+            dim, q_order, source_level, root_extent, window_theta, 0
+        )
+        geometry = opcounters.duffy_block_geometry(ops_skeleton)
+
         # The windowed channel families depend only on (dim, q_order, level,
         # root_extent, window_theta, chan orders) -- not on the kernel or the
         # parameter -- so build each requested channel-order family once here.
@@ -832,12 +1313,33 @@ def run_sweep(
                 chan_regular_order=chan_regular_order,
                 chan_radial_order=chan_radial_order,
             )
+            # The analytic family-build count (n_channels regions-times-nodes
+            # quadratures) only describes an executed build, so it is
+            # comparable -- and recorded -- for cold families alone.
+            channels["channel_build_singular_nodes_analytic"] = (
+                max(p_stars)
+                * opcounters.grouped_duffy_singular_nodes(
+                    ops_skeleton,
+                    chan_regular_order,
+                    chan_radial_order,
+                    geometry=geometry,
+                )
+                if channels["channel_build_was_cold"]
+                else ""
+            )
             print(
                 f"[channels] dim={dim} "
                 f"chan_orders={chan_regular_order}/{chan_radial_order} "
                 f"cold={channels['channel_build_was_cold']} "
                 f"build_s={channels['channel_build_seconds']:.2f} "
-                f"n_reduced_entries={channels['n_reduced_entries']}",
+                f"n_reduced_entries={channels['n_reduced_entries']} "
+                f"singular_nodes={channels['channel_build_singular_nodes']}"
+                + (
+                    " (analytic "
+                    f"{channels['channel_build_singular_nodes_analytic']})"
+                    if channels["channel_build_was_cold"]
+                    else ""
+                ),
                 flush=True,
             )
             channel_prep_records[
@@ -850,6 +1352,17 @@ def run_sweep(
                 "channel_build_seconds": channels["channel_build_seconds"],
                 "channel_build_was_cold": channels["channel_build_was_cold"],
                 "n_reduced_entries": channels["n_reduced_entries"],
+                "channel_build_singular_nodes": channels[
+                    "channel_build_singular_nodes"
+                ],
+                "channel_build_singular_nodes_analytic": channels[
+                    "channel_build_singular_nodes_analytic"
+                ],
+                "channel_build_special_function_evals": channels[
+                    "channel_build_special_function_evals"
+                ],
+                "n_duffy_blocks": geometry["n_blocks"],
+                "n_active_duffy_regions": geometry["n_active_regions"],
             }
             channels["cache_path"] = windowed_cache
             channels["chan_regular_order"] = chan_regular_order
@@ -884,6 +1397,7 @@ def run_sweep(
                                 "status": "skipped: --skip-3d-tight",
                                 "build_seconds": "",
                                 "values": None,
+                                "routing": "skipped",
                             }
                         )
                         continue
@@ -908,24 +1422,9 @@ def run_sweep(
                     )
                 loose, tight = policy_results
 
-                if (
-                    loose["values"] is not None
-                    and tight["values"] is not None
-                ):
-                    floor_rel_max, _ = _relative_deviations(
-                        loose["values"], tight["values"]
-                    )
-                else:
-                    floor_rel_max = ""
-                if tight["values"] is not None:
-                    reference_policy = "tight"
-                    reference_values = tight["values"]
-                elif loose["values"] is not None:
-                    reference_policy = "loose"
-                    reference_values = loose["values"]
-                else:
-                    reference_policy = ""
-                    reference_values = None
+                floor_rel_max, reference_policy, reference_values = (
+                    _reference_from_policies(loose, tight)
+                )
 
                 classical = _run_classical(
                     queue=queue,
@@ -1067,6 +1566,9 @@ def run_sweep(
                                     "direct_loose_build_seconds": loose[
                                         "build_seconds"
                                     ],
+                                    "direct_loose_build_routing": (
+                                        loose.get("routing", "")
+                                    ),
                                     "direct_tight_regular_order": (
                                         direct_policies[1][0]
                                     ),
@@ -1077,11 +1579,19 @@ def run_sweep(
                                     "direct_tight_build_seconds": tight[
                                         "build_seconds"
                                     ],
+                                    "direct_tight_build_routing": (
+                                        tight.get("routing", "")
+                                    ),
                                     "direct_policy_rel_max_entry_floor": (
                                         floor_rel_max
                                     ),
                                     "direct_reference_policy": (
                                         reference_policy
+                                    ),
+                                    "direct_build_routing": (
+                                        _reference_build_routing(
+                                            loose, tight, reference_policy
+                                        )
                                     ),
                                     "windowed_vs_direct_rel_max_entry": (
                                         windowed_rel_max
@@ -1095,6 +1605,43 @@ def run_sweep(
                                     "classical_vs_direct_rel_l2": (
                                         classical_rel_l2
                                     ),
+                                    # ray identification: the real rows sit
+                                    # on the phase-0 (Yukawa) and phase-1
+                                    # (Helmholtz) edges of the zeta disk
+                                    "zeta_phase_fraction": (
+                                        0.0 if kernel == "Yukawa" else 1.0
+                                    ),
+                                    "zeta_real": (
+                                        mu * mu
+                                        if kernel == "Yukawa"
+                                        else -(mu * mu)
+                                    ),
+                                    "zeta_imag": 0.0,
+                                    "ops_n_duffy_blocks": geometry[
+                                        "n_blocks"
+                                    ],
+                                    "ops_n_active_duffy_regions": geometry[
+                                        "n_active_regions"
+                                    ],
+                                    "ops_channel_build_singular_nodes": (
+                                        family[
+                                            "channel_build_singular_nodes"
+                                        ]
+                                    ),
+                                    (
+                                        "ops_channel_build_singular_nodes"
+                                        "_analytic"
+                                    ): family[
+                                        "channel_build_singular_nodes"
+                                        "_analytic"
+                                    ],
+                                    (
+                                        "ops_channel_build_special"
+                                        "_function_evals"
+                                    ): family[
+                                        "channel_build_special"
+                                        "_function_evals"
+                                    ],
                                 }
                             )
                             for key, value in windowed.items():
@@ -1103,6 +1650,250 @@ def run_sweep(
                             for key, value in classical.items():
                                 if key != "values" and key in FIELDS:
                                     row[key] = value
+                            if windowed["windowed_status"] == "ok":
+                                used = int(windowed["smooth_quad_order_used"])
+                                row["ops_smooth_rule_nodes_analytic"] = (
+                                    geometry["n_blocks"] * used**dim
+                                )
+                                row["ops_recombination_flops_analytic"] = (
+                                    p_star * n_entries + p_star
+                                )
+                            rows.append(row)
+
+        # Damped complex-frequency rows (E8): zeta = mu^2 exp(-i pi f) with
+        # phase fractions strictly between the Yukawa and Helmholtz rays,
+        # assembled from the same real channel families as the real rows.
+        # The rows are kernel-independent (the two real kernels are the
+        # phase-0 and phase-1 edges), so they are emitted once per dim.
+        for mu in dim_mus if complex_phases else []:
+            theta = float(mu) * box_extent
+            for phase_fraction in complex_phases:
+                zeta = _damped_zeta(mu, phase_fraction)
+
+                policy_results = []
+                for policy_index, (regular, radial) in enumerate(
+                    direct_policies
+                ):
+                    policy_name = "loose" if policy_index == 0 else "tight"
+                    if policy_name == "tight" and dim == 3 and skip_3d_tight:
+                        policy_results.append(
+                            {
+                                "status": "skipped: --skip-3d-tight",
+                                "build_seconds": "",
+                                "values": None,
+                                "routing": "skipped",
+                            }
+                        )
+                        continue
+                    policy_results.append(
+                        _build_damped_reference(
+                            dim=dim,
+                            q_order=q_order,
+                            source_box_level=source_level,
+                            root_extent=root_extent,
+                            window_theta=window_theta,
+                            zeta=zeta,
+                            regular_order=regular,
+                            radial_order=radial,
+                            entry_ids=entry_ids,
+                        )
+                    )
+                loose, tight = policy_results
+                floor_rel_max, reference_policy, reference_values = (
+                    _reference_from_policies(loose, tight)
+                )
+
+                print(
+                    f"[case] dim={dim} kernel={DAMPED_KERNEL_NAME} "
+                    f"mu={mu:g} phase={phase_fraction:g}*pi theta={theta:g} "
+                    f"direct_loose={loose['status']} "
+                    f"direct_tight={tight['status']} classical=skipped",
+                    flush=True,
+                )
+
+                for family in channel_families:
+                    windowed_cache = family["cache_path"]
+                    chan_regular_order = family["chan_regular_order"]
+                    chan_radial_order = family["chan_radial_order"]
+                    chan_tag = f"c{chan_regular_order}x{chan_radial_order}"
+
+                    for p_star in sorted(p_stars):
+                        for smooth_order in sorted(smooth_orders):
+                            windowed = _run_damped(
+                                cache_path=windowed_cache,
+                                dim=dim,
+                                q_order=q_order,
+                                zeta=zeta,
+                                source_box_level=source_level,
+                                root_extent=root_extent,
+                                window_theta=window_theta,
+                                p_star=p_star,
+                                smooth_quad_order=smooth_order,
+                                chan_regular_order=chan_regular_order,
+                                chan_radial_order=chan_radial_order,
+                                entry_ids=entry_ids,
+                                n_reduced_entries=n_entries,
+                            )
+                            if (
+                                windowed["values"] is not None
+                                and reference_values is not None
+                            ):
+                                windowed_rel_max, windowed_rel_l2 = (
+                                    _relative_deviations(
+                                        windowed["values"], reference_values
+                                    )
+                                )
+                            else:
+                                windowed_rel_max, windowed_rel_l2 = "", ""
+
+                            print(
+                                f"  [row] chan={chan_regular_order}/"
+                                f"{chan_radial_order} "
+                                f"phase={phase_fraction:g}*pi "
+                                f"p_star={p_star} "
+                                f"smooth={smooth_order} "
+                                f"windowed={windowed['windowed_status']} "
+                                f"assemble_s="
+                                f"{windowed['windowed_assemble_seconds']:.2f}"
+                                + (
+                                    f" rel_max={windowed_rel_max:.3e}"
+                                    if windowed_rel_max != ""
+                                    else ""
+                                ),
+                                flush=True,
+                            )
+
+                            row = {key: "" for key in FIELDS}
+                            row.update(
+                                {
+                                    "case_id": _damped_case_id(
+                                        dim,
+                                        mu,
+                                        phase_fraction,
+                                        chan_tag,
+                                        p_star,
+                                        smooth_order,
+                                        q_order=q_order,
+                                        source_box_level=source_level,
+                                        root_extent=root_extent,
+                                        window_theta=window_theta,
+                                    ),
+                                    "mode": mode,
+                                    "dim": dim,
+                                    "kernel": DAMPED_KERNEL_NAME,
+                                    "parameter_name": (
+                                        DAMPED_PARAMETER_NAME
+                                    ),
+                                    "parameter_value": mu,
+                                    "theta": theta,
+                                    "window_theta": window_theta,
+                                    "q_order": q_order,
+                                    "source_box_level": source_level,
+                                    "root_extent": root_extent,
+                                    "box_extent": box_extent,
+                                    "n_reduced_entries": n_entries,
+                                    "p_star": p_star,
+                                    "smooth_quad_order_requested": (
+                                        smooth_order
+                                    ),
+                                    "chan_regular_order": chan_regular_order,
+                                    "chan_radial_order": chan_radial_order,
+                                    "channel_build_was_cold": family[
+                                        "channel_build_was_cold"
+                                    ],
+                                    "channel_build_seconds": family[
+                                        "channel_build_seconds"
+                                    ],
+                                    "classical_status": "skipped",
+                                    "classical_refusal": "",
+                                    "classical_refusal_detail": (
+                                        "skipped: no classical assembly "
+                                        "path for complex zeta"
+                                    ),
+                                    "direct_loose_regular_order": (
+                                        direct_policies[0][0]
+                                    ),
+                                    "direct_loose_radial_order": (
+                                        direct_policies[0][1]
+                                    ),
+                                    "direct_loose_status": loose["status"],
+                                    "direct_loose_build_seconds": loose[
+                                        "build_seconds"
+                                    ],
+                                    "direct_loose_build_routing": (
+                                        loose.get("routing", "")
+                                    ),
+                                    "direct_tight_regular_order": (
+                                        direct_policies[1][0]
+                                    ),
+                                    "direct_tight_radial_order": (
+                                        direct_policies[1][1]
+                                    ),
+                                    "direct_tight_status": tight["status"],
+                                    "direct_tight_build_seconds": tight[
+                                        "build_seconds"
+                                    ],
+                                    "direct_tight_build_routing": (
+                                        tight.get("routing", "")
+                                    ),
+                                    "direct_policy_rel_max_entry_floor": (
+                                        floor_rel_max
+                                    ),
+                                    "direct_reference_policy": (
+                                        reference_policy
+                                    ),
+                                    "direct_build_routing": (
+                                        _reference_build_routing(
+                                            loose, tight, reference_policy
+                                        )
+                                    ),
+                                    "windowed_vs_direct_rel_max_entry": (
+                                        windowed_rel_max
+                                    ),
+                                    "windowed_vs_direct_rel_l2": (
+                                        windowed_rel_l2
+                                    ),
+                                    "zeta_phase_fraction": phase_fraction,
+                                    "zeta_real": zeta.real,
+                                    "zeta_imag": zeta.imag,
+                                    "ops_n_duffy_blocks": geometry[
+                                        "n_blocks"
+                                    ],
+                                    "ops_n_active_duffy_regions": geometry[
+                                        "n_active_regions"
+                                    ],
+                                    "ops_channel_build_singular_nodes": (
+                                        family[
+                                            "channel_build_singular_nodes"
+                                        ]
+                                    ),
+                                    (
+                                        "ops_channel_build_singular_nodes"
+                                        "_analytic"
+                                    ): family[
+                                        "channel_build_singular_nodes"
+                                        "_analytic"
+                                    ],
+                                    (
+                                        "ops_channel_build_special"
+                                        "_function_evals"
+                                    ): family[
+                                        "channel_build_special"
+                                        "_function_evals"
+                                    ],
+                                }
+                            )
+                            for key, value in windowed.items():
+                                if key != "values" and key in FIELDS:
+                                    row[key] = value
+                            if windowed["windowed_status"] == "ok":
+                                used = int(windowed["smooth_quad_order_used"])
+                                row["ops_smooth_rule_nodes_analytic"] = (
+                                    geometry["n_blocks"] * used**dim
+                                )
+                                row["ops_recombination_flops_analytic"] = (
+                                    p_star * n_entries + p_star
+                                )
                             rows.append(row)
 
     total_seconds = time.perf_counter() - sweep_start
@@ -1124,6 +1915,7 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
 
 
 def main() -> int:
+    _configure_logging()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("smoke", "full"), default="smoke")
     parser.add_argument(
@@ -1185,6 +1977,17 @@ def main() -> int:
         "windowed channel builds, e.g. '48,61;64,121'; each pair is swept "
         "as its own family with its own channel cache.  Default: the single "
         "per-dimension tested pair (2D: 48,61; 3D: 20,61)",
+    )
+    parser.add_argument(
+        "--complex-phases",
+        nargs="?",
+        const=DEFAULT_COMPLEX_PHASE_FRACTIONS,
+        default=None,
+        help="enable damped complex-frequency rows (E8) at "
+        "zeta = mu^2 exp(-i pi f) for the given comma-separated phase "
+        "fractions f, each strictly between 0 (the Yukawa ray) and 1 (the "
+        "Helmholtz ray); without a value, uses "
+        f"'{DEFAULT_COMPLEX_PHASE_FRACTIONS}'",
     )
     parser.add_argument(
         "--cache-dir",
@@ -1265,6 +2068,21 @@ def main() -> int:
         )
     except ValueError as exc:
         parser.error(str(exc))
+    try:
+        complex_phases = (
+            sorted(_parse_csv_floats(args.complex_phases))
+            if args.complex_phases
+            else None
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+    if complex_phases is not None:
+        for phase in complex_phases:
+            if not np.isfinite(phase) or not 0.0 < phase < 1.0:
+                parser.error(
+                    "--complex-phases entries must lie strictly between 0 "
+                    "and 1 (0 is the Yukawa ray, 1 the Helmholtz ray)"
+                )
 
     try:
         _require_unique(dims, "--dim entries")
@@ -1273,6 +2091,8 @@ def main() -> int:
         _require_unique(smooth_orders, "--smooth-orders entries")
         if mus is not None:
             _require_unique(mus, "--mus entries")
+        if complex_phases is not None:
+            _require_unique(complex_phases, "--complex-phases entries")
     except ValueError as exc:
         parser.error(str(exc))
 
@@ -1292,6 +2112,7 @@ def main() -> int:
         chan_orders=chan_orders,
         cache_dir=args.cache_dir,
         skip_3d_tight=args.skip_3d_tight,
+        complex_phases=complex_phases,
     )
 
     out_dir = args.out_dir
@@ -1318,6 +2139,7 @@ def main() -> int:
             else None
         ),
         "classical_tolerance": CLASSICAL_TOLERANCE,
+        "complex_phases": complex_phases,
         "cache_dir": str(args.cache_dir),
         "skip_3d_tight": args.skip_3d_tight,
         "csv_path": str(csv_path),

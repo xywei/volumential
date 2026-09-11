@@ -1,3 +1,9 @@
+"""Tests for :mod:`volumential.nearfield_potential_table`: quadrature modes
+and Chebyshev remapping, the Duffy-radial build paths (including the
+batched builder and its autotuning), symmetry/orbit reduction, and the
+table payload serialization contract.
+"""
+
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
 __license__ = """
@@ -24,9 +30,11 @@ import os
 import sys
 
 import numpy as np
-import pyopencl as cl
 import pytest
 from numpy.polynomial.chebyshev import chebval, chebval2d, chebval3d
+
+import pyopencl as cl
+
 
 if (
     sys.platform == "darwin"
@@ -82,7 +90,7 @@ def _make_legendre_table_without_cl(q_order, dim):
     elif dim == 3:
         q_points = [(x, y, z) for x in nodes for y in nodes for z in nodes]
     else:
-        raise NotImplementedError("dimension %d not supported" % dim)
+        raise NotImplementedError(f"dimension {dim} not supported")
 
     table.q_points = np.asarray(q_points, dtype=np.float64)
     return table
@@ -99,15 +107,21 @@ def _precomputed_legendre_q_points(q_order, dim):
     elif dim == 3:
         q_points = [(x, y, z) for x in nodes for y in nodes for z in nodes]
     else:
-        raise NotImplementedError("dimension %d not supported" % dim)
+        raise NotImplementedError(f"dimension {dim} not supported")
 
     return np.asarray(q_points, dtype=np.float64)
 
 
-def test_const_order_1():
+def _check_constant_kernel_table_entries(quad_order, expected_entry_value):
+    """Build a constant-kernel 2D table and check every entry's value.
+
+    The two ``test_const_order_*`` cases differ only in `quad_order` and the
+    resulting entry value; they stay separate tests because the order-2 build
+    is expensive enough to keep behind ``--longrun``.
+    """
     queue = _make_build_queue_or_skip()
     table = npt.NearFieldInteractionTable(
-        quad_order=1,
+        quad_order=quad_order,
         kernel_func=npt.constant_one,
         kernel_type="const",
         sumpy_kernel=ConstantKernel(2),
@@ -115,21 +129,15 @@ def test_const_order_1():
     )
     table.build_table(queue=queue)
     for entry_id in range(len(table.data)):
-        assert np.allclose(table.get_entry_data(entry_id), 1)
+        assert np.allclose(table.get_entry_data(entry_id), expected_entry_value)
+
+
+def test_const_order_1():
+    _check_constant_kernel_table_entries(1, 1)
 
 
 def test_const_order_2(longrun):
-    queue = _make_build_queue_or_skip()
-    table = npt.NearFieldInteractionTable(
-        quad_order=2,
-        kernel_func=npt.constant_one,
-        kernel_type="const",
-        sumpy_kernel=ConstantKernel(2),
-        progress_bar=False,
-    )
-    table.build_table(queue=queue)
-    for entry_id in range(len(table.data)):
-        assert np.allclose(table.get_entry_data(entry_id), 0.25)
+    _check_constant_kernel_table_entries(2, 0.25)
 
 
 def interp_modes(q_order):
@@ -147,8 +155,6 @@ def interp_modes(q_order):
     yi = yi.flatten()
 
     val = np.zeros(xi.shape)
-    print(xi)
-    print(yi)
 
     for i in range(len(xi)):
         val[i] = interpolate_function(xi[i], yi[i])
@@ -163,9 +169,9 @@ def test_modes():
 
 
 def test_sumpy_kernel_to_lambda_lambdifies_once(monkeypatch):
-    from sumpy.kernel import LaplaceKernel
-
     import sympy
+
+    from sumpy.kernel import LaplaceKernel
 
     call_count = {"n": 0}
     original_lambdify = sympy.lambdify
@@ -233,7 +239,7 @@ def cheb_eval(dim, coefs, coords):
     elif dim == 3:
         return chebval3d(coords[0], coords[1], coords[2], coefs)
     else:
-        raise NotImplementedError("dimension %d not supported" % dim)
+        raise NotImplementedError(f"dimension {dim} not supported")
 
 
 def drive_test_modes_cheb_coeffs(dim, q, cheb_order):
@@ -1461,7 +1467,7 @@ def test_mode_remap_is_elementwise_for_vectorized_inputs():
     y = np.array([0.4, 0.5], dtype=np.float64)
 
     scalar_vals = np.array(
-        [mode(float(ix), float(iy)) for ix, iy in zip(x, y)],
+        [mode(float(ix), float(iy)) for ix, iy in zip(x, y, strict=True)],
         dtype=np.float64,
     )
     vector_vals = mode(x, y)
@@ -1643,11 +1649,12 @@ def test_duffy_radial_batched_clamps_decomposition_vertex(monkeypatch):
     assert np.allclose(target_points[:, 0], np.array([2.10, -0.10]))
 
 
-def test_duffy_radial_routes_queue_to_batched_builder_1d(monkeypatch):
+@pytest.mark.parametrize("dim", [1, 3], ids=["1d", "3d"])
+def test_duffy_radial_routes_queue_to_batched_builder_nd(monkeypatch, dim):
     table = npt.NearFieldInteractionTable(
         quad_order=2,
         build_method="DuffyRadial",
-        dim=1,
+        dim=dim,
         sumpy_kernel=object(),
         derive_kernel_func=False,
         progress_bar=False,
@@ -1656,7 +1663,7 @@ def test_duffy_radial_routes_queue_to_batched_builder_1d(monkeypatch):
     seen = {}
 
     def fail_build_normalizer_table(self, pool=None, pb=None):
-        raise AssertionError("normalizer table should not be built in 1D")
+        raise AssertionError(f"normalizer table should not be built in {dim}D")
 
     def fake_batched(
         self,
@@ -1696,64 +1703,7 @@ def test_duffy_radial_routes_queue_to_batched_builder_1d(monkeypatch):
 
     assert seen["called"]
     assert seen["queue"] is q
-    assert seen["dim"] == 1
-    assert table.last_duffy_build_timings["normalizer_s"] == 0.0
-
-
-def test_duffy_radial_routes_queue_to_batched_builder_3d(monkeypatch):
-    table = npt.NearFieldInteractionTable(
-        quad_order=2,
-        build_method="DuffyRadial",
-        dim=3,
-        sumpy_kernel=object(),
-        derive_kernel_func=False,
-        progress_bar=False,
-    )
-
-    seen = {}
-
-    def fail_build_normalizer_table(self, pool=None, pb=None):
-        raise AssertionError("normalizer table should not be built in 3D")
-
-    def fake_batched(
-        self,
-        queue,
-        radial_rule,
-        deg_theta,
-        radial_quad_order,
-        mp_dps,
-        kernel_kwargs=None,
-    ):
-        seen["queue"] = queue
-        seen["dim"] = self.dim
-        seen["called"] = True
-        self.is_built = True
-        self.last_duffy_build_timings = {
-            "invariant_info_s": 0.0,
-            "quadrature_s": 0.0,
-            "scatter_s": 0.0,
-            "total_s": 0.0,
-            "n_entries": 0,
-        }
-
-    monkeypatch.setattr(
-        npt.NearFieldInteractionTable,
-        "build_normalizer_table",
-        fail_build_normalizer_table,
-    )
-
-    monkeypatch.setattr(
-        npt.NearFieldInteractionTable,
-        "build_table_via_duffy_radial_batched",
-        fake_batched,
-    )
-
-    q = object()
-    table.build_table_via_duffy_radial(queue=q)
-
-    assert seen["called"]
-    assert seen["queue"] is q
-    assert seen["dim"] == 3
+    assert seen["dim"] == dim
     assert table.last_duffy_build_timings["normalizer_s"] == 0.0
 
 
@@ -2398,6 +2348,7 @@ def test_arithmetic_orbit_reconstruction_sorts_nonadjacent_group_axes():
         "mixed-directional-target-derivative",
     ],
 )
+@pytest.mark.slow
 def test_arithmetic_orbit_reconstruction_matches_dense_oracle(kernel_case):
     from sumpy.kernel import (
         AxisSourceDerivative,
@@ -2671,8 +2622,6 @@ def test_arithmetic_orbit_reconstruction_q3_payload_diagnostic_row():
 
 
 def test_table_payload_serialization_excludes_nan_sentinels_for_reduced_tables():
-    import io
-
     from volumential.table_manager import (
         _deserialize_table_payload,
         _serialize_table_payload,
@@ -2779,6 +2728,813 @@ def test_batched_duffy_non_cl_executor_signature(monkeypatch):
     )
     assert values.shape == (1,)
     assert np.allclose(values, np.array([3.14], dtype=table.dtype))
+
+
+# {{{ batched-to-scalar fallback is loud and recorded
+
+
+def _const_table_for_fallback():
+    return npt.NearFieldInteractionTable(
+        quad_order=1,
+        kernel_func=npt.constant_one,
+        kernel_type="const",
+        sumpy_kernel=ConstantKernel(2),
+        progress_bar=False,
+    )
+
+
+def _raise_batched(monkeypatch, message="synthetic batched build failure"):
+    def failing_batched(self, queue, *args, **kwargs):
+        raise RuntimeError(message)
+
+    monkeypatch.setattr(
+        npt.NearFieldInteractionTable,
+        "build_table_via_duffy_radial_batched",
+        failing_batched,
+    )
+
+
+def test_scalar_fallback_warns_and_records_routing(monkeypatch):
+    queue = _make_build_queue_or_skip()
+    monkeypatch.delenv(npt.DUFFY_NO_FALLBACK_ENV_VAR, raising=False)
+    _raise_batched(monkeypatch)
+
+    table = _const_table_for_fallback()
+    with pytest.warns(RuntimeWarning, match="falling back to the scalar"):
+        table.build_table(queue=queue)
+
+    assert table.is_built
+    assert table.build_routing == "scalar-fallback"
+    assert table.build_fallback_reason == (
+        "RuntimeError: synthetic batched build failure"
+    )
+    # the scalar builder still produced the right table
+    for entry_id in range(len(table.data)):
+        assert np.allclose(table.get_entry_data(entry_id), 1)
+
+
+def test_batched_build_records_batched_routing(monkeypatch):
+    queue = _make_build_queue_or_skip()
+    monkeypatch.delenv(npt.DUFFY_NO_FALLBACK_ENV_VAR, raising=False)
+
+    table = _const_table_for_fallback()
+    table.build_table(queue=queue)
+
+    assert table.build_routing == "batched"
+    assert table.build_fallback_reason is None
+
+
+def test_no_fallback_env_var_turns_the_fallback_into_an_error(monkeypatch):
+    queue = _make_build_queue_or_skip()
+    monkeypatch.setenv(npt.DUFFY_NO_FALLBACK_ENV_VAR, "1")
+    _raise_batched(monkeypatch)
+
+    table = _const_table_for_fallback()
+    with pytest.raises(RuntimeError, match=npt.DUFFY_NO_FALLBACK_ENV_VAR):
+        table.build_table(queue=queue)
+
+    assert not table.is_built
+
+
+@pytest.mark.parametrize("value", ["0", "false", "off", ""])
+def test_no_fallback_env_var_off_values_keep_the_fallback(monkeypatch, value):
+    queue = _make_build_queue_or_skip()
+    monkeypatch.setenv(npt.DUFFY_NO_FALLBACK_ENV_VAR, value)
+    _raise_batched(monkeypatch)
+
+    table = _const_table_for_fallback()
+    with pytest.warns(RuntimeWarning, match="falling back to the scalar"):
+        table.build_table(queue=queue)
+
+    assert table.build_routing == "scalar-fallback"
+
+
+def test_record_build_routing_rejects_unknown_routings():
+    table = _const_table_for_fallback()
+    with pytest.raises(ValueError, match="unknown DuffyRadial build routing"):
+        table._record_build_routing("turbo")
+
+
+# }}}
+
+
+# {{{ complex exponentials avoid cdouble_exp
+
+
+def _pymbolic_eval(expr, context):
+    import cmath
+
+    from pymbolic import evaluate
+
+    return evaluate(
+        expr,
+        {"exp": cmath.exp, "cos": cmath.cos, "sin": cmath.sin, **context},
+    )
+
+
+def test_split_complex_expression_is_exact_for_purely_imaginary():
+    import pymbolic.primitives as prim
+
+    k = prim.Variable("k")
+    r = prim.Variable("r")
+    real_part, imag_part = npt._split_complex_expression(
+        prim.Product((np.complex128(1j), k, r))
+    )
+
+    assert npt._is_structural_zero(real_part)
+    assert _pymbolic_eval(imag_part, {"k": 3.0, "r": 5.0}) == 15.0
+
+
+def test_split_complex_expression_is_exact_for_a_damped_exponent():
+    import pymbolic.primitives as prim
+
+    alpha = prim.Variable("alpha")
+    beta = prim.Variable("beta")
+    r = prim.Variable("r")
+    # the damped complex-frequency form (-alpha + i beta) * r
+    argument = prim.Product((
+        prim.Sum((
+            prim.Product((-1, alpha)),
+            prim.Product((np.complex128(1j), beta)),
+        )),
+        r,
+    ))
+    real_part, imag_part = npt._split_complex_expression(argument)
+
+    context = {"alpha": 0.7, "beta": 11.0, "r": 1.3}
+    assert _pymbolic_eval(real_part, context) == pytest.approx(-0.91)
+    assert _pymbolic_eval(imag_part, context) == pytest.approx(14.3)
+    # re + 1j*im must reproduce the original exponent exactly
+    assert _pymbolic_eval(argument, context) == pytest.approx(
+        _pymbolic_eval(real_part, context)
+        + 1j * _pymbolic_eval(imag_part, context)
+    )
+
+
+def test_complex_exponential_rewriter_preserves_the_value():
+    import pymbolic.primitives as prim
+
+    rewriter = npt.ComplexExponentialRewriter()
+    alpha = prim.Variable("alpha")
+    beta = prim.Variable("beta")
+    r = prim.Variable("r")
+
+    for argument in (
+        prim.Product((np.complex128(1j), beta, r)),
+        prim.Product((
+            prim.Sum((
+                prim.Product((-1, alpha)),
+                prim.Product((np.complex128(1j), beta)),
+            )),
+            r,
+        )),
+    ):
+        original = prim.Call(prim.Variable("exp"), (argument,))
+        rewritten = rewriter(original)
+        assert rewritten != original
+        for context in (
+            {"alpha": 0.7, "beta": 11.0, "r": 1.3},
+            {"alpha": -2.5, "beta": 0.25, "r": 0.4},
+        ):
+            assert _pymbolic_eval(rewritten, context) == pytest.approx(
+                _pymbolic_eval(original, context), rel=1e-13, abs=1e-15
+            )
+
+
+def test_complex_exponential_rewriter_leaves_real_exponents_alone():
+    import pymbolic.primitives as prim
+
+    rewriter = npt.ComplexExponentialRewriter()
+    argument = prim.Product((-1, prim.Variable("lam"), prim.Variable("r")))
+    original = prim.Call(prim.Variable("exp"), (argument,))
+
+    assert rewriter(original) == original
+
+
+def _fused_device_code(sumpy_kernel, dim, queue, *, n_entries=8, n_nodes=64):
+    import loopy as lp
+
+    table = npt.NearFieldInteractionTable(
+        quad_order=2,
+        dim=dim,
+        dtype=np.complex128,
+        sumpy_kernel=sumpy_kernel,
+        progress_bar=False,
+    )
+    program = table._get_fused_invariant_duffy_table_program(
+        queue, n_entries, n_nodes
+    )
+    return lp.generate_code_v2(program).device_code()
+
+
+def test_helmholtz_fused_duffy_code_has_no_cdouble_exp():
+    """The generated complex kernel must not call ``cdouble_exp``.
+
+    pyopencl implements it with the OpenCL ``sincos`` out-parameter builtin,
+    which is pathologically slow on the PoCL CPU driver; see
+    ``ComplexExponentialRewriter``.
+    """
+    from sumpy.kernel import HelmholtzKernel
+
+    queue = _make_build_queue_or_skip()
+    code = _fused_device_code(HelmholtzKernel(3), 3, queue)
+
+    assert "cdouble_exp" not in code
+    # nor any other complex transcendental, which pyopencl implements the
+    # same way
+    for name in ("cdouble_cos", "cdouble_sin", "cdouble_pow", "cdouble_powr"):
+        assert name not in code
+    # the phase must instead go through the real transcendentals
+    assert "cos(" in code
+    assert "sin(" in code
+
+
+def test_yukawa_fused_duffy_code_keeps_a_real_exp():
+    from sumpy.kernel import YukawaKernel
+
+    queue = _make_build_queue_or_skip()
+    code = _fused_device_code(YukawaKernel(3), 3, queue)
+
+    assert "cdouble_exp" not in code
+    assert "exp(" in code
+
+
+def test_complex_exponential_rewriter_visits_a_shared_cse_once():
+    """The CSE cache must actually be in the MRO.
+
+    Both ``CSECachingMapperMixin`` and ``IdentityMapper`` define
+    ``map_common_subexpression``; with the mixin second the uncached
+    ``IdentityMapper`` method wins and a shared node in the post-CSE DAG is
+    rebuilt once per reference.
+    """
+    import pymbolic.primitives as prim
+    from pymbolic.mapper import CSECachingMapperMixin, IdentityMapper
+
+    bases = npt.ComplexExponentialRewriter.__mro__
+    assert bases.index(CSECachingMapperMixin) < bases.index(IdentityMapper)
+    assert (
+        npt.ComplexExponentialRewriter.map_common_subexpression.__qualname__
+        == "CSECachingMapperMixin.map_common_subexpression"
+    )
+
+    visits = []
+
+    class _CountingRewriter(npt.ComplexExponentialRewriter):
+        def map_common_subexpression_uncached(self, expr, /, *args, **kwargs):
+            visits.append(expr)
+            return super().map_common_subexpression_uncached(
+                expr, *args, **kwargs
+            )
+
+    # one CSE object referenced three times, as sumpy's global CSE leaves it
+    shared = prim.CommonSubexpression(
+        prim.Product((prim.Variable("k"), prim.Variable("r")))
+    )
+    expr = prim.Sum((shared, shared, prim.Product((2, shared))))
+
+    _CountingRewriter()(expr)
+    assert len(visits) == 1
+
+
+def test_only_a_declared_double_argument_is_proven():
+    """One rule for every argument dtype, because loopy's inference is
+    not reproducible from the expression alone.
+
+    An argument is proven only when it is declared as a real floating
+    type at least as wide as a double.  Complex, narrow, integer and
+    undeclared dtypes are all unproven -- an integer alone narrows the
+    result of a floating builtin, and even a plain ``3.0`` beside an
+    integer comes out ``3.0f``, so this module does not try to model it.
+    """
+    import loopy as lp
+    import numpy as _np
+    from sumpy.kernel import (
+        HelmholtzKernel,
+        KernelArgument,
+        LaplaceKernel,
+        YukawaKernel,
+    )
+
+    def _kernel(dtype):
+        class _K:
+            @staticmethod
+            def get_args():
+                return [KernelArgument(lp.ValueArg("k", dtype))]
+        return _K()
+
+    # the kernels this table actually builds declare float64 parameters
+    assert npt._kernel_arg_names_not_known_real(HelmholtzKernel(3)) == (
+        frozenset()
+    )
+    assert npt._kernel_arg_names_not_known_real(YukawaKernel(3)) == frozenset()
+    assert npt._kernel_arg_names_not_known_real(LaplaceKernel(3)) == (
+        frozenset()
+    )
+    assert npt._kernel_arg_names_not_known_real(None) == frozenset()
+    assert npt._kernel_arg_names_not_known_real(_kernel(_np.float64)) == (
+        frozenset()
+    )
+
+    # everything else is unproven
+    assert npt._kernel_arg_names_not_known_real(
+        HelmholtzKernel(3, allow_evanescent=True)
+    ) == frozenset({"k"})
+    for unproven in (
+        _np.complex128, _np.float32, _np.float16,
+        _np.int32, _np.int64, _np.uint32, None,
+    ):
+        assert npt._kernel_arg_names_not_known_real(
+            _kernel(unproven)
+        ) == frozenset({"k"}), unproven
+
+    # a bare lp.ValueArg has no dtype at all
+    assert KernelArgument(lp.ValueArg("k")).loopy_arg.dtype is None
+
+
+@pytest.mark.parametrize(
+    "build_phase",
+    [
+        # the bare integer argument
+        lambda prim, n, k: n,
+        # ... behind an integer-preserving call
+        lambda prim, n, k: prim.Call(prim.Variable("abs"), (n,)),
+        # ... behind a floating builtin, which loopy narrows anyway
+        lambda prim, n, k: prim.Call(prim.Variable("floor"), (n,)),
+        # ... scaled by a Python float, which loopy emits as 3.0f
+        lambda prim, n, k: prim.Product((3.0, n)),
+        # ... and mixed with a proven double, which does not rescue it
+        lambda prim, n, k: prim.Product((n, k)),
+    ],
+)
+def test_any_unproven_argument_declines_the_rewrite(build_phase):
+    """One rule covers every way an unproven argument can enter a phase.
+
+    Each of these used to need its own predicate branch, and each new
+    shape found the next gap; the dependency on an unproven argument is
+    the thing they have in common.
+    """
+    import pymbolic.primitives as prim
+
+    n = prim.Variable("n")
+    k = prim.Variable("k")
+    unproven = frozenset({"n"})
+    phase = build_phase(prim, n, k)
+
+    assert npt._is_known_real(phase)              # proven when n is a double
+    assert not npt._is_known_real(phase, unproven)
+
+    original = prim.Call(
+        prim.Variable("exp"), (prim.Product((np.complex128(1j), phase)),)
+    )
+    assert npt.ComplexExponentialRewriter(unproven)(original) == original
+    # ... and the same expression is rewritten when nothing is unproven
+    assert npt.ComplexExponentialRewriter()(original) != original
+
+
+def test_a_constant_only_half_is_not_proven_double():
+    """Nothing in an all-constant expression fixes the emitted precision.
+
+    loopy writes the constant real half of ``exp(-200 + 1j*k)`` as
+    ``exp((float) (-200.0f))``, which underflows to zero, where the
+    ``cdouble_exp`` it replaces kept the finite ``exp(-200)``.
+    """
+    import pymbolic.primitives as prim
+
+    k = prim.Variable("k")
+    rewriter = npt.ComplexExponentialRewriter()
+
+    constant_magnitude = prim.Call(
+        prim.Variable("exp"),
+        (prim.Sum((-200, prim.Product((np.complex128(1j), k)))),),
+    )
+    assert rewriter(constant_magnitude) == constant_magnitude
+
+    # a variable in the magnitude fixes it as a double, so it rewrites
+    with_variable = prim.Call(
+        prim.Variable("exp"),
+        (prim.Sum((
+            prim.Product((-200, prim.Variable("r"))),
+            prim.Product((np.complex128(1j), k)),
+        )),),
+    )
+    assert rewriter(with_variable) != with_variable
+
+    # ... and the same rule on the phase side
+    constant_phase = prim.Call(
+        prim.Variable("exp"), (prim.Product((np.complex128(1j), 3.5)),)
+    )
+    assert rewriter(constant_phase) == constant_phase
+
+    # a purely imaginary exponent with a variable phase is unaffected: the
+    # magnitude is a structural zero, so there is no exp() to prove
+    ordinary = prim.Call(
+        prim.Variable("exp"), (prim.Product((np.complex128(1j), k)),)
+    )
+    assert rewriter(ordinary) != ordinary
+
+    # ... and this is the arithmetic at stake
+    assert np.exp(np.float64(-200.0)) > 0
+    assert np.exp(np.float32(-200.0)) == 0
+
+
+def test_extra_loopy_argument_dtypes_join_the_guard():
+    """``extra_kernel_kwarg_types`` are not in ``integral_knl.get_args()``.
+
+    A ``complex128`` parameter supplied that way would otherwise look like
+    a proven ``float64`` and the exponent would be rewritten into the
+    cancellation-prone form.
+    """
+    import loopy as lp
+    import numpy as _np
+
+    assert npt._loopy_arg_names_not_known_real(()) == frozenset()
+    assert npt._loopy_arg_names_not_known_real(
+        [lp.ValueArg("k", _np.float64)]
+    ) == frozenset()
+    for unproven in (_np.complex128, _np.float32, _np.int32, None):
+        assert npt._loopy_arg_names_not_known_real(
+            [lp.ValueArg("k", unproven)]
+        ) == frozenset({"k"}), unproven
+
+    # and the table threads them into the rewriter it builds
+    table = npt.NearFieldInteractionTable(quad_order=1, dim=2)
+    plain = table._complex_exponential_rewriter()
+    guarded = table._complex_exponential_rewriter(
+        [lp.ValueArg("k", _np.complex128)]
+    )
+    assert "k" not in plain.unproven_arg_names
+    assert "k" in guarded.unproven_arg_names
+
+
+def test_the_magnitude_obeys_the_same_argument_rule():
+    """``exp(re)`` is a bare real call too, so ``re`` clears the same bar."""
+    import pymbolic.primitives as prim
+
+    a = prim.Variable("a")
+    k = prim.Variable("k")
+    argument = prim.Sum((
+        prim.Product((-1, a)),
+        prim.Product((np.complex128(1j), k)),
+    ))
+    original = prim.Call(prim.Variable("exp"), (argument,))
+
+    assert npt.ComplexExponentialRewriter()(original) != original
+    assert npt.ComplexExponentialRewriter(frozenset({"a"}))(original) == (
+        original
+    )
+    # a purely imaginary exponent has no magnitude to prove
+    phase_only = prim.Call(
+        prim.Variable("exp"), (prim.Product((np.complex128(1j), k)),)
+    )
+    assert npt.ComplexExponentialRewriter(frozenset({"a"}))(phase_only) != (
+        phase_only
+    )
+
+
+def test_narrow_and_complex_constants_are_not_proof_of_a_double():
+    """A constant's *type* decides, not its value."""
+    import pymbolic.primitives as prim
+
+    n = prim.Variable("n")
+
+    assert npt._is_known_real(0.1)          # Python float is a double
+    assert npt._is_known_real(np.float64(0.1))
+    assert npt._is_known_real(3)            # an exact integer constant
+    assert not npt._is_known_real(np.float32(0.1))
+    assert not npt._is_known_real(np.float16(0.1))
+    assert not npt._is_known_real(np.complex128(0j))
+    assert not npt._is_known_real(prim.Product((np.float32(0.1), n)))
+
+    original = prim.Call(
+        prim.Variable("exp"),
+        (prim.Product((np.complex128(1j), np.float32(0.1), n)),),
+    )
+    assert npt.ComplexExponentialRewriter()(original) == original
+    widened = prim.Call(
+        prim.Variable("exp"),
+        (prim.Product((np.complex128(1j), np.float64(0.1), n)),),
+    )
+    assert npt.ComplexExponentialRewriter()(widened) != widened
+
+
+def test_a_complex_typed_constant_behind_a_call_is_not_proof_of_realness():
+    """``sqrt(x + complex128(0j))`` can come back imaginary.
+
+    At ``x = -1600`` it is ``40j``, the true value is ``exp(-40)``, and
+    the Euler form cancels to exactly zero.
+    """
+    import cmath
+
+    import pymbolic.primitives as prim
+
+    x = prim.Variable("x")
+    phase = prim.Call(
+        prim.Variable("sqrt"), (prim.Sum((x, np.complex128(0j))),)
+    )
+    assert not npt._is_known_real(phase)
+    # a real-typed zero in the same position is fine
+    assert npt._is_known_real(
+        prim.Call(prim.Variable("sqrt"), (prim.Sum((x, np.float64(0.0))),))
+    )
+
+    original = prim.Call(
+        prim.Variable("exp"), (prim.Product((np.complex128(1j), phase)),)
+    )
+    assert npt.ComplexExponentialRewriter()(original) == original
+
+    imaginary_phase = cmath.sqrt(complex(-1600.0))
+    assert imaginary_phase == 40j
+    assert cmath.exp(-40.0) != 0
+    assert cmath.cos(imaginary_phase) + 1j * cmath.sin(imaginary_phase) == 0
+    with np.errstate(over="ignore", invalid="ignore"):
+        far = np.sqrt(np.complex128(-1.0e6))
+        assert np.isfinite(np.exp(1j * far))
+        assert not np.isfinite(np.cos(far) + 1j * np.sin(far))
+
+
+def test_a_quotient_by_one_does_not_hide_the_phase():
+    """``SympyToPymbolicMapper`` wraps the scaling constant in a ``/1``.
+
+    ``exp(1j*k)`` arrives as ``exp((1j*k)/1)``; without walking the
+    quotient the exponent is opaque, the imaginary part is a structural
+    zero, and the ``cdouble_exp`` this PR exists to remove stays put.
+    """
+    import pymbolic.primitives as prim
+
+    k = prim.Variable("k")
+    wrapped = prim.Quotient(prim.Product((np.complex128(1j), k)), 1)
+
+    real_part, imag_part = npt._split_complex_expression(wrapped)
+    assert npt._is_structural_zero(real_part)
+    assert _pymbolic_eval(imag_part, {"k": 2.5}) == pytest.approx(2.5)
+
+    original = prim.Call(prim.Variable("exp"), (wrapped,))
+    rewritten = npt.ComplexExponentialRewriter()(original)
+    assert rewritten != original
+    for value in (0.4, 2.5, 7.0):
+        assert _pymbolic_eval(rewritten, {"k": value}) == pytest.approx(
+            _pymbolic_eval(original, {"k": value}), rel=1e-13
+        )
+
+    # a genuinely complex denominator is left alone rather than divided
+    # through, which would reintroduce the cancellation
+    complex_denominator = prim.Quotient(
+        prim.Product((np.complex128(1j), k)),
+        prim.Sum((1.0, np.complex128(1j))),
+    )
+    assert npt.ComplexExponentialRewriter()(
+        prim.Call(prim.Variable("exp"), (complex_denominator,))
+    ) == prim.Call(prim.Variable("exp"), (complex_denominator,))
+
+
+def test_proving_a_product_chain_stays_linear():
+    """The proof must walk the named DAG, not expand it into a tree.
+
+    Each factor's named real/imaginary pair references *both* members of
+    the previous pair, so a naive recursion is exponential in the number
+    of factors even though the DAG itself is linear.
+    """
+    import time
+
+    import pymbolic.primitives as prim
+
+    def chain(n_factors):
+        return prim.Product(tuple(
+            prim.Sum((
+                prim.Variable(f"a{i}"),
+                prim.Product((np.complex128(1j), prim.Variable(f"b{i}"))),
+            ))
+            for i in range(n_factors)
+        ))
+
+    def prove(n_factors):
+        real_part, imag_part = npt._split_complex_expression(chain(n_factors))
+        start = time.perf_counter()
+        assert npt._is_known_real(real_part)
+        assert npt._is_known_real(imag_part)
+        assert npt._has_variable(imag_part)
+        return time.perf_counter() - start
+
+    prove(4)  # warm any import-time cost
+    small = prove(6)
+    large = prove(20)
+
+    # 20 factors against 6 is 2**14 times the work if the walk is a tree;
+    # a generous linear-ish bound still separates the two by orders of
+    # magnitude
+    assert large < 200 * max(small, 1.0e-6), (small, large)
+
+
+def test_splitting_a_product_chain_stays_linear():
+    """The split must not build an exponentially large expression tree.
+
+    Each factor of a chain of complex sums embeds both accumulated
+    components into both of its outputs, so without naming them the DAG
+    doubles per factor and every later walk -- the realness proof, code
+    generation -- traverses it as a tree.
+    """
+    import pymbolic.primitives as prim
+    from pymbolic.mapper import WalkMapper
+
+    class _Counter(WalkMapper):
+        def __init__(self):
+            super().__init__()
+            self.n = 0
+
+        def visit(self, expr, *args, **kwargs):
+            self.n += 1
+            # do not descend into a named subexpression twice
+            return not isinstance(expr, prim.CommonSubexpression)
+
+    def chain(n_factors):
+        return prim.Product(tuple(
+            prim.Sum((
+                prim.Variable(f"a{i}"),
+                prim.Product((np.complex128(1j), prim.Variable(f"b{i}"))),
+            ))
+            for i in range(n_factors)
+        ))
+
+    sizes = []
+    for n_factors in (2, 4, 6, 8):
+        real_part, imag_part = npt._split_complex_expression(
+            chain(n_factors)
+        )
+        counter = _Counter()
+        counter(real_part)
+        counter(imag_part)
+        sizes.append(counter.n)
+
+    # linear, not doubling: 8 factors must not cost anything like 2**8
+    # times the 2-factor size
+    assert sizes[-1] < 6 * sizes[0], sizes
+
+    # ... and the split is still exact
+    context = {}
+    expected = 1.0 + 0j
+    for i in range(8):
+        context[f"a{i}"] = 0.5 + 0.1 * i
+        context[f"b{i}"] = 0.25 - 0.05 * i
+        expected *= context[f"a{i}"] + 1j * context[f"b{i}"]
+    real_part, imag_part = npt._split_complex_expression(chain(8))
+    assert _pymbolic_eval(real_part, context) + 1j * _pymbolic_eval(
+        imag_part, context
+    ) == pytest.approx(expected)
+
+
+def test_complex_exponential_rewriter_keeps_a_possibly_complex_phase():
+    """A complex ``k`` must keep ``exp``; Euler's formula loses it to cancellation.
+
+    For ``z = x + 1j*y`` both ``cos z`` and ``sin z`` grow like
+    ``exp(|y|)/2`` while ``exp(1j*z)`` decays like ``exp(-y)``, so rewriting
+    a damped phase through Euler's formula subtracts two large numbers to get
+    a small one.
+    """
+    import pymbolic.primitives as prim
+
+    k = prim.Variable("k")
+    r = prim.Variable("r")
+    argument = prim.Product((np.complex128(1j), k, r))
+    original = prim.Call(prim.Variable("exp"), (argument,))
+
+    # a real k: the rewrite is safe and must still happen
+    assert npt.ComplexExponentialRewriter()(original) != original
+    # a complex k: the rewrite must be declined
+    guarded = npt.ComplexExponentialRewriter(frozenset({"k"}))
+    assert guarded(original) == original
+
+    # ... and this is why.  With an evanescent k, Euler's form is numerically
+    # worthless even though it is algebraically identical, in two stages:
+    def euler(phase):
+        with np.errstate(over="ignore", invalid="ignore"):
+            return np.cos(phase) + 1j * np.sin(phase)
+
+    # the rewrite would feed cos/sin the phase k*r, against exp(1j*k*r)
+    #
+    # moderate damping: cos and sin are each ~exp(|imag|)/2 and cancel to
+    # exactly zero, so every digit of the decaying answer is gone
+    phase = np.complex128(3.0 + 40.0j) * 12.0
+    assert np.exp(1j * phase) != 0
+    assert abs(np.exp(1j * phase)) < 1e-200
+    assert euler(phase) == 0
+
+    # heavier damping: cos and sin overflow before they can cancel
+    phase = np.complex128(3.0 + 100.0j) * 12.0
+    assert np.isfinite(np.exp(1j * phase))
+    assert not np.isfinite(euler(phase))
+
+
+def test_is_known_real_proves_the_shapes_the_duffy_builder_produces():
+    """The real Helmholtz/Yukawa phase must pass the guard, node for node.
+
+    The shape below is the exponent the fused Duffy builder actually hands
+    the rewriter for ``HelmholtzKernel(3)`` (captured from
+    ``_get_fused_invariant_duffy_table_program``): a wave number times a
+    CSE-wrapped ``sqrt`` of a CSE-wrapped sum of squared coordinate
+    differences.
+    """
+    import pymbolic.primitives as prim
+
+    coords = prim.CommonSubexpression(
+        prim.Sum(tuple(
+            prim.Power(prim.Variable(f"d{axis}"), 2) for axis in range(3)
+        ))
+    )
+    radius = prim.CommonSubexpression(
+        prim.Call(prim.Variable("sqrt"), (coords,))
+    )
+    phase = prim.Product((prim.Variable("k"), radius))
+
+    assert npt._is_known_real(phase)
+    assert npt._is_known_real(phase, frozenset({"lam"}))
+    # ... and not once k is a complex-valued kernel argument
+    assert not npt._is_known_real(phase, frozenset({"k"}))
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        # a complex constant hidden behind an opaque CSE: no complex-typed
+        # dependency anywhere, yet the phase is complex.  The fused Duffy
+        # expressions are post-CSE, so this is the shape that matters.
+        lambda prim: prim.CommonSubexpression(
+            prim.Product((np.complex128(3.0 + 40.0j), prim.Variable("r")))
+        ),
+        # a function this module cannot prove real-valued
+        lambda prim: prim.Call(
+            prim.Variable("hankel1"), (0, prim.Variable("r"))
+        ),
+        # an unrecognized node type
+        lambda prim: prim.If(
+            prim.Variable("c"), prim.Variable("a"), prim.Variable("b")
+        ),
+    ],
+)
+def test_an_opaque_phase_is_not_proved_real_and_keeps_its_exp(build):
+    import pymbolic.primitives as prim
+
+    inner = build(prim)
+    assert not npt._is_known_real(inner)
+
+    # ... so exp(1j * inner) keeps its complex exponential
+    original = prim.Call(
+        prim.Variable("exp"),
+        (prim.Product((np.complex128(1j), inner)),),
+    )
+    assert npt.ComplexExponentialRewriter()(original) == original
+
+
+def test_a_visible_complex_constant_is_split_and_still_rewritten():
+    """The guard must not over-refuse: a *walked* complex constant is safe.
+
+    ``exp(1j * (3 + 40j) * r)`` is ``exp(-40r) * (cos(3r) + 1j sin(3r))``.
+    The split separates the constant, so both the magnitude and the phase
+    are real and the rewrite is well conditioned -- unlike the CSE-wrapped
+    form above, where the same constant is invisible to the split.
+    """
+    import cmath
+
+    import pymbolic.primitives as prim
+
+    argument = prim.Product((
+        np.complex128(1j),
+        np.complex128(3.0 + 40.0j),
+        prim.Variable("r"),
+    ))
+    original = prim.Call(prim.Variable("exp"), (argument,))
+    rewritten = npt.ComplexExponentialRewriter()(original)
+    assert rewritten != original
+
+    for r in (0.4, 1.3, 12.0):
+        assert _pymbolic_eval(rewritten, {"r": r}) == pytest.approx(
+            cmath.exp(1j * (3.0 + 40.0j) * r), rel=1e-13, abs=1e-300
+        )
+
+
+def test_the_opaque_cse_phase_would_have_cancelled_to_zero():
+    """Why the case above matters: the numbers, not just the type argument."""
+    def euler(phase):
+        with np.errstate(over="ignore", invalid="ignore"):
+            return np.cos(phase) + 1j * np.sin(phase)
+
+    # exp(1j * ((3+40j) * r)) at r = 12, the value the rewrite would have
+    # replaced with cos + 1j*sin of the same complex phase
+    phase = np.complex128(3.0 + 40.0j) * 12.0
+    assert abs(np.exp(1j * phase)) < 1e-200
+    assert np.exp(1j * phase) != 0
+    assert euler(phase) == 0
+
+
+def test_evanescent_helmholtz_fused_duffy_code_keeps_cdouble_exp():
+    from sumpy.kernel import HelmholtzKernel
+
+    queue = _make_build_queue_or_skip()
+    code = _fused_device_code(HelmholtzKernel(3, allow_evanescent=True), 3, queue)
+
+    assert "cdouble_exp" in code
+
+
+# }}}
 
 
 if __name__ == "__main__":

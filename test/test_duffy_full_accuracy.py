@@ -1,9 +1,14 @@
+"""High-cost accuracy sweeps for the batched Duffy-radial table builder.
+
+Everything here is marked ``full_accuracy`` and therefore skipped unless
+``pytest --full-accuracy`` is used.
+"""
+
 import numpy as np
 import pytest
 from numpy.polynomial.legendre import leggauss
 
 import pyopencl as cl
-
 from sumpy.kernel import (
     AxisSourceDerivative,
     AxisTargetDerivative,
@@ -14,6 +19,7 @@ from sumpy.kernel import (
 from sumpy.point_calculus import CalculusPatch
 
 import volumential.nearfield_potential_table as npt
+
 
 try:
     from _duffy_test_utils import pick_far_positive_case_id
@@ -188,7 +194,7 @@ def _make_interpolated_source_callable(table, source_values):
 
     def source_interp(*coords):
         out = np.zeros_like(np.asarray(coords[0], dtype=out_dtype))
-        for mode_value, mode in zip(source_values, modes):
+        for mode_value, mode in zip(source_values, modes, strict=True):
             out = out + mode_value * mode(*coords)
         return out
 
@@ -524,7 +530,8 @@ def test_duffy_batched_derivative_full_accuracy_matrix(
     ) / max(1.0, abs(fd_target_derivative))
     antisymmetry_error = abs(target_table_value + source_table_value) / max(
         1.0,
-        max(abs(target_table_value), abs(source_table_value)),
+        abs(target_table_value),
+        abs(source_table_value),
     )
 
     assert rel_target_error < cfg["rel_tol"]

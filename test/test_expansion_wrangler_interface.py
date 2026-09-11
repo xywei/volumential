@@ -1,3 +1,7 @@
+"""Tests that the abstract ExpansionWranglerInterface enforces the FMM
+stage contract its subclasses are expected to implement.
+"""
+
 
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 

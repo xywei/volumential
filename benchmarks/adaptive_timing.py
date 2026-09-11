@@ -74,6 +74,10 @@ FIELDS = (
     "per_level_table_count",
     "per_level_table_build_s",
     "per_level_table_payload_bytes",
+    # DuffyRadial routing recorded by the builder for the per-level direct
+    # tables (';'-joined over levels); "scalar-fallback" marks a row built by
+    # the slower per-entry builder after a batched failure
+    "direct_build_routing",
 )
 
 
@@ -380,6 +384,7 @@ def _get_per_level_tables(
         "per_level_table_count": len(tables),
         "per_level_table_build_s": build_s,
         "per_level_table_payload_bytes": payload_bytes,
+        "direct_build_routing": _table_build_routing(tables),
     }
 
 
@@ -549,6 +554,25 @@ def _table_build_seconds(timings) -> float:
     return float(details.get("table_build_s", details.get("total_s", 0.0)))
 
 
+def _table_build_routing(tables) -> str:
+    """The distinct recorded DuffyRadial routings of ``tables``, ';'-joined."""
+    import volumential.opcounters as opcounters
+
+    return ";".join(sorted({
+        opcounters.direct_build_routing(table) for table in tables
+    }))
+
+
+def _table_build_routing_union(per_level_routing: str, canonical_table) -> str:
+    """``per_level_routing`` widened to include the canonical table's."""
+    import volumential.opcounters as opcounters
+
+    routings = {routing for routing in per_level_routing.split(";") if routing}
+    if canonical_table is not None:
+        routings.add(opcounters.direct_build_routing(canonical_table))
+    return ";".join(sorted(routings))
+
+
 def _equivalence_diagnostics(
     canonical_potential,
     per_level_potential,
@@ -556,7 +580,17 @@ def _equivalence_diagnostics(
     source_levels: list[int],
     canonical_table_timings,
     per_level_table_diagnostics,
+    canonical_table=None,
 ) -> dict[str, Any]:
+    """Diagnostics comparing the canonical and per-level table paths.
+
+    *canonical_table* is folded into ``direct_build_routing``.  Each row
+    times its FMM trials against *that* table, so reporting only the
+    per-level routing could say ``batched`` while the timed table came out
+    of the scalar fallback (or the reverse).  Both routings are unioned
+    into the one column, in the same ``';'``-joined form
+    :func:`_table_build_routing` uses everywhere else.
+    """
     if len(source_levels) < 2:
         raise RuntimeError("canonical/per-level comparison requires mixed source levels")
     if not (
@@ -590,6 +624,10 @@ def _equivalence_diagnostics(
             canonical_table_timings
         ),
         **per_level_table_diagnostics,
+        "direct_build_routing": _table_build_routing_union(
+            per_level_table_diagnostics.get("direct_build_routing", ""),
+            canonical_table,
+        ),
     }
 
 
@@ -686,6 +724,7 @@ def run_case(
     fmm_order = max(8, 4 * q_order)
     rows = []
     canonical_table_timings = None
+    canonical_table = None
     canonical_potential = None
     for cache_state, force_recompute in (("cold", True), ("warm", False)):
         mesh, q_points, q_weights, tree, traversal, mesh_init_s, adapt_s, geometry_s = (
@@ -711,6 +750,7 @@ def run_case(
         )
         if cache_state == "cold":
             canonical_table_timings = table_timings
+            canonical_table = table
         rows.append(
             _row(
                 mode=mode,
@@ -763,6 +803,7 @@ def run_case(
         source_levels,
         canonical_table_timings,
         per_level_table_diagnostics,
+        canonical_table,
     )
     for row in rows:
         row.update(equivalence_diagnostics)
