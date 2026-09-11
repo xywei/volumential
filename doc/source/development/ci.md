@@ -3,11 +3,16 @@
 Two GitHub Actions workflows and two automated reviewers stand between a branch
 and `main`.
 
-## `CI` — every pull request
+## `CI` — pull requests targeting `main`
 
-`.github/workflows/ci.yml` runs on pull requests to `main`, on pushes to
-`main`, weekly, and on demand. It is the gate; everything in it should stay
-bounded in runtime.
+`.github/workflows/ci.yml` runs on pull requests **whose base is `main`**, on
+pushes to `main`, weekly, and on demand. It is the gate; everything in it
+should stay bounded in runtime.
+
+The base-branch restriction has a consequence worth stating before the table:
+a stacked pull request, which targets its parent branch rather than `main`,
+gets **none** of these checks. See
+[Stacked pull requests](#stacked-pull-requests).
 
 | Job | What it does |
 | --- | --- |
@@ -78,3 +83,14 @@ A branch stacked on another open pull request targets that branch, not `main`,
 and says so in its body. Merge the stack in order, and **do not delete a base
 branch while a child is still open** — deleting a base closes its stacked
 children.
+
+Two things do not work on a stacked pull request, and both are worth planning
+around:
+
+- **`CI` does not run.** Its `pull_request` trigger is restricted to base
+  `main`, so a stacked pull request has no lint, type, test or example job.
+  Run them locally, and expect the first check to happen when the stack
+  reaches `main`.
+- **CodeRabbit does not auto-review**, because auto-reviews are limited to the
+  default branch. Ask for one with `@coderabbitai review`. Codex reviews
+  stacked pull requests normally.

@@ -125,8 +125,13 @@ Both share the near-field machinery: table marshalling
 in {mod}`volumential.list1` (`NearFieldFromCSR` reads table data through the
 CSR interaction lists the traversal produced).
 
-`volumential.expansion_wrangler_fpnd` re-exports the whole package unchanged,
-so the historical import path keeps working.
+`volumential.expansion_wrangler_fpnd` is a compatibility shim: every name that
+*was* importable from it before the split is re-exported and refers to the same
+object, so the historical import path keeps working. It is not a mirror of the
+current package — names added since, the mixins
+`FMMLibBatchedStagesMixin`, `HelmholtzSplitCorrectionMixin` and
+`NearFieldPayloadCacheMixin` among them, exist only in
+{mod}`volumential.wranglers`. New code should import from there.
 
 ### 5. Drive it
 

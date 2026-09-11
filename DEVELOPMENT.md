@@ -64,10 +64,13 @@ produces evidence, local or remote.
 
 ### Inducer stack from Git sources
 
-The `inducer` projects (`boxtree`, `sumpy`, `loopy`, `pyopencl`, `pytools`,
-`modepy`, `arraycontext`, `meshmode`, `pytential`) release rarely, so
-`[tool.uv.sources]` installs them from main-branch Git sources and `uv.lock`
-records the resolved commits. Do not swap them for PyPI wheels in an
+Most of the `inducer` stack releases rarely, so `[tool.uv.sources]` installs
+it from main-branch Git sources and `uv.lock` records the resolved commits:
+`arraycontext`, `boxtree`, `cgen`, `genpy`, `gmsh_interop`, `loopy`,
+`meshmode`, `modepy`, `pyfmmlib`, `pymbolic`, `pytential`, `pytools`,
+`pyvisfile`, `sumpy`. `pyopencl` is *not* in that table -- it resolves from
+PyPI and `uv.lock` pins a release, so run metadata records its version rather
+than a commit. Do not swap them for PyPI wheels in an
 experiment environment, and capture the locked commits in the run metadata of
 any promoted result.
 

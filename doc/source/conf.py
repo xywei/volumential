@@ -237,11 +237,16 @@ def _write_legacy_redirects(app, exception):
         return
 
     out_dir = Path(app.outdir)
+    # Ownership comes from the *current* document set, never from what is on
+    # disk: an incremental build into an output directory that still holds a
+    # removed page's HTML would otherwise skip that page's redirect and leave
+    # the stale content served.
+    current_pages = {f"{docname}.html" for docname in app.env.found_docs}
     for source, target in _LEGACY_REDIRECTS.items():
-        stub = out_dir / source
-        if stub.exists():
+        if source in current_pages:
             # A real page owns this path now; never shadow it.
             continue
+        stub = out_dir / source
         stub.parent.mkdir(parents=True, exist_ok=True)
         href = posixpath.relpath(target, posixpath.dirname(source) or ".")
         stub.write_text(

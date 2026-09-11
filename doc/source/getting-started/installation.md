@@ -52,10 +52,13 @@ in play.
 
 ## Why the dependencies come from Git
 
-`[tool.uv.sources]` points the `inducer` projects — `boxtree`, `sumpy`,
-`loopy`, `pyopencl`, `pytools`, `modepy`, `arraycontext`, `meshmode`,
-`pytential` — at their main branches, and `uv.lock` records the resolved
-commits. These projects release rarely, and released wheels have shipped
+`[tool.uv.sources]` points most of the `inducer` stack at its main branches,
+and `uv.lock` records the resolved commits: `arraycontext`, `boxtree`, `cgen`,
+`genpy`, `gmsh_interop`, `loopy`, `meshmode`, `modepy`, `pyfmmlib`,
+`pymbolic`, `pytential`, `pytools`, `pyvisfile`, `sumpy`. **`pyopencl` is not
+among them** — it resolves from PyPI, and `uv.lock` pins a release
+(`2026.1.2`) rather than a commit, so that is the version an audit of an
+evidence environment should expect to find. These projects release rarely, and released wheels have shipped
 defects that corrupt results *silently*, which is a different and worse failure
 than a crash.
 

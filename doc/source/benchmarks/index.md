@@ -149,9 +149,17 @@ all three:
    less than the per-solve speedup suggests.
 3. **The solve itself** — the only number that scales with the problem.
 
-Drivers that report cold and warm rows — `adaptive_timing.py`,
-`table_equivalence_cache.py`, the composition drivers — do so per case, from
-the stage times `drive_volume_fmm` records in its `timing_data` mapping.
+Three different recorders produce the seconds in these CSVs, and a column
+should never mix them:
+
+- `drive_volume_fmm`'s `timing_data` mapping — the per-stage FMM times.
+  `adaptive_timing.py` is the driver that asks for it.
+- `NearFieldInteractionTableManager.last_get_table_timings` — cold build and
+  warm load of a table, read by `adaptive_timing.py` and
+  `table_equivalence_cache.py`, which is where their cold/warm rows come from.
+- `time.perf_counter()` around a whole phase or solve — what the composition
+  drivers report, and what the other two use for the parts outside the FMM and
+  the table manager.
 
 `volumential.phase_profile` is a different measurement and only two drivers
 use it: `split_parameter_sweep.py` and `break_even_validation.py`, which

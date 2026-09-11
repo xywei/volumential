@@ -67,7 +67,8 @@ needs it, and end-of-session cleanup of stray table caches.
 
 ## Examples as tests
 
-The maintained examples run in CI in a reduced configuration:
+Three examples run per pull request in a reduced configuration —
+`laplace2d.py`, `helmholtz2d.py` and `helmholtz3d.py`:
 
 ```bash
 VOLUMENTIAL_EXAMPLE_SMOKE=1 python examples/laplace2d.py
@@ -75,5 +76,10 @@ VOLUMENTIAL_EXAMPLE_SMOKE=1 python examples/laplace2d.py
 
 Smoke mode drops the quadrature order, level count and multipole order and uses
 a separate table cache file, so it finishes in seconds. An example that stops
-working in smoke mode is a broken example, and the job that runs them is a gate
-like any other.
+working in smoke mode is a broken example.
+
+The other maintained examples — `laplace3d.py`, `poisson3d.py`,
+`branched_flow_helmholtz2d.py` and the two `*_split_p_convergence.py` drivers —
+run at full settings in `CI Full`, which has no `pull_request` trigger. Nothing
+gates them on a pull request, so run the one you touched yourself. See
+{doc}`ci`.

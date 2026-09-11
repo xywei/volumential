@@ -28,9 +28,14 @@ defines the private `_HelmholtzSplitSeriesRemainderKernel` of
 {mod}`volumential.wranglers`. Yukawa uses the principal-branch substitution
 $k = i\lambda$, under which the assembled table is real.
 
-Every channel integrand is elementary (powers and `log`), so all channel tables
-build through the batched device Duffy path; no special-function quadrature is
-needed anywhere. The channel family is parameter independent, so once it is
+Every channel integrand is elementary (powers and `log`), so the channel family
+needs no special-function quadrature anywhere and is eligible for the batched
+device Duffy path — which is where the build-cost advantage comes from. It is
+eligibility, not a guarantee: `_get_channel_tables` forwards the caller's
+`build_config` to the table manager unchanged, so an adaptive configuration or
+a failed batched build records `scalar-adaptive` or `scalar-fallback` here like
+anywhere else (see {doc}`../user-guide/table-build-routing`), and a cost
+comparison should check the recorded routing rather than assume it. The channel family is parameter independent, so once it is
 built and cached, a further parameter costs only coefficient evaluation and a
 linear combination over the symmetry-reduced entries.
 
