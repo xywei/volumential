@@ -7,8 +7,9 @@ platforms, can change it silently between runs. Select the device explicitly.
 
 ## `PYOPENCL_CTX`
 
-Anything that calls `pyopencl.create_some_context()` — the examples, the
-library's own fallbacks — honours `PYOPENCL_CTX`. It takes a
+Anything that calls `pyopencl.create_some_context()` — `examples/laplace2d.py`,
+`laplace3d.py`, `poisson3d.py`, several benchmark drivers, and the library's
+own queue-less fallbacks — honours `PYOPENCL_CTX`. It takes a
 platform-substring or index, optionally with a device index:
 
 ```bash
@@ -80,6 +81,19 @@ Prefer an explicit class over `auto` for anything whose timings will be quoted.
 class between two hosts — or between two days on one host — without changing
 the recorded arguments. Record the class you chose alongside the measurement;
 see {doc}`../benchmarks/index`.
+
+## Examples that select their own device
+
+`PYOPENCL_CTX` does not reach every example. `helmholtz2d.py`,
+`helmholtz3d.py`, `branched_flow_helmholtz2d.py` and the two
+`*_split_p_convergence.py` drivers each carry a `_select_opencl_device` that
+enumerates the platforms, prefers the first fp64-capable GPU and falls back to
+an fp64 CPU, then builds a `cl.Context` from it directly. On a host with both a
+CUDA GPU and PoCL they run on the GPU regardless of the variable.
+
+That is usually what you want from those examples, but it means the variable is
+not a device policy for the whole tree. Read the device off the run rather than
+inferring it from the environment.
 
 ## Thread caps
 

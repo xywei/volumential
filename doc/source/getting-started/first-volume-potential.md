@@ -142,7 +142,8 @@ VOLUMENTIAL_EXAMPLE_SMOKE=1 uv run python examples/laplace2d.py
 - Other maintained examples: `examples/laplace3d.py`,
   `examples/helmholtz2d.py`, `examples/helmholtz3d.py`,
   `examples/poisson3d.py`, `examples/branched_flow_helmholtz2d.py`, and the
-  two `*_split_p_convergence.py` drivers.
+  two `*_split_p_convergence.py` drivers. The Helmholtz ones pick their own
+  device instead of reading `PYOPENCL_CTX` — see {doc}`device-selection`.
 - Choosing the device the run lands on: {doc}`device-selection`.
 - The whole pipeline, stage by stage:
   {doc}`../user-guide/volume-fmm-workflow`.

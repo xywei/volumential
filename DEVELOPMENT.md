@@ -208,9 +208,16 @@ git clone <repo-url>
 cd volumential
 micromamba create -n volumential-dev -c conda-forge -c nodefaults \
   python=3.12 pyopencl pocl scipy numpy
+eval "$(micromamba shell hook -s bash)"
 micromamba activate volumential-dev
+export UV_PROJECT_ENVIRONMENT="$CONDA_PREFIX"
 uv sync --extra test --extra doc
 ```
+
+The `UV_PROJECT_ENVIRONMENT` export matters as much here as locally, and it is
+easier to miss: without it `uv sync` builds a `.venv` beside the checkout, the
+run uses that instead of the conda environment, and the missing PoCL runtime
+surfaces as a device error hours into a job rather than at provisioning time.
 
 Then run the provisioning checks above on that host before using it for
 evidence, and run long jobs under `tmux` with `nice`, logging to a file.
