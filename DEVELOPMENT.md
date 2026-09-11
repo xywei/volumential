@@ -1,7 +1,9 @@
 # Development Environment
 
 `pyproject.toml` + `uv` are the source of truth for dependency resolution, and
-`uv.lock` records the exact dependency commits an environment was built from.
+`uv.lock` records the exact resolution an environment was built from: a commit
+for each Git-sourced dependency, a version and artifact hashes for each one
+resolved from PyPI.
 
 ## Supported Setup
 
@@ -35,25 +37,32 @@ provision an evidence environment on it without re-measuring.
      python=3.12 pyopencl pocl scipy numpy
    eval "$(micromamba shell hook -s bash)"   # unless the shell is init'd
    micromamba activate volumential-dev
+   export UV_PROJECT_ENVIRONMENT="$CONDA_PREFIX"
    ```
 
    `micromamba activate` is a shell function, so a shell that has not been
-   `micromamba shell init`-ed needs the hook first; otherwise activation fails
-   and `uv sync --active` installs into the wrong interpreter.
+   `micromamba shell init`-ed needs the hook first, or activation fails.
+
+   `UV_PROJECT_ENVIRONMENT` is what makes `uv` use the conda environment.
+   Activating conda sets `CONDA_PREFIX`, not `VIRTUAL_ENV`, and `uv --active`
+   keys on `VIRTUAL_ENV` -- so `uv sync --active` inside an activated conda
+   environment creates `.venv` in the checkout and installs there instead, and
+   every later `uv run` uses that `.venv`. The result imports fine and has none
+   of the conda-provided OpenCL runtime.
 
 3. Sync project dependencies:
 
    ```bash
-   uv sync --active --extra test --extra doc
+   uv sync --extra test --extra doc
    ```
 
-4. Run targeted checks. `--active` keeps `uv run` in the environment step 3
-   filled, rather than the project's own `.venv`:
+4. Run targeted checks. These need the `UV_PROJECT_ENVIRONMENT` export of
+   step 2; without it `uv run` uses the project's own `.venv`:
 
    ```bash
-   uv run --active pytest -q test/test_import.py
-   uv run --active pytest -q test/test_public_surface.py
-   uv run --active pytest -q test/test_duffy_tanh_sinh.py
+   uv run pytest -q test/test_import.py
+   uv run pytest -q test/test_public_surface.py
+   uv run pytest -q test/test_duffy_tanh_sinh.py
    ```
 
 ## Dependency Provisioning Rules
@@ -92,7 +101,7 @@ wheels have neither. The interim locally patched branch is retired; the recipe
 is a source build on a host with `gfortran` and `ninja`:
 
 ```bash
-uv sync --active --extra test --extra doc --extra fmmlib
+uv sync --extra test --extra doc --extra fmmlib
 ```
 
 `uv sync` is an exact sync, so naming only `--extra fmmlib` uninstalls the
@@ -200,7 +209,7 @@ cd volumential
 micromamba create -n volumential-dev -c conda-forge -c nodefaults \
   python=3.12 pyopencl pocl scipy numpy
 micromamba activate volumential-dev
-uv sync --active --extra test --extra doc
+uv sync --extra test --extra doc
 ```
 
 Then run the provisioning checks above on that host before using it for
@@ -217,9 +226,9 @@ uvx ruff@0.13.0 check --fix          # fixable rules only; re-read every hunk
 uvx basedpyright -p pyproject.toml --level error
 
 # Tests.
-uv run --active pytest -q                     # default suite
-uv run --active pytest --longrun              # include long-running checks
-uv run --active pytest --full-accuracy        # include the high-cost accuracy markers
+uv run pytest -q                     # default suite
+uv run pytest --longrun              # include long-running checks
+uv run pytest --full-accuracy        # include the high-cost accuracy markers
 ```
 
 `ruff.toml` carries a `[lint.per-file-ignores]` baseline of pre-existing
@@ -237,7 +246,7 @@ environment with the OpenCL stack (`pyopencl`, `loopy`) installed.
 ```bash
 # uv sync is exact: name every extra the environment needs, or --extra doc
 # alone uninstalls the test extra.
-uv sync --active --extra test --extra doc
+uv sync --extra test --extra doc
 
 # The build CI Full runs: -W makes every warning an error, --keep-going
 # reports all of them.  conf.py suppresses no warning class.

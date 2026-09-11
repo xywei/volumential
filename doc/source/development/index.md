@@ -63,7 +63,7 @@ environment with the OpenCL stack (`pyopencl`, `loopy`) installed.
 ```bash
 # Name every extra you want: uv sync is exact, so --extra doc alone would
 # uninstall pytest and the rest of the test extra.
-uv sync --active --extra test --extra doc
+uv sync --extra test --extra doc
 
 # The build CI Full runs: -W makes every warning an error, and --keep-going
 # reports all of them instead of stopping at the first.  No warning class is

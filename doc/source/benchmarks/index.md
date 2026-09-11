@@ -84,9 +84,15 @@ knowing before promoting one:
 
 The remaining drivers — `table_equivalence_cache.py`,
 `accuracy_preservation.py`, `split_parameter_sweep.py`, `adaptive_timing.py`
-and the composition and sweep drivers — write CSV only and have no
-`--metadata-out`. Passing the option to them is an error, and a run of one of
-them is not self-describing.
+and the composition drivers — write CSV only and have no `--metadata-out`.
+Passing the option to them is an error, and a run of one of them is not
+self-describing.
+
+`windowed_rke_sweep.py` is a half-exception: it has no `--metadata-out` either,
+but it unconditionally writes `<out-dir>/windowed_rke_sweep_config.json` after
+the CSV, holding the resolved arguments and run information. That is a
+*configuration* record, not environment provenance — useful for reproducing the
+invocation, not for establishing what it ran on.
 
 `performance_suite.py` is neither: it takes `--manifest`, not
 `--metadata-out`, and writes a JSON *command manifest* of what it ran. It

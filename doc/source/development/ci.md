@@ -55,7 +55,7 @@ so anything in the base dependencies, the `test` extra or the `doc` extra is
 installed for it; only an extra that job does not select (`benchmark`,
 `fmmlib`, `gmsh_support`) is missing. The `doc` extra is where a documentation
 dependency belongs regardless, because it is what
-`uv sync --active --extra test --extra doc` gives a contributor locally.
+`uv sync --extra test --extra doc` gives a contributor locally.
 
 Note where the failure would surface: `CI Full` has no `pull_request` trigger,
 so a documentation dependency that is not installed fails on `main`, not on the

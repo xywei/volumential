@@ -101,7 +101,7 @@ the excerpt takes the defaults — that is a tighter near-field table, and the
 reason the example's error is smaller than this one's:
 
 ```bash
-uv run --active python examples/laplace2d.py
+uv run python examples/laplace2d.py
 ```
 
 ## What just happened
@@ -134,7 +134,7 @@ That is what CI runs; it finishes in seconds and is accurate to about a
 percent.
 
 ```bash
-VOLUMENTIAL_EXAMPLE_SMOKE=1 uv run --active python examples/laplace2d.py
+VOLUMENTIAL_EXAMPLE_SMOKE=1 uv run python examples/laplace2d.py
 ```
 
 ## Next

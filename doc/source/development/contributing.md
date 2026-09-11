@@ -17,7 +17,7 @@ land as pull requests against `main`.
 ```bash
 uvx ruff@0.13.0 check
 uvx basedpyright -p pyproject.toml --level error
-uv run --active pytest -q
+uv run pytest -q
 sphinx-build -W --keep-going -b html doc/source doc/build/html   # if docs changed
 ```
 

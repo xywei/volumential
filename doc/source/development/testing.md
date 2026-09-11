@@ -9,28 +9,28 @@ what each tier currently covers; this page is how to run them.
 
 | Tier | Command | Runs in |
 | --- | --- | --- |
-| Smoke and regression | `uv run --active pytest -q` | Pull-request CI and `main` |
-| Long-run | `uv run --active pytest --longrun` | Developer or dedicated runs |
-| Full accuracy | `uv run --active pytest -m full_accuracy --full-accuracy` | GPU-capable or dedicated runners |
+| Smoke and regression | `uv run pytest -q` | Pull-request CI and `main` |
+| Long-run | `uv run pytest --longrun` | Developer or dedicated runs |
+| Full accuracy | `uv run pytest -m full_accuracy --full-accuracy` | GPU-capable or dedicated runners |
 | Benchmarks | `python benchmarks/<name>.py --mode smoke` | Smoke in CI; full runs promoted manually |
 
-`--active` keeps `uv run` in the environment `uv sync --active` filled — the
-conda environment with the OpenCL runtime — instead of falling back to the
-project's own `.venv`.
+These assume `UV_PROJECT_ENVIRONMENT` points at the conda environment, as in
+{doc}`../getting-started/installation`; without it `uv run` uses the project's
+own `.venv`, which has no OpenCL runtime.
 
 ```bash
-uv run --active pytest -q                     # default suite
-uv run --active pytest --longrun              # include long-running checks
-uv run --active pytest --full-accuracy        # include the high-cost accuracy markers
-uv run --active pytest -m 'not slow'          # skip the wall-clock hogs
+uv run pytest -q                     # default suite
+uv run pytest --longrun              # include long-running checks
+uv run pytest --full-accuracy        # include the high-cost accuracy markers
+uv run pytest -m 'not slow'          # skip the wall-clock hogs
 ```
 
 Targeted checks worth running after any environment change:
 
 ```bash
-uv run --active pytest -q test/test_import.py
-uv run --active pytest -q test/test_public_surface.py
-uv run --active pytest -q test/test_duffy_tanh_sinh.py
+uv run pytest -q test/test_import.py
+uv run pytest -q test/test_public_surface.py
+uv run pytest -q test/test_duffy_tanh_sinh.py
 ```
 
 ## Markers and options

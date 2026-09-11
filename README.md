@@ -17,13 +17,16 @@ adaptively refined 2:1-balanced trees.
 ```bash
 micromamba create -n volumential-dev -c conda-forge -c nodefaults \
   python=3.12 pyopencl pocl scipy numpy && micromamba activate volumential-dev
+export UV_PROJECT_ENVIRONMENT="$CONDA_PREFIX"
 git clone https://github.com/xywei/volumential.git && cd volumential
-uv sync --active --extra test
+uv sync --extra test
 ```
 
 (`micromamba activate` is a shell function: in a shell that has not been
 `micromamba shell init`-ed, run `eval "$(micromamba shell hook -s bash)"`
-first.)
+first. `UV_PROJECT_ENVIRONMENT` is what points `uv` at the conda environment —
+without it `uv` builds a `.venv` with no OpenCL runtime. See
+[Installation][docs-install].)
 
 Released wheels of the `inducer` stack have shipped defects that corrupt
 adaptive-tree results *silently*, so `uv.lock` pins those dependencies (and
@@ -34,7 +37,7 @@ fresh environment — see [Installation][docs-install].
 
 ```bash
 export PYOPENCL_CTX=portable:0        # otherwise the device is picked for you
-uv run --active python examples/laplace2d.py
+uv run python examples/laplace2d.py
 ```
 
 That evaluates a 2D Laplace volume potential against a manufactured Gaussian
@@ -63,7 +66,7 @@ deployment from `main` is tracked by
   review bots, release and versioning
 - [Changelog][docs-changelog]
 
-Build it locally with `uv sync --active --extra test --extra doc` and
+Build it locally with `uv sync --extra test --extra doc` and
 `sphinx-build -W --keep-going -b html doc/source doc/build/html`.
 
 ## Repository layout

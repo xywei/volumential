@@ -77,16 +77,21 @@ radial desingularization quadrature in 2D and 3D;
 {mod}`volumential.singular_integral_2d` carries an older 2D-only Duffy
 implementation specialized to `1/r`-type kernels.
 
-A table depends on the kernel, the dimension, `q_order`, the build
-configuration, and the *scale* of the source box — the manager's `root_extent`
-together with the `source_box_level` of the request, which is what
-`TableRequest` carries and what the cache fingerprint hashes. It does not
-depend on the source density, on the tree's topology, or on the target points.
-So a table is built once per (kernel, dimension, order, level) and cached, but
-it is not portable to a geometry with a different root extent: the integral
-values, and the Helmholtz/Yukawa parameter scaling on top of them, are tied to
-that box extent. Building the table is by far the largest one-time cost, which
-is why the cache file is worth keeping. How a build is routed, and how to tell after
+A table is keyed by the kernel, the dimension, `q_order` and the
+`source_box_level` — that is what `TableRequest` carries — plus the build
+configuration, which the cache fingerprint hashes. It does not depend on the
+source density, on the tree's topology, or on the target points.
+
+The `root_extent` is *not* part of that key. It is a property of the cache file
+as a whole: the manager stores it in the database on first write and raises if
+a later manager opens the same file with a different value. That is the right
+behaviour, because the integral values — and the Helmholtz/Yukawa parameter
+scaling on top of them — are tied to the box extent. The practical consequence
+is that a second root extent needs a **separate cache file**, not a second key
+in the same one.
+
+Building the table is by far the largest one-time cost, which is why the cache
+file is worth keeping. How a build is routed, and how to tell after
 the fact which path produced a cached table, is
 {doc}`table-build-routing`.
 
@@ -171,12 +176,14 @@ are not interchangeable.
 
 What `drive_volume_fmm` returns depends on the tree it was given. With a
 coincident source/target tree — the usual case, and the one the example builds
-with `targets=None` — it returns the potential at the box-mesh nodes. When the
-traversal carries distinct target arrays, the default
-`auto_interpolate_targets=True` does the second step for you: it solves on the
-source modes, interpolates to `tree.targets`, and returns values in the
-requested target layout. Interpolating that result again is a shape error
-waiting to happen.
+with `targets=None` — it returns the potential at the box-mesh nodes. When the traversal carries distinct target arrays **and the wrangler is a
+sumpy one**, the default `auto_interpolate_targets=True` does the second step
+for you: it solves on the source modes, interpolates to `tree.targets`, and
+returns values in the requested target layout. Interpolating that result again
+is a shape error waiting to happen. The branch is guarded by
+`isinstance(expansion_wrangler, FPNDSumpyExpansionWrangler)`, so the FMMLib
+wrangler continues through the ordinary traversal and its output layout does
+not change.
 
 - {func}`volumential.volume_fmm.interpolate_volume_potential` evaluates a
   box-mesh potential at an arbitrary set of target points — the explicit form

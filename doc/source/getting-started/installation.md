@@ -1,8 +1,9 @@
 # Installation
 
 `pyproject.toml` plus [uv](https://docs.astral.sh/uv/) are the source of truth
-for dependency resolution, and `uv.lock` records the exact commits an
-environment was built from. `DEVELOPMENT.md` at the repository root carries the
+for dependency resolution, and `uv.lock` records the exact resolution an
+environment was built from — a commit for each Git-sourced dependency, a
+version and artifact hashes for each one that comes from PyPI. `DEVELOPMENT.md` at the repository root carries the
 same recipe in the form a maintainer runs it; this page is the version a new
 user needs.
 
@@ -35,20 +36,27 @@ micromamba create -n volumential-dev -c conda-forge -c nodefaults \
 
 eval "$(micromamba shell hook -s bash)"   # once per shell, if not shell-init'd
 micromamba activate volumential-dev
+export UV_PROJECT_ENVIRONMENT="$CONDA_PREFIX"
 
 git clone https://github.com/xywei/volumential.git
 cd volumential
-uv sync --active --extra test --extra doc
+uv sync --extra test --extra doc
 ```
 
-`micromamba activate` is a shell function, not a binary, so a fresh shell has
-to evaluate the hook first — otherwise activation fails and `uv sync --active`
-then installs into the wrong interpreter. `micromamba shell init -s bash` makes
-it permanent; the `eval` line above is the per-shell form.
+Two lines there are load-bearing and both fail quietly if you skip them.
 
-`uv sync --active` installs into the activated environment rather than
-creating a second one, which is what keeps the conda-provided OpenCL runtime
-in play.
+`micromamba activate` is a shell function, not a binary, so a fresh shell has
+to evaluate the hook before it exists. `micromamba shell init -s bash` makes it
+permanent; the `eval` line above is the per-shell form.
+
+`UV_PROJECT_ENVIRONMENT` is what makes `uv` use the conda environment as the
+project environment. Activating conda sets `CONDA_PREFIX`, not `VIRTUAL_ENV`,
+and `uv`'s `--active` flag keys on `VIRTUAL_ENV` — so `uv sync --active` inside
+an activated conda environment does **not** target it: it creates `.venv` in
+the checkout and installs there, and every later `uv run` uses that same
+`.venv`. The result builds and imports, and has none of the conda-provided
+OpenCL runtime this recipe exists to supply. Export the variable once after
+activating and both `uv sync` and `uv run` do the right thing.
 
 ## Why the dependencies come from Git
 
@@ -77,7 +85,7 @@ branch, or vendored and committed.
 ## The FMMLib backend
 
 ```bash
-uv sync --active --extra test --extra doc --extra fmmlib
+uv sync --extra test --extra doc --extra fmmlib
 ```
 
 `uv sync` is an *exact* sync: it uninstalls whatever the requested set does not
@@ -129,14 +137,13 @@ re-measured after adoption.
 
 ### Imports and quick tests
 
-`uv run` defaults to the project's own `.venv`, not to the environment
-`uv sync --active` filled, so pass `--active` here too — otherwise `uv run`
-creates a second environment without the conda-provided OpenCL runtime.
+These need `UV_PROJECT_ENVIRONMENT` exported, as above — `uv run` otherwise
+creates and uses `.venv` rather than the conda environment.
 
 ```bash
-uv run --active pytest -q test/test_import.py
-uv run --active pytest -q test/test_public_surface.py
-uv run --active pytest -q test/test_duffy_tanh_sinh.py
+uv run pytest -q test/test_import.py
+uv run pytest -q test/test_public_surface.py
+uv run pytest -q test/test_duffy_tanh_sinh.py
 ```
 
 ### The traversal check
