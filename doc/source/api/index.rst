@@ -1,10 +1,12 @@
 API Reference
 =============
 
-Every module of :mod:`volumential` has a generated page below, built from its
-docstring and its members.  Start from the package page for the full module
-tree, or use the map further down to find the module that owns a given piece
-of the volume FMM.
+Every supported module of :mod:`volumential` has a generated page below, built
+from its docstring and its members.  (The one exception is
+``volumential.qbfem``, a 2019 finite-element experiment that nothing in the
+tree imports and that is not part of the supported API.)  Start from the
+package page for the full module tree, or use the map further down to find the
+module that owns a given piece of the volume FMM.
 
 .. autosummary::
    :toctree: generated

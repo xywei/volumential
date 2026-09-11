@@ -67,17 +67,20 @@ todo_include_todos = True
 nitpicky = True
 
 nitpick_ignore = [
-    # numpy publishes ``ArrayLike`` as a ``py:data`` type alias, so the
-    # annotation has no class target under either name autodoc renders it
-    # with (Sphinx 8 emits the bare alias, Sphinx 9 its defining module).
-    ("py:class", "ArrayLike"),
-    ("py:class", "numpy._typing.ArrayLike"),
     # boxtree no longer documents ``DeviceDataRecord``, so the base class of
     # the interpolation lookups is absent from its inventory.
     ("py:class", "boxtree.tools.DeviceDataRecord"),
     # mpmath and pyfmmlib publish no objects.inv at all.
     ("py:mod", "mpmath"),
     ("py:mod", "pyfmmlib"),
+]
+
+nitpick_ignore_regex = [
+    # numpy publishes ``ArrayLike`` as a ``py:data`` type alias, so the
+    # annotation has no class target under any of the names autodoc renders
+    # it with: the bare alias under Sphinx 8, a private ``numpy._typing``
+    # path under Sphinx 9, at a depth that moves with the numpy version.
+    ("py:class", r"([\w.]+\.)?ArrayLike"),
 ]
 
 
@@ -154,6 +157,8 @@ html_theme_options = {
     "navbar_align": "left",
     "navbar_start": ["navbar-logo", "version-switcher"],
     "show_toc_level": 2,
+    # Only for the pages that have a source file in the repository; see
+    # ``_disable_edit_button_on_generated_pages`` below.
     "use_edit_page_button": True,
     "switcher": {
         # Served from the site itself: ``_static/switcher.json`` carries a
@@ -171,6 +176,25 @@ html_context = {
     # Follow the reader's system preference; the navbar toggle overrides it.
     "default_mode": "auto",
 }
+
+
+_GENERATED_API_PREFIX = "api/generated/"
+
+
+def _disable_edit_button_on_generated_pages(
+    app, pagename, templatename, context, doctree
+):
+    """Hide "Edit this page" where there is no source file to edit.
+
+    ``sphinx.ext.autosummary`` writes the API pages at build time and they are
+    not committed, so an edit link into the repository would be a dead link.
+    """
+    if pagename.startswith(_GENERATED_API_PREFIX):
+        context["theme_use_edit_page_button"] = False
+
+
+def setup(app):
+    app.connect("html-page-context", _disable_edit_button_on_generated_pages)
 
 
 # -- Options for the link checker -----------------------------------------
