@@ -1,0 +1,194 @@
+# The volume-FMM workflow
+
+A volume potential
+
+$$
+u(\boldsymbol{x}) = \int_{\Omega} G(\boldsymbol{x}, \boldsymbol{y})\,
+f(\boldsymbol{y})\,\mathrm{d}\boldsymbol{y}
+$$
+
+is not a particle sum: the integrand is singular wherever the target lies in or
+next to the source box, so no point quadrature converges there. Volumential's
+answer is to split the domain by *distance in the tree* rather than by
+quadrature rule.
+
+- **Far field** — boxes well separated from the target — is an ordinary
+  particle FMM over the volume quadrature nodes, weighted by the quadrature
+  weights. Nothing about it is volume-specific.
+- **Near field** — the target's own box and its List 1 neighbours — is read
+  from a table of precomputed singular integrals, one entry per (source mode,
+  target node, interaction case).
+
+The code calls this `fpnd`: **f**ar field by **p**article approximation,
+**n**ear field **d**irect. Every wrangler in
+{mod}`volumential.wranglers` implements it; the two backends differ only in who
+produces the far field.
+
+## Stages
+
+### 1. A box mesh and its quadrature nodes
+
+{mod}`volumential.meshgen` builds a box-shaped mesh over a cube and places
+tensor-product Gauss-Legendre nodes of order `q_order` in each leaf.
+`MeshGen1D/2D/3D` expose the nodes (`get_q_points`, shape `(nnodes, dim)`) and
+weights (`get_q_weights`) on host or device.
+
+Adaptive refinement and coarsening of the underlying tree of boxes, including
+the 2:1 level restriction that keeps List 1 bounded, live in
+{mod}`volumential.tree_interactive_build`. Refinement is driven by a
+user-supplied per-leaf criterion, so a source that is tight in one corner of
+the domain does not force a uniform tree everywhere.
+
+{mod}`volumential.geometry` assembles the objects the wranglers actually
+consume: `BoundingBoxFactory` for the root box,
+`BoxFMMGeometryFactory` for the repeated build, and the resulting
+`BoxFMMGeometryData` (nodes, weights, tree, traversal).
+
+### 2. A tree and a traversal
+
+The nodes are handed to `boxtree`'s `TreeBuilder`, normally with
+`kind="adaptive-level-restricted"` and `max_particles_in_box` set from
+`q_order**dim`, so that one leaf holds one element's worth of nodes.
+`FMMTraversalBuilder` then produces the interaction lists.
+
+Two details bite:
+
+- Pass `targets=None` when the targets *are* the source nodes. Building a
+  traversal from separate-but-identical arrays gives a different, subtly wrong
+  self-interaction structure; `VOLUMENTIAL_STRICT_SOURCE_TARGET_TREE=1` turns
+  that into an immediate failure (see {doc}`../getting-started/device-selection`).
+- The `boxtree` version matters. A stale
+  `refine_and_coarsen_tree_of_boxes` corrupts List 1 on reordered adaptive
+  trees without any error; the check in
+  {doc}`../getting-started/installation` is what catches it.
+
+### 3. A near-field interaction table
+
+{class}`volumential.table_manager.NearFieldInteractionTableManager` is the
+entry point. `get_table(dim, kernel_type, q_order, ...)` returns a table,
+building it on a cache miss and loading it from SQLite otherwise.
+
+The table holds, for each List 1 *interaction case* (the relative position of
+the source box to the target box, as a case vector) and each pair of source
+mode and target node, the integral of the kernel against that source basis
+function. The integrals are singular, and
+{mod}`volumential.nearfield_potential_table` evaluates them with Duffy-type
+radial desingularization quadrature in 2D and 3D;
+{mod}`volumential.singular_integral_2d` carries an older 2D-only Duffy
+implementation specialized to `1/r`-type kernels.
+
+A table depends on the kernel, the dimension, `q_order` and the build
+configuration — not on the source density, the tree or the target points. It is
+built once and cached; this is by far the largest one-time cost and the reason
+the cache file is worth keeping. How a build is routed, and how to tell after
+the fact which path produced a cached table, is
+{doc}`table-build-routing`.
+
+The table is stored symmetry-reduced. {mod}`volumential.list1_symmetry`
+discovers the symmetry operations the kernel and dimension admit,
+{mod}`volumential.orbit_arithmetic` canonicalizes entries under them, and only
+canonical entries are stored;
+{mod}`volumential.list1_gallery` enumerates the cases. See
+{doc}`nearfield_symmetry` for the storage format and the runtime
+reconstruction, and {doc}`../design-notes/orbit-canonicalization` for why the
+arithmetic variant exists.
+
+Fixed-parameter Helmholtz and Yukawa tables can also be *assembled* from a
+parameter-independent channel family instead of being built by quadrature per
+parameter; that is {mod}`volumential.rke_table_assembly` and
+{doc}`../design-notes/windowed-channels`.
+
+### 4. A wrangler
+
+{mod}`volumential.expansion_wrangler_interface` states the interface the driver
+calls. {mod}`volumential.wranglers` implements it twice:
+
+- `FPNDExpansionWrangler` / `FPNDSumpyExpansionWrangler` — expansions
+  generated by {mod}`sumpy`. Works for every kernel sumpy can differentiate,
+  and carries the near-field Helmholtz split.
+- `FPNDFMMLibExpansionWrangler` — expansions from {mod}`pyfmmlib` through
+  `boxtree.pyfmmlib_integration`. Restricted to 2D/3D Laplace and Helmholtz,
+  and considerably faster. Needs the environment of
+  {doc}`../getting-started/installation`, or it silently drops to a serial
+  per-box P2M path.
+
+Both share the near-field machinery: table marshalling
+(`volumential.wranglers.table_data`), orbit reconstruction
+(`volumential.wranglers.arithmetic_orbits`,
+`volumential.wranglers.orbit_generated`), and the on-device List 1 evaluators
+in {mod}`volumential.list1` (`NearFieldFromCSR` reads table data through the
+CSR interaction lists the traversal produced).
+
+`volumential.expansion_wrangler_fpnd` re-exports the whole package unchanged,
+so the historical import path keeps working.
+
+### 5. Drive it
+
+{func}`volumential.volume_fmm.drive_volume_fmm` runs the two FMM passes and
+adds the near-field stage:
+
+```python
+(pot,) = drive_volume_fmm(trav, wrangler, src_weights, src_func)
+```
+
+`src_weights` is the source density *times* the quadrature weights (what the
+far field integrates); `src_func` is the bare density (what the near-field
+table contracts against). Passing the same array for both is a common and
+quiet error.
+
+`direct_evaluation=True` replaces the FMM with a direct sum over the same
+nodes, using the same near-field tables — the reference the accuracy tests
+compare against. `timing_data={}` collects per-stage times;
+{mod}`volumential.phase_profile` turns those into the per-phase shares the
+benchmark drivers report.
+
+### 6. Get the values where you want them
+
+`drive_volume_fmm` returns the potential at the box-mesh nodes.
+
+- {func}`volumential.volume_fmm.interpolate_volume_potential` evaluates it at
+  an arbitrary set of target points.
+- {mod}`volumential.interpolation` transfers between the box mesh and a
+  {mod}`meshmode` discretization in both directions, which is how Volumential
+  couples to a `pytential` boundary-integral solve (see
+  `examples/poisson3d.py`).
+
+The interpolation is $O(N \log N)$, but in practice indistinguishable from
+$O(N)$: the geometry lookup is a very small fraction of the runtime.
+
+## Sources
+
+The density does not have to arrive as an array.
+
+- {mod}`volumential.symbolic` and
+  `volumential.tools.ScalarFieldExpressionEvaluation` evaluate a
+  {mod}`pymbolic` expression at the quadrature nodes on device. This is what
+  the examples use.
+- {mod}`volumential.gaussian` supplies Gaussian fixtures with closed-form
+  potentials, which is what most accuracy checks measure against.
+- {mod}`volumential.function_extension` continues a density given on a *curved*
+  domain to the surrounding box using layer potentials, so that the extended
+  values can be evaluated directly at volume quadrature targets. That is the
+  route from a Poisson problem on a non-box domain to a volume potential on a
+  box.
+
+## Kernels
+
+Laplace, Helmholtz and Yukawa are supported in 2D and 3D for potential and
+target gradient; see {doc}`m1_kernels` for the matrix and
+{doc}`derivative_support` for the derivative wrappers and their sign
+bookkeeping.
+
+Helmholtz and Yukawa additionally support the *near-field split*, which
+subtracts the smooth part of the kernel so that one Laplace-like table family
+serves a whole range of parameters instead of one table per wave number. That
+is {doc}`helmholtz_split`.
+
+## Where the time goes
+
+Roughly, in a first run: table build, then sumpy code generation for the first
+solve, then the FMM itself. In a warm run the table is a millisecond-scale load
+and the code-generation cache is hit, so the FMM dominates. Any timing claim
+therefore has to separate first-call from warm seconds and say which device
+class it ran on — {doc}`../benchmarks/index` is what that looks like in
+practice.
