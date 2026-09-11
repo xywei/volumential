@@ -1202,6 +1202,38 @@ def test_a_nonfinite_assembly_is_not_a_successful_row(
         assert reason is not None and expected in reason
 
 
+def test_run_sweep_refuses_an_unrepresentable_mu_before_measuring():
+    """Refusing inside _damped_zeta is not enough: the damped block runs
+    after the real-parameter rows and main() writes the CSV only after
+    run_sweep() returns, so the refusal has to happen at argument
+    validation, before anything is measured.
+    """
+    module = _load_benchmark("windowed_rke_sweep")
+
+    def _run(**kwargs):
+        return module.run_sweep(
+            mode="smoke",
+            dims=[2],
+            kernels=["Yukawa"],
+            p_stars=[4],
+            smooth_orders=[6],
+            cache_dir=Path("/nonexistent/never-created"),
+            q_order_override=None,
+            source_level_override=None,
+            root_extent=2.0,
+            window_theta=16.0,
+            direct_policies=[(20, 61), (24, 81)],
+            classical_channel_orders=(20, 61),
+            chan_orders=None,
+            skip_3d_tight=False,
+            **kwargs,
+        )
+
+    for phases in ([0.5], [0.25, 0.75]):
+        with pytest.raises(ValueError, match="square is not representable"):
+            _run(mus=[1.0e200], complex_phases=phases)
+
+
 def test_an_unrepresentable_mu_is_refused_before_provisioning():
     """float(mu)**2 raises OverflowError, which no row taxonomy covers,
     and the damped block runs after the real-parameter rows of the same

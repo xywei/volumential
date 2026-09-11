@@ -193,6 +193,111 @@ FULL_SPLIT_ORDERS = (2, 3)
 KERNEL_PARAMETER_TAGS = {"Yukawa": "lam", "Helmholtz": "k"}
 
 
+def _windowed_evaluator_updates(
+    *,
+    ctx,
+    queue,
+    traversal,
+    q_order,
+    fmm_order,
+    kernel,
+    parameter,
+    windowed_tables,
+    q_weights,
+    source_values_host,
+    weights_host,
+    direct_potential,
+) -> dict[str, Any]:
+    """Row columns from the windowed evaluator pass, or a failed verdict.
+
+    The evaluator is provisioning's last mile and belongs to the same
+    taxonomy as the assembly and the transfer: ``drive_volume_fmm`` raises
+    ``RuntimeError`` when its List 1 result turns non-finite, and ``main``
+    writes the CSV only after every case completes, so an exception
+    escaping here discards every direct, online-split and windowed row
+    already measured instead of keeping this case as a failed row.
+    """
+    try:
+        windowed_wrangler, weighted_sources, source_vals = _build_path(
+            ctx=ctx,
+            queue=queue,
+            traversal=traversal,
+            q_order=q_order,
+            fmm_order=fmm_order,
+            kernel=kernel,
+            parameter=float(parameter),
+            table=windowed_tables,
+            source_weights=q_weights,
+            source_values_host=source_values_host,
+            split=False,
+            split_order=1,
+        )
+        windowed_potential, windowed_wall_s = _drive(
+            queue,
+            traversal,
+            windowed_wrangler,
+            weighted_sources,
+            source_vals,
+        )
+        weighted_rel_l2, linf = _weighted_mismatch(
+            weights_host, windowed_potential, direct_potential
+        )
+    except (
+        ValueError, RuntimeError, NotImplementedError, OSError, KeyError,
+        sqlite3.Error,
+    ) as exc:
+        return {
+            "windowed_status": "failed",
+            "windowed_refusal": (
+                f"windowed evaluator: {type(exc).__name__}: {exc}"
+            ),
+            "windowed_wall_s": "",
+            "windowed_vs_direct_weighted_rel_l2": "",
+            "windowed_vs_direct_linf": "",
+        }
+    return {
+        "windowed_wall_s": windowed_wall_s,
+        "windowed_vs_direct_weighted_rel_l2": weighted_rel_l2,
+        "windowed_vs_direct_linf": linf,
+    }
+
+
+def _windowed_case_suffix(
+    *,
+    window_theta: float,
+    windowed_p_star: int,
+    windowed_chan_orders: tuple[int, int],
+    quadrature_policy: str,
+) -> str:
+    """``"windowed-cfg<token>"``: the windowed case-id suffix.
+
+    Two campaigns differing only in the window declaration, ``p_star``,
+    the channel orders or the quadrature policy assemble different tables
+    and measure different errors and timings, but the literal
+    ``"windowed"`` suffix gave them the same id.  The settings ride in an
+    eight-hex-digit token so the visible part of the id stays readable.
+    """
+    import hashlib
+
+    payload = json.dumps(
+        {
+            # repr round-trips a float64
+            "window_theta": repr(float(window_theta)),
+            "windowed_p_star": int(windowed_p_star),
+            "windowed_chan_orders": [
+                int(order) for order in windowed_chan_orders
+            ],
+            "quadrature_policy": str(quadrature_policy),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    token = hashlib.blake2s(
+        payload.encode("utf-8"), digest_size=4
+    ).hexdigest()
+    return f"windowed-cfg{token}"
+
+
 def _case_id(
     kernel: str,
     q_order: int,
@@ -1079,7 +1184,12 @@ def run_case(
                     initial_nlevels,
                     adapt_steps,
                     parameter,
-                    "windowed",
+                    _windowed_case_suffix(
+                        window_theta=window_theta,
+                        windowed_p_star=windowed_p_star,
+                        windowed_chan_orders=windowed_chan_orders,
+                        quadrature_policy=quadrature_policy,
+                    ),
                 ),
                 **common_columns,
                 "kernel": kernel,
@@ -1118,40 +1228,20 @@ def run_case(
             }
 
             if windowed_tables is not None:
-                windowed_wrangler, weighted_sources, source_vals = _build_path(
+                row.update(_windowed_evaluator_updates(
                     ctx=ctx,
                     queue=queue,
                     traversal=traversal,
                     q_order=q_order,
                     fmm_order=fmm_order,
                     kernel=kernel,
-                    parameter=float(parameter),
-                    table=windowed_tables,
-                    source_weights=q_weights,
-                    q_points=q_points,
+                    parameter=parameter,
+                    windowed_tables=windowed_tables,
+                    q_weights=q_weights,
                     source_values_host=source_values_host,
-                    split=False,
-                    split_order=1,
-                )
-                windowed_potential, windowed_wall_s = _drive(
-                    queue,
-                    traversal,
-                    windowed_wrangler,
-                    weighted_sources,
-                    source_vals,
-                )
-                weighted_rel_l2, linf = _weighted_mismatch(
-                    weights_host,
-                    windowed_potential,
-                    direct_result["potential"],
-                )
-                row.update(
-                    {
-                        "windowed_wall_s": windowed_wall_s,
-                        "windowed_vs_direct_weighted_rel_l2": weighted_rel_l2,
-                        "windowed_vs_direct_linf": linf,
-                    }
-                )
+                    weights_host=weights_host,
+                    direct_potential=direct_result["potential"],
+                ))
 
             rows.append(row)
             print(
@@ -1281,10 +1371,19 @@ def main() -> int:
             parser.error(
                 "--windowed-chan-orders must be a 'regular,radial' pair"
             )
-        if any(part < 1 for part in parts):
-            # the assembler refuses these, but only after the geometry and
-            # every direct and online-split table have been built
-            parser.error("--windowed-chan-orders must both be >= 1")
+        try:
+            # The assembler is the authority on which orders its node
+            # builders honour -- currently regular >= 2 and a radial order
+            # the tanh-sinh-fast rule does not silently clamp -- and it
+            # refuses the rest only after the geometry and every direct
+            # and online-split table have been built.  Ask it here.
+            from volumential.rke_table_assembly import (
+                _validate_channel_orders,
+            )
+
+            _validate_channel_orders(parts[0], parts[1])
+        except ValueError as exc:
+            parser.error(f"--windowed-chan-orders: {exc}")
         windowed_chan_orders = (parts[0], parts[1])
     if args.windowed_p_star < 1:
         parser.error("--windowed-p-star must be >= 1")

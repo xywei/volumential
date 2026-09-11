@@ -841,8 +841,14 @@ def test_scoped_rows_with_finite_mismatches_are_still_ungated(composition3d):
     ])
 
 
-@pytest.mark.parametrize("bad", ["0,61", "20,0", "-1,61"])
-def test_main_rejects_nonpositive_windowed_channel_orders(
+@pytest.mark.parametrize("bad", [
+    "0,61", "20,0", "-1,61",
+    # the assembler's own floors, which a >= 1 check let through: the
+    # Gauss-Legendre rule needs at least 2, and the tanh-sinh-fast radial
+    # rule silently clamps anything below 3 to the same 7-node rule
+    "1,61", "20,2",
+])
+def test_main_rejects_unusable_windowed_channel_orders(
     composition3d, tmp_path, monkeypatch, capsys, bad
 ):
     monkeypatch.setattr(
@@ -867,9 +873,8 @@ def test_main_rejects_nonpositive_windowed_channel_orders(
         composition3d.main()
 
     assert exited.value.code == 2
-    assert "--windowed-chan-orders must both be >= 1" in (
-        capsys.readouterr().err
-    )
+    # the assembler's own rule, quoted through parser.error
+    assert "--windowed-chan-orders: " in capsys.readouterr().err
     assert not (tmp_path / "never-created").exists()
 
 
@@ -1247,3 +1252,102 @@ def test_shared_windowed_helpers_reject_unsupported_dimensions():
             certificate={},
             dim=4,
         )
+
+@pytest.mark.parametrize(("key", "changed"), [
+    ("window_theta", 16.0000001),
+    ("windowed_p_star", 5),
+    ("windowed_chan_orders", (24, 61)),
+    ("quadrature_policy", "high-accuracy"),
+])
+def test_the_windowed_case_suffix_separates_campaigns(composition3d, key, changed):
+    """Campaigns differing only in the window declaration, p_star, the
+    channel orders or the quadrature policy assemble different tables and
+    measure different errors, but all shared the literal "windowed"
+    suffix."""
+    base = {
+        "window_theta": 16.0,
+        "windowed_p_star": 4,
+        "windowed_chan_orders": (20, 61),
+        "quadrature_policy": "default",
+    }
+    suffix = composition3d._windowed_case_suffix(**base)
+    assert suffix.startswith("windowed-cfg")
+    assert composition3d._windowed_case_suffix(**base) == suffix
+    assert composition3d._windowed_case_suffix(**{**base, key: changed}) != suffix
+
+@pytest.mark.parametrize("exc", [
+    RuntimeError("non-finite List 1 result"),
+    ValueError("bad table"),
+    OSError("device disappeared"),
+])
+def test_windowed_evaluator_failures_become_a_failed_row(
+    composition3d, monkeypatch, exc
+):
+    """The evaluator is provisioning's last mile.
+
+    drive_volume_fmm raises RuntimeError when its List 1 result turns
+    non-finite, and main() writes the CSV only after every case
+    completes, so an exception escaping the evaluator discarded every
+    direct, online-split and windowed row already measured.
+    """
+    def _raise(**kwargs):
+        raise exc
+
+    monkeypatch.setattr(composition3d, "_build_path", _raise)
+
+    updates = composition3d._windowed_evaluator_updates(
+        ctx=None,
+        queue=None,
+        traversal=None,
+        q_order=2,
+        fmm_order=8,
+        kernel="Yukawa",
+        parameter=2.0,
+        windowed_tables=[object()],
+        q_weights=None,
+        source_values_host=None,
+        weights_host=None,
+        direct_potential=None,
+    )
+
+    assert updates["windowed_status"] == "failed"
+    assert "windowed evaluator" in updates["windowed_refusal"]
+    assert type(exc).__name__ in updates["windowed_refusal"]
+    assert updates["windowed_vs_direct_weighted_rel_l2"] == ""
+
+
+def test_a_successful_windowed_evaluation_reports_its_columns(
+    composition3d, monkeypatch
+):
+    monkeypatch.setattr(
+        composition3d, "_build_path", lambda **kwargs: (object(), None, None)
+    )
+    monkeypatch.setattr(
+        composition3d, "_drive", lambda *a, **k: ([0.0, 0.0, 0.0, 0.0], 1.25)
+    )
+    monkeypatch.setattr(
+        composition3d, "_weighted_mismatch", lambda *a, **k: (1.0e-8, 2.0e-8)
+    )
+
+    updates = composition3d._windowed_evaluator_updates(
+        ctx=None,
+        queue=None,
+        traversal=None,
+        q_order=2,
+        fmm_order=8,
+        kernel="Yukawa",
+        parameter=2.0,
+        windowed_tables=[object()],
+        q_weights=None,
+        source_values_host=None,
+        weights_host=None,
+        direct_potential=None,
+    )
+
+    assert "windowed_status" not in updates
+    assert updates["windowed_wall_s"] == pytest.approx(1.25)
+    assert updates["windowed_vs_direct_weighted_rel_l2"] == pytest.approx(
+        1.0e-8
+    )
+    assert updates["windowed_vs_direct_linf"] == pytest.approx(2.0e-8)
+

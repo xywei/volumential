@@ -206,10 +206,6 @@ def _parameter_identity_token(value: float) -> str:
     return f"{float(value):g}-{_exact_float_token(value)}"
 
 
-#: Largest ``mu`` whose square is a finite float64.
-_MAX_REPRESENTABLE_MU = math.sqrt(np.finfo(np.float64).max)
-
-
 def _damped_zeta(mu: float, phase_fraction: float) -> complex:
     """The E8 squared frequency ``zeta = mu^2 exp(-i pi f)``.
 
@@ -226,18 +222,13 @@ def _damped_zeta(mu: float, phase_fraction: float) -> complex:
     under which the assembled entries, the direct reference and therefore
     every measured column are conjugate-symmetric.
     """
-    squared = float(mu) ** 2 if abs(float(mu)) < _MAX_REPRESENTABLE_MU else (
-        math.inf
+    # Also checked at argument validation, before anything is measured;
+    # this is the backstop for a programmatic caller, and it raises
+    # ValueError rather than the OverflowError no taxonomy covers.
+    _require_representable_square(mu, "mu")
+    return complex(
+        (float(mu) ** 2) * np.exp(-1j * np.pi * float(phase_fraction))
     )
-    if not math.isfinite(squared):
-        # float(mu)**2 raises OverflowError, which no row taxonomy covers,
-        # and the damped block runs after the real-parameter rows of the
-        # same sweep, so it would take their measurements down with it
-        raise ValueError(
-            f"mu={float(mu):g} is too large: its square is not "
-            "representable in float64"
-        )
-    return complex(squared * np.exp(-1j * np.pi * float(phase_fraction)))
 
 
 def _damped_case_id(
@@ -307,9 +298,23 @@ def _classical_cache_path(
     )
 
 
+#: Largest ``mu`` whose square is a finite float64.
+_MAX_REPRESENTABLE_MU = math.sqrt(np.finfo(np.float64).max)
+
+
 def _require_finite_positive(value: float, name: str) -> None:
     if not np.isfinite(value) or value <= 0:
         raise ValueError(f"{name} must be finite and positive")
+
+
+def _require_representable_square(value: float, name: str) -> None:
+    """The damped rows form ``zeta = mu^2 ...``; refuse a mu whose square
+    is not a finite float64 before any of it is measured."""
+    if abs(float(value)) >= _MAX_REPRESENTABLE_MU:
+        raise ValueError(
+            f"{name}={float(value):g} is too large: its square is not "
+            "representable in float64"
+        )
 
 
 def _require_unique(values, name: str) -> None:
@@ -1141,6 +1146,14 @@ def run_sweep(
         for mu in mus:
             _require_finite_positive(mu, "mu")
         _require_unique(mus, "mu entries")
+    # Checked here, against whichever mus this run will use -- the defaults
+    # included -- rather than only inside _damped_zeta: the damped block
+    # runs after the real-parameter rows, and main() writes the CSV only
+    # after run_sweep() returns, so raising there would still discard every
+    # row already measured.
+    if complex_phases is not None:
+        for mu in mus if mus is not None else []:
+            _require_representable_square(mu, "mu")
     direct_policies = [
         _require_usable_order_pair(policy, "direct policy")
         for policy in direct_policies
@@ -1226,6 +1239,10 @@ def run_sweep(
         )
         for mu in dim_mus:
             _require_finite_positive(mu, "mu")
+            if complex_phases is not None:
+                # covers the defaults too, which are derived from the
+                # window declaration and the box extent
+                _require_representable_square(mu, "mu")
         dimension_configs[dim] = (
             q_order, source_level, box_extent, dim_mus
         )
