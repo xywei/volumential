@@ -330,6 +330,10 @@ def _assignment_binding(
     target = _assignment_target(node)
     if target is None:
         return None
+    if isinstance(node, ast.AnnAssign) and node.value is None:
+        # ``public: Callable[..., None]`` annotates the name without binding
+        # it, so whatever the name already held is still what it holds.
+        return None
 
     value = node.value
     callable_kind = "method" if in_class else "function"
@@ -422,18 +426,33 @@ def _function_documentation(
     an aliased implementation usually is, and a name defined in two surviving
     branches counts as documented only when both are.
     """
-    surviving: dict[str, dict[tuple, bool]] = {}
+    surviving: dict[str, dict[tuple, bool | None]] = {}
     for binding in _bindings(body, guard_names, {}, in_class=False):
         node = binding.node
-        if not isinstance(node, _FUNCTION_NODES):
+        if isinstance(node, ast.ClassDef):
             continue
-        bucket = surviving.setdefault(node.name, {})
+        if isinstance(node, _FUNCTION_NODES):
+            documented: bool | None = ast.get_docstring(node) is not None
+        elif isinstance(node.value, ast.Lambda):
+            # Still callable, and a lambda has no docstring.
+            documented = False
+        else:
+            # Rebound to something this pass cannot call a function -- a
+            # constant, an import, a call.  ``None`` drops the name from the
+            # result, so an alias of it is not read as a method and a
+            # descriptor built on it gets no docstring from it.
+            documented = None
+        bucket = surviving.setdefault(_bound_name(node), {})
         for bound in list(bucket):
             if _dominates(binding.suite, bound):
                 del bucket[bound]
-        bucket[binding.suite] = ast.get_docstring(node) is not None
+        bucket[binding.suite] = documented
 
-    return {name: all(states.values()) for name, states in surviving.items()}
+    return {
+        name: all(states.values())
+        for name, states in surviving.items()
+        if None not in states.values()
+    }
 
 
 # }}}
@@ -451,6 +470,9 @@ class Carrier(NamedTuple):
     kind: str
     #: Whether the object the name ends up holding has a docstring.
     documented: bool
+    #: The bindings that survived, which is where a class's members come from:
+    #: a superseded ``class`` body is not part of the API any more.
+    surviving: list[Binding]
 
 
 def _carriers(
@@ -524,7 +546,9 @@ def _carriers(
                 _overrides_inherited_property(binding.node)
                 for binding in candidates
             )
-            yield Carrier(candidates[0].node, candidates[0].kind, inherited)
+            yield Carrier(
+                candidates[0].node, candidates[0].kind, inherited, surviving
+            )
             continue
 
         undocumented = [
@@ -534,10 +558,10 @@ def _carriers(
         ]
         if undocumented:
             first = min(undocumented, key=lambda binding: binding.node.lineno)
-            yield Carrier(first.node, first.kind, False)
+            yield Carrier(first.node, first.kind, False, surviving)
         else:
             last = carriers[-1]
-            yield Carrier(last.node, last.kind, True)
+            yield Carrier(last.node, last.kind, True, surviving)
 
 
 def _is_documented(binding: Binding) -> bool:
@@ -605,9 +629,8 @@ def _scan_module(
         # another branch binds that name to a function and carries it.
         class_bodies = [
             binding.node.body
-            for binding in module_bindings
+            for binding in carrier.surviving
             if isinstance(binding.node, ast.ClassDef)
-            and binding.node.name == name
         ]
         if not class_bodies:
             continue
