@@ -20,6 +20,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
+import cmath
 import logging
 import numbers
 import os
@@ -81,6 +82,81 @@ def _duffy_fallback_is_disabled():
     if value is None:
         return False
     return value.strip().lower() not in ("", "0", "false", "no", "off")
+
+
+# {{{ sumpy symbolic -> pymbolic
+
+def _sumpy_symbolic_to_pymbolic(expr):
+    """Convert *expr* from sumpy's active symbolic backend to :mod:`pymbolic`.
+
+    ``sumpy.symbolic.SympyToPymbolicMapper`` used to follow whichever backend
+    :mod:`sumpy` had selected: with symengine installed it derived from
+    :mod:`pymbolic`'s ``SymEngineToPymbolicMapper``, so the one name covered
+    both worlds.  `inducer/sumpy@d543b743
+    <https://github.com/inducer/sumpy/commit/d543b743>`__ split the two apart
+    and bound ``SympyToPymbolicMapper`` to :mod:`sympy` alone; handing it a
+    symengine tree now raises ``NotImplementedError`` on the ``Pi`` and
+    ``Complex`` nodes that every kernel scaling constant is made of.
+    ``sumpy.symbolic.to_pymbolic`` is the backend-aware replacement, so use it
+    when it exists and keep the old mapper for sumpy versions predating it.
+    """
+    import sumpy.symbolic as sumpy_sym
+
+    to_pymbolic = getattr(sumpy_sym, "to_pymbolic", None)
+    if to_pymbolic is not None:
+        return to_pymbolic(expr)
+
+    return sumpy_sym.SympyToPymbolicMapper()(expr)
+
+
+def _symbolic_constant_as_number(expr):
+    """*expr* as a Python number if it is symbol-free, otherwise *None*.
+
+    A :class:`float` is returned when the imaginary part vanishes and a
+    :class:`complex` otherwise, matching what the mappers produce for the
+    same expression.  Everything that still mentions a symbol -- the
+    ``mu``/``nu`` of the elasticity kernels, say -- is left for the mapper.
+    """
+    free_symbols = getattr(expr, "free_symbols", None)
+    if free_symbols is None or free_symbols:
+        return None
+
+    try:
+        value = complex(expr)
+    except (ArithmeticError, AttributeError, RuntimeError, TypeError, ValueError):
+        return None
+
+    if not cmath.isfinite(value):
+        return None
+
+    if value.imag == 0.0:
+        return value.real
+
+    return value
+
+
+def kernel_global_scaling_const_to_pymbolic(kernel):
+    r"""*kernel*'s global scaling constant as a :mod:`pymbolic` expression.
+
+    For every kernel Volumential tabulates the constant is a pure number --
+    :math:`-1/(2\pi)`, :math:`1/(4\pi)`, :math:`i/4` -- so it is folded to a
+    literal here.  That keeps the generated ``knl_scaling`` assignment a
+    constant regardless of how the upstream mappers happen to shape the
+    expression tree, which is what
+    :meth:`NearFieldInteractionTable._rewrite_complex_exponentials` needs in
+    order to see (and split) an imaginary constant instead of an opaque node.
+    Kernels whose scaling still carries a symbol go through the backend-aware
+    mapper unchanged.
+    """
+    expr = kernel.get_global_scaling_const()
+
+    value = _symbolic_constant_as_number(expr)
+    if value is not None:
+        return value
+
+    return _sumpy_symbolic_to_pymbolic(expr)
+
+# }}}
 
 
 # {{{ complex exponential -> real exp/cos/sin rewrite
@@ -219,7 +295,8 @@ def _split_complex_expression(expr):
 
     if isinstance(expr, prim.Quotient):
         # (a + ib)/c = a/c + i b/c for a *real* c.  Worth walking because
-        # SympyToPymbolicMapper emits a "/1" wrapper -- exp(1j*k) arrives
+        # sumpy's symbolic-to-pymbolic mapper emits a "/1" wrapper around
+        # every product -- exp(1j*k) arrives
         # as exp((1j*k)/1) -- which would otherwise make the whole
         # exponent opaque and leave the cdouble_exp in place.  A complex
         # denominator is left alone: dividing through it would reintroduce
@@ -2625,7 +2702,7 @@ class NearFieldInteractionTable:
     def _get_fused_invariant_duffy_table_tunit(self):
         from sumpy.assignment_collection import SymbolicAssignmentCollection
         from sumpy.codegen import to_loopy_insns
-        from sumpy.symbolic import SympyToPymbolicMapper, make_sym_vector
+        from sumpy.symbolic import make_sym_vector
 
         geom_dtype = self._get_geom_dtype()
         batched_value_dtype = self._get_batched_accumulation_dtype()
@@ -2659,7 +2736,6 @@ class NearFieldInteractionTable:
                     predicates=frozenset(predicates) | frozenset(["active"]),
                 )
             )
-        sympy_conv = SympyToPymbolicMapper()
         scaling_assignment = lp.Assignment(
             id=None,
             assignee="knl_scaling",
@@ -2669,7 +2745,7 @@ class NearFieldInteractionTable:
             # inode -- one untouched cdouble_exp here is one per quadrature
             # node, which is the whole cost this PR removes.
             expression=self._rewrite_complex_exponentials(
-                sympy_conv(self.integral_knl.get_global_scaling_const())
+                kernel_global_scaling_const_to_pymbolic(self.integral_knl)
             ),
             temp_var_type=lp.Optional(),
             within_inames=frozenset(["ientry", "inode"]),
@@ -4047,7 +4123,7 @@ class NearFieldInteractionTable:
 
         from sumpy.assignment_collection import SymbolicAssignmentCollection
         from sumpy.codegen import to_loopy_insns
-        from sumpy.symbolic import SympyToPymbolicMapper, make_sym_vector
+        from sumpy.symbolic import make_sym_vector
 
         # Read before the expression maps are built: the rewrite guard
         # needs these argument dtypes, and they are not in
@@ -4087,14 +4163,12 @@ class NearFieldInteractionTable:
             for insn in knl_insns
         ]
 
-        sympy_conv = SympyToPymbolicMapper()
-
         scaling_assignment = lp.Assignment(
             id=None,
             assignee="knl_scaling",
             # same guarded rewrite as the quadrature instructions above
             expression=self._rewrite_complex_exponentials(
-                sympy_conv(self.integral_knl.get_global_scaling_const()),
+                kernel_global_scaling_const_to_pymbolic(self.integral_knl),
                 extra_kernel_kwarg_types,
             ),
             temp_var_type=lp.Optional(),
