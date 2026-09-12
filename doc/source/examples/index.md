@@ -172,15 +172,21 @@ committed settings, far more time than a documentation build has, so the pages
 show the prose and the code but no results — the numbers and figures appear
 only when you run the notebook yourself.
 
-No extra declares JupyterLab, on purpose — it is a tool, not a dependency of
-the library — so bring it along for the one command that needs it. `--with`
-layers it over the project environment rather than an isolated one, which is
-what makes the notebook's kernel the environment that has `volumential` in it:
+Neither JupyterLab nor matplotlib is a dependency of the library — one is a
+tool, the other is only used for the pictures — so bring both along for the one
+command that needs them. `--with` layers them over the project environment
+rather than an isolated one, which is what makes the notebook's kernel the
+interpreter that has `volumential` in it:
 
 ```bash
 uv sync --extra test
-uv run --with jupyterlab jupyter lab examples/
+uv run --with jupyterlab --with matplotlib jupyter lab examples/
 ```
+
+Both Poisson notebooks import `matplotlib` in their first code cell, so without
+it they fail before doing anything. The 3D one also draws interactive
+isosurfaces with `plotly` if it is importable and prints a skip message if it
+is not; add `--with plotly` for those.
 
 ```{toctree}
 :maxdepth: 1

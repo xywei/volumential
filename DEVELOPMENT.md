@@ -274,7 +274,9 @@ sphinx-build -b linkcheck doc/source doc/build/linkcheck
 # the package on a page, and does every public object have a docstring.
 # --max-gaps is the ratchet; CI also passes --output, which only names the
 # file inside the artifact.
-sphinx-build -W --keep-going -b coverage doc/source doc/build/coverage
+# -q is load-bearing: an undocumented object is logged at info level unless
+# the app is quiet, and only a warning is what -W fails on.
+sphinx-build -q -W --keep-going -b coverage doc/source doc/build/coverage
 python doc/tools/docstring_gaps.py --max-gaps 5
 
 # Live preview at http://127.0.0.1:8000, rebuilding on save.

@@ -48,13 +48,27 @@ except ImportError:
     except ImportError:
 
         class TimingRecorder:
+            """Stand-in for boxtree's recorder, when boxtree has none.
+
+            Reached only if neither ``boxtree.timing`` nor ``boxtree.fmm``
+            exports a ``TimingRecorder``.  It collects the per-stage timing
+            futures the volume FMM hands it and resolves them on demand,
+            which is all this module asks of the real one.
+            """
+
             def __init__(self):
                 self._futures = []
 
             def add(self, stage, future):
+                """Record *future* as the timing result of stage *stage*."""
                 self._futures.append((stage, future))
 
             def summarize(self):
+                """Resolve the recorded futures into a ``stage -> result`` map.
+
+                A stage whose future is ``None`` is left out, and one that is
+                already a value rather than a callable is taken as it stands.
+                """
                 summary = {}
                 for stage, future in self._futures:
                     if future is None:

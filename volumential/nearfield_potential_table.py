@@ -1270,12 +1270,19 @@ class NearFieldInteractionTable:
     # {{{ encode to table index
 
     def get_entry_index(self, source_mode_index, target_point_index, case_id):
-        """Index into :attr:`data` of one (source mode, target, case) entry.
+        """Full table entry id of one (source mode, target, case) interaction.
 
-        On a symmetry-reduced table this is the index of the entry's orbit
+        On a symmetry-reduced table this is the id of the entry's orbit
         representative, so an interaction and its images under the kernel's
-        symmetries share one slot.  :meth:`decode_index` inverts the
+        symmetries resolve to one id.  :meth:`decode_index` inverts the
         unreduced form of the same encoding.
+
+        The id addresses the *full* entry space, which is an index into
+        :attr:`data` only while the table is stored densely.  Compact reduced
+        storage (:meth:`set_reduced_table_data`) keeps the values in a shorter
+        array addressed through ``reduced_entry_ids``, so read a value with
+        :meth:`get_entry_data` or :meth:`get_entry_data_for_full_indices`
+        rather than by indexing :attr:`data` with what this returns.
         """
         assert source_mode_index >= 0 and source_mode_index < self.n_q_points
         assert target_point_index >= 0 and target_point_index < self.n_q_points

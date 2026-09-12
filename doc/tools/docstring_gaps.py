@@ -13,7 +13,10 @@ no OpenCL stack, no import of the package and no Sphinx, and it can run on a
 machine that could not build the documentation.  *Public* means every
 module-level class and function, and every method of a public class, whose name
 does not begin with an underscore, in a module whose dotted name has no
-underscore-prefixed component.  The two halves of a property count once.
+underscore-prefixed component.  A definition nested in module-level control
+flow -- the ``except ImportError`` fallback for an optional dependency, say --
+counts, because it binds a module attribute like any other.  The two halves of
+a property count once.
 
 Usage::
 
@@ -30,6 +33,7 @@ from __future__ import annotations
 import argparse
 import ast
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 from typing import NamedTuple
 
@@ -40,9 +44,17 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # with the filter in ``doc/source/_templates/autosummary/module.rst``: a 2019
 # finite-element experiment that nothing in the tree imports and that is not
 # part of the supported API.
+# Each entry ignores that module *and its descendants*, so an addition below
+# ``volumential.qbfem`` cannot fail the ratchet for a package that the other
+# two mechanisms leave out of the documentation entirely.
 IGNORED_MODULES = frozenset({"volumential.qbfem"})
 
 _FUNCTION_NODES = (ast.AsyncFunctionDef, ast.FunctionDef)
+
+# Statements a module-level definition can be nested in and still be a
+# module-level definition: an optional-dependency fallback under ``try`` or a
+# version check under ``if`` defines a name every importer sees.
+_CONTROL_FLOW_NODES = (ast.For, ast.If, ast.Try, ast.TryStar, ast.While, ast.With)
 
 
 class Gap(NamedTuple):
@@ -64,6 +76,31 @@ def _module_name(path: Path, package_root: Path) -> str:
 
 def _is_public(name: str) -> bool:
     return not name.startswith("_")
+
+
+def _is_ignored(module: str) -> bool:
+    """Is *module* one of :data:`IGNORED_MODULES`, or inside one?"""
+    return any(
+        module == ignored or module.startswith(f"{ignored}.")
+        for ignored in IGNORED_MODULES
+    )
+
+
+def _module_level_definitions(body: list[ast.stmt]) -> Iterator[ast.stmt]:
+    """Yield the class and function definitions of a module body, in order.
+
+    Control flow is entered, because a class defined in an ``except
+    ImportError`` fallback binds a module attribute like any other; a function
+    or class body is not, because what it defines is not module-level.
+    """
+    for node in body:
+        if isinstance(node, (ast.ClassDef, *_FUNCTION_NODES)):
+            yield node
+        elif isinstance(node, _CONTROL_FLOW_NODES):
+            for field in ("body", "orelse", "finalbody"):
+                yield from _module_level_definitions(getattr(node, field, []))
+            for handler in getattr(node, "handlers", []):
+                yield from _module_level_definitions(handler.body)
 
 
 def _is_property_mutator(node: ast.AST) -> bool:
@@ -100,9 +137,7 @@ def _scan_module(
         if ast.get_docstring(node) is None:
             gaps.append(Gap(relative, node.lineno, kind, name))
 
-    for node in tree.body:
-        if not isinstance(node, (ast.ClassDef, *_FUNCTION_NODES)):
-            continue
+    for node in _module_level_definitions(tree.body):
         if not _is_public(node.name):
             continue
 
@@ -127,7 +162,7 @@ def collect(package_root: Path) -> tuple[list[Gap], int]:
 
     for path in sorted(package_root.rglob("*.py")):
         module = _module_name(path, package_root)
-        if module in IGNORED_MODULES:
+        if _is_ignored(module):
             continue
         if any(part.startswith("_") for part in module.split(".")):
             continue

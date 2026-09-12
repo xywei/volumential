@@ -82,15 +82,20 @@ jobs:
           build_docs
 
       # Two different questions; see the Development section of the site.
-      # ``-b coverage`` asks whether every object of every imported module
-      # reaches a page.  ``docstring_gaps.py`` asks whether every public object
-      # has a docstring, and ratchets: raise --max-gaps only deliberately.
+      # ``-b coverage`` asks whether every object of every module of the
+      # package reaches a page.  ``docstring_gaps.py`` asks whether every
+      # public object has a docstring, and ratchets: raise --max-gaps only
+      # deliberately.
+      #
+      # ``-q`` is load-bearing, not tidiness: sphinx.ext.coverage logs an
+      # undocumented object at info level unless the app is quiet, in which
+      # case it logs a warning -- and only then does ``-W`` fail the job.
       - name: Docstring and API coverage
         shell: micromamba-shell {0}
         run: |
           set -euo pipefail
 
-          sphinx-build -W --keep-going -b coverage doc/source doc/build/coverage
+          sphinx-build -q -W --keep-going -b coverage doc/source doc/build/coverage
           python doc/tools/docstring_gaps.py --max-gaps 5 \
             --output doc/build/coverage/docstring-gaps.txt
 

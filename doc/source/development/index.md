@@ -146,8 +146,11 @@ the file in `examples/` is never modified.
 Two different questions, and CI answers both in the `Documentation` job of
 `CI Full`, uploading the answers as a `docs-coverage-*` artifact.
 
-`sphinx-build -W --keep-going -b coverage` asks whether every object of every
-module of the package reaches a page of this site. It is at 100% and should
+`sphinx-build -q -W --keep-going -b coverage` asks whether every object of
+every module of the package reaches a page of this site. `-q` is load-bearing
+rather than tidiness: `sphinx.ext.coverage` logs an undocumented *object* at
+info level unless the app is quiet, in which case it logs a warning — and only
+a warning is something `-W` fails on. It is at 100% and should
 stay there. `coverage_modules` in `conf.py` is what makes it a real check:
 without it the builder looks only at the modules it already saw on a page, so a
 module that fell out of the autosummary tree would not be examined at all and
@@ -184,8 +187,10 @@ leaves out `genindex`, `py-modindex` and `search`.
 There is deliberately no `robots.txt`. A crawler reads the robots policy from
 the origin root only — `https://xywei.github.io/robots.txt` — which belongs to
 the user site, not to this project's build output, so a file shipped at
-`/volumential/robots.txt` would never be read. The sitemap is at
-`/sitemap.xml` and can be submitted directly.
+`/volumential/robots.txt` would never be read. The same subpath applies to the
+sitemap, which is why it has to be submitted by URL rather than advertised:
+it is served at `https://xywei.github.io/volumential/sitemap.xml`, not at the
+origin root.
 
 Social-card images are off (`ogp_social_cards`): generating one per page needs
 matplotlib and a bundled font. The landing page sets its own description in
