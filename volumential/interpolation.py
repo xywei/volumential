@@ -995,7 +995,7 @@ def compute_affine_transform(source_simplex, target_simplex):
     that maps ``source_simplex`` to ``target_simplex``.
 
     :param source_simplex: a dim-by-(dim+1) :mod:`numpy` array
-    :param target_simplex: a dim-by-(dim+1) :mod:`numpy: array
+    :param target_simplex: a dim-by-(dim+1) :mod:`numpy` array
     """
     assert source_simplex.shape == target_simplex.shape
     dim = source_simplex.shape[0]

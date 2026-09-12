@@ -4,6 +4,24 @@ Near-Field Symmetry Reduction
 Volumential reduces near-field table storage by canonicalizing table entries
 under symmetry orbits over ``(source_mode, target_mode, interaction_case)``.
 
+At a glance
+-----------
+
+- Near-field table storage canonicalizes entries over
+  ``(source_mode, target_mode, interaction_case)`` and stores only the
+  canonical ones.
+- Derivative kernels are supported through sign-aware orbit metadata: runtime
+  lookup applies a per-entry sign factor when reconstructing an entry from its
+  canonical representative.
+- SQLite cache schema ``2.1.0`` stores table content in the ``payload`` blob
+  only; the legacy dense blob columns were removed.
+- Symmetry-reduced payloads persist only finite canonical data arrays
+  (``reduced_entry_ids`` plus ``reduced_data``) and store no NaN sentinels.
+
+The closed-form *arithmetic* addressing that makes the on-device lookup cheap
+is described in :doc:`../design-notes/orbit-canonicalization`; this page is
+about what is stored and how it is reconstructed.
+
 Orbit canonicalization
 ----------------------
 

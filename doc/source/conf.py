@@ -8,6 +8,9 @@ Build with::
 described in ``DEVELOPMENT.md``.
 """
 
+import html
+import json
+import posixpath
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -57,7 +60,6 @@ source_suffix = {
 root_doc = "index"
 language = "en"
 exclude_patterns = []
-suppress_warnings = ["docutils"]
 pygments_style = "sphinx"
 templates_path = ["_templates"]
 todo_include_todos = True
@@ -193,8 +195,81 @@ def _disable_edit_button_on_generated_pages(
         context["theme_use_edit_page_button"] = False
 
 
+# -- Redirects for the pre-Diataxis flat layout ---------------------------
+
+# Until the 2026-09 restructure every page lived directly under the site root,
+# and the published build is replaced in place, so a bookmark or an external
+# link to one of those flat URLs would 404 against the new tree.  Emit a
+# meta-refresh stub at each old path instead.  These are cheap and removable:
+# delete an entry once its inbound links have aged out.
+_LEGACY_REDIRECTS = {
+    # Moved under a section.
+    "derivative_support.html": "user-guide/derivative_support.html",
+    "helmholtz_split.html": "user-guide/helmholtz_split.html",
+    "m1_kernels.html": "user-guide/m1_kernels.html",
+    "nearfield_symmetry.html": "user-guide/nearfield_symmetry.html",
+    "validation_matrix.html": "user-guide/validation_matrix.html",
+    # Superseded; sent to the page that took over the content.
+    "api/modules.html": "api/index.html",
+    "development.html": "development/index.html",
+    "indices_tables.html": "api/index.html",
+    "install.html": "getting-started/installation.html",
+    "intro.html": "index.html",
+    "sphinx.html": "development/index.html",
+}
+
+# The script carries ``location.hash`` across, so a deep link into one of
+# the long moved pages (``helmholtz_split.html#automatic-regime-planner``)
+# lands on its section rather than at the top; the meta refresh is the
+# no-JavaScript fallback and loses the fragment.
+_REDIRECT_TEMPLATE = """<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="refresh" content="1; url={target}">
+    <link rel="canonical" href="{target}">
+    <title>Page moved</title>
+    <script>
+      window.location.replace({target_js} + window.location.hash);
+    </script>
+  </head>
+  <body>
+    <p>This page has moved to <a href="{target}">{target}</a>.</p>
+  </body>
+</html>
+"""
+
+
+def _write_legacy_redirects(app, exception):
+    """Write a meta-refresh stub at every pre-restructure URL."""
+    if exception is not None or app.builder.name != "html":
+        return
+
+    out_dir = Path(app.outdir)
+    # Ownership comes from the *current* document set, never from what is on
+    # disk: an incremental build into an output directory that still holds a
+    # removed page's HTML would otherwise skip that page's redirect and leave
+    # the stale content served.
+    current_pages = {f"{docname}.html" for docname in app.env.found_docs}
+    for source, target in _LEGACY_REDIRECTS.items():
+        if source in current_pages:
+            # A real page owns this path now; never shadow it.
+            continue
+        stub = out_dir / source
+        stub.parent.mkdir(parents=True, exist_ok=True)
+        href = posixpath.relpath(target, posixpath.dirname(source) or ".")
+        stub.write_text(
+            _REDIRECT_TEMPLATE.format(
+                target=html.escape(href, quote=True),
+                target_js=json.dumps(href),
+            ),
+            encoding="utf-8",
+        )
+
+
 def setup(app):
     app.connect("html-page-context", _disable_edit_button_on_generated_pages)
+    app.connect("build-finished", _write_legacy_redirects)
 
 
 # -- Options for the link checker -----------------------------------------

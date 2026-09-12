@@ -1,7 +1,9 @@
 # Development Environment
 
 `pyproject.toml` + `uv` are the source of truth for dependency resolution, and
-`uv.lock` records the exact dependency commits an environment was built from.
+`uv.lock` records the exact resolution an environment was built from: a commit
+for each Git-sourced dependency, a version and artifact hashes for each one
+resolved from PyPI.
 
 ## Supported Setup
 
@@ -11,11 +13,13 @@
 - Fortran toolchain (`gfortran`, `ninja`): required only for the `fmmlib` extra
 
 `requires-python` in `pyproject.toml` is still `>=3.11`, and nothing in
-Volumential itself needs 3.12. CI pins 3.12 only because `loopy` currently
-imports `override` from the standard-library `typing` module, which gained it
-in 3.12; under 3.11 `import loopy` fails outright. A 3.11 environment is
-therefore unsupported in practice until that upstream import moves to
-`typing_extensions`.
+Volumential itself needs 3.12. CI pins 3.12 because that is the environment
+the suite is exercised in. The original reason was harder than that: `loopy`
+imported `override` from the standard-library `typing` module, which gained it
+only in 3.12, so `import loopy` failed outright under 3.11. At the `loopy`
+revision `uv.lock` currently pins, that import comes from `typing_extensions`,
+so 3.11 is untested rather than known-broken -- but nothing runs it, so do not
+provision an evidence environment on it without re-measuring.
 
 ## Local Setup
 
@@ -31,16 +35,29 @@ therefore unsupported in practice until that upstream import moves to
    ```bash
    micromamba create -n volumential-dev -c conda-forge -c nodefaults \
      python=3.12 pyopencl pocl scipy numpy
+   eval "$(micromamba shell hook -s bash)"   # unless the shell is init'd
    micromamba activate volumential-dev
+   export UV_PROJECT_ENVIRONMENT="$CONDA_PREFIX"
    ```
+
+   `micromamba activate` is a shell function, so a shell that has not been
+   `micromamba shell init`-ed needs the hook first, or activation fails.
+
+   `UV_PROJECT_ENVIRONMENT` is what makes `uv` use the conda environment.
+   Activating conda sets `CONDA_PREFIX`, not `VIRTUAL_ENV`, and `uv --active`
+   keys on `VIRTUAL_ENV` -- so `uv sync --active` inside an activated conda
+   environment creates `.venv` in the checkout and installs there instead, and
+   every later `uv run` uses that `.venv`. The result imports fine and has none
+   of the conda-provided OpenCL runtime.
 
 3. Sync project dependencies:
 
    ```bash
-   uv sync --active --extra test --extra doc
+   uv sync --extra test --extra doc
    ```
 
-4. Run targeted checks:
+4. Run targeted checks. These need the `UV_PROJECT_ENVIRONMENT` export of
+   step 2; without it `uv run` uses the project's own `.venv`:
 
    ```bash
    uv run pytest -q test/test_import.py
@@ -56,10 +73,13 @@ produces evidence, local or remote.
 
 ### Inducer stack from Git sources
 
-The `inducer` projects (`boxtree`, `sumpy`, `loopy`, `pyopencl`, `pytools`,
-`modepy`, `arraycontext`, `meshmode`, `pytential`) release rarely, so
-`[tool.uv.sources]` installs them from main-branch Git sources and `uv.lock`
-records the resolved commits. Do not swap them for PyPI wheels in an
+Most of the `inducer` stack releases rarely, so `[tool.uv.sources]` installs
+it from main-branch Git sources and `uv.lock` records the resolved commits:
+`arraycontext`, `boxtree`, `cgen`, `genpy`, `gmsh_interop`, `loopy`,
+`meshmode`, `modepy`, `pyfmmlib`, `pymbolic`, `pytential`, `pytools`,
+`pyvisfile`, `sumpy`. `pyopencl` is *not* in that table -- it resolves from
+PyPI and `uv.lock` pins a release, so run metadata records its version rather
+than a commit. Do not swap them for PyPI wheels in an
 experiment environment, and capture the locked commits in the run metadata of
 any promoted result.
 
@@ -81,8 +101,11 @@ wheels have neither. The interim locally patched branch is retired; the recipe
 is a source build on a host with `gfortran` and `ninja`:
 
 ```bash
-uv sync --active --extra fmmlib
+uv sync --extra test --extra doc --extra fmmlib
 ```
+
+`uv sync` is an exact sync, so naming only `--extra fmmlib` uninstalls the
+`test` and `doc` extras: list every extra the environment needs on each sync.
 
 Since #135, `pyfmmlib` has a `[tool.uv.sources]` entry pointing at upstream
 `main`, so the `fmmlib` extra resolves to the Git source at the commit
@@ -99,18 +122,29 @@ falls back to the serial per-box path without complaining when the batched
 entry points are missing, so a mis-provisioned environment is correct but slow:
 
 ```bash
-python -c "from pyfmmlib import l3dformmp_imany"   # batched wrappers present
+# Batched wrappers present.  The backend selects {l,h}{2,3}dformmp_imany from
+# the equation and dimension, so check all four.
+python -c "from pyfmmlib import \
+    h2dformmp_imany, h3dformmp_imany, l2dformmp_imany, l3dformmp_imany"
 python - <<'PY'
 import pathlib
+import platform
 import subprocess
 
 import pyfmmlib
 
 so = next(pathlib.Path(pyfmmlib.__file__).parent.glob("_internal*.so"))
 print(so)
-subprocess.run(["ldd", str(so)], check=True)   # expect a libgomp line
+if platform.system() == "Darwin":
+    # macOS has no ldd; otool -L is the equivalent, and the OpenMP runtime
+    # is libomp rather than libgomp.
+    subprocess.run(["otool", "-L", str(so)], check=True)
+else:
+    subprocess.run(["ldd", str(so)], check=True)
 PY
 ```
+
+Expect a `libgomp` line on Linux, a `libomp` one on macOS.
 
 Batched P2M is bit-identical to the per-box path and GEMM L2P agrees at
 roundoff (`test/test_fmmlib_batched_stages.py`), so adopting them needs no
@@ -182,9 +216,16 @@ git clone <repo-url>
 cd volumential
 micromamba create -n volumential-dev -c conda-forge -c nodefaults \
   python=3.12 pyopencl pocl scipy numpy
+eval "$(micromamba shell hook -s bash)"
 micromamba activate volumential-dev
-uv sync --active --extra test --extra doc
+export UV_PROJECT_ENVIRONMENT="$CONDA_PREFIX"
+uv sync --extra test --extra doc
 ```
+
+The `UV_PROJECT_ENVIRONMENT` export matters as much here as locally, and it is
+easier to miss: without it `uv sync` builds a `.venv` beside the checkout, the
+run uses that instead of the conda environment, and the missing PoCL runtime
+surfaces as a device error hours into a job rather than at provisioning time.
 
 Then run the provisioning checks above on that host before using it for
 evidence, and run long jobs under `tmux` with `nice`, logging to a file.
@@ -218,9 +259,12 @@ carries everything it needs. The build imports `volumential`, so it needs an
 environment with the OpenCL stack (`pyopencl`, `loopy`) installed.
 
 ```bash
-uv sync --active --extra doc
+# uv sync is exact: name every extra the environment needs, or --extra doc
+# alone uninstalls the test extra.
+uv sync --extra test --extra doc
 
-# The gate CI runs: warnings are errors, and every warning is reported.
+# The build CI Full runs: -W makes every warning an error, --keep-going
+# reports all of them.  conf.py suppresses no warning class.
 sphinx-build -W --keep-going -b html doc/source doc/build/html
 
 # External links.
@@ -230,9 +274,14 @@ sphinx-build -b linkcheck doc/source doc/build/linkcheck
 sphinx-autobuild doc/source doc/build/html
 ```
 
-`doc/source/api/` is generated: `sphinx.ext.autosummary` writes one page per
-module from the templates in `doc/source/_templates/autosummary/`, so a new
-module needs no edit there. The build is `nitpicky`, which means an
+New pages are MyST Markdown (`.md`); the remaining reStructuredText pages are
+substantial existing documents kept as they are. `doc/source/development/`
+documents the section layout and which section a new page belongs in.
+
+`doc/source/api/generated/` is generated -- only that subdirectory.
+`sphinx.ext.autosummary` writes one page per module there from the templates in
+`doc/source/_templates/autosummary/`, so a new module needs no edit; the
+`doc/source/api/index.rst` above it is committed and hand-written. The build is `nitpicky`, which means an
 unresolvable cross-reference in a docstring fails it; add an intersphinx
 target when the name belongs to a dependency, and a commented
 `nitpick_ignore` entry in `doc/source/conf.py` only when a third-party project

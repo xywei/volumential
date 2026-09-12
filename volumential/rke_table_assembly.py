@@ -28,9 +28,13 @@ kernel-space bound into a table-entry bound.
 Windowed mode
 -------------
 
-The windowed assembler (:func:`assemble_windowed_parameterized_table`) keeps
-the classical table count but replaces the polynomially growing channels
-``r^{2m} log r`` / ``r^{m-1}`` by Gaussian-windowed channels
+The windowed assembler (:func:`assemble_windowed_parameterized_table`)
+replaces the polynomially growing channels ``r^{2m} log r`` / ``r^{m-1}`` by
+Gaussian-windowed channels.  It builds exactly ``p_star`` of them in either
+dimension, one per retained order, against the ``1 + n`` (3D) / ``2 + 2n`` (2D)
+tables the classical family needs for ``n`` retained terms -- each 2D term
+contributing both an ``r^{2n}`` and an ``r^{2n} log r`` channel.  The channels
+are
 
 - 2D: ``chi_m(r) = (1/2) (r^2/4)^m Gamma(-m, x)``
 - 3D: ``chi_m(r) = (1/(2 sqrt(pi))) (r^2/4)^(m-1/2) Gamma(1/2-m, x)``
