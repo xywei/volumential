@@ -357,8 +357,8 @@ wheels = [
 
 [[package]]
 name = "loopy"
-version = "2025.2"
-source = { git = "https://github.com/inducer/loopy.git#682ad32b859ac562937beff905f74dff35534ab0" }
+version = "2026.1"
+source = { git = "https://github.com/inducer/loopy.git#8807bdd42344ef619106866f8f41908e1a461a6f" }
 dependencies = [
     { name = "cgen" },
     { name = "codepy" },
@@ -367,6 +367,7 @@ dependencies = [
     { name = "genpy" },
     { name = "islpy" },
     { name = "mako" },
+    { name = "namedisl" },
     { name = "numpy" },
     { name = "pymbolic" },
     { name = "pytools" },
@@ -546,6 +547,20 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/21/dc/603751677fff302f34396e206b610f556a59d7fe58b9a2145f54e96b48e8/myst_parser-5.1.0.tar.gz", hash = "sha256:ab69322dc6719dcc7f296479dbb70181b66df6ed315064f92dbc85c0e1bf2f02", size = 101182, upload-time = "2026-05-13T09:38:19.361Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/09/dc/f3dfb7488b770f3f67e6545085bf2abea5172e88f57b8ad25ef860ca704c/myst_parser-5.1.0-py3-none-any.whl", hash = "sha256:9c91c52b3cdb4d94a6506e4fab4e2f296c7623a0da0dcbe6de1565c3dad67a8a", size = 85817, upload-time = "2026-05-13T09:38:17.904Z" },
+]
+
+[[package]]
+name = "namedisl"
+version = "2026.1.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "constantdict" },
+    { name = "islpy" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/3a/35/8a49712047f5b882c1c6b888c3be2605d70ae181270487bf8f9f231b1677/namedisl-2026.1.1.tar.gz", hash = "sha256:a66bb13b76447b804d52d2c15de964571197eb112d4bc8298cc9f21b3a41211d", size = 33718, upload-time = "2026-08-11T13:45:22.135Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b9/ff/574d4aa0ab61f08d8e075e7906529e09b2dde1162a495e8965055db5c19d/namedisl-2026.1.1-py3-none-any.whl", hash = "sha256:625effedee04ee97b70c11d4558737a7471aa2a0c8886d0de8a2954b3e1e3be6", size = 35940, upload-time = "2026-08-11T13:45:20.961Z" },
 ]
 
 [[package]]
@@ -1214,7 +1229,7 @@ wheels = [
 [[package]]
 name = "sumpy"
 version = "2024.0"
-source = { git = "https://github.com/inducer/sumpy.git#83c5db03ba9266e8c2b24e5d3115142db6ca1be8" }
+source = { git = "https://github.com/inducer/sumpy.git#019e780a31113af35a823e0178e032b4d70ebdbc" }
 dependencies = [
     { name = "arraycontext" },
     { name = "boxtree" },
