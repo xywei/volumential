@@ -1,3 +1,21 @@
+---
+# Two consumers, two keys.  ``sphinxext.opengraph`` derives ``og:description``
+# by walking the doctree, which on this page starts with display math and comes
+# out as raw LaTeX; a top-level ``og:description`` overrides it.  The
+# ``html_meta`` one below is the ordinary ``<meta name="description">`` a search
+# engine shows, and setting it also stops the extension from adding its own.
+"og:description": >-
+  Volumential evaluates volume potentials over box-shaped domains with the
+  Fast Multipole Method, for the Laplace, Helmholtz and Yukawa kernels in
+  two and three dimensions.
+myst:
+  html_meta:
+    description: >-
+      Volumential evaluates volume potentials over box-shaped domains with the
+      Fast Multipole Method, for the Laplace, Helmholtz and Yukawa kernels in
+      two and three dimensions.
+---
+
 # Volumential
 
 **Volumential** (VOLUME poteNTIAL) evaluates volume potentials

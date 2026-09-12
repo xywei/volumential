@@ -56,6 +56,8 @@ extensions = [
     "myst_nb",
     "sphinx_copybutton",
     "sphinx_design",
+    "sphinx_sitemap",
+    "sphinxext.opengraph",
 ]
 
 source_suffix = {
@@ -193,7 +195,16 @@ intersphinx_mapping = {
 html_theme = "pydata_sphinx_theme"
 html_title = "Volumential"
 html_static_path = ["_static"]
+# Copied to the root of the site verbatim; ``robots.txt`` has to live there to
+# be found, which ``_static`` cannot do.
+html_extra_path = ["_extra"]
 html_last_updated_fmt = "%Y-%m-%d"
+
+# Where the built site is served from.  Sphinx uses it for the ``canonical``
+# link of every page, ``sphinx_sitemap`` for the URLs in ``sitemap.xml``, and
+# ``sphinxext.opengraph`` for the ``og:url`` metadata.  A trailing slash is
+# required by all three.
+html_baseurl = "https://xywei.github.io/volumential/"
 
 html_theme_options = {
     "github_url": "https://github.com/xywei/volumential",
@@ -210,6 +221,25 @@ html_theme_options = {
         "version_match": "latest",
     },
 }
+
+# -- Sitemap and social metadata ------------------------------------------
+
+# One flat set of URLs: the site publishes ``latest`` only and is not
+# translated, so the default ``{lang}{version}{link}`` scheme would invent a
+# ``en/latest/`` prefix that does not exist.
+sitemap_url_scheme = "{link}"
+# Generated navigation, not content: a crawler that indexes them finds nothing
+# it has not already found on the pages they point at.
+sitemap_excludes = ["genindex.html", "py-modindex.html", "search.html"]
+
+ogp_site_url = html_baseurl
+ogp_site_name = "Volumential"
+ogp_enable_meta_description = True
+# Rendering a social-preview image per page needs matplotlib and a bundled
+# font, which is a build dependency and a per-page cost for something no reader
+# of these pages sees.  The text metadata above is what link unfurls use.
+ogp_social_cards = {"enable": False}
+
 
 html_context = {
     "github_user": "xywei",

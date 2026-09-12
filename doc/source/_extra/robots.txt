@@ -1,0 +1,5 @@
+# Copied to the root of the built site by ``html_extra_path`` in conf.py.
+User-agent: *
+Allow: /
+
+Sitemap: https://xywei.github.io/volumential/sitemap.xml

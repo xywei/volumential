@@ -53,6 +53,8 @@ doc = [
   "sphinx-autobuild",
   "sphinx-copybutton",
   "sphinx-design",
+  "sphinx-sitemap",
+  "sphinxext-opengraph",
 ]
 
 [tool.setuptools]
