@@ -170,18 +170,35 @@ def _is_property_mutator(node: ast.AST) -> bool:
 
 def _property_assignments(
     body: Iterable[ast.stmt],
-) -> dict[str, tuple[ast.stmt, bool]]:
+) -> dict[str, list[tuple[ast.stmt, bool]]]:
     """Public ``name = property(...)`` statements of a class body.
 
     A property can be declared by assignment rather than by decorating a
-    getter, and then no function definition carries its name at all.  The
-    second element of each value says whether the statement is followed by a
+    getter, and then no function definition carries its name at all.  Control
+    flow is traversed like everywhere else, and every alternative is kept: a
+    branch can declare the property with an attribute docstring and another
+    without.  The flag beside each statement says whether it is followed by a
     bare string literal, which is the attribute-docstring convention autodoc
     reads.
     """
     statements = list(body)
-    found: dict[str, tuple[ast.stmt, bool]] = {}
+    found: dict[str, list[tuple[ast.stmt, bool]]] = {}
+
+    def merge(other: dict[str, list[tuple[ast.stmt, bool]]]) -> None:
+        for name, alternatives in other.items():
+            found.setdefault(name, []).extend(alternatives)
+
     for index, node in enumerate(statements):
+        if isinstance(node, _CONTROL_FLOW_NODES):
+            for field in ("body", "orelse", "finalbody"):
+                merge(_property_assignments(getattr(node, field, [])))
+            for handler in getattr(node, "handlers", []):
+                merge(_property_assignments(handler.body))
+            continue
+        if isinstance(node, ast.Match):
+            for case in node.cases:
+                merge(_property_assignments(case.body))
+            continue
         if not isinstance(node, ast.Assign) or len(node.targets) != 1:
             continue
         target = node.targets[0]
@@ -203,14 +220,14 @@ def _property_assignments(
             and isinstance(following.value, ast.Constant)
             and isinstance(following.value.value, str)
         )
-        found[target.id] = (node, documented)
+        found.setdefault(target.id, []).append((node, documented))
     return found
 
 
 def _carriers(
     nodes: Iterable[ast.stmt],
     overload_names: frozenset[str],
-    property_assignments: dict[str, tuple[ast.stmt, bool]] | None = None,
+    property_assignments: dict[str, list[tuple[ast.stmt, bool]]] | None = None,
 ) -> Iterator[Carrier]:
     """One ``(definition, always_a_gap)`` per public name a suite binds.
 
@@ -259,10 +276,17 @@ def _carriers(
             )
         ]
         if not getters:
-            assignment = property_assignments.get(name)
-            if assignment is not None:
-                statement, documented = assignment
-                yield Carrier(statement, not documented, group)
+            alternatives = property_assignments.get(name)
+            if alternatives:
+                missing = [
+                    statement
+                    for statement, documented in alternatives
+                    if not documented
+                ]
+                if missing:
+                    yield Carrier(missing[0], True, group)
+                else:
+                    yield Carrier(alternatives[-1][0], False, group)
             else:
                 yield Carrier(candidates[0], True, group)
             continue
@@ -306,30 +330,24 @@ def _scan_module(
 
     for carrier in _carriers(_definitions(tree.body), overload_names):
         node = carrier.node
-        if not isinstance(node, ast.ClassDef):
-            record(
-                node,
-                "function",
-                f"{module}.{node.name}",
-                always_a_gap=carrier.always_a_gap,
-            )
-            continue
-
         record(
             node,
-            "class",
+            "class" if isinstance(node, ast.ClassDef) else "function",
             f"{module}.{node.name}",
             always_a_gap=carrier.always_a_gap,
         )
 
-        # Any branch of a conditionally defined class can be the one that
-        # binds the name, so the members of all of them are in play.
+        # Any branch of a conditionally defined class can be the one that binds
+        # the name, so the members of all of them are in play -- including when
+        # another branch binds that name to a function and carries it.
         bodies = [
             statement
             for definition in carrier.group
             if isinstance(definition, ast.ClassDef)
             for statement in definition.body
         ]
+        if not bodies:
+            continue
         methods = (
             member
             for member in _definitions(bodies)
