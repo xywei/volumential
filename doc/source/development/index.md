@@ -148,11 +148,17 @@ the file in `examples/` is never modified.
 Two different questions, and CI answers both in the `Documentation` job of
 `CI Full`, uploading the answers as a `docs-coverage-*` artifact.
 
-`sphinx-build -q -W --keep-going -b coverage` asks whether every object of
-every module of the package reaches a page of this site. `-q` is load-bearing
-rather than tidiness: `sphinx.ext.coverage` logs an undocumented *object* at
-info level unless the app is quiet, in which case it logs a warning — and only
-a warning is something `-W` fails on. It is at 100% and should
+`sphinx-build -q -W --keep-going -b coverage` asks whether every module,
+function, class and method of the package reaches a page of this site. `-q` is
+load-bearing rather than tidiness: `sphinx.ext.coverage` logs an undocumented
+*object* at info level unless the app is quiet, in which case it logs a
+warning — and only a warning is something `-W` fails on.
+
+It does not see properties: the builder inspects a class attribute only when
+it is a method or a function, so a `@property` that fell off a page would go
+unreported. Nothing here documents a property anywhere but on its class's
+page, so the gap has no reach today; know about it before relying on the
+report for a new kind of page. It is at 100% and should
 stay there. `coverage_modules` in `conf.py` is what makes it a real check:
 without it the builder looks only at the modules it already saw on a page, so a
 module that fell out of the autosummary tree would not be examined at all and

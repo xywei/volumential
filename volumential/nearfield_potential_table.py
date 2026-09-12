@@ -775,8 +775,14 @@ class SymmetryReductionDiagnostics:
     :meth:`NearFieldInteractionTable.get_symmetry_reduction_diagnostics`: the
     entry counts before and after reduction and their ratio, the orbit-size
     histogram and sign bookkeeping behind it, the payload sizes of the three
-    representations, and -- only when the caller passes reference data to
-    reconstruct against -- the error of that reconstruction.
+    representations, and the error of reconstructing the full table from the
+    representatives.
+
+    The two error fields are ``None`` unless there is finite reference data to
+    reconstruct against.  A table that has not been reduced yet supplies its
+    own :attr:`~NearFieldInteractionTable.data` for that, so the usual dense
+    call fills them in; an already reduced table has no full array to compare
+    with, and there the caller has to pass ``reference_data``.
     """
 
     full_entry_count: int
@@ -865,11 +871,14 @@ def get_cahn_hilliard(dim, b=0, c=0, approx_at_origin=False):
     small-argument series with the leading logarithmic term removed
     analytically.
 
-    Real roots only.  This takes the real ``numpy.sqrt`` of each root, where
-    the sumpy kernel takes the complex square root and so covers
-    :math:`b^2 < 4c` as well; for coefficients in that range the callable
-    returned here evaluates to ``nan`` rather than raising, so check the
-    discriminant before tabulating with it.
+    Real, nonnegative roots only.  This takes the real ``numpy.sqrt`` of each
+    root of :math:`\lambda^2 - b\lambda + c`, so both roots must be real
+    *and* nonnegative -- that is, :math:`b^2 \ge 4c`, :math:`b \ge 0` and
+    :math:`c \ge 0`, the last two being the sum and product of the roots.
+    Outside that region the callable returns ``nan`` rather than raising, so
+    check the coefficients before tabulating with it.
+    :class:`volumential.table_manager.CahnHilliardKernel` has no such
+    restriction: it takes the complex square root.
     """
     if dim != 2:
         raise NotImplementedError(

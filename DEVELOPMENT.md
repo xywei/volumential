@@ -270,8 +270,10 @@ sphinx-build -W --keep-going -b html doc/source doc/build/html
 # External links.
 sphinx-build -b linkcheck doc/source doc/build/linkcheck
 
-# What CI checks and keeps as the docs-coverage artifact: is every module of
-# the package on a page, and does every public object have a docstring.
+# What CI checks and keeps as the docs-coverage artifact: is every module,
+# function, class and method of the package on a page (properties excepted --
+# the builder does not inspect them), and does every public object have a
+# docstring.
 # --max-gaps is the ratchet; CI also passes --output, which only names the
 # file inside the artifact.
 # -q is load-bearing: an undocumented object is logged at info level unless

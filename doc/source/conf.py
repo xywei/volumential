@@ -150,16 +150,21 @@ napoleon_numpy_docstring = True
 
 # -- Coverage of the API by the site --------------------------------------
 
-# ``sphinx-build -b coverage`` answers one question: is every object of every
-# imported module reachable from a page of this site?  The ``Documentation``
-# job of ``.github/workflows/ci-full.yml`` runs it and uploads
-# ``doc/build/coverage/``, so a module that never reaches a page becomes
-# visible instead of staying silent.
+# ``sphinx-build -q -W --keep-going -b coverage`` answers one question: does
+# every module, function, class and method of the package reach a page of this
+# site?  The ``Documentation`` job of ``.github/workflows/ci-full.yml`` runs it
+# and uploads ``doc/build/coverage/``, so anything that never reaches a page
+# becomes visible instead of staying silent.
 #
-# It is deliberately *not* a docstring check.  ``autodoc_default_options`` sets
-# ``undoc-members``, so an object with no docstring still gets an entry and
-# still counts as covered here.  ``doc/tools/docstring_gaps.py`` is the
-# docstring half of the same question, and CI runs it beside this builder.
+# Two limits are worth stating rather than discovering.  It is deliberately
+# *not* a docstring check: ``autodoc_default_options`` sets ``undoc-members``,
+# so an object with no docstring still gets an entry and still counts as
+# covered -- ``doc/tools/docstring_gaps.py`` is the docstring half of the same
+# question, and CI runs it beside this builder.  And it does not see
+# properties: the builder inspects a class attribute only when it is a method
+# or a function, so a ``@property`` that fell off a page would not be reported
+# here.  Nothing in this package documents a property anywhere but on its
+# class's page, so that gap has no reach today.
 # Enumerate the package rather than letting the builder infer the module set
 # from the documentation.  Without this it checks only the modules it already
 # saw on a page, so a module that fell out of the autosummary tree -- the exact
