@@ -16,8 +16,10 @@ does not begin with an underscore, in a module whose dotted name has no
 underscore-prefixed component.  A definition nested in module-level control
 flow -- the ``except ImportError`` fallback for an optional dependency, say --
 counts, and so does a method defined inside class-level control flow: both bind
-an attribute like any other.  The two halves of a property count once, and an
-``@overload`` set counts as the one runtime object it declares.
+an attribute like any other.  Definitions that bind one name count once, as
+the object a reader ends up with: the two halves of a property under its
+getter, an ``@overload`` set under its implementation, a conditional
+redefinition under the branch that wins.
 
 Usage::
 
@@ -34,7 +36,7 @@ from __future__ import annotations
 import argparse
 import ast
 import sys
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import NamedTuple
 
@@ -110,34 +112,93 @@ def _definitions(body: list[ast.stmt]) -> Iterator[ast.stmt]:
                 yield from _definitions(case.body)
 
 
-def _is_typing_overload(node: ast.AST) -> bool:
+def _overload_names(tree: ast.Module) -> frozenset[str]:
+    """The names this module binds to ``typing.overload``.
+
+    ``from typing import overload as _overload`` is as much an overload
+    decorator as the plain name, and a module that defines an ``overload`` of
+    its own is not one at all, so the decorator is recognised by what was
+    imported rather than by how it is spelled.  The attribute form,
+    ``@typing.overload``, is matched separately.
+    """
+    names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module in {
+            "typing",
+            "typing_extensions",
+        }:
+            names.update(
+                alias.asname or alias.name
+                for alias in node.names
+                if alias.name == "overload"
+            )
+    return frozenset(names)
+
+
+def _is_typing_overload(node: ast.AST, overload_names: frozenset[str]) -> bool:
     """Is *node* an ``@overload`` stub rather than the runtime definition?
 
     A stub carries no docstring by convention and is not the object anyone
-    imports; the implementation that follows the set is.  Counting the stubs
-    would report one public object as several, all but one of them a gap.
+    imports; the implementation that follows the set is.
     """
     return any(
-        (isinstance(decorator, ast.Name) and decorator.id == "overload")
+        (isinstance(decorator, ast.Name) and decorator.id in overload_names)
         or (isinstance(decorator, ast.Attribute) and decorator.attr == "overload")
         for decorator in node.decorator_list
     )
 
 
 def _is_property_mutator(node: ast.AST) -> bool:
-    """Is *node* the ``@x.setter`` or ``@x.deleter`` half of a property?
-
-    Sphinx documents a property once, under its getter, so counting a mutator
-    that follows one would overstate the gap.  A mutator with no getter before
-    it -- a write-only ``value = property()`` and its setter -- is the
-    property's only definition and has to be counted, which is why the caller
-    checks the names it has already seen rather than this alone.
-    """
+    """Is *node* the ``@x.setter`` or ``@x.deleter`` half of a property?"""
     return any(
         isinstance(decorator, ast.Attribute)
         and decorator.attr in {"deleter", "setter"}
         for decorator in node.decorator_list
     )
+
+
+def _carriers(
+    nodes: Iterable[ast.stmt], overload_names: frozenset[str]
+) -> Iterator[tuple[ast.stmt, bool]]:
+    """One ``(definition, always_a_gap)`` per public name a suite binds.
+
+    Several definitions can bind one name -- an ``@overload`` set, a branch
+    that defines a name two ways, a property's getter and its setter -- and the
+    docstring that matters is the one on whichever of them the reader ends up
+    with.  Two rules cover that:
+
+    * a property takes its ``__doc__`` from its getter, never from a mutator,
+      so a name bound only by mutators (a write-only ``value = property()`` and
+      its setter) is a gap however well the setter is written;
+    * otherwise the last definition is the one that survives, and an
+      ``@overload`` stub loses to the implementation that follows the set.
+    """
+    groups: dict[str, list[ast.stmt]] = {}
+    for node in nodes:
+        if _is_public(node.name):
+            groups.setdefault(node.name, []).append(node)
+
+    for group in groups.values():
+        implementations = [
+            node
+            for node in group
+            if not (
+                isinstance(node, _FUNCTION_NODES)
+                and _is_typing_overload(node, overload_names)
+            )
+        ]
+        candidates = implementations or group
+        getters = [
+            node
+            for node in candidates
+            if not (
+                isinstance(node, _FUNCTION_NODES) and _is_property_mutator(node)
+            )
+        ]
+        if getters:
+            yield getters[-1], False
+        else:
+            yield candidates[0], True
 
 
 def _scan_module(
@@ -152,37 +213,42 @@ def _scan_module(
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     relative = path.relative_to(report_root).as_posix()
 
+    overload_names = _overload_names(tree)
     gaps: list[Gap] = []
     total = 0
 
-    def record(node, kind: str, name: str) -> None:
+    def record(node, kind: str, name: str, *, always_a_gap: bool = False) -> None:
         nonlocal total
         total += 1
-        if ast.get_docstring(node) is None:
+        if always_a_gap or ast.get_docstring(node) is None:
             gaps.append(Gap(relative, node.lineno, kind, name))
 
-    for node in _definitions(tree.body):
-        if not _is_public(node.name):
-            continue
-        if isinstance(node, _FUNCTION_NODES) and _is_typing_overload(node):
-            continue
-
+    for node, always_a_gap in _carriers(_definitions(tree.body), overload_names):
         if isinstance(node, ast.ClassDef):
             record(node, "class", f"{module}.{node.name}")
-            recorded_names: set[str] = set()
-            for member in _definitions(node.body):
-                if not isinstance(member, _FUNCTION_NODES):
-                    continue
-                if not _is_public(member.name) or _is_typing_overload(member):
-                    continue
-                if _is_property_mutator(member) and member.name in recorded_names:
-                    # The getter above already stands for this property.
-                    continue
-                recorded_names.add(member.name)
-                record(member, "method", f"{module}.{node.name}.{member.name}")
+            methods = (
+                member
+                for member in _definitions(node.body)
+                if isinstance(member, _FUNCTION_NODES)
+            )
+            for member, member_is_a_gap in _carriers(methods, overload_names):
+                record(
+                    member,
+                    "method",
+                    f"{module}.{node.name}.{member.name}",
+                    always_a_gap=member_is_a_gap,
+                )
         else:
-            record(node, "function", f"{module}.{node.name}")
+            record(
+                node,
+                "function",
+                f"{module}.{node.name}",
+                always_a_gap=always_a_gap,
+            )
 
+    # Grouping by name can pick a carrier that is not the first definition of
+    # the group, so restore source order for the report.
+    gaps.sort(key=lambda gap: gap.lineno)
     return gaps, total
 
 
