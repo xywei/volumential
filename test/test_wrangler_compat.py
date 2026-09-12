@@ -277,6 +277,35 @@ def test_patching_the_legacy_validator_still_reaches_the_cached_wrapper(monkeypa
     assert calls == [16]
 
 
+def test_the_fft_app_call_binds_against_sumpy():
+    """The FFT plan is requested by keyword, which binds either way.
+
+    ``sumpy.tools.get_opencl_fft_app`` took ``shape``/``dtype``/``inverse``
+    positionally until inducer/sumpy@16e0e3c5 ("refactor fft apps") made
+    everything after the array context keyword-only.  Conversely sumpy's own
+    wrangler now calls the ``opencl_fft_app`` hook by keyword, so the
+    override has to keep accepting that spelling.
+    """
+    import inspect
+
+    from sumpy.tools import get_opencl_fft_app
+
+    from volumential.wranglers.sumpy_backend import (
+        FPNDSumpyTreeIndependentDataForWrangler,
+    )
+
+    arguments = {
+        "shape": (4,),
+        "dtype": np.dtype(np.complex128),
+        "inverse": False,
+    }
+
+    inspect.signature(get_opencl_fft_app).bind(object(), **arguments)
+    inspect.signature(
+        FPNDSumpyTreeIndependentDataForWrangler.opencl_fft_app
+    ).bind(object(), **arguments)
+
+
 if __name__ == "__main__":
     import sys
 
