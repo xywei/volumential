@@ -871,14 +871,25 @@ def get_cahn_hilliard(dim, b=0, c=0, approx_at_origin=False):
     small-argument series with the leading logarithmic term removed
     analytically.
 
-    Real, nonnegative roots only.  This takes the real ``numpy.sqrt`` of each
-    root of :math:`\lambda^2 - b\lambda + c`, so both roots must be real
-    *and* nonnegative -- that is, :math:`b^2 \ge 4c`, :math:`b \ge 0` and
-    :math:`c \ge 0`, the last two being the sum and product of the roots.
-    Outside that region the callable returns ``nan`` rather than raising, so
-    check the coefficients before tabulating with it.
-    :class:`volumential.table_manager.CahnHilliardKernel` has no such
-    restriction: it takes the complex square root.
+    Distinct positive roots only, and all three inequalities are strict:
+
+    .. math::
+
+        b > 0, \qquad c > 0, \qquad b^2 > 4c.
+
+    The first two make both roots of :math:`\lambda^2 - b\lambda + c`
+    positive (they are its sum and its product) and the third makes them
+    distinct, which is what the three steps here need: the real
+    ``numpy.sqrt`` of each root, a nonzero :math:`\lambda_1^2 -
+    \lambda_2^2` in the prefactor, and a nonzero denominator in the
+    stabilized quadratic formula.  Each boundary case breaks a different one
+    -- :math:`b^2 = 4c` collapses the prefactor, :math:`c = 0` reaches a
+    :math:`0/0`, a negative root reaches :math:`\sqrt{\text{negative}}` --
+    and all of them produce a callable that returns ``nan`` rather than
+    raising, so check the coefficients before tabulating with it.
+    :class:`volumential.table_manager.CahnHilliardKernel` is not restricted
+    this way: it takes the complex square root and rejects coincident roots
+    outright.
     """
     if dim != 2:
         raise NotImplementedError(
