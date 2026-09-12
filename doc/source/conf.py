@@ -244,6 +244,18 @@ html_theme_options = {
     "switcher": {
         # Served from the site itself: ``_static/switcher.json`` carries a
         # single "latest" entry until tagged versions are published.
+        #
+        # TODO(#145): the moment GitHub Pages is enabled (Settings -> Pages ->
+        # Build and deployment -> Source: "GitHub Actions") and
+        # https://xywei.github.io/volumential/ responds, three edits follow.
+        # Here: make ``json_url`` the absolute
+        # ``https://xywei.github.io/volumential/_static/switcher.json`` -- a
+        # relative URL resolves against whichever build is being viewed, so an
+        # older tagged build would show its own frozen list rather than the
+        # current one -- and drop the ``linkcheck_ignore`` entry for that host
+        # below.  Elsewhere: the documentation link in README.md, and the
+        # repository homepage.  Until then this file points at nothing that is
+        # live, which is why the relative URL is the right placeholder.
         "json_url": "_static/switcher.json",
         "version_match": "latest",
     },
