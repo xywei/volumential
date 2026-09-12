@@ -1,3 +1,21 @@
+---
+# Two consumers, two keys.  ``sphinxext.opengraph`` derives ``og:description``
+# by walking the doctree, which on this page starts with display math and comes
+# out as raw LaTeX; a top-level ``og:description`` overrides it.  The
+# ``html_meta`` one below is the ordinary ``<meta name="description">`` a search
+# engine shows, and setting it also stops the extension from adding its own.
+"og:description": >-
+  Volumential evaluates volume potentials over box-shaped domains with the
+  Fast Multipole Method, for the Laplace, Helmholtz and Yukawa kernels in
+  two and three dimensions.
+myst:
+  html_meta:
+    description: >-
+      Volumential evaluates volume potentials over box-shaped domains with the
+      Fast Multipole Method, for the Laplace, Helmholtz and Yukawa kernels in
+      two and three dimensions.
+---
+
 # Volumential
 
 **Volumential** (VOLUME poteNTIAL) evaluates volume potentials
@@ -26,6 +44,14 @@ uniform and adaptively refined 2:1-balanced trees.
 
 Install the stack, evaluate a first volume potential, and pick the OpenCL
 device you meant to use.
+:::
+
+:::{grid-item-card} {octicon}`beaker` Examples
+:link: examples/index
+:link-type: doc
+
+The eight programs under `examples/`, what each one costs to run and which
+device it lands on, plus the notebooks rendered as pages.
 :::
 
 :::{grid-item-card} {octicon}`book` User guide
@@ -76,6 +102,7 @@ release and versioning.
 
 - Never run Volumential before: {doc}`getting-started/installation`, then
   {doc}`getting-started/first-volume-potential`.
+- Looking for a program close to your problem: {doc}`examples/index`.
 - Want to understand the machinery: {doc}`user-guide/volume-fmm-workflow`.
 - Chasing a slow or wrong table: {doc}`user-guide/table-build-routing` and
   {doc}`user-guide/nearfield_symmetry`.
@@ -86,6 +113,7 @@ release and versioning.
 :maxdepth: 2
 
 getting-started/index
+examples/index
 user-guide/index
 design-notes/index
 Benchmarks <benchmarks/index>

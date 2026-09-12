@@ -122,6 +122,7 @@ class OpCounters:
         self._counts: dict[str, dict[str, int]] = {}
 
     def add(self, category: str, label: str, count) -> None:
+        """Add *count* to the counter named *label* within *category*."""
         count = _require_count(count)
         by_label = self._counts.setdefault(str(category), {})
         by_label[str(label)] = by_label.get(str(label), 0) + count
@@ -131,9 +132,11 @@ class OpCounters:
         return dict(self._counts.get(str(category), {}))
 
     def total(self, category: str) -> int:
+        """Sum of every label's count in *category*, zero if it has none."""
         return sum(self._counts.get(str(category), {}).values())
 
     def as_dict(self) -> dict[str, dict[str, int]]:
+        """A plain nested-dict copy of every counter, safe to serialize."""
         return {
             category: dict(by_label)
             for category, by_label in self._counts.items()

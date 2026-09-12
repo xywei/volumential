@@ -93,11 +93,14 @@ _ACCEPTED_BUILD_METHODS = (_TABLE_BUILD_METHOD, EXTERNAL_TABLE_BUILD_METHOD)
 
 @dataclass(frozen=True)
 class KernelSpec:
+    """What a table is a table *of*: a dimension and a kernel type name."""
+
     dim: int
     kernel_type: str
 
     @classmethod
     def from_args(cls, dim, kernel_type):
+        """Build a :class:`KernelSpec`, coercing and validating *dim*."""
         dim = int(dim)
         if dim < 1:
             raise ValueError(f"dim must be >= 1, got {dim}")
@@ -107,11 +110,19 @@ class KernelSpec:
 
 @dataclass(frozen=True)
 class TableDiscretization:
+    """How a table is discretized: quadrature order and source box level.
+
+    The level is what fixes the source box extent, and therefore the scale a
+    cached table is valid at; see the table-build routing page of the
+    documentation.
+    """
+
     q_order: int
     source_box_level: int = 0
 
     @classmethod
     def from_args(cls, q_order, source_box_level=0):
+        """Build a :class:`TableDiscretization`, coercing and validating both."""
         q_order = int(q_order)
         if q_order < 1:
             raise ValueError(f"q_order must be >= 1, got {q_order}")
@@ -128,11 +139,20 @@ class TableDiscretization:
 
 @dataclass(frozen=True)
 class TableRequest:
+    """One table's identity: a :class:`KernelSpec` and a
+    :class:`TableDiscretization`.
+
+    This is the key the manager looks a table up by, builds it under, and
+    stores it against, so the properties below are read far more often than
+    the two nested records.
+    """
+
     kernel: KernelSpec
     discretization: TableDiscretization
 
     @classmethod
     def from_args(cls, dim, kernel_type, q_order, source_box_level=0):
+        """Build a :class:`TableRequest` from the four scalar fields."""
         return cls(
             kernel=KernelSpec.from_args(dim=dim, kernel_type=kernel_type),
             discretization=TableDiscretization.from_args(
@@ -143,23 +163,37 @@ class TableRequest:
 
     @property
     def dim(self):
+        """Shorthand for ``self.kernel.dim``."""
         return self.kernel.dim
 
     @property
     def kernel_type(self):
+        """Shorthand for ``self.kernel.kernel_type``."""
         return self.kernel.kernel_type
 
     @property
     def q_order(self):
+        """Shorthand for ``self.discretization.q_order``."""
         return self.discretization.q_order
 
     @property
     def source_box_level(self):
+        """Shorthand for ``self.discretization.source_box_level``."""
         return self.discretization.source_box_level
 
 
 @dataclass(frozen=True)
 class TableKernelBundle:
+    """The three kernel objects a table build needs, resolved together.
+
+    ``sumpy_kernel`` is the symbolic kernel the request resolved to (``None``
+    when the kernel type has no sumpy form), ``kernel_func`` the plain
+    callable :func:`~volumential.nearfield_potential_table.sumpy_kernel_to_lambda`
+    derived from it for the quadrature, and ``kernel_scale_type`` the scaling
+    rule lookups apply when they move an entry from the template box to a real
+    one.
+    """
+
     kernel_func: object
     kernel_scale_type: object
     sumpy_kernel: object
@@ -641,6 +675,13 @@ def _backup_cache_file(path):
 
 
 class ConstantKernel(ExpressionKernel):
+    """The kernel that is identically one, as a :mod:`sumpy` expression kernel.
+
+    Tabulating it gives the plain volume integral of the density over each
+    near-field case, which is what the scale-adjustment and normalizer paths
+    are checked against.
+    """
+
     init_arg_names = ("dim",)
 
     def __init__(self, dim=None):
@@ -654,9 +695,16 @@ class ConstantKernel(ExpressionKernel):
 
     @property
     def is_complex_valued(self):
+        """``False``: the constant kernel is real."""
         return False
 
     def adjust_for_kernel_scaling(self, expr, rscale, nderivatives):
+        """Divide *expr* by *rscale*.
+
+        The :mod:`sumpy` hook that rescales a term for a box of radius
+        *rscale*; ``has_efficient_scale_adjustment`` above is what advertises
+        that this kernel implements it.
+        """
         return expr / rscale
 
     def __getinitargs__(self):
@@ -737,6 +785,27 @@ def _compute_cahn_hilliard_lambdas(b, c):
 
 
 class CahnHilliardKernel(ExpressionKernel):
+    r"""The 2D Cahn-Hilliard kernel as a :mod:`sumpy` expression kernel.
+
+    With :math:`\lambda_1^2` and :math:`\lambda_2^2` the two roots of
+    :math:`\lambda^2 - b\lambda + c`, the kernel is
+
+    .. math::
+
+        -\frac{1}{2\pi(\lambda_1^2 - \lambda_2^2)}
+        \bigl( K_0(\lambda_1 r) - K_0(\lambda_2 r) \bigr),
+
+    written in the Hankel form :math:`K_0(z) = \tfrac{\pi}{2}
+    \mathrm{i}\, H^{(1)}_0(\mathrm{i}z)` that sumpy's Bessel callables
+    provide.
+
+    The constructor rejects near-degenerate coefficients, and the test is an
+    absolute one: :math:`\lvert \lambda_1^2 - \lambda_2^2 \rvert < 10^{-15}`
+    raises, which catches coincident roots and also genuinely distinct roots
+    whose separation is that small in absolute terms -- at coefficient scales
+    near :math:`10^{-16}`, say, where no pair of distinct roots passes.
+    """
+
     init_arg_names = ("dim", "b", "c")
 
     def __init__(self, dim: int | None = None, b: complex = 0j, c: complex = 0j):
@@ -766,9 +835,14 @@ class CahnHilliardKernel(ExpressionKernel):
 
     @property
     def is_complex_valued(self):
+        """``True``: the Hankel form above is complex even for real *b*, *c*."""
         return True
 
     def prepare_loopy_kernel(self, loopy_knl):
+        """Register sumpy's Bessel callables on *loopy_knl*.
+
+        Without them the generated code has no ``hankel_1`` to call.
+        """
         from sumpy.codegen import register_bessel_callables
 
         return register_bessel_callables(loopy_knl)

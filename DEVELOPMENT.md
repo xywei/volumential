@@ -270,13 +270,39 @@ sphinx-build -W --keep-going -b html doc/source doc/build/html
 # External links.
 sphinx-build -b linkcheck doc/source doc/build/linkcheck
 
-# Live preview at http://127.0.0.1:8000, rebuilding on save.
-sphinx-autobuild doc/source doc/build/html
+# What CI checks and keeps as the docs-coverage artifact.  Two questions.
+#
+# Is every module, function, class and method of the package on a page
+# (properties excepted -- the builder does not inspect them)?  -q is
+# load-bearing: an undocumented object is logged at info level unless the app
+# is quiet, and only a warning is what -W fails on.  The report lands in
+# doc/build/coverage/python.txt, which names the objects that reach no page.
+sphinx-build -q -W --keep-going -b coverage doc/source doc/build/coverage
+
+# And does every public object have a docstring?  interrogate answers that
+# from the syntax tree, so it needs no OpenCL stack, no import and no Sphinx.
+# -v prints the per-file table, -vv names every object it counted and whether
+# it is covered.  [tool.interrogate] in pyproject.toml sets what counts as
+# public and the fail-under percentage, which is a ratchet.
+interrogate -v volumential
+
+# Live preview at http://127.0.0.1:8000, rebuilding on save.  --watch is what
+# picks up an edit to a notebook: they live outside doc/source, and the staging
+# copy in conf.py only runs when a build starts.
+sphinx-autobuild --watch examples doc/source doc/build/html
 ```
 
 New pages are MyST Markdown (`.md`); the remaining reStructuredText pages are
 substantial existing documents kept as they are. `doc/source/development/`
 documents the section layout and which section a new page belongs in.
+
+The notebooks under `examples/` are rendered as pages by `myst-nb` and are
+**never executed** by the build (`nb_execution_mode = "off"`): they all need a
+working OpenCL device, and the two Poisson tutorials run co-refinement studies
+far past a documentation build's budget (the Helmholtz one is a smoke-mode
+wrapper and is cheap, but a docs build is not where it belongs either). `conf.py` stages a copy of each into
+`doc/source/examples/notebooks/` at the start of every build; that directory is
+generated and git-ignored. Commit notebooks with their outputs stripped.
 
 `doc/source/api/generated/` is generated -- only that subdirectory.
 `sphinx.ext.autosummary` writes one page per module there from the templates in

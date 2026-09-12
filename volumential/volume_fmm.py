@@ -48,13 +48,27 @@ except ImportError:
     except ImportError:
 
         class TimingRecorder:
+            """Stand-in for boxtree's recorder, when boxtree has none.
+
+            Reached only if neither ``boxtree.timing`` nor ``boxtree.fmm``
+            exports a ``TimingRecorder``.  It collects the per-stage timing
+            futures the volume FMM hands it and resolves them on demand,
+            which is all this module asks of the real one.
+            """
+
             def __init__(self):
                 self._futures = []
 
             def add(self, stage, future):
+                """Record *future* as the timing result of stage *stage*."""
                 self._futures.append((stage, future))
 
             def summarize(self):
+                """Resolve the recorded futures into a ``stage -> result`` map.
+
+                A stage whose future is ``None`` is left out, and one that is
+                already a value rather than a callable is taken as it stands.
+                """
                 summary = {}
                 for stage, future in self._futures:
                     if future is None:
@@ -1231,7 +1245,14 @@ def drive_volume_fmm(
 
 
 def compute_barycentric_lagrange_params(q_order):
+    """1D interpolation nodes and barycentric weights for a box of *q_order*.
 
+    The nodes are the *q_order* Gauss-Legendre points mapped from
+    :math:`[-1, 1]` to the box-local :math:`[0, 1]`, which is where the volume
+    FMM places quadrature nodes inside a leaf; the weights are the barycentric
+    Lagrange weights of those nodes.  A single node needs no weight, so
+    ``q_order == 1`` returns a trivial one.
+    """
     # 1d quad points and weights
     q_points_1d, q_weights_1d = np.polynomial.legendre.leggauss(q_order)
     q_points_1d = (q_points_1d + 1) * 0.5

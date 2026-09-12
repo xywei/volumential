@@ -46,12 +46,16 @@ fmmlib = ["pyfmmlib>=2024.1"]
 gmsh_support = ["gmsh_interop"]
 test = ["filelock", "gmsh_interop", "pytest"]
 doc = [
+  "interrogate",
+  "myst-nb",
   "myst-parser",
   "pydata-sphinx-theme",
   "sphinx",
   "sphinx-autobuild",
   "sphinx-copybutton",
   "sphinx-design",
+  "sphinx-sitemap",
+  "sphinxext-opengraph",
 ]
 
 [tool.setuptools]
@@ -78,6 +82,45 @@ pytential = { git = "https://github.com/inducer/pytential.git" }
 pytools = { git = "https://github.com/inducer/pytools.git" }
 pyvisfile = { git = "https://github.com/inducer/pyvisfile.git" }
 sumpy = { git = "https://github.com/inducer/sumpy.git" }
+
+[tool.interrogate]
+# The docstring half of the documentation coverage question; the module and
+# object half is ``sphinx-build -b coverage`` (see ``doc/source/conf.py``).
+# ``interrogate volumential`` prints the percentage of the public surface that
+# carries a docstring, and ``-v`` lists the objects that do not.
+#
+# What counts as public here is what the API reference means by it: a name with
+# an underscore-prefixed component is not on a page, so it is not counted, and
+# neither is ``__init__`` (documented by its class) or a nested helper.
+ignore-init-method = true
+ignore-magic = true
+ignore-private = true
+ignore-semiprivate = true
+ignore-nested-functions = true
+exclude = [
+  # A 2019 finite-element experiment that nothing in the tree imports; the API
+  # reference leaves it out too.
+  "volumential/qbfem",
+  "benchmarks",
+  "doc",
+  "examples",
+  "test",
+]
+# A ratchet, not a target: the tree measures 91.53% today (389 of 425), and
+# 91.5 is that truncated to the tenth.  The decimal is load-bearing -- a
+# whole-number threshold would leave several objects of slack, because
+# interrogate rounds the measured percentage to as many decimals as the
+# threshold carries before comparing, and one new gap here costs 0.24 points.
+# At 91.5 a single new undocumented public object (91.29%, rounded to 91.3)
+# fails the check.  Raise the number in the commit that earns it; lowering it
+# is a deliberate edit that has to say why.
+#
+# The 36 that are missing today are 30 module docstrings and six objects: the
+# five Duffy quadrature kernels of ``NearFieldInteractionTable``, whose
+# contract cannot be read off the source, and the setter half of its ``data``
+# property, documented on the getter.
+fail-under = 91.5
+verbose = 1
 
 [tool.pytest.ini_options]
 testpaths = ["test"]

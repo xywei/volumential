@@ -1,5 +1,5 @@
 """This example evaluates the volume potential over
-[-1,1]^3 with the Laplace kernel.
+[-0.5, 0.5]^3 with the Laplace kernel.
 """
 
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"

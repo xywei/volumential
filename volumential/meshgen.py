@@ -380,6 +380,7 @@ class MeshGen1D(MeshGenBase):
     """Meshgen in 1D"""
 
     def dimension_specific_setup(self):
+        """Check that the bounds the constructor got describe a 1D box."""
         assert self.dim == 1
 
 
@@ -387,6 +388,13 @@ class MeshGen2D(MeshGenBase):
     """Meshgen in 2D"""
 
     def dimension_specific_setup(self):
+        """Promote scalar bounds to a 2D box, or check that the bounds are 2D.
+
+        :class:`MeshGenBase` reads the dimension off the length of the bounds
+        it was given, so the common ``a=-1, b=1`` call arrives here as ``dim ==
+        1``; widening it (and the root vertex with it) is what makes that call
+        mean :math:`[-1, 1]^2`.
+        """
         if self.dim == 1:
             self.dim = 2
             self.root_vertex = np.zeros(self.dim) + self.bound_a
@@ -398,6 +406,10 @@ class MeshGen3D(MeshGenBase):
     """Meshgen in 3D"""
 
     def dimension_specific_setup(self):
+        """Promote scalar bounds to a 3D box, or check that the bounds are 3D.
+
+        The 3D counterpart of :meth:`MeshGen2D.dimension_specific_setup`.
+        """
         if self.dim == 1:
             self.dim = 3
             self.root_vertex = np.zeros(self.dim) + self.bound_a

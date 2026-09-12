@@ -48,18 +48,28 @@ extensions = [
     "sphinx.ext.napoleon",
     "sphinx.ext.todo",
     "sphinx.ext.viewcode",
-    "myst_parser",
+    # ``myst_nb`` is a superset of ``myst_parser``: it parses the Markdown
+    # pages exactly as ``myst_parser`` did, honours the same ``myst_*``
+    # settings, and additionally reads ``.ipynb``.  Upstream asks that only
+    # one of the two be loaded, so ``myst_parser`` is not listed here even
+    # though it is still what does the Markdown parsing.
+    "myst_nb",
     "sphinx_copybutton",
     "sphinx_design",
+    "sphinx_sitemap",
+    "sphinxext.opengraph",
 ]
 
 source_suffix = {
     ".rst": "restructuredtext",
-    ".md": "markdown",
+    # ``myst-nb`` is the parser ``myst_nb`` registers, and it reads both: the
+    # Markdown pages, exactly as ``myst_parser`` did, and the notebooks.
+    ".md": "myst-nb",
+    ".ipynb": "myst-nb",
 }
 root_doc = "index"
 language = "en"
-exclude_patterns = []
+exclude_patterns = ["**/.ipynb_checkpoints"]
 pygments_style = "sphinx"
 templates_path = ["_templates"]
 todo_include_todos = True
@@ -97,6 +107,20 @@ myst_enable_extensions = [
 myst_heading_anchors = 3
 
 
+# -- Notebooks (myst-nb) --------------------------------------------------
+
+# Never execute a notebook during a docs build.  Every one of them needs a
+# working OpenCL device, which a contributor building the documentation may not
+# have, and the two Poisson tutorials run co-refinement studies far past what a
+# docs build can afford; the Helmholtz one is a smoke-mode wrapper and would be
+# cheap, but a docs build is still not where it belongs.  Pages therefore show
+# the prose, the code and whatever outputs the notebook carries in the
+# repository -- today, none -- except that staging drops the outputs of a file
+# over ``_MAX_STAGED_NOTEBOOK_BYTES``, so an oversized notebook renders without
+# them whatever it was committed with.
+nb_execution_mode = "off"
+
+
 # -- autodoc / autosummary ------------------------------------------------
 
 # Generate a stub page per module from ``_templates/autosummary``.
@@ -128,6 +152,48 @@ napoleon_google_docstring = True
 napoleon_numpy_docstring = True
 
 
+# -- Coverage of the API by the site --------------------------------------
+
+# ``sphinx-build -q -W --keep-going -b coverage`` answers one question: does
+# every module, function, class and method of the package reach a page of this
+# site?  The ``Documentation`` job of ``.github/workflows/ci-full.yml`` runs it
+# and uploads ``doc/build/coverage/``, so anything that never reaches a page
+# becomes visible instead of staying silent.
+#
+# Two limits are worth stating rather than discovering.  It is deliberately
+# *not* a docstring check: ``autodoc_default_options`` sets ``undoc-members``,
+# so an object with no docstring still gets an entry and still counts as
+# covered.  ``interrogate volumential`` is the docstring half of the same
+# question, configured in ``[tool.interrogate]`` of ``pyproject.toml``.  And
+# this builder does not see properties: it inspects a class attribute only
+# when it is a method or a function, so a ``@property`` that fell off a page
+# would not be reported here.  Nothing in this package documents a property
+# anywhere but on its class's page, so that gap has no reach today.
+# Enumerate the package rather than letting the builder infer the module set
+# from the documentation.  Without this it checks only the modules it already
+# saw on a page, so a module that fell out of the autosummary tree -- the exact
+# regression this report is here to catch -- would simply not be looked at, and
+# the total would stay at 100%.  With it, a module in the package but not on a
+# page, and a module on a page but not in the package, are both warnings.
+coverage_modules = ["volumential"]
+coverage_ignore_modules = [
+    # A 2019 finite-element experiment that nothing in the tree imports; the
+    # autosummary template leaves it out of the API reference too.
+    r"volumential\.qbfem(\..*)?$",
+    # Any module with an underscore-prefixed component.  Recursive autosummary
+    # omits those, so without this a private implementation module would be a
+    # missing-module warning here -- and, under ``-W``, a failed job -- for
+    # correctly having no page.
+    r"(.*\.)?_.*",
+]
+# ``coverage_show_missing_items`` names the objects rather than only counting
+# them, so ``doc/build/coverage/python.txt`` reads as a list of what to fix.
+coverage_show_missing_items = True
+coverage_write_headline = True
+coverage_statistics_to_report = True
+coverage_statistics_to_stdout = True
+
+
 # -- intersphinx ----------------------------------------------------------
 
 intersphinx_mapping = {
@@ -154,6 +220,19 @@ html_title = "Volumential"
 html_static_path = ["_static"]
 html_last_updated_fmt = "%Y-%m-%d"
 
+# Where the built site is served from.  Sphinx uses it for the ``canonical``
+# link of every page, ``sphinx_sitemap`` for the URLs in ``sitemap.xml``, and
+# ``sphinxext.opengraph`` for the ``og:url`` metadata.  A trailing slash is
+# required by all three.
+#
+# This is the GitHub Pages destination the modernization is heading for, and
+# what ``_static/switcher.json`` and ``linkcheck_ignore`` already name.  Until
+# the Pages deployment lands, a build published anywhere else carries canonical
+# links to a site that is not up yet; that is a property of the deployment
+# order, not of this value, and pointing it at an interim host would have to be
+# reverted the moment Pages goes live.
+html_baseurl = "https://xywei.github.io/volumential/"
+
 html_theme_options = {
     "github_url": "https://github.com/xywei/volumential",
     "navbar_align": "left",
@@ -170,6 +249,25 @@ html_theme_options = {
     },
 }
 
+# -- Sitemap and social metadata ------------------------------------------
+
+# One flat set of URLs: the site publishes ``latest`` only and is not
+# translated, so the default ``{lang}{version}{link}`` scheme would invent a
+# ``en/latest/`` prefix that does not exist.
+sitemap_url_scheme = "{link}"
+# Generated navigation, not content: a crawler that indexes them finds nothing
+# it has not already found on the pages they point at.
+sitemap_excludes = ["genindex.html", "py-modindex.html", "search.html"]
+
+ogp_site_url = html_baseurl
+ogp_site_name = "Volumential"
+ogp_enable_meta_description = True
+# Rendering a social-preview image per page needs matplotlib and a bundled
+# font, which is a build dependency and a per-page cost for something no reader
+# of these pages sees.  The text metadata above is what link unfurls use.
+ogp_social_cards = {"enable": False}
+
+
 html_context = {
     "github_user": "xywei",
     "github_repo": "volumential",
@@ -180,18 +278,83 @@ html_context = {
 }
 
 
-_GENERATED_API_PREFIX = "api/generated/"
+# -- Staging the example notebooks ----------------------------------------
+
+# The notebooks are maintained in ``examples/``, beside the scripts they
+# demonstrate and where a reader runs them from.  Sphinx reads only what is
+# under ``doc/source``, so copy them in at the start of every build;
+# ``doc/source/examples/notebooks/`` is generated and git-ignored, exactly like
+# ``doc/source/api/generated/``.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_NOTEBOOK_SOURCE_DIR = _REPO_ROOT / "examples"
+_NOTEBOOK_STAGE_DIR = Path(__file__).resolve().parent / "examples" / "notebooks"
+
+# Nothing is executed (``nb_execution_mode``), so a page shows the outputs the
+# notebook was committed with.  Today every notebook is committed stripped and
+# the largest is well under 100 KiB, but a notebook saved with its figures --
+# or with an image pasted into a Markdown cell, which lands in that cell's
+# ``attachments`` -- would ship those bytes into the page, so above this size
+# the staged copy keeps the prose and the code and drops both payloads.  The
+# file in ``examples/`` is never modified.
+_MAX_STAGED_NOTEBOOK_BYTES = 2 * 1024 * 1024
+
+
+def _strip_notebook_payloads(text):
+    """Return *text*, a notebook document, with its heavy cell payloads removed.
+
+    Two of them, because either can be what made the file large: the outputs of
+    a code cell, and the ``attachments`` of a Markdown cell, which is where a
+    pasted image ends up.
+    """
+    notebook = json.loads(text)
+    for cell in notebook.get("cells", []):
+        cell.pop("attachments", None)
+        if cell.get("cell_type") == "code":
+            cell["outputs"] = []
+            cell["execution_count"] = None
+    return json.dumps(notebook, indent=1, ensure_ascii=False) + "\n"
+
+
+def _stage_example_notebooks(app):
+    """Copy ``examples/*.ipynb`` under ``doc/source`` so Sphinx can read them."""
+    _NOTEBOOK_STAGE_DIR.mkdir(parents=True, exist_ok=True)
+
+    staged = set()
+    for source in sorted(_NOTEBOOK_SOURCE_DIR.glob("*.ipynb")):
+        text = source.read_text(encoding="utf-8")
+        if source.stat().st_size > _MAX_STAGED_NOTEBOOK_BYTES:
+            text = _strip_notebook_payloads(text)
+
+        target = _NOTEBOOK_STAGE_DIR / source.name
+        # Write only on a real change: an unconditional write moves the mtime
+        # and makes every incremental build re-read every notebook.
+        if not target.is_file() or target.read_text(encoding="utf-8") != text:
+            target.write_text(text, encoding="utf-8")
+        staged.add(target.name)
+
+    # A notebook renamed or deleted in ``examples/`` must not keep a page here.
+    for leftover in _NOTEBOOK_STAGE_DIR.glob("*.ipynb"):
+        if leftover.name not in staged:
+            leftover.unlink()
+
+
+# Pages whose source Sphinx reads from a directory this build generated.  An
+# "Edit this page" link for one of them would point at a path that does not
+# exist in the repository.
+_GENERATED_PAGE_PREFIXES = (
+    # ``sphinx.ext.autosummary`` writes one page per module here.
+    "api/generated/",
+    # ``_stage_example_notebooks`` copies the notebooks here; the files they
+    # come from are under ``examples/``, linked from the gallery page.
+    "examples/notebooks/",
+)
 
 
 def _disable_edit_button_on_generated_pages(
     app, pagename, templatename, context, doctree
 ):
-    """Hide "Edit this page" where there is no source file to edit.
-
-    ``sphinx.ext.autosummary`` writes the API pages at build time and they are
-    not committed, so an edit link into the repository would be a dead link.
-    """
-    if pagename.startswith(_GENERATED_API_PREFIX):
+    """Hide "Edit this page" where there is no source file to edit."""
+    if pagename.startswith(_GENERATED_PAGE_PREFIXES):
         context["theme_use_edit_page_button"] = False
 
 
@@ -268,6 +431,7 @@ def _write_legacy_redirects(app, exception):
 
 
 def setup(app):
+    app.connect("builder-inited", _stage_example_notebooks)
     app.connect("html-page-context", _disable_edit_button_on_generated_pages)
     app.connect("build-finished", _write_legacy_redirects)
 

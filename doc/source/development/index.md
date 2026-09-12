@@ -74,8 +74,10 @@ sphinx-build -W --keep-going -b html doc/source doc/build/html
 # External links.
 sphinx-build -b linkcheck doc/source doc/build/linkcheck
 
-# Live preview at http://127.0.0.1:8000, rebuilding on save.
-sphinx-autobuild doc/source doc/build/html
+# Live preview at http://127.0.0.1:8000, rebuilding on save.  --watch is what
+# picks up an edit to a notebook: they live outside doc/source, and the
+# staging copy in conf.py only runs when a build starts.
+sphinx-autobuild --watch examples doc/source doc/build/html
 ```
 
 ### Writing pages
@@ -124,6 +126,104 @@ publishes no `objects.inv` at all (`mpmath`, `pyfmmlib`), or it publishes one
 that does not document the referenced object (`boxtree` no longer documents
 `boxtree.tools.DeviceDataRecord`, though its inventory is otherwise fine).
 
+### Example notebooks
+
+The notebooks are maintained in `examples/`, beside the scripts they
+demonstrate. Sphinx reads only what is under `doc/source`, so `conf.py` copies
+`examples/*.ipynb` into `doc/source/examples/notebooks/` on `builder-inited`;
+that directory is generated and git-ignored, like `api/generated/`. Add a
+notebook to `examples/` and it gets a page, because
+{doc}`../examples/index` globs the staged directory — but add the paragraph
+that says what it costs to run, since a reader cannot tell from the rendering.
+
+Nothing is executed: `nb_execution_mode = "off"`. Every notebook needs a
+working OpenCL device, and the two Poisson tutorials run co-refinement studies
+far past a documentation build's budget; the Helmholtz one calls
+`run_convergence_study(smoke_mode=True)` and would be cheap, but a docs build
+is still not where it belongs. So a page shows the prose, the code and whatever
+outputs the notebook carries in the repository — today, none. Commit them
+stripped. Above 2 MB the
+staged copy drops the outputs anyway rather than shipping them into the page;
+the file in `examples/` is never modified.
+
+### Docstring and API coverage
+
+Two different questions, and CI answers both in the `Documentation` job of
+`CI Full`, uploading the answers as a `docs-coverage-*` artifact. Both are
+maintained tools configured in the repository, not checkers written here.
+
+`sphinx-build -q -W --keep-going -b coverage` asks whether every module,
+function, class and method of the package reaches a page of this site. `-q` is
+load-bearing rather than tidiness: `sphinx.ext.coverage` logs an undocumented
+*object* at info level unless the app is quiet, in which case it logs a
+warning — and only a warning is something `-W` fails on. The report it writes,
+`doc/build/coverage/python.txt`, lists the undocumented objects per module;
+`coverage_show_missing_items` is what puts the names in it.
+
+It does not see properties: the builder inspects a class attribute only when
+it is a method or a function, so a `@property` that fell off a page would go
+unreported. Nothing here documents a property anywhere but on its class's
+page, so the gap has no reach today; know about it before relying on the
+report for a new kind of page. It is at 100% and should
+stay there. `coverage_modules` in `conf.py` is what makes it a real check:
+without it the builder looks only at the modules it already saw on a page, so a
+module that fell out of the autosummary tree would not be examined at all and
+the total would stay at 100%. With it, a module in the package but not on a
+page — and a module on a page but not in the package — is a warning, which
+under `-W` fails the job.
+
+It is *not* a docstring check. `undoc-members` is what puts the whole public
+surface on the API pages, and an object with no docstring still gets an entry
+there and still counts as covered.
+
+[`interrogate`](https://interrogate.readthedocs.io/en/latest/) asks the other question:
+does every public object *have* a docstring? It reads the syntax tree, so it
+needs no OpenCL stack, no import and no Sphinx, and runs anywhere:
+
+```bash
+interrogate -v volumential
+```
+
+`-v` prints the per-file table, and `-vv` names every object it counted and
+says whether it is covered; without either the command prints only the
+percentage and its verdict.
+
+The configuration is `[tool.interrogate]` in `pyproject.toml`, and it decides
+two things. What counts as public is what the API reference means by it: not a
+name with an underscore-prefixed component, not `__init__` (documented by its
+class), not a nested helper, and nothing under `qbfem`. Modules do count, so a
+module that opens with `__copyright__` instead of a docstring is a gap like any
+other. And `fail-under` is the percentage the tree measures today rather than a
+target, so a new undocumented public object fails the check. Raise the number
+in the commit that earns it; lowering it is a deliberate edit that has to say
+why.
+
+Neither of these is a review. `undoc-members` and a one-line docstring both
+satisfy a coverage tool; whether the sentence is *true* is what a reader
+checks, and a plausible-sounding docstring on a numerical routine nobody has
+run is worse than none.
+
+### Sitemap and social metadata
+
+`html_baseurl` is the GitHub Pages URL the site is heading for, and three
+things read it: Sphinx writes a `canonical` link per page, `sphinx-sitemap`
+writes `sitemap.xml`, and `sphinxext.opengraph` writes `og:url`. The sitemap
+uses the flat `{link}` scheme, since the site publishes `latest` only, and
+leaves out `genindex`, `py-modindex` and `search`.
+
+There is deliberately no `robots.txt`. A crawler reads the robots policy from
+the origin root only — `https://xywei.github.io/robots.txt` — which belongs to
+the user site, not to this project's build output, so a file shipped at
+`/volumential/robots.txt` would never be read. The same subpath applies to the
+sitemap, which is why it has to be submitted by URL rather than advertised:
+it is served at `https://xywei.github.io/volumential/sitemap.xml`, not at the
+origin root.
+
+Social-card images are off (`ogp_social_cards`): generating one per page needs
+matplotlib and a bundled font. The landing page sets its own description in
+front matter, because the extension derives one by walking the doctree and that
+page opens with display math.
+
 ### Redirect stubs for the old flat URLs
 
 Before the 2026-09 restructure every page lived directly under the site root,
@@ -142,6 +242,7 @@ of these:
 | Section | For | Example |
 | --- | --- | --- |
 | Getting started | A reader who has not run the code yet | installing, a first potential |
+| Examples | What each program under `examples/` does and costs | the gallery |
 | User guide | Understanding a mechanism you are using | the Helmholtz split |
 | Design notes | Why a mechanism has its shape; no derivations | windowed channels |
 | Benchmarks | Producing and promoting evidence | metadata sidecars |
