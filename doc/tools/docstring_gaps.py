@@ -91,6 +91,11 @@ _DESCRIPTOR_KINDS = {
 #: It still dominates whatever it replaces; it is simply never reported.
 _OPAQUE = "value"
 
+#: Kind for the marker an exhaustive ``if``/``else`` emits for a name its
+#: branches all rebind.  It dominates what came before and is then discarded:
+#: the branch bindings themselves are the alternatives.
+_SHADOW = "shadow"
+
 
 class Gap(NamedTuple):
     """One public object that has no docstring."""
@@ -102,8 +107,11 @@ class Gap(NamedTuple):
 
 
 class Binding(NamedTuple):
-    """One statement that binds a public name."""
+    """One statement binding one name."""
 
+    #: The name it binds.  A chained assignment binds several, one per
+    #: :class:`Binding`, so this is not always derivable from *node*.
+    name: str
     #: The statement the report points at.
     node: ast.stmt
     #: The suite it sits in; see :func:`_dominates`.
@@ -251,30 +259,20 @@ def _is_public(name: str) -> bool:
     return not name.startswith("_")
 
 
-def _bound_name(node: ast.stmt) -> str:
-    """The name *node* binds, whether it is a definition or an assignment."""
-    if isinstance(node, ast.AnnAssign):
-        return node.target.id
-    if isinstance(node, ast.Assign):
-        return node.targets[0].id
-    return node.name
-
-
 # }}}
 
 
 # {{{ reading one suite into bindings
 
 
-def _assignment_target(node: ast.stmt) -> ast.Name | None:
-    """The single ``Name`` an assignment statement binds, if it binds one."""
-    if isinstance(node, ast.AnnAssign):
-        target = node.target
-    elif isinstance(node, ast.Assign) and len(node.targets) == 1:
-        target = node.targets[0]
-    else:
-        return None
-    return target if isinstance(target, ast.Name) else None
+def _assignment_targets(node: ast.stmt) -> list[ast.Name]:
+    """The plain names an assignment statement binds.
+
+    A chained assignment binds each of its targets, and a tuple or attribute
+    target binds nothing this module tracks.
+    """
+    targets = [node.target] if isinstance(node, ast.AnnAssign) else node.targets
+    return [target for target in targets if isinstance(target, ast.Name)]
 
 
 def _descriptor_documentation(
@@ -308,13 +306,13 @@ def _descriptor_documentation(
     return False
 
 
-def _assignment_binding(
+def _assignment_bindings(
     node: ast.stmt,
     following: ast.stmt | None,
     suite: tuple,
     function_docstrings: dict[str, bool],
     in_class: bool,
-) -> Binding | None:
+) -> Iterator[Binding]:
     """Read an assignment to a public name as a :class:`Binding`.
 
     An assignment can create a documentable object: a descriptor inside a
@@ -327,13 +325,13 @@ def _assignment_binding(
     recorded as :data:`_OPAQUE` rather than dropped, and the name leaves the
     report.
     """
-    target = _assignment_target(node)
-    if target is None:
-        return None
+    targets = _assignment_targets(node)
+    if not targets:
+        return
     if isinstance(node, ast.AnnAssign) and node.value is None:
         # ``public: Callable[..., None]`` annotates the name without binding
         # it, so whatever the name already held is still what it holds.
-        return None
+        return
 
     value = node.value
     callable_kind = "method" if in_class else "function"
@@ -361,14 +359,18 @@ def _assignment_binding(
         kind = callable_kind
 
     if kind is None:
-        return Binding(node, suite, _OPAQUE, True)
+        for target in targets:
+            yield Binding(target.id, node, suite, _OPAQUE, True)
+        return
 
     attribute_docstring = (
         isinstance(following, ast.Expr)
         and isinstance(following.value, ast.Constant)
         and isinstance(following.value.value, str)
     )
-    return Binding(node, suite, kind, attribute_docstring or from_value)
+    documented = attribute_docstring or from_value
+    for target in targets:
+        yield Binding(target.id, node, suite, kind, documented)
 
 
 def _bindings(
@@ -393,11 +395,14 @@ def _bindings(
                 if isinstance(node, ast.ClassDef)
                 else ("method" if in_class else "function")
             )
-            yield Binding(node, suite, kind, None)
+            yield Binding(node.name, node, suite, kind, None)
         elif isinstance(node, (*_CONTROL_FLOW_NODES, ast.Match)):
-            for statements_of_branch, branch in _suites_of(
-                node, suite, guard_names
+            branches = list(_suites_of(node, suite, guard_names))
+            for name in _rebound_by_every_branch(
+                node, branches, guard_names, function_docstrings, in_class
             ):
+                yield Binding(name, node, suite, _SHADOW, None)
+            for statements_of_branch, branch in branches:
                 yield from _bindings(
                     statements_of_branch,
                     guard_names,
@@ -410,11 +415,45 @@ def _bindings(
             following = (
                 statements[next_index] if next_index < len(statements) else None
             )
-            binding = _assignment_binding(
+            yield from _assignment_bindings(
                 node, following, suite, function_docstrings, in_class
             )
-            if binding is not None:
-                yield binding
+
+
+def _rebound_by_every_branch(
+    node: ast.stmt,
+    branches: list[tuple[list, tuple]],
+    guard_names: frozenset[str],
+    function_docstrings: dict[str, bool],
+    in_class: bool,
+) -> set[str]:
+    """Names that an exhaustive ``if``/``else`` rebinds whichever way it goes.
+
+    Only ``if``/``else`` is treated as exhaustive, and only when both suites
+    bind the name: then whatever the name held before the statement is
+    unreachable afterwards, and a marker in the enclosing suite says so.  A
+    ``try`` is not exhaustive -- its body can stop part way -- and a ``match``
+    need not be, so neither is considered here.
+    """
+    if not isinstance(node, ast.If) or not node.orelse:
+        return set()
+    if _is_type_checking_guard(node, guard_names):
+        return set()
+
+    per_branch = [
+        {
+            binding.name
+            for binding in _bindings(
+                statements,
+                guard_names,
+                function_docstrings,
+                in_class=in_class,
+                suite=branch,
+            )
+        }
+        for statements, branch in branches
+    ]
+    return set.intersection(*per_branch) if per_branch else set()
 
 
 def _function_documentation(
@@ -426,23 +465,45 @@ def _function_documentation(
     an aliased implementation usually is, and a name defined in two surviving
     branches counts as documented only when both are.
     """
+    known = _function_documentation_pass(body, guard_names, {})
+    # ``_alias = _impl`` then ``public = _alias``: the second assignment can
+    # only be read as a function once the first one has been.  Two names is
+    # already an unusual chain, so a handful of passes is ample, and the loop
+    # stops as soon as nothing new is learned.
+    for _ in range(4):
+        wider = _function_documentation_pass(body, guard_names, known)
+        if wider == known:
+            break
+        known = wider
+    return known
+
+
+def _function_documentation_pass(
+    body: Iterable[ast.stmt],
+    guard_names: frozenset[str],
+    function_docstrings: dict[str, bool],
+) -> dict[str, bool]:
+    """One sweep of :func:`_function_documentation`."""
+    body = list(body)
     surviving: dict[str, dict[tuple, bool | None]] = {}
-    for binding in _bindings(body, guard_names, {}, in_class=False):
+    for binding in _bindings(
+        body, guard_names, function_docstrings, in_class=False
+    ):
         node = binding.node
-        if isinstance(node, ast.ClassDef):
+        if isinstance(node, ast.ClassDef) or binding.kind == _SHADOW:
             continue
         if isinstance(node, _FUNCTION_NODES):
             documented: bool | None = ast.get_docstring(node) is not None
-        elif isinstance(node.value, ast.Lambda):
-            # Still callable, and a lambda has no docstring.
-            documented = False
-        else:
+        elif binding.kind == _OPAQUE:
             # Rebound to something this pass cannot call a function -- a
             # constant, an import, a call.  ``None`` drops the name from the
-            # result, so an alias of it is not read as a method and a
+            # result, so an alias of it is not read as a function and a
             # descriptor built on it gets no docstring from it.
             documented = None
-        bucket = surviving.setdefault(_bound_name(node), {})
+        else:
+            # A ``lambda``, or an alias an earlier pass resolved.
+            documented = binding.documented
+        bucket = surviving.setdefault(binding.name, {})
         for bound in list(bucket):
             if _dominates(binding.suite, bound):
                 del bucket[bound]
@@ -464,6 +525,8 @@ def _function_documentation(
 class Carrier(NamedTuple):
     """What the report says about one public name."""
 
+    #: The name.
+    name: str
     #: The statement the report points at.
     node: ast.stmt
     #: What the report calls it.
@@ -498,9 +561,16 @@ def _carriers(
     """
     groups: dict[str, dict[tuple, Binding]] = {}
     for binding in bindings:
-        if not _is_public(_bound_name(binding.node)):
+        if not _is_public(binding.name):
             continue
-        bucket = groups.setdefault(_bound_name(binding.node), {})
+        bucket = groups.setdefault(binding.name, {})
+        if binding.kind == _SHADOW:
+            for bound in list(bucket):
+                if isinstance(bound, tuple) and bound and bound[0] == "mutator":
+                    continue
+                if _dominates(binding.suite, bound):
+                    del bucket[bound]
+            continue
         if isinstance(binding.node, _FUNCTION_NODES) and _is_property_mutator(
             binding.node
         ):
@@ -546,8 +616,13 @@ def _carriers(
                 _overrides_inherited_property(binding.node)
                 for binding in candidates
             )
+            first_binding = candidates[0]
             yield Carrier(
-                candidates[0].node, candidates[0].kind, inherited, surviving
+                first_binding.name,
+                first_binding.node,
+                first_binding.kind,
+                inherited,
+                surviving,
             )
             continue
 
@@ -558,10 +633,10 @@ def _carriers(
         ]
         if undocumented:
             first = min(undocumented, key=lambda binding: binding.node.lineno)
-            yield Carrier(first.node, first.kind, False, surviving)
+            yield Carrier(first.name, first.node, first.kind, False, surviving)
         else:
             last = carriers[-1]
-            yield Carrier(last.node, last.kind, True, surviving)
+            yield Carrier(last.name, last.node, last.kind, True, surviving)
 
 
 def _is_documented(binding: Binding) -> bool:
@@ -621,7 +696,7 @@ def _scan_module(
         _bindings(tree.body, guard_names, module_functions, in_class=False)
     )
     for carrier in _carriers(module_bindings, overload_names):
-        name = _bound_name(carrier.node)
+        name = carrier.name
         record(carrier, f"{module}.{name}")
 
         # Any branch of a conditionally defined class can be the one that binds
@@ -649,7 +724,7 @@ def _scan_module(
                 )
             )
         for member in _carriers(members, overload_names):
-            record(member, f"{module}.{name}.{_bound_name(member.node)}")
+            record(member, f"{module}.{name}.{member.name}")
 
     # Grouping by name can pick a carrier that is not the first binding of the
     # group, so restore source order for the report.
