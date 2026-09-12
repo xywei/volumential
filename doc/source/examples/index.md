@@ -164,6 +164,34 @@ by default.
 uv run python examples/branched_flow_helmholtz2d.py --smoke
 ```
 
+## Notebooks
+
+The three notebooks below are rendered here **exactly as they are committed,
+without being executed**. Running them needs an OpenCL device and, at their
+committed settings, far more time than a documentation build has, so the pages
+show the prose and the code but no results — the numbers and figures appear
+only when you run the notebook yourself.
+
+```bash
+uv sync --extra test --extra doc
+uv run jupyter lab examples/
+```
+
+```{toctree}
+:maxdepth: 1
+:glob:
+
+notebooks/*
+```
+
+The two Poisson notebooks are tutorials with a roadmap, staged from a single
+run through a co-refinement study; the Helmholtz one is a thin wrapper that
+imports `run_convergence_study` from `examples/helmholtz3d.py` and plots its
+output, so it costs what that script costs in smoke mode.
+
+`examples/convert_grid` is not an example program but a two-line gmsh script
+used to write a box mesh out as `box_grid.msh`.
+
 [laplace2d]: https://github.com/xywei/volumential/blob/main/examples/laplace2d.py
 [laplace3d]: https://github.com/xywei/volumential/blob/main/examples/laplace3d.py
 [poisson3d]: https://github.com/xywei/volumential/blob/main/examples/poisson3d.py

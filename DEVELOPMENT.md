@@ -283,6 +283,12 @@ New pages are MyST Markdown (`.md`); the remaining reStructuredText pages are
 substantial existing documents kept as they are. `doc/source/development/`
 documents the section layout and which section a new page belongs in.
 
+The notebooks under `examples/` are rendered as pages by `myst-nb` and are
+**never executed** by the build (`nb_execution_mode = "off"`): they need an
+OpenCL device and hours of compute. `conf.py` stages a copy of each into
+`doc/source/examples/notebooks/` at the start of every build; that directory is
+generated and git-ignored. Commit notebooks with their outputs stripped.
+
 `doc/source/api/generated/` is generated -- only that subdirectory.
 `sphinx.ext.autosummary` writes one page per module there from the templates in
 `doc/source/_templates/autosummary/`, so a new module needs no edit; the

@@ -124,6 +124,23 @@ publishes no `objects.inv` at all (`mpmath`, `pyfmmlib`), or it publishes one
 that does not document the referenced object (`boxtree` no longer documents
 `boxtree.tools.DeviceDataRecord`, though its inventory is otherwise fine).
 
+### Example notebooks
+
+The notebooks are maintained in `examples/`, beside the scripts they
+demonstrate. Sphinx reads only what is under `doc/source`, so `conf.py` copies
+`examples/*.ipynb` into `doc/source/examples/notebooks/` on `builder-inited`;
+that directory is generated and git-ignored, like `api/generated/`. Add a
+notebook to `examples/` and it gets a page, because
+{doc}`../examples/index` globs the staged directory — but add the paragraph
+that says what it costs to run, since a reader cannot tell from the rendering.
+
+Nothing is executed: `nb_execution_mode = "off"`. A notebook needs an OpenCL
+device and, at its committed settings, more time than a documentation build
+has, so a page shows the prose, the code and whatever outputs the notebook
+carries in the repository — today, none. Commit them stripped. Above 2 MB the
+staged copy drops the outputs anyway rather than shipping them into the page;
+the file in `examples/` is never modified.
+
 ### Docstring and API coverage
 
 Two different questions, and CI answers both in the `Documentation` job of

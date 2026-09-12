@@ -48,18 +48,26 @@ extensions = [
     "sphinx.ext.napoleon",
     "sphinx.ext.todo",
     "sphinx.ext.viewcode",
-    "myst_parser",
+    # ``myst_nb`` is a superset of ``myst_parser``: it parses the Markdown
+    # pages exactly as ``myst_parser`` did, honours the same ``myst_*``
+    # settings, and additionally reads ``.ipynb``.  Upstream asks that only
+    # one of the two be loaded, so ``myst_parser`` is not listed here even
+    # though it is still what does the Markdown parsing.
+    "myst_nb",
     "sphinx_copybutton",
     "sphinx_design",
 ]
 
 source_suffix = {
     ".rst": "restructuredtext",
-    ".md": "markdown",
+    # ``myst-nb`` is the parser ``myst_nb`` registers, and it reads both: the
+    # Markdown pages, exactly as ``myst_parser`` did, and the notebooks.
+    ".md": "myst-nb",
+    ".ipynb": "myst-nb",
 }
 root_doc = "index"
 language = "en"
-exclude_patterns = []
+exclude_patterns = ["**/.ipynb_checkpoints"]
 pygments_style = "sphinx"
 templates_path = ["_templates"]
 todo_include_todos = True
@@ -95,6 +103,16 @@ myst_enable_extensions = [
     "dollarmath",
 ]
 myst_heading_anchors = 3
+
+
+# -- Notebooks (myst-nb) --------------------------------------------------
+
+# Never execute a notebook during a docs build.  The example notebooks need an
+# OpenCL device and, at their committed settings, hours of compute; neither the
+# GitHub-hosted docs runner nor a contributor's laptop has that.  Pages
+# therefore show the prose, the code and whatever outputs the notebook carries
+# in the repository -- today, none.
+nb_execution_mode = "off"
 
 
 # -- autodoc / autosummary ------------------------------------------------
@@ -203,6 +221,59 @@ html_context = {
 }
 
 
+# -- Staging the example notebooks ----------------------------------------
+
+# The notebooks are maintained in ``examples/``, beside the scripts they
+# demonstrate and where a reader runs them from.  Sphinx reads only what is
+# under ``doc/source``, so copy them in at the start of every build;
+# ``doc/source/examples/notebooks/`` is generated and git-ignored, exactly like
+# ``doc/source/api/generated/``.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_NOTEBOOK_SOURCE_DIR = _REPO_ROOT / "examples"
+_NOTEBOOK_STAGE_DIR = Path(__file__).resolve().parent / "examples" / "notebooks"
+
+# Nothing is executed (``nb_execution_mode``), so a page shows the outputs the
+# notebook was committed with.  Today every notebook is committed stripped and
+# the largest is well under 100 KiB, but a notebook saved with its figures
+# would ship those bytes into the page, so above this size the staged copy
+# keeps the prose and the code and drops the outputs.  The file in
+# ``examples/`` is never modified.
+_MAX_STAGED_NOTEBOOK_BYTES = 2 * 1024 * 1024
+
+
+def _strip_notebook_outputs(text):
+    """Return *text*, a notebook document, with every code-cell output removed."""
+    notebook = json.loads(text)
+    for cell in notebook.get("cells", []):
+        if cell.get("cell_type") == "code":
+            cell["outputs"] = []
+            cell["execution_count"] = None
+    return json.dumps(notebook, indent=1, ensure_ascii=False) + "\n"
+
+
+def _stage_example_notebooks(app):
+    """Copy ``examples/*.ipynb`` under ``doc/source`` so Sphinx can read them."""
+    _NOTEBOOK_STAGE_DIR.mkdir(parents=True, exist_ok=True)
+
+    staged = set()
+    for source in sorted(_NOTEBOOK_SOURCE_DIR.glob("*.ipynb")):
+        text = source.read_text(encoding="utf-8")
+        if source.stat().st_size > _MAX_STAGED_NOTEBOOK_BYTES:
+            text = _strip_notebook_outputs(text)
+
+        target = _NOTEBOOK_STAGE_DIR / source.name
+        # Write only on a real change: an unconditional write moves the mtime
+        # and makes every incremental build re-read every notebook.
+        if not target.is_file() or target.read_text(encoding="utf-8") != text:
+            target.write_text(text, encoding="utf-8")
+        staged.add(target.name)
+
+    # A notebook renamed or deleted in ``examples/`` must not keep a page here.
+    for leftover in _NOTEBOOK_STAGE_DIR.glob("*.ipynb"):
+        if leftover.name not in staged:
+            leftover.unlink()
+
+
 _GENERATED_API_PREFIX = "api/generated/"
 
 
@@ -291,6 +362,7 @@ def _write_legacy_redirects(app, exception):
 
 
 def setup(app):
+    app.connect("builder-inited", _stage_example_notebooks)
     app.connect("html-page-context", _disable_edit_button_on_generated_pages)
     app.connect("build-finished", _write_legacy_redirects)
 
