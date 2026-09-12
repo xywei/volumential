@@ -277,33 +277,37 @@ def test_patching_the_legacy_validator_still_reaches_the_cached_wrapper(monkeypa
     assert calls == [16]
 
 
-def test_the_fft_app_call_binds_against_sumpy():
-    """The FFT plan is requested by keyword, which binds either way.
+def test_the_fft_plan_hook_is_sumpys_cached_one():
+    """The FFT plan must come from sumpy's memoizing hook.
 
-    ``sumpy.tools.get_opencl_fft_app`` took ``shape``/``dtype``/``inverse``
-    positionally until inducer/sumpy@16e0e3c5 ("refactor fft apps") made
-    everything after the array context keyword-only.  Conversely sumpy's own
-    wrangler now calls the ``opencl_fft_app`` hook by keyword, so the
-    override has to keep accepting that spelling.
+    This class used to reimplement ``opencl_fft_app`` as a bare call to
+    ``sumpy.tools.get_opencl_fft_app``, which is a copy of sumpy's body with
+    the ``memoize_in`` cache dropped: it rebuilt the loopy translation unit
+    or VkFFT plan on every FFT stage.  Inheriting also keeps us out of the
+    way of that signature, which inducer/sumpy@16e0e3c5 ("refactor fft
+    apps") turned keyword-only.
     """
     import inspect
 
-    from sumpy.tools import get_opencl_fft_app
+    from sumpy.fmm import SumpyTreeIndependentDataForWrangler
 
     from volumential.wranglers.sumpy_backend import (
         FPNDSumpyTreeIndependentDataForWrangler,
     )
 
-    arguments = {
-        "shape": (4,),
-        "dtype": np.dtype(np.complex128),
-        "inverse": False,
-    }
+    assert (
+        FPNDSumpyTreeIndependentDataForWrangler.opencl_fft_app
+        is SumpyTreeIndependentDataForWrangler.opencl_fft_app
+    )
 
-    inspect.signature(get_opencl_fft_app).bind(object(), **arguments)
     inspect.signature(
         FPNDSumpyTreeIndependentDataForWrangler.opencl_fft_app
-    ).bind(object(), **arguments)
+    ).bind(
+        object(),
+        shape=(4,),
+        dtype=np.dtype(np.complex128),
+        inverse=False,
+    )
 
 
 if __name__ == "__main__":

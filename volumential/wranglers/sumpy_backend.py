@@ -211,22 +211,13 @@ class FPNDSumpyTreeIndependentDataForWrangler(
             name="p2l",
         )
 
-    def opencl_fft_app(self, shape, dtype, inverse: bool):
-        """Cached OpenCL FFT plan for *shape*/*dtype*, forward or *inverse*.
-
-        *shape*, *dtype* and *inverse* stay positional-or-keyword here even
-        though sumpy's own hook is keyword-only, so that both calling
-        conventions keep working.
-        """
-        from sumpy.tools import get_opencl_fft_app
-
-        # `inducer/sumpy@16e0e3c5 <https://github.com/inducer/sumpy/commit/16e0e3c5>`__
-        # ("refactor fft apps") made everything after the array context
-        # keyword-only; they were positional-or-keyword before, so passing
-        # them by keyword works with either sumpy.
-        return get_opencl_fft_app(
-            self._setup_actx, shape=shape, dtype=dtype, inverse=inverse
-        )
+    # NOTE: ``opencl_fft_app`` is deliberately *not* overridden.  This class
+    # used to reimplement it as a bare call to ``sumpy.tools`` -- a copy of
+    # sumpy's body with the ``memoize_in`` cache dropped, which rebuilt the
+    # loopy translation unit or VkFFT plan on every FFT stage.  sumpy's own
+    # hook caches by shape/dtype/direction (and, since
+    # inducer/sumpy@16e0e3c5, by FFT backend), so inheriting it is both
+    # faster and immune to further churn in that signature.
 
 
 class FPNDSumpyExpansionWrangler(
