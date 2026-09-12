@@ -270,17 +270,21 @@ sphinx-build -W --keep-going -b html doc/source doc/build/html
 # External links.
 sphinx-build -b linkcheck doc/source doc/build/linkcheck
 
-# What CI checks and keeps as the docs-coverage artifact: is every module,
-# function, class and method of the package on a page (properties excepted --
-# the builder does not inspect them), and does every public object have a
-# docstring.
-# --max-gaps is the ratchet; CI also passes --output, which only names the
-# file inside the artifact.  test/test_docstring_gaps.py pins what the checker
-# considers a public object, one case per code shape.
-# -q is load-bearing: an undocumented object is logged at info level unless
-# the app is quiet, and only a warning is what -W fails on.
+# What CI checks and keeps as the docs-coverage artifact.  Two questions.
+#
+# Is every module, function, class and method of the package on a page
+# (properties excepted -- the builder does not inspect them)?  -q is
+# load-bearing: an undocumented object is logged at info level unless the app
+# is quiet, and only a warning is what -W fails on.  The report lands in
+# doc/build/coverage/python.txt, which names the objects that reach no page.
 sphinx-build -q -W --keep-going -b coverage doc/source doc/build/coverage
-python doc/tools/docstring_gaps.py --max-gaps 5
+
+# And does every public object have a docstring?  interrogate answers that
+# from the syntax tree, so it needs no OpenCL stack, no import and no Sphinx.
+# -v prints the per-file table, -vv names every object it counted and whether
+# it is covered.  [tool.interrogate] in pyproject.toml sets what counts as
+# public and the fail-under percentage, which is a ratchet.
+interrogate -v volumential
 
 # Live preview at http://127.0.0.1:8000, rebuilding on save.  --watch is what
 # picks up an edit to a notebook: they live outside doc/source, and the staging

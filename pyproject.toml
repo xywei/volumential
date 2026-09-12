@@ -46,6 +46,7 @@ fmmlib = ["pyfmmlib>=2024.1"]
 gmsh_support = ["gmsh_interop"]
 test = ["filelock", "gmsh_interop", "pytest"]
 doc = [
+  "interrogate",
   "myst-nb",
   "myst-parser",
   "pydata-sphinx-theme",
@@ -81,6 +82,39 @@ pytential = { git = "https://github.com/inducer/pytential.git" }
 pytools = { git = "https://github.com/inducer/pytools.git" }
 pyvisfile = { git = "https://github.com/inducer/pyvisfile.git" }
 sumpy = { git = "https://github.com/inducer/sumpy.git" }
+
+[tool.interrogate]
+# The docstring half of the documentation coverage question; the module and
+# object half is ``sphinx-build -b coverage`` (see ``doc/source/conf.py``).
+# ``interrogate volumential`` prints the percentage of the public surface that
+# carries a docstring, and ``-v`` lists the objects that do not.
+#
+# What counts as public here is what the API reference means by it: a name with
+# an underscore-prefixed component is not on a page, so it is not counted, and
+# neither is ``__init__`` (documented by its class) or a nested helper.
+ignore-init-method = true
+ignore-magic = true
+ignore-private = true
+ignore-semiprivate = true
+ignore-nested-functions = true
+exclude = [
+  # A 2019 finite-element experiment that nothing in the tree imports; the API
+  # reference leaves it out too.
+  "volumential/qbfem",
+  "benchmarks",
+  "doc",
+  "examples",
+  "test",
+]
+# A ratchet, not a target: 91 is 91.5% -- what the tree measures today --
+# rounded down, so a new undocumented public object fails the check.  Raise it
+# in the commit that earns it; lowering it is a deliberate edit that has to say
+# why.  The 36 that are missing today are 30 module docstrings and six objects:
+# the five Duffy quadrature kernels of ``NearFieldInteractionTable``, whose
+# contract cannot be read off the source, and the setter half of its ``data``
+# property, documented on the getter.
+fail-under = 91
+verbose = 1
 
 [tool.pytest.ini_options]
 testpaths = ["test"]

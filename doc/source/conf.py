@@ -163,12 +163,12 @@ napoleon_numpy_docstring = True
 # Two limits are worth stating rather than discovering.  It is deliberately
 # *not* a docstring check: ``autodoc_default_options`` sets ``undoc-members``,
 # so an object with no docstring still gets an entry and still counts as
-# covered -- ``doc/tools/docstring_gaps.py`` is the docstring half of the same
-# question, and CI runs it beside this builder.  And it does not see
-# properties: the builder inspects a class attribute only when it is a method
-# or a function, so a ``@property`` that fell off a page would not be reported
-# here.  Nothing in this package documents a property anywhere but on its
-# class's page, so that gap has no reach today.
+# covered.  ``interrogate volumential`` is the docstring half of the same
+# question, configured in ``[tool.interrogate]`` of ``pyproject.toml``.  And
+# this builder does not see properties: it inspects a class attribute only
+# when it is a method or a function, so a ``@property`` that fell off a page
+# would not be reported here.  Nothing in this package documents a property
+# anywhere but on its class's page, so that gap has no reach today.
 # Enumerate the package rather than letting the builder infer the module set
 # from the documentation.  Without this it checks only the modules it already
 # saw on a page, so a module that fell out of the autosummary tree -- the exact
@@ -181,11 +181,13 @@ coverage_ignore_modules = [
     # autosummary template leaves it out of the API reference too.
     r"volumential\.qbfem(\..*)?$",
     # Any module with an underscore-prefixed component.  Recursive autosummary
-    # omits those, and ``doc/tools/docstring_gaps.py`` skips them, so without
-    # this a private implementation module would be a missing-module warning
-    # here -- and, under ``-W``, a failed job -- for correctly having no page.
+    # omits those, so without this a private implementation module would be a
+    # missing-module warning here -- and, under ``-W``, a failed job -- for
+    # correctly having no page.
     r"(.*\.)?_.*",
 ]
+# ``coverage_show_missing_items`` names the objects rather than only counting
+# them, so ``doc/build/coverage/python.txt`` reads as a list of what to fix.
 coverage_show_missing_items = True
 coverage_write_headline = True
 coverage_statistics_to_report = True

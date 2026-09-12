@@ -38,7 +38,7 @@ trigger. A change that breaks one of those is not caught before it reaches
 | Job | What it does |
 | --- | --- |
 | Testing (macOS) | the suite on macOS |
-| Documentation | `sphinx-build` of this site, then the two coverage reports (`-b coverage` and `doc/tools/docstring_gaps.py`) uploaded as a `docs-coverage-*` artifact; the job installs `.[test,doc]` |
+| Documentation | `sphinx-build` of this site, then the two coverage reports (`-b coverage` and `interrogate`) uploaded as a `docs-coverage-*` artifact; the job installs `.[test,doc]` |
 | Full Accuracy Tests | scheduled or manual only — collects **and** runs the `full_accuracy` marker |
 | Examples | the maintained examples at full settings, with a cached Laplace 3D table |
 

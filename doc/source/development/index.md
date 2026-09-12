@@ -149,13 +149,16 @@ the file in `examples/` is never modified.
 ### Docstring and API coverage
 
 Two different questions, and CI answers both in the `Documentation` job of
-`CI Full`, uploading the answers as a `docs-coverage-*` artifact.
+`CI Full`, uploading the answers as a `docs-coverage-*` artifact. Both are
+maintained tools configured in the repository, not checkers written here.
 
 `sphinx-build -q -W --keep-going -b coverage` asks whether every module,
 function, class and method of the package reaches a page of this site. `-q` is
 load-bearing rather than tidiness: `sphinx.ext.coverage` logs an undocumented
 *object* at info level unless the app is quiet, in which case it logs a
-warning — and only a warning is something `-W` fails on.
+warning — and only a warning is something `-W` fails on. The report it writes,
+`doc/build/coverage/python.txt`, lists the undocumented objects per module;
+`coverage_show_missing_items` is what puts the names in it.
 
 It does not see properties: the builder inspects a class attribute only when
 it is a method or a function, so a `@property` that fell off a page would go
@@ -173,26 +176,32 @@ It is *not* a docstring check. `undoc-members` is what puts the whole public
 surface on the API pages, and an object with no docstring still gets an entry
 there and still counts as covered.
 
-`doc/tools/docstring_gaps.py` asks whether every public object *has* a
-docstring. It parses the tree with `ast`, so it needs no OpenCL stack, no
-import and no Sphinx, and runs anywhere:
+[`interrogate`](https://interrogate.readthedocs.io/) asks the other question:
+does every public object *have* a docstring? It reads the syntax tree, so it
+needs no OpenCL stack, no import and no Sphinx, and runs anywhere:
 
 ```bash
-python doc/tools/docstring_gaps.py --max-gaps 5
+interrogate -v volumential
 ```
 
-`--max-gaps` is the ratchet, and that is the number CI passes, so the command
-above gives the same verdict CI does; drop it to read the report without a
-verdict. Lower the recorded number in the same commit that lowers the count;
-raise it only deliberately, and say why. (CI also passes `--output`, which
-only names the file inside the artifact.)
+`-v` prints the per-file table, and `-vv` names every object it counted and
+says whether it is covered; without either the command prints only the
+percentage and its verdict.
 
-Deciding what a public name ends up holding is more than reading `def`
-statements — a definition can be superseded, conditional, an `@overload` stub,
-a property half, or an assignment — so the rules live in
-`test/test_docstring_gaps.py`, one case per code shape, each a whole module
-with the number of gaps it should produce. Change the checker and that file
-says what you changed.
+The configuration is `[tool.interrogate]` in `pyproject.toml`, and it decides
+two things. What counts as public is what the API reference means by it: not a
+name with an underscore-prefixed component, not `__init__` (documented by its
+class), not a nested helper, and nothing under `qbfem`. Modules do count, so a
+module that opens with `__copyright__` instead of a docstring is a gap like any
+other. And `fail-under` is the percentage the tree measures today rather than a
+target, so a new undocumented public object fails the check. Raise the number
+in the commit that earns it; lowering it is a deliberate edit that has to say
+why.
+
+Neither of these is a review. `undoc-members` and a one-line docstring both
+satisfy a coverage tool; whether the sentence is *true* is what a reader
+checks, and a plausible-sounding docstring on a numerical routine nobody has
+run is worse than none.
 
 ### Sitemap and social metadata
 
