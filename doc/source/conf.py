@@ -180,6 +180,11 @@ coverage_ignore_modules = [
     # A 2019 finite-element experiment that nothing in the tree imports; the
     # autosummary template leaves it out of the API reference too.
     r"volumential\.qbfem",
+    # Any module with an underscore-prefixed component.  Recursive autosummary
+    # omits those, and ``doc/tools/docstring_gaps.py`` skips them, so without
+    # this a private implementation module would be a missing-module warning
+    # here -- and, under ``-W``, a failed job -- for correctly having no page.
+    r"(.*\.)?_.*",
 ]
 coverage_show_missing_items = True
 coverage_write_headline = True

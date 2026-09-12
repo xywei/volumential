@@ -18,8 +18,9 @@ flow -- the ``except ImportError`` fallback for an optional dependency, say --
 counts, and so does a method defined inside class-level control flow: both bind
 an attribute like any other.  Definitions that bind one name count once, as
 the object a reader ends up with: the two halves of a property under its
-getter, an ``@overload`` set under its implementation, a conditional
-redefinition under the branch that wins.
+getter, an ``@overload`` set under its implementation, a rebinding under the
+last of them, and a conditional alternative under whichever branch is missing
+its documentation.
 
 Usage::
 
@@ -94,6 +95,15 @@ def _is_public(name: str) -> bool:
     return not name.startswith("_")
 
 
+def _bound_name(node: ast.stmt) -> str:
+    """The name *node* binds, whether it is a definition or an assignment."""
+    if isinstance(node, ast.AnnAssign):
+        return node.target.id
+    if isinstance(node, ast.Assign):
+        return node.targets[0].id
+    return node.name
+
+
 def _is_ignored(module: str) -> bool:
     """Is *module* one of :data:`IGNORED_MODULES`, or inside one?"""
     return any(
@@ -102,25 +112,38 @@ def _is_ignored(module: str) -> bool:
     )
 
 
-def _definitions(body: list[ast.stmt]) -> Iterator[ast.stmt]:
-    """Yield the class and function definitions of one suite, in source order.
+def _definitions(
+    body: list[ast.stmt], suite: tuple = ()
+) -> Iterator[tuple[ast.stmt, tuple]]:
+    """Yield ``(definition, suite)`` for one suite, in source order.
 
     Control flow is entered, because a class or method defined in an ``except
     ImportError`` fallback or under a version check binds an attribute like any
     other.  A function or class body is *not* entered: what it defines belongs
     to that scope, not to the suite this was called on.
+
+    *suite* identifies the branch a definition sits in, and the caller needs it
+    to tell two situations apart: two definitions in the same suite are a
+    rebinding, where only the later one survives, while two in different suites
+    are alternatives, either of which a reader may end up importing.
     """
     for node in body:
         if isinstance(node, (ast.ClassDef, *_FUNCTION_NODES)):
-            yield node
+            yield node, suite
         elif isinstance(node, _CONTROL_FLOW_NODES):
             for field in ("body", "orelse", "finalbody"):
-                yield from _definitions(getattr(node, field, []))
-            for handler in getattr(node, "handlers", []):
-                yield from _definitions(handler.body)
+                yield from _definitions(
+                    getattr(node, field, []), (*suite, node.lineno, field)
+                )
+            for index, handler in enumerate(getattr(node, "handlers", [])):
+                yield from _definitions(
+                    handler.body, (*suite, node.lineno, "handler", index)
+                )
         elif isinstance(node, ast.Match):
-            for case in node.cases:
-                yield from _definitions(case.body)
+            for index, case in enumerate(node.cases):
+                yield from _definitions(
+                    case.body, (*suite, node.lineno, "case", index)
+                )
 
 
 def _overload_names(tree: ast.Module) -> frozenset[str]:
@@ -169,8 +192,8 @@ def _is_property_mutator(node: ast.AST) -> bool:
 
 
 def _property_assignments(
-    body: Iterable[ast.stmt],
-) -> dict[str, list[tuple[ast.stmt, bool]]]:
+    body: Iterable[ast.stmt], suite: tuple = ()
+) -> dict[str, dict[tuple, tuple[ast.stmt, bool]]]:
     """Public ``name = property(...)`` statements of a class body.
 
     A property can be declared by assignment rather than by decorating a
@@ -182,27 +205,43 @@ def _property_assignments(
     reads.
     """
     statements = list(body)
-    found: dict[str, list[tuple[ast.stmt, bool]]] = {}
+    found: dict[str, dict[tuple, tuple[ast.stmt, bool]]] = {}
 
-    def merge(other: dict[str, list[tuple[ast.stmt, bool]]]) -> None:
+    def merge(other: dict[str, dict[tuple, tuple[ast.stmt, bool]]]) -> None:
         for name, alternatives in other.items():
-            found.setdefault(name, []).extend(alternatives)
+            found.setdefault(name, {}).update(alternatives)
 
     for index, node in enumerate(statements):
         if isinstance(node, _CONTROL_FLOW_NODES):
             for field in ("body", "orelse", "finalbody"):
-                merge(_property_assignments(getattr(node, field, [])))
-            for handler in getattr(node, "handlers", []):
-                merge(_property_assignments(handler.body))
+                merge(
+                    _property_assignments(
+                        getattr(node, field, []), (*suite, node.lineno, field)
+                    )
+                )
+            for handler_index, handler in enumerate(getattr(node, "handlers", [])):
+                merge(
+                    _property_assignments(
+                        handler.body,
+                        (*suite, node.lineno, "handler", handler_index),
+                    )
+                )
             continue
         if isinstance(node, ast.Match):
-            for case in node.cases:
-                merge(_property_assignments(case.body))
+            for case_index, case in enumerate(node.cases):
+                merge(
+                    _property_assignments(
+                        case.body, (*suite, node.lineno, "case", case_index)
+                    )
+                )
             continue
-        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+
+        if isinstance(node, ast.AnnAssign):
+            target, value = node.target, node.value
+        elif isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target, value = node.targets[0], node.value
+        else:
             continue
-        target = node.targets[0]
-        value = node.value
         if not isinstance(target, ast.Name) or not _is_public(target.id):
             continue
         if not isinstance(value, ast.Call):
@@ -220,14 +259,17 @@ def _property_assignments(
             and isinstance(following.value, ast.Constant)
             and isinstance(following.value.value, str)
         )
-        found.setdefault(target.id, []).append((node, documented))
+        # A later assignment in the same suite replaces an earlier one.
+        found.setdefault(target.id, {})[suite] = (node, documented)
     return found
 
 
 def _carriers(
-    nodes: Iterable[ast.stmt],
+    nodes: Iterable[tuple[ast.stmt, tuple]],
     overload_names: frozenset[str],
-    property_assignments: dict[str, list[tuple[ast.stmt, bool]]] | None = None,
+    property_assignments: (
+        dict[str, dict[tuple, tuple[ast.stmt, bool]]] | None
+    ) = None,
 ) -> Iterator[Carrier]:
     """One ``(definition, always_a_gap)`` per public name a suite binds.
 
@@ -240,6 +282,8 @@ def _carriers(
       so a name bound only by mutators (a write-only ``value = property()`` and
       its setter) is a gap however well the setter is written;
     * an ``@overload`` stub loses to the implementation that follows the set;
+    * a definition rebound later in the same suite is gone; only the last
+      binding of each suite survives;
     * of the definitions that remain, *any* of them can be the one a reader
       imports -- alternative branches of a version check bind different ones on
       different interpreters -- so the name is a gap unless they all carry a
@@ -252,14 +296,24 @@ def _carriers(
     documentation from the getter as usual.
     """
     property_assignments = property_assignments or {}
-    groups: dict[str, list[ast.stmt]] = {
-        name: [] for name in property_assignments
+    # Keyed by suite, so that a rebinding in one suite keeps only its last
+    # definition while the branches of a conditional keep all of theirs.
+    groups: dict[str, dict[tuple, ast.stmt]] = {
+        name: {} for name in property_assignments
     }
-    for node in nodes:
-        if _is_public(node.name):
-            groups.setdefault(node.name, []).append(node)
+    for node, suite in nodes:
+        if not _is_public(node.name):
+            continue
+        bucket = groups.setdefault(node.name, {})
+        if isinstance(node, _FUNCTION_NODES) and _is_property_mutator(node):
+            # A mutator augments the property its getter created rather than
+            # rebinding the name, so it must not displace that getter.
+            bucket[("mutator", suite, node.lineno)] = node
+        else:
+            bucket[suite] = node
 
-    for name, group in groups.items():
+    for name, by_suite in groups.items():
+        group = list(by_suite.values())
         implementations = [
             node
             for node in group
@@ -276,7 +330,7 @@ def _carriers(
                 isinstance(node, _FUNCTION_NODES) and _is_property_mutator(node)
             )
         ]
-        alternatives = property_assignments.get(name, [])
+        alternatives = list(property_assignments.get(name, {}).values())
         undocumented = [
             statement for statement, documented in alternatives if not documented
         ]
@@ -347,17 +401,16 @@ def _scan_module(
         # Property docstrings are positional, so each class body is scanned on
         # its own: flattening them first would let one class's docstring sit
         # where the previous class's trailing assignment looks for its own.
-        assignments: dict[str, list[tuple[ast.stmt, bool]]] = {}
-        for class_body in class_bodies:
+        assignments: dict[str, dict[tuple, tuple[ast.stmt, bool]]] = {}
+        for index, class_body in enumerate(class_bodies):
             for assigned_name, alternatives in _property_assignments(
-                class_body
+                class_body, (index,)
             ).items():
-                assignments.setdefault(assigned_name, []).extend(alternatives)
-
-        bodies = [statement for body in class_bodies for statement in body]
+                assignments.setdefault(assigned_name, {}).update(alternatives)
         methods = (
-            member
-            for member in _definitions(bodies)
+            (member, (index, suite))
+            for index, class_body in enumerate(class_bodies)
+            for member, suite in _definitions(class_body)
             if isinstance(member, _FUNCTION_NODES)
         )
         for member in _carriers(methods, overload_names, assignments):
@@ -366,7 +419,7 @@ def _scan_module(
                 if isinstance(member.node, _FUNCTION_NODES)
                 else "property"
             )
-            name = getattr(member.node, "name", None) or member.node.targets[0].id
+            name = _bound_name(member.node)
             record(
                 member.node,
                 kind,
