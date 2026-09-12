@@ -111,27 +111,11 @@ Python 3 Conda Examples:
     reports:
       junit: test/pytest.xml
 
-Documentation Sphinx:
-  script:
-  - export PY_EXE=python3
-  - export PYOPENCL_TEST=portable:pthread
-  - export EXTRA_INSTALL="pybind11 cython numpy pytest scipy mako wheel"
-  - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/master/build-py-project.sh
-  - ". ./build-py-project.sh"
-  - cd doc && make html
-  - git config --global user.name "${COMMIT_USER}"
-  - git config --global user.email "${COMMIT_EMAIL}"
-  - git clone https://${GH_USER}:${GH_ACCESS_TOKEN}@${HOMEPAGE_URL} homepage
-  - cd homepage
-  - git checkout src
-  - cd static && mkdir -p docs
-  - rm -rf docs/volumential
-  - cp -r ../../build/html docs/volumential
-  - git add -f ./docs/volumential
-  - (git commit -m "Auto-updated volumential docs") || (echo "Docs are up to date")
-  - git push
-  tags:
-  - python3
-  except:
-  - tags
-  allow_failure: true
+# The "Documentation Sphinx" job that used to live here is retired.  It built
+# the site and force-pushed the result into a personal homepage repository over
+# a token -- the mechanism behind the build the README still links to.  Its
+# replacements are in GitHub Actions, where the rest of CI already lives:
+# .github/workflows/ci.yml builds the site, checks its links and reports its
+# coverage on every pull request, and .github/workflows/docs-pages.yml deploys
+# it to GitHub Pages from main once Pages is enabled for the repository.  See
+# xywei/volumential#145.
