@@ -1231,7 +1231,14 @@ def drive_volume_fmm(
 
 
 def compute_barycentric_lagrange_params(q_order):
+    """1D interpolation nodes and barycentric weights for a box of *q_order*.
 
+    The nodes are the *q_order* Gauss-Legendre points mapped from
+    :math:`[-1, 1]` to the box-local :math:`[0, 1]`, which is where the volume
+    FMM places quadrature nodes inside a leaf; the weights are the barycentric
+    Lagrange weights of those nodes.  A single node needs no weight, so
+    ``q_order == 1`` returns a trivial one.
+    """
     # 1d quad points and weights
     q_points_1d, q_weights_1d = np.polynomial.legendre.leggauss(q_order)
     q_points_1d = (q_points_1d + 1) * 0.5

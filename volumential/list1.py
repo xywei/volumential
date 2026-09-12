@@ -555,6 +555,11 @@ class NearFieldFromCSR(NearFieldEvalBase):
         return self.get_kernel_scaling_policy(box_name=box_name).scaling_code
 
     def codegen_compute_displacement(self, box_name: str = "sbox") -> str:
+        """C code for the kernel displacement to apply to box *box_name*.
+
+        Either the caller's own ``kernel_displacement_code``, or the rule
+        :meth:`get_kernel_scaling_policy` infers from the box extent.
+        """
         if "kernel_displacement_code" in self.extra_kwargs:
             # user-defined displacement rule
             assert isinstance(self.extra_kwargs["kernel_displacement_code"], str)
@@ -572,6 +577,12 @@ class NearFieldFromCSR(NearFieldEvalBase):
         return self.get_kernel_scaling_policy(box_name=box_name).displacement_code
 
     def codegen_get_table_level(self, box_name: str = "sbox") -> str:
+        """C code that picks which table level box *box_name* reads from.
+
+        Either the level rule implied by a caller-supplied
+        ``kernel_scaling_code``, or the one :meth:`get_kernel_scaling_policy`
+        infers from the box extent.
+        """
         if "kernel_scaling_code" in self.extra_kwargs:
             # Using custom scaling
             return self.get_kernel_scaling_policy(box_name=box_name).table_level_code

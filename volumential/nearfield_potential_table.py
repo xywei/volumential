@@ -533,11 +533,26 @@ class ComplexExponentialRewriter(CSECachingMapperMixin, IdentityMapper):
         return _has_variable(expr)
 
     def map_common_subexpression_uncached(self, expr, /, *args, **kwargs):
+        """Rewrite the body of a common subexpression that is not yet cached.
+
+        :class:`~pymbolic.mapper.CSECachingMapperMixin` calls this once per
+        distinct :class:`~pymbolic.primitives.CommonSubexpression` node and
+        caches the result; descending with
+        :class:`~pymbolic.mapper.IdentityMapper` is what makes the rewrite
+        reach inside the node instead of stopping at it.
+        """
         return IdentityMapper.map_common_subexpression(
             self, expr, *args, **kwargs
         )
 
     def map_call(self, expr, /, *args, **kwargs):
+        """Split an ``exp`` of a complex argument into real ``exp``/``cos``/``sin``.
+
+        Any other call, an ``exp`` whose imaginary part is structurally zero,
+        and an ``exp`` whose halves are not provably double-precision real are
+        all returned unchanged; see the class docstring for why, and
+        ``_is_double_precision_real`` for the last of those tests.
+        """
         expr = super().map_call(expr, *args, **kwargs)
 
         if not isinstance(expr, prim.Call):
@@ -733,6 +748,15 @@ def _kernel_uses_target_minus_source_displacement(kernel):
 
 @dataclass(frozen=True)
 class DuffyBuildConfig:
+    """Quadrature settings for one Duffy near-field table build.
+
+    The single object that carries a build's accuracy knobs from the caller to
+    :meth:`NearFieldInteractionTable.build_table_via_duffy_radial`: the radial
+    rule and its order, the regular (angular/tensor) order, the mpmath working
+    precision, and the optional auto-tuning of the two orders.  It is frozen,
+    so it can be recorded verbatim in a table's provenance.
+    """
+
     radial_rule: str = "tanh-sinh-fast"
     regular_quad_order: object = 20
     radial_quad_order: object = 61
@@ -745,6 +769,16 @@ class DuffyBuildConfig:
 
 @dataclass(frozen=True)
 class SymmetryReductionDiagnostics:
+    """What a table's symmetry reduction bought, and what it cost.
+
+    Reported by
+    :meth:`NearFieldInteractionTable.get_symmetry_reduction_diagnostics`: the
+    entry counts before and after reduction and their ratio, the orbit-size
+    histogram and sign bookkeeping behind it, the payload sizes of the three
+    representations, and -- only when the caller passes reference data to
+    reconstruct against -- the error of that reconstruction.
+    """
+
     full_entry_count: int
     representative_count: int
     compression_ratio: float
@@ -784,6 +818,7 @@ def _orthonormal(n, i):
 
 
 def constant_one(x, y=None, z=None):
+    """The constant function one, broadcast to the shape of *x*."""
     return np.ones(np.array(x).shape)
 
 
@@ -795,6 +830,12 @@ def _is_auto_quad_order(value):
 
 
 def get_laplace(dim):
+    r"""The free-space Laplace kernel as a plain callable of its components.
+
+    2D only: :math:`-\log r / (2\pi)`, evaluated from the Cartesian
+    components of the displacement so that it can be handed to the table
+    builder as an ordinary Python function.
+    """
     if dim != 2:
         raise NotImplementedError(
             "Kernel function Laplace" + str(dim) + "D not implemented."
@@ -808,6 +849,22 @@ def get_laplace(dim):
 
 
 def get_cahn_hilliard(dim, b=0, c=0, approx_at_origin=False):
+    r"""The 2D Cahn-Hilliard kernel as a plain callable of its components.
+
+    With :math:`\lambda_1^2` and :math:`\lambda_2^2` the two roots of
+    :math:`\lambda^2 - b\lambda + c`, the returned function evaluates
+
+    .. math::
+
+        -\frac{1}{2\pi(\lambda_1^2 - \lambda_2^2)}
+        \bigl( K_0(\lambda_1 r) - K_0(\lambda_2 r) \bigr),
+
+    the same expression that
+    :class:`volumential.table_manager.CahnHilliardKernel` carries
+    symbolically.  With *approx_at_origin*, each :math:`K_0` is replaced by a
+    small-argument series with the leading logarithmic term removed
+    analytically.
+    """
     if dim != 2:
         raise NotImplementedError(
             "Kernel function Laplace" + str(dim) + "D not implemented."
@@ -882,6 +939,7 @@ def get_cahn_hilliard(dim, b=0, c=0, approx_at_origin=False):
 
 
 def get_cahn_hilliard_laplacian(dim, b=0, c=0):
+    """Not implemented; always raises :exc:`NotImplementedError`."""
     raise NotImplementedError("Cahn-Hilliard-Laplacian kernel function not implemented")
 
 
@@ -908,6 +966,17 @@ def _sumpy_kernel_dim(sknl, fallback_dim=None):
 
 
 def sumpy_kernel_to_lambda(sknl, fallback_dim=None, parameter_values=None):
+    """Turn a :mod:`sumpy` kernel into a plain callable of its components.
+
+    The table builders evaluate the kernel at quadrature nodes as an ordinary
+    Python function, so the kernel's symbolic expression -- source and target
+    post-processing applied, multiplied by its global scaling constant -- is
+    lambdified, with the Hankel and modified-Bessel calls routed to
+    :mod:`scipy.special`.  *parameter_values* substitutes the kernel's free
+    symbols, such as a wave number, before lambdification; *fallback_dim*
+    supplies the dimension for a kernel object that carries neither ``dim``
+    nor ``ambient_dim``.
+    """
     if not _is_sumpy_kernel_like(sknl):
         raise TypeError(
             "sumpy_kernel_to_lambda requires a sumpy-like kernel object with "
@@ -1162,6 +1231,12 @@ class NearFieldInteractionTable:
 
     @property
     def data(self):
+        """The table entries, allocated full of NaN on first access.
+
+        Assigning to it replaces them with an unreduced, full-length entry
+        array: the orbit representative ids are dropped and the table stops
+        being marked symmetry-reduced.
+        """
         if self._data is None:
             self._data = np.empty(self._full_entry_count(), dtype=self.dtype)
             self._data.fill(np.nan)
@@ -1195,7 +1270,13 @@ class NearFieldInteractionTable:
     # {{{ encode to table index
 
     def get_entry_index(self, source_mode_index, target_point_index, case_id):
+        """Index into :attr:`data` of one (source mode, target, case) entry.
 
+        On a symmetry-reduced table this is the index of the entry's orbit
+        representative, so an interaction and its images under the kernel's
+        symmetries share one slot.  :meth:`decode_index` inverts the
+        unreduced form of the same encoding.
+        """
         assert source_mode_index >= 0 and source_mode_index < self.n_q_points
         assert target_point_index >= 0 and target_point_index < self.n_q_points
         pair_id = source_mode_index * self.n_q_points + target_point_index
@@ -1233,6 +1314,11 @@ class NearFieldInteractionTable:
     # {{{ basis modes in the template box
 
     def unwrap_mode_index(self, mode_index):
+        """Split a flat basis-mode index into one index per axis.
+
+        The flattening is row-major over ``quad_order`` nodes per axis and has
+        to agree with the mesh generator's node ordering.
+        """
         # NOTE: these two lines should be changed
         # in accordance with the mesh generator
         # to get correct xi (1d grid)
@@ -1249,10 +1335,11 @@ class NearFieldInteractionTable:
         return idx
 
     def get_template_mode(self, mode_index):
+        """The *mode_index*-th basis mode of the template box, as a callable.
+
+        Template modes are defined on an l_infty circle.
+        """
         assert mode_index >= 0 and mode_index < self.n_q_points
-        """
-        template modes are defined on an l_infty circle.
-        """
         idx = self.unwrap_mode_index(mode_index)
 
         if self.quad_order == 1:
@@ -3848,6 +3935,14 @@ class NearFieldInteractionTable:
     # {{{ build table (driver)
 
     def build_table(self, cl_ctx=None, queue=None, build_config=None, **kwargs):
+        """Fill in this table, by way of the Duffy radial builder.
+
+        The entry point the table manager calls.  Which Duffy path actually
+        runs -- and, when the batched one gives way to the scalar one, why --
+        is decided a level down in :meth:`build_table_via_duffy_radial` and
+        recorded on the table as ``build_routing`` and
+        ``build_fallback_reason``.
+        """
         logger.info("[duffy] build_table invoked")
         self.build_table_via_duffy_radial(
             queue=queue,
