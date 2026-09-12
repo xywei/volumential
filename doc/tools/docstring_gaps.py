@@ -51,9 +51,11 @@ IGNORED_MODULES = frozenset({"volumential.qbfem"})
 
 _FUNCTION_NODES = (ast.AsyncFunctionDef, ast.FunctionDef)
 
-# Statements a module-level definition can be nested in and still be a
-# module-level definition: an optional-dependency fallback under ``try`` or a
-# version check under ``if`` defines a name every importer sees.
+# Statements a definition can be nested in and still belong to the enclosing
+# module or class: an optional-dependency fallback under ``try`` or a version
+# check under ``if`` binds a name every importer sees.  ``ast.Match`` is
+# handled separately below, because its suites hang off ``cases`` rather than
+# off the fields these nodes share.
 _CONTROL_FLOW_NODES = (ast.For, ast.If, ast.Try, ast.TryStar, ast.While, ast.With)
 
 
@@ -102,6 +104,9 @@ def _definitions(body: list[ast.stmt]) -> Iterator[ast.stmt]:
                 yield from _definitions(getattr(node, field, []))
             for handler in getattr(node, "handlers", []):
                 yield from _definitions(handler.body)
+        elif isinstance(node, ast.Match):
+            for case in node.cases:
+                yield from _definitions(case.body)
 
 
 def _is_property_mutator(node: ast.AST) -> bool:
