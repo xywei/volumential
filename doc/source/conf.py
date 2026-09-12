@@ -109,11 +109,13 @@ myst_heading_anchors = 3
 
 # -- Notebooks (myst-nb) --------------------------------------------------
 
-# Never execute a notebook during a docs build.  The example notebooks need an
-# OpenCL device and, at their committed settings, hours of compute; neither the
-# GitHub-hosted docs runner nor a contributor's laptop has that.  Pages
-# therefore show the prose, the code and whatever outputs the notebook carries
-# in the repository -- today, none.
+# Never execute a notebook during a docs build.  Every one of them needs a
+# working OpenCL device, which a contributor building the documentation may not
+# have, and the two Poisson tutorials run co-refinement studies far past what a
+# docs build can afford; the Helmholtz one is a smoke-mode wrapper and would be
+# cheap, but a docs build is still not where it belongs.  Pages therefore show
+# the prose, the code and whatever outputs the notebook carries in the
+# repository -- today, none.
 nb_execution_mode = "off"
 
 

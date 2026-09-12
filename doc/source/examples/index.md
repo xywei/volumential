@@ -187,10 +187,12 @@ uv run python examples/branched_flow_helmholtz2d.py --smoke
 ## Notebooks
 
 The three notebooks below are rendered here **exactly as they are committed,
-without being executed**. Running them needs an OpenCL device and, at their
-committed settings, far more time than a documentation build has, so the pages
-show the prose and the code but no results — the numbers and figures appear
-only when you run the notebook yourself.
+without being executed**. All of them need a working OpenCL device, and the two
+Poisson tutorials run co-refinement studies far past what a documentation build
+can afford; the Helmholtz one is a smoke-mode wrapper and is cheap, but a docs
+build is still not where it belongs. So the pages show the prose and the code
+but no results — the numbers and figures appear only when you run the notebook
+yourself.
 
 Neither JupyterLab nor matplotlib is a dependency of the library — one is a
 tool, the other is only used for the pictures — so bring both along for the one

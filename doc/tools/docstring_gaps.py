@@ -16,7 +16,8 @@ does not begin with an underscore, in a module whose dotted name has no
 underscore-prefixed component.  A definition nested in module-level control
 flow -- the ``except ImportError`` fallback for an optional dependency, say --
 counts, and so does a method defined inside class-level control flow: both bind
-an attribute like any other.  The two halves of a property count once.
+an attribute like any other.  The two halves of a property count once, and an
+``@overload`` set counts as the one runtime object it declares.
 
 Usage::
 
@@ -109,6 +110,20 @@ def _definitions(body: list[ast.stmt]) -> Iterator[ast.stmt]:
                 yield from _definitions(case.body)
 
 
+def _is_typing_overload(node: ast.AST) -> bool:
+    """Is *node* an ``@overload`` stub rather than the runtime definition?
+
+    A stub carries no docstring by convention and is not the object anyone
+    imports; the implementation that follows the set is.  Counting the stubs
+    would report one public object as several, all but one of them a gap.
+    """
+    return any(
+        (isinstance(decorator, ast.Name) and decorator.id == "overload")
+        or (isinstance(decorator, ast.Attribute) and decorator.attr == "overload")
+        for decorator in node.decorator_list
+    )
+
+
 def _is_property_mutator(node: ast.AST) -> bool:
     """Is *node* the ``@x.setter`` or ``@x.deleter`` half of a property?
 
@@ -149,6 +164,8 @@ def _scan_module(
     for node in _definitions(tree.body):
         if not _is_public(node.name):
             continue
+        if isinstance(node, _FUNCTION_NODES) and _is_typing_overload(node):
+            continue
 
         if isinstance(node, ast.ClassDef):
             record(node, "class", f"{module}.{node.name}")
@@ -156,7 +173,7 @@ def _scan_module(
             for member in _definitions(node.body):
                 if not isinstance(member, _FUNCTION_NODES):
                     continue
-                if not _is_public(member.name):
+                if not _is_public(member.name) or _is_typing_overload(member):
                     continue
                 if _is_property_mutator(member) and member.name in recorded_names:
                     # The getter above already stands for this property.

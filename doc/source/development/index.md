@@ -136,10 +136,13 @@ notebook to `examples/` and it gets a page, because
 {doc}`../examples/index` globs the staged directory — but add the paragraph
 that says what it costs to run, since a reader cannot tell from the rendering.
 
-Nothing is executed: `nb_execution_mode = "off"`. A notebook needs an OpenCL
-device and, at its committed settings, more time than a documentation build
-has, so a page shows the prose, the code and whatever outputs the notebook
-carries in the repository — today, none. Commit them stripped. Above 2 MB the
+Nothing is executed: `nb_execution_mode = "off"`. Every notebook needs a
+working OpenCL device, and the two Poisson tutorials run co-refinement studies
+far past a documentation build's budget; the Helmholtz one calls
+`run_convergence_study(smoke_mode=True)` and would be cheap, but a docs build
+is still not where it belongs. So a page shows the prose, the code and whatever
+outputs the notebook carries in the repository — today, none. Commit them
+stripped. Above 2 MB the
 staged copy drops the outputs anyway rather than shipping them into the page;
 the file in `examples/` is never modified.
 

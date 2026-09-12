@@ -292,8 +292,10 @@ substantial existing documents kept as they are. `doc/source/development/`
 documents the section layout and which section a new page belongs in.
 
 The notebooks under `examples/` are rendered as pages by `myst-nb` and are
-**never executed** by the build (`nb_execution_mode = "off"`): they need an
-OpenCL device and hours of compute. `conf.py` stages a copy of each into
+**never executed** by the build (`nb_execution_mode = "off"`): they all need a
+working OpenCL device, and the two Poisson tutorials run co-refinement studies
+far past a documentation build's budget (the Helmholtz one is a smoke-mode
+wrapper and is cheap, but a docs build is not where it belongs either). `conf.py` stages a copy of each into
 `doc/source/examples/notebooks/` at the start of every build; that directory is
 generated and git-ignored. Commit notebooks with their outputs stripped.
 
