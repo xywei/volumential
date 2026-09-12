@@ -28,6 +28,14 @@ Install the stack, evaluate a first volume potential, and pick the OpenCL
 device you meant to use.
 :::
 
+:::{grid-item-card} {octicon}`beaker` Examples
+:link: examples/index
+:link-type: doc
+
+The eight programs under `examples/`, what each one costs to run and which
+device it lands on, plus the notebooks rendered as pages.
+:::
+
 :::{grid-item-card} {octicon}`book` User guide
 :link: user-guide/index
 :link-type: doc
@@ -76,6 +84,7 @@ release and versioning.
 
 - Never run Volumential before: {doc}`getting-started/installation`, then
   {doc}`getting-started/first-volume-potential`.
+- Looking for a program close to your problem: {doc}`examples/index`.
 - Want to understand the machinery: {doc}`user-guide/volume-fmm-workflow`.
 - Chasing a slow or wrong table: {doc}`user-guide/table-build-routing` and
   {doc}`user-guide/nearfield_symmetry`.
@@ -86,6 +95,7 @@ release and versioning.
 :maxdepth: 2
 
 getting-started/index
+examples/index
 user-guide/index
 design-notes/index
 Benchmarks <benchmarks/index>

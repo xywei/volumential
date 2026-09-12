@@ -165,6 +165,7 @@ of these:
 | Section | For | Example |
 | --- | --- | --- |
 | Getting started | A reader who has not run the code yet | installing, a first potential |
+| Examples | What each program under `examples/` does and costs | the gallery |
 | User guide | Understanding a mechanism you are using | the Helmholtz split |
 | Design notes | Why a mechanism has its shape; no derivations | windowed channels |
 | Benchmarks | Producing and promoting evidence | metadata sidecars |
