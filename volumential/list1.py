@@ -585,8 +585,10 @@ class NearFieldFromCSR(NearFieldEvalBase):
         The ``table_level_code`` of the policy
         :meth:`get_kernel_scaling_policy` returns: the inferred rule under
         ``canonical_single_table``, the constant table level 0 under the two
-        other single-table modes, and the source box's own level, clamped to
-        the cached range, under ``per_level_tables``.
+        other single-table modes, and under ``per_level_tables`` the box's
+        level *as an offset from* ``table_starting_level``, clamped to the
+        cached range -- so it is an index into the cached levels, not the
+        absolute level of the box.
         """
         if "kernel_scaling_code" in self.extra_kwargs:
             # Using custom scaling

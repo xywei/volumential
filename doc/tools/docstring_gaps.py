@@ -243,7 +243,8 @@ def _carriers(
     * of the definitions that remain, *any* of them can be the one a reader
       imports -- alternative branches of a version check bind different ones on
       different interpreters -- so the name is a gap unless they all carry a
-      docstring, and the first that does not is what the report points at.
+      docstring, assignments from *property_assignments* included, and the
+      earliest that does not is what the report points at.
 
     *property_assignments* adds the properties a class body declares by
     assignment rather than by decorating a getter, from
@@ -275,29 +276,24 @@ def _carriers(
                 isinstance(node, _FUNCTION_NODES) and _is_property_mutator(node)
             )
         ]
-        if not getters:
-            alternatives = property_assignments.get(name)
-            if alternatives:
-                missing = [
-                    statement
-                    for statement, documented in alternatives
-                    if not documented
-                ]
-                if missing:
-                    yield Carrier(missing[0], True, group)
-                else:
-                    yield Carrier(alternatives[-1][0], False, group)
-            else:
-                yield Carrier(candidates[0], True, group)
-            continue
-
+        alternatives = property_assignments.get(name, [])
         undocumented = [
+            statement for statement, documented in alternatives if not documented
+        ]
+        undocumented += [
             node for node in getters if ast.get_docstring(node) is None
         ]
+
         if undocumented:
-            yield Carrier(undocumented[0], True, group)
-        else:
+            # Point at whichever branch is missing its documentation.
+            first = min(undocumented, key=lambda node: node.lineno)
+            yield Carrier(first, True, group)
+        elif getters:
             yield Carrier(getters[-1], False, group)
+        elif alternatives:
+            yield Carrier(alternatives[-1][0], False, group)
+        else:
+            yield Carrier(candidates[0], True, group)
 
 
 def _scan_module(
