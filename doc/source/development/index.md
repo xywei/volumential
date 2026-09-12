@@ -146,11 +146,18 @@ the file in `examples/` is never modified.
 Two different questions, and CI answers both in the `Documentation` job of
 `CI Full`, uploading the answers as a `docs-coverage-*` artifact.
 
-`sphinx-build -b coverage` asks whether every object of every imported module
-reaches a page of this site. It is at 100% and should stay there; a module that
-gets no page shows up here. It is *not* a docstring check — `undoc-members` is
-what puts the whole public surface on the API pages, and an object with no
-docstring still gets an entry and still counts as covered.
+`sphinx-build -W --keep-going -b coverage` asks whether every object of every
+module of the package reaches a page of this site. It is at 100% and should
+stay there. `coverage_modules` in `conf.py` is what makes it a real check:
+without it the builder looks only at the modules it already saw on a page, so a
+module that fell out of the autosummary tree would not be examined at all and
+the total would stay at 100%. With it, a module in the package but not on a
+page — and a module on a page but not in the package — is a warning, which
+under `-W` fails the job.
+
+It is *not* a docstring check. `undoc-members` is what puts the whole public
+surface on the API pages, and an object with no docstring still gets an entry
+there and still counts as covered.
 
 `doc/tools/docstring_gaps.py` asks whether every public object *has* a
 docstring. It parses the tree with `ast`, so it needs no OpenCL stack, no
@@ -163,6 +170,25 @@ python doc/tools/docstring_gaps.py
 CI runs it with `--max-gaps`, which fails when the count rises. Lower the
 recorded number in the same commit that lowers the count; raise it only
 deliberately, and say why.
+
+### Sitemap and social metadata
+
+`html_baseurl` is the GitHub Pages URL the site is heading for, and three
+things read it: Sphinx writes a `canonical` link per page, `sphinx-sitemap`
+writes `sitemap.xml`, and `sphinxext.opengraph` writes `og:url`. The sitemap
+uses the flat `{link}` scheme, since the site publishes `latest` only, and
+leaves out `genindex`, `py-modindex` and `search`.
+
+There is deliberately no `robots.txt`. A crawler reads the robots policy from
+the origin root only — `https://xywei.github.io/robots.txt` — which belongs to
+the user site, not to this project's build output, so a file shipped at
+`/volumential/robots.txt` would never be read. The sitemap is at
+`/sitemap.xml` and can be submitted directly.
+
+Social-card images are off (`ogp_social_cards`): generating one per page needs
+matplotlib and a bundled font. The landing page sets its own description in
+front matter, because the extension derives one by walking the doctree and that
+page opens with display math.
 
 ### Redirect stubs for the old flat URLs
 

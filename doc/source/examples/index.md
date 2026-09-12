@@ -172,9 +172,14 @@ committed settings, far more time than a documentation build has, so the pages
 show the prose and the code but no results — the numbers and figures appear
 only when you run the notebook yourself.
 
+No extra declares JupyterLab, on purpose — it is a tool, not a dependency of
+the library — so bring it along for the one command that needs it. `--with`
+layers it over the project environment rather than an isolated one, which is
+what makes the notebook's kernel the environment that has `volumential` in it:
+
 ```bash
-uv sync --extra test --extra doc
-uv run jupyter lab examples/
+uv sync --extra test
+uv run --with jupyterlab jupyter lab examples/
 ```
 
 ```{toctree}
@@ -187,7 +192,11 @@ notebooks/*
 The two Poisson notebooks are tutorials with a roadmap, staged from a single
 run through a co-refinement study; the Helmholtz one is a thin wrapper that
 imports `run_convergence_study` from `examples/helmholtz3d.py` and plots its
-output, so it costs what that script costs in smoke mode.
+output, so it costs what that script costs in smoke mode. The pages are built
+from a staged copy, so they carry no "Edit this page" link; the files
+themselves are [`poisson2d_pytential_volumential.ipynb`][nb2d],
+[`poisson3d_volumential.ipynb`][nb3d] and
+[`helmholtz3d_volumential.ipynb`][nbh3d].
 
 `examples/convert_grid` is not an example program but a two-line gmsh script
 used to write a box mesh out as `box_grid.msh`.
@@ -200,3 +209,6 @@ used to write a box mesh out as `box_grid.msh`.
 [h2dsplit]: https://github.com/xywei/volumential/blob/main/examples/helmholtz2d_split_p_convergence.py
 [h3dsplit]: https://github.com/xywei/volumential/blob/main/examples/helmholtz3d_split_p_convergence.py
 [branched]: https://github.com/xywei/volumential/blob/main/examples/branched_flow_helmholtz2d.py
+[nb2d]: https://github.com/xywei/volumential/blob/main/examples/poisson2d_pytential_volumential.ipynb
+[nb3d]: https://github.com/xywei/volumential/blob/main/examples/poisson3d_volumential.ipynb
+[nbh3d]: https://github.com/xywei/volumential/blob/main/examples/helmholtz3d_volumential.ipynb

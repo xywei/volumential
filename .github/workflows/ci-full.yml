@@ -90,7 +90,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          sphinx-build -b coverage doc/source doc/build/coverage
+          sphinx-build -W --keep-going -b coverage doc/source doc/build/coverage
           python doc/tools/docstring_gaps.py --max-gaps 5 \
             --output doc/build/coverage/docstring-gaps.txt
 

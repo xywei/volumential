@@ -179,7 +179,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    gaps, total = collect(args.package.resolve())
+    package_root = args.package.resolve()
+    # Without this, a misspelled ``--package`` scans nothing, reports "0 of 0"
+    # and exits successfully -- a green run that checked no code at all.
+    if not (package_root / "__init__.py").is_file():
+        parser.error(f"{package_root} is not a Python package directory")
+
+    gaps, total = collect(package_root)
     report = format_report(gaps, total)
     print(report, end="")
 

@@ -272,7 +272,7 @@ sphinx-build -b linkcheck doc/source doc/build/linkcheck
 
 # What CI keeps as the docs-coverage artifact: is every object of every
 # imported module on a page, and does every public object have a docstring.
-sphinx-build -b coverage doc/source doc/build/coverage
+sphinx-build -W --keep-going -b coverage doc/source doc/build/coverage
 python doc/tools/docstring_gaps.py
 
 # Live preview at http://127.0.0.1:8000, rebuilding on save.

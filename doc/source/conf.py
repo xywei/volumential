@@ -160,6 +160,13 @@ napoleon_numpy_docstring = True
 # ``undoc-members``, so an object with no docstring still gets an entry and
 # still counts as covered here.  ``doc/tools/docstring_gaps.py`` is the
 # docstring half of the same question, and CI runs it beside this builder.
+# Enumerate the package rather than letting the builder infer the module set
+# from the documentation.  Without this it checks only the modules it already
+# saw on a page, so a module that fell out of the autosummary tree -- the exact
+# regression this report is here to catch -- would simply not be looked at, and
+# the total would stay at 100%.  With it, a module in the package but not on a
+# page, and a module on a page but not in the package, are both warnings.
+coverage_modules = ["volumential"]
 coverage_ignore_modules = [
     # A 2019 finite-element experiment that nothing in the tree imports; the
     # autosummary template leaves it out of the API reference too.
@@ -195,15 +202,19 @@ intersphinx_mapping = {
 html_theme = "pydata_sphinx_theme"
 html_title = "Volumential"
 html_static_path = ["_static"]
-# Copied to the root of the site verbatim; ``robots.txt`` has to live there to
-# be found, which ``_static`` cannot do.
-html_extra_path = ["_extra"]
 html_last_updated_fmt = "%Y-%m-%d"
 
 # Where the built site is served from.  Sphinx uses it for the ``canonical``
 # link of every page, ``sphinx_sitemap`` for the URLs in ``sitemap.xml``, and
 # ``sphinxext.opengraph`` for the ``og:url`` metadata.  A trailing slash is
 # required by all three.
+#
+# This is the GitHub Pages destination the modernization is heading for, and
+# what ``_static/switcher.json`` and ``linkcheck_ignore`` already name.  Until
+# the Pages deployment lands, a build published anywhere else carries canonical
+# links to a site that is not up yet; that is a property of the deployment
+# order, not of this value, and pointing it at an interim host would have to be
+# reverted the moment Pages goes live.
 html_baseurl = "https://xywei.github.io/volumential/"
 
 html_theme_options = {
@@ -304,18 +315,23 @@ def _stage_example_notebooks(app):
             leftover.unlink()
 
 
-_GENERATED_API_PREFIX = "api/generated/"
+# Pages whose source Sphinx reads from a directory this build generated.  An
+# "Edit this page" link for one of them would point at a path that does not
+# exist in the repository.
+_GENERATED_PAGE_PREFIXES = (
+    # ``sphinx.ext.autosummary`` writes one page per module here.
+    "api/generated/",
+    # ``_stage_example_notebooks`` copies the notebooks here; the files they
+    # come from are under ``examples/``, linked from the gallery page.
+    "examples/notebooks/",
+)
 
 
 def _disable_edit_button_on_generated_pages(
     app, pagename, templatename, context, doctree
 ):
-    """Hide "Edit this page" where there is no source file to edit.
-
-    ``sphinx.ext.autosummary`` writes the API pages at build time and they are
-    not committed, so an edit link into the repository would be a dead link.
-    """
-    if pagename.startswith(_GENERATED_API_PREFIX):
+    """Hide "Edit this page" where there is no source file to edit."""
+    if pagename.startswith(_GENERATED_PAGE_PREFIXES):
         context["theme_use_edit_page_button"] = False
 
 
