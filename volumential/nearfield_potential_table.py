@@ -922,7 +922,10 @@ def get_cahn_hilliard(dim, b=0, c=0, approx_at_origin=False):
         root21 = quadratic_formula_2(1, -b, c)
         root22 = citardauq_formula_2(1, -b, c)
         if np.abs(f(root21)) < np.abs(f(root22)):
-            lam1 = np.sqrt(root21)
+            # This branch wrote ``lam1`` until 2026-09, which clobbered the
+            # first root and left ``lam2`` unbound: every coefficient pair
+            # that took it raised ``UnboundLocalError`` two statements later.
+            lam2 = np.sqrt(root21)
         else:
             lam2 = np.sqrt(root22)
 

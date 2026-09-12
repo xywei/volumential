@@ -112,8 +112,11 @@ def _definitions(body: list[ast.stmt]) -> Iterator[ast.stmt]:
 def _is_property_mutator(node: ast.AST) -> bool:
     """Is *node* the ``@x.setter`` or ``@x.deleter`` half of a property?
 
-    Sphinx documents a property once, under its getter, so counting the
-    mutators separately would overstate the gap.
+    Sphinx documents a property once, under its getter, so counting a mutator
+    that follows one would overstate the gap.  A mutator with no getter before
+    it -- a write-only ``value = property()`` and its setter -- is the
+    property's only definition and has to be counted, which is why the caller
+    checks the names it has already seen rather than this alone.
     """
     return any(
         isinstance(decorator, ast.Attribute)
@@ -149,11 +152,16 @@ def _scan_module(
 
         if isinstance(node, ast.ClassDef):
             record(node, "class", f"{module}.{node.name}")
+            recorded_names: set[str] = set()
             for member in _definitions(node.body):
                 if not isinstance(member, _FUNCTION_NODES):
                     continue
-                if not _is_public(member.name) or _is_property_mutator(member):
+                if not _is_public(member.name):
                     continue
+                if _is_property_mutator(member) and member.name in recorded_names:
+                    # The getter above already stands for this property.
+                    continue
+                recorded_names.add(member.name)
                 record(member, "method", f"{module}.{node.name}.{member.name}")
         else:
             record(node, "function", f"{module}.{node.name}")
