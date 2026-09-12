@@ -115,7 +115,9 @@ myst_heading_anchors = 3
 # docs build can afford; the Helmholtz one is a smoke-mode wrapper and would be
 # cheap, but a docs build is still not where it belongs.  Pages therefore show
 # the prose, the code and whatever outputs the notebook carries in the
-# repository -- today, none.
+# repository -- today, none -- except that staging drops the outputs of a file
+# over ``_MAX_STAGED_NOTEBOOK_BYTES``, so an oversized notebook renders without
+# them whatever it was committed with.
 nb_execution_mode = "off"
 
 
