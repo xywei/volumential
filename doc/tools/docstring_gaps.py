@@ -340,22 +340,31 @@ def _scan_module(
         # Any branch of a conditionally defined class can be the one that binds
         # the name, so the members of all of them are in play -- including when
         # another branch binds that name to a function and carries it.
-        bodies = [
-            statement
+        class_bodies = [
+            definition.body
             for definition in carrier.group
             if isinstance(definition, ast.ClassDef)
-            for statement in definition.body
         ]
-        if not bodies:
+        if not class_bodies:
             continue
+
+        # Property docstrings are positional, so each class body is scanned on
+        # its own: flattening them first would let one class's docstring sit
+        # where the previous class's trailing assignment looks for its own.
+        assignments: dict[str, list[tuple[ast.stmt, bool]]] = {}
+        for class_body in class_bodies:
+            for assigned_name, alternatives in _property_assignments(
+                class_body
+            ).items():
+                assignments.setdefault(assigned_name, []).extend(alternatives)
+
+        bodies = [statement for body in class_bodies for statement in body]
         methods = (
             member
             for member in _definitions(bodies)
             if isinstance(member, _FUNCTION_NODES)
         )
-        for member in _carriers(
-            methods, overload_names, _property_assignments(bodies)
-        ):
+        for member in _carriers(methods, overload_names, assignments):
             kind = (
                 "method"
                 if isinstance(member.node, _FUNCTION_NODES)
