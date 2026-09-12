@@ -864,6 +864,12 @@ def get_cahn_hilliard(dim, b=0, c=0, approx_at_origin=False):
     symbolically.  With *approx_at_origin*, each :math:`K_0` is replaced by a
     small-argument series with the leading logarithmic term removed
     analytically.
+
+    Real roots only.  This takes the real ``numpy.sqrt`` of each root, where
+    the sumpy kernel takes the complex square root and so covers
+    :math:`b^2 < 4c` as well; for coefficients in that range the callable
+    returned here evaluates to ``nan`` rather than raising, so check the
+    discriminant before tabulating with it.
     """
     if dim != 2:
         raise NotImplementedError(

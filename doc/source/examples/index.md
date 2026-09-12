@@ -8,10 +8,11 @@ own driver is usually to copy the closest example and change it.
 
 Two things decide what a run costs, and neither is visible in the file name.
 
-**Smoke mode.** Six of the eight scripts drop to a small configuration when
-`VOLUMENTIAL_EXAMPLE_SMOKE=1` is set (`branched_flow_helmholtz2d.py` uses its
-own `--smoke` flag instead); `laplace3d.py` has no smoke mode at all. A smoke
-run is a correctness check, never a measurement — see
+**Small runs.** Six of the eight scripts drop to a small configuration when
+`VOLUMENTIAL_EXAMPLE_SMOKE=1` is set; `branched_flow_helmholtz2d.py` uses its
+own `--smoke` flag instead, and `laplace3d.py` has no preset at all — only
+three environment overrides for its quadrature order, level count and
+multipole order. A small run is a correctness check, never a measurement — see
 {doc}`../benchmarks/index` for what a measurement has to record.
 
 **Near-field tables.** Every script writes its table cache to an SQLite file in
@@ -26,7 +27,7 @@ of {doc}`../user-guide/table-build-routing`.
 | Script | Small run | Table cache | Device |
 | --- | --- | --- | --- |
 | [`laplace2d.py`][laplace2d] | `VOLUMENTIAL_EXAMPLE_SMOKE=1` | `nft_laplace2d[_smoke].sqlite` | `PYOPENCL_CTX` |
-| [`laplace3d.py`][laplace3d] | **none** | `nft_laplace3d.sqlite` | `PYOPENCL_CTX` |
+| [`laplace3d.py`][laplace3d] | **no preset**, three size overrides | `nft_laplace3d.sqlite` | `PYOPENCL_CTX` |
 | [`poisson3d.py`][poisson3d] | `VOLUMENTIAL_EXAMPLE_SMOKE=1` | `nft_poisson3d[_smoke].sqlite` | `PYOPENCL_CTX` |
 | [`helmholtz2d.py`][helmholtz2d] | `VOLUMENTIAL_EXAMPLE_SMOKE=1` | `nft_laplace2d_for_helmholtz[_smoke].sqlite` | picks its own |
 | [`helmholtz3d.py`][helmholtz3d] | `VOLUMENTIAL_EXAMPLE_SMOKE=1` | `nft_laplace3d_for_helmholtz[_smoke].sqlite` | picks its own |
@@ -53,11 +54,13 @@ all eight — so treat "full settings" as *tens of minutes each*, and expect the
 
 The reference example, and the one {doc}`../getting-started/first-volume-potential`
 walks through line by line. It evaluates the volume potential of a manufactured
-density over $[-1, 1]^2$ with the Laplace kernel, compares it against the exact
-potential at the quadrature nodes, and prints the relative error. It also
-carries the plotting and direct-particle-to-particle branches the walkthrough
-leaves out, and pins an explicit `DuffyBuildConfig`, which is why its error is
-smaller than the excerpt's.
+density over $[-\tfrac12, \tfrac12]^2$ with the Laplace kernel, compares it
+against the exact potential at the quadrature nodes, and prints the **maximum
+absolute** error — `max |exact - computed|`, not a relative one, so do not
+compare it against a relative tolerance from elsewhere. It also carries the
+plotting and direct-particle-to-particle branches the walkthrough leaves out,
+and pins an explicit `DuffyBuildConfig`, which is why its error is smaller than
+the excerpt's.
 
 ```bash
 VOLUMENTIAL_EXAMPLE_SMOKE=1 uv run python examples/laplace2d.py   # seconds
@@ -66,25 +69,42 @@ uv run python examples/laplace2d.py                               # full setting
 
 ### `laplace3d.py`
 
-The same problem over $[-1, 1]^3$. **It has no smoke mode**: the only way to
-run it is at full settings, and the first run builds a 3D near-field table,
-which is the expensive part — `CI Full` caches `nft_laplace3d.sqlite` between
-runs for exactly that reason. Keep the file.
+The same problem over $[-\tfrac12, \tfrac12]^3$, reporting the maximum
+absolute error on the evaluation grid and both a maximum absolute and a
+relative $L^2$ error at the quadrature nodes.
+
+**It has no smoke preset**: `VOLUMENTIAL_EXAMPLE_SMOKE` does not reach it, and
+the defaults ($q = 7$, five levels, multipole order 10) are what `CI Full`
+runs. What it does have is three size knobs, which is the cheap way to try it:
 
 ```bash
-uv run python examples/laplace3d.py
+uv run python examples/laplace3d.py                    # full settings
+
+VOLUMENTIAL_LAPLACE3D_Q_ORDER=3 \
+VOLUMENTIAL_LAPLACE3D_N_LEVELS=3 \
+VOLUMENTIAL_LAPLACE3D_M_ORDER=8 \
+    uv run python examples/laplace3d.py                # much smaller
 ```
+
+Either way the first run builds a 3D near-field table, which is the expensive
+part — `CI Full` caches `nft_laplace3d.sqlite` between runs for exactly that
+reason, and both configurations above share that one cache file. Keep it.
 
 ### `poisson3d.py`
 
-A manufactured 3D Poisson solve over $[-0.5, 0.5]^3$ — two shifted Gaussian
-bumps and the forcing $f = -\Delta u$ — that also produces pictures: orthogonal
-slice plots and a point-cloud error plot, written as PNGs into
+A manufactured 3D Poisson solve over $[-\tfrac12, \tfrac12]^3$ — two shifted
+Gaussian bumps and the forcing $f = -\Delta u$ — that also produces pictures:
+orthogonal slice plots and a point-cloud error plot, written as PNGs into
 `poisson3d_output/` (override with `VOLUMENTIAL_POISSON3D_OUTPUT_DIR`). Use it
 when you want to *see* where the error lives rather than read one number.
 
+The pictures need matplotlib, which nothing in the project declares: both
+plotting helpers catch the `ImportError` and skip, so without it the run
+succeeds and quietly writes no PNGs at all.
+
 ```bash
-VOLUMENTIAL_EXAMPLE_SMOKE=1 uv run python examples/poisson3d.py
+VOLUMENTIAL_EXAMPLE_SMOKE=1 uv run --with matplotlib \
+    python examples/poisson3d.py
 ```
 
 ## Helmholtz
