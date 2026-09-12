@@ -143,7 +143,7 @@ def kernel_global_scaling_const_to_pymbolic(kernel):
     literal here.  That keeps the generated ``knl_scaling`` assignment a
     constant regardless of how the upstream mappers happen to shape the
     expression tree, which is what
-    :meth:`NearFieldInteractionTable._rewrite_complex_exponentials` needs in
+    ``NearFieldInteractionTable._rewrite_complex_exponentials`` needs in
     order to see (and split) an imaginary constant instead of an opaque node.
     Kernels whose scaling still carries a symbol go through the backend-aware
     mapper unchanged.
