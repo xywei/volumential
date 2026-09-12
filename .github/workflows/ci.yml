@@ -74,6 +74,99 @@ jobs:
 
           python -m basedpyright -p pyproject.toml --level error
 
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: .test-conda-env-py3.yml
+          environment-name: testing
+          cache-downloads: true
+          generate-run-shell: true
+      - name: Prepare Documentation Environment
+        shell: micromamba-shell {0}
+        run: |
+          set -euxo pipefail
+
+          export PY_EXE=python
+
+          python -m pip install --upgrade pip
+          python -m pip install uv
+          uv pip install --system --editable ".[test,doc]"
+
+      # The build imports volumential, hence the micromamba environment: the
+      # OpenCL stack (pyopencl, loopy) has to be importable even though no
+      # device is used.
+      - name: Build the site
+        shell: micromamba-shell {0}
+        run: |
+          set -euo pipefail
+
+          # -W turns every warning into an error and --keep-going reports all
+          # of them instead of stopping at the first.  -n is nitpicky mode,
+          # which is what makes an unresolvable cross-reference a warning;
+          # conf.py sets ``nitpicky`` too, so passing the flag keeps the check
+          # from depending on that setting staying put.
+          sphinx-build -W --keep-going -n -b html doc/source doc/build/html
+
+      # Two different questions; see the Development section of the site.
+      # ``-b coverage`` asks whether every object of every module of the
+      # package reaches a page, and writes them to python.txt.  ``interrogate``
+      # asks whether every public object has a docstring, and ratchets on the
+      # fail-under percentage recorded in pyproject.toml.
+      #
+      # ``-q`` is load-bearing, not tidiness: sphinx.ext.coverage logs an
+      # undocumented object at info level unless the app is quiet, in which
+      # case it logs a warning -- and only then does ``-W`` fail the job.
+      - name: Docstring and API coverage
+        shell: micromamba-shell {0}
+        run: |
+          set -euo pipefail
+
+          sphinx-build -q -W --keep-going -b coverage doc/source doc/build/coverage
+          interrogate -v volumential | tee doc/build/coverage/interrogate.txt
+
+      # Last, because it is the only step here whose outcome depends on hosts
+      # nobody in this repository controls: a rate-limited or unreachable
+      # third party must not stop the deterministic checks above from being
+      # reported.
+      - name: Check external links
+        shell: micromamba-shell {0}
+        run: |
+          set -euo pipefail
+
+          # The linkcheck builder exits non-zero on a broken link by itself,
+          # so -W would add nothing here.  The few URLs that cannot be checked
+          # from a runner are listed, with a reason each, in
+          # ``linkcheck_ignore`` of doc/source/conf.py; keep that list short
+          # and justified rather than muting a real 404.
+          sphinx-build -b linkcheck doc/source doc/build/linkcheck
+
+      # A preview of the site this pull request would publish.  Download it
+      # from the run's Artifacts section and open index.html; the pages are
+      # built with the same command the Pages deployment uses, so what is in
+      # here is what would go live.
+      - name: Upload the built site
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-html-${{ github.run_id }}-${{ github.run_attempt }}
+          path: doc/build/html/
+          if-no-files-found: warn
+          # A review aid, not an archive.
+          retention-days: 14
+
+      - name: Upload coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-coverage-${{ github.run_id }}-${{ github.run_attempt }}
+          path: doc/build/coverage/
+          if-no-files-found: warn
+
   pytest:
     name: Testing (Linux)
     runs-on: ubuntu-latest

@@ -1,0 +1,116 @@
+name: Docs Pages
+
+# Builds the documentation site from ``main`` and publishes it to GitHub Pages
+# at https://xywei.github.io/volumential/ .
+#
+# INERT UNTIL PAGES IS TURNED ON.  Publishing changes a public surface, so the
+# repository owner enables it, not this workflow: Settings -> Pages -> Build
+# and deployment -> Source: "GitHub Actions".  Until that is set, the ``build``
+# job succeeds and the ``deploy`` job fails with "Get Pages site failed" --
+# nothing is published and nothing else in CI is affected.  The workflow does
+# not enable Pages for itself (``actions/configure-pages`` with
+# ``enablement: true`` would, and needs a token beyond GITHUB_TOKEN); that
+# choice stays with the owner.
+#
+# Three follow-ups belong to the same moment the site first responds, and are
+# deliberately not made here: the switcher URL in doc/source/conf.py (with the
+# ``linkcheck_ignore`` entry for the Pages host dropped), the documentation
+# link in README.md, and the repository homepage.  Until then the published
+# build is still the one the README points at.
+#
+# See xywei/volumential#145.
+
+on:
+  push:
+    branches: [ 'main' ]
+  # Manual runs exist for the first publication after Pages is enabled, when
+  # there may be no new commit on main to trigger one.  ``workflow_dispatch``
+  # takes a ref, though, and a dispatch from a branch or a tag would otherwise
+  # publish that ref to the production site; both jobs below are guarded
+  # against it.
+  workflow_dispatch:
+
+# Read-only by default.  The two grants a Pages deployment needs --
+# ``pages: write`` to create the deployment and ``id-token: write`` for the
+# OIDC token ``actions/deploy-pages`` exchanges for it -- are on the ``deploy``
+# job alone, so the job that runs the build (and with it every dependency's
+# setup code) cannot reach the Pages API or mint a token.
+permissions:
+  contents: read
+
+# One deployment at a time, and never cancel one in flight: a cancelled deploy
+# can leave the site half-updated.  Deliberately a single "pages" group rather
+# than the per-ref group the other workflows use, so that two pushes to main in
+# quick succession queue instead of racing.
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+  build:
+    name: Build
+    # main only.  The site has one published version, so a dispatch from any
+    # other ref must not reach it; a skipped build also skips ``deploy``,
+    # which needs it.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: .test-conda-env-py3.yml
+          environment-name: testing
+          cache-downloads: true
+          generate-run-shell: true
+      - name: Prepare Documentation Environment
+        shell: micromamba-shell {0}
+        run: |
+          set -euxo pipefail
+
+          export PY_EXE=python
+
+          python -m pip install --upgrade pip
+          python -m pip install uv
+          uv pip install --system --editable ".[test,doc]"
+
+      # The same command the ``Documentation`` job of CI runs, so that what is
+      # published is what the pull request's preview artifact showed.  The link
+      # check and the coverage reports stay in CI: they gate a change, and a
+      # third-party host going down should not block a deployment of pages that
+      # already passed them.
+      - name: Build the site
+        shell: micromamba-shell {0}
+        run: |
+          set -euo pipefail
+
+          sphinx-build -W --keep-going -n -b html doc/source doc/build/html
+
+      - name: Upload the site as a Pages artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: doc/build/html/
+
+  deploy:
+    name: Deploy
+    needs: build
+    # Stated again rather than inherited, so that the guarantee survives an
+    # edit to ``needs``.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
+
+# vim: sw=2

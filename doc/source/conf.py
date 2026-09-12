@@ -244,6 +244,18 @@ html_theme_options = {
     "switcher": {
         # Served from the site itself: ``_static/switcher.json`` carries a
         # single "latest" entry until tagged versions are published.
+        #
+        # TODO(#145): the moment GitHub Pages is enabled (Settings -> Pages ->
+        # Build and deployment -> Source: "GitHub Actions") and
+        # https://xywei.github.io/volumential/ responds, three edits follow.
+        # Here: make ``json_url`` the absolute
+        # ``https://xywei.github.io/volumential/_static/switcher.json`` -- a
+        # relative URL resolves against whichever build is being viewed, so an
+        # older tagged build would show its own frozen list rather than the
+        # current one -- and drop the ``linkcheck_ignore`` entry for that host
+        # below.  Elsewhere: the documentation link in README.md, and the
+        # repository homepage.  Until then this file points at nothing that is
+        # live, which is why the relative URL is the right placeholder.
         "json_url": "_static/switcher.json",
         "version_match": "latest",
     },
@@ -440,9 +452,33 @@ def setup(app):
 
 linkcheck_timeout = 30
 linkcheck_retries = 2
+
+# The ``Documentation`` job of .github/workflows/ci.yml runs this builder on
+# every pull request, so an entry here is what keeps a host that cannot be
+# checked from failing an unrelated change.  Keep the list short and give each
+# entry a reason: a 404 that is muted here is a 404 a reader will hit.
 linkcheck_ignore = [
-    # Not published yet; the GitHub Pages deployment lands in a later phase.
+    # Not published yet; enabling GitHub Pages is the maintainer's step, and
+    # .github/workflows/docs-pages.yml is inert until then.  Drop this entry
+    # once the site responds.
     r"https://xywei\.github\.io/volumential/?.*",
+    # One citation, not a host: the reference in
+    # ``volumential.singular_integral_2d`` resolves from a browser and from a
+    # developer machine, but academic publishers commonly answer a CI runner
+    # with 403 or a challenge page, which linkcheck reports as broken.  The
+    # URL is DOI-derived and stable, so there is nothing for a check to catch.
+    # Spelled out rather than matched by host, so that the next Springer link
+    # someone adds is still checked.
+    r"https?://link\.springer\.com/10\.1007/BF00370482/?$",
+    # One OpenCL specification page, cited by ``volumential.symbolic``.  It
+    # answers a GitHub Actions runner with 403 (observed in the Documentation
+    # job on 2026-09-12) while resolving normally from a browser and from a
+    # developer machine.  Named exactly, so that another Khronos link is
+    # still checked.
+    r"https?://registry\.khronos\.org/OpenCL/sdk/1\.0/docs/man/xhtml/mathFunctions\.html$",
+    # The sphinx-autobuild preview server, which exists only while a
+    # contributor is running it.
+    r"https?://(127\.0\.0\.1|localhost)(:\d+)?/?.*",
 ]
 
 

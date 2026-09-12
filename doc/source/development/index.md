@@ -149,7 +149,8 @@ the file in `examples/` is never modified.
 ### Docstring and API coverage
 
 Two different questions, and CI answers both in the `Documentation` job of
-`CI Full`, uploading the answers as a `docs-coverage-*` artifact. Both are
+`CI` — on every pull request — uploading the answers as a `docs-coverage-*`
+artifact next to the `docs-html-*` preview of the site itself. Both are
 maintained tools configured in the repository, not checkers written here.
 
 `sphinx-build -q -W --keep-going -b coverage` asks whether every module,
