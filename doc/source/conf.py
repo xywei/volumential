@@ -128,6 +128,29 @@ napoleon_google_docstring = True
 napoleon_numpy_docstring = True
 
 
+# -- Coverage of the API by the site --------------------------------------
+
+# ``sphinx-build -b coverage`` answers one question: is every object of every
+# imported module reachable from a page of this site?  The ``Documentation``
+# job of ``.github/workflows/ci-full.yml`` runs it and uploads
+# ``doc/build/coverage/``, so a module that never reaches a page becomes
+# visible instead of staying silent.
+#
+# It is deliberately *not* a docstring check.  ``autodoc_default_options`` sets
+# ``undoc-members``, so an object with no docstring still gets an entry and
+# still counts as covered here.  ``doc/tools/docstring_gaps.py`` is the
+# docstring half of the same question, and CI runs it beside this builder.
+coverage_ignore_modules = [
+    # A 2019 finite-element experiment that nothing in the tree imports; the
+    # autosummary template leaves it out of the API reference too.
+    r"volumential\.qbfem",
+]
+coverage_show_missing_items = True
+coverage_write_headline = True
+coverage_statistics_to_report = True
+coverage_statistics_to_stdout = True
+
+
 # -- intersphinx ----------------------------------------------------------
 
 intersphinx_mapping = {

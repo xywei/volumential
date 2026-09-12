@@ -124,6 +124,29 @@ publishes no `objects.inv` at all (`mpmath`, `pyfmmlib`), or it publishes one
 that does not document the referenced object (`boxtree` no longer documents
 `boxtree.tools.DeviceDataRecord`, though its inventory is otherwise fine).
 
+### Docstring and API coverage
+
+Two different questions, and CI answers both in the `Documentation` job of
+`CI Full`, uploading the answers as a `docs-coverage-*` artifact.
+
+`sphinx-build -b coverage` asks whether every object of every imported module
+reaches a page of this site. It is at 100% and should stay there; a module that
+gets no page shows up here. It is *not* a docstring check — `undoc-members` is
+what puts the whole public surface on the API pages, and an object with no
+docstring still gets an entry and still counts as covered.
+
+`doc/tools/docstring_gaps.py` asks whether every public object *has* a
+docstring. It parses the tree with `ast`, so it needs no OpenCL stack, no
+import and no Sphinx, and runs anywhere:
+
+```bash
+python doc/tools/docstring_gaps.py
+```
+
+CI runs it with `--max-gaps`, which fails when the count rises. Lower the
+recorded number in the same commit that lowers the count; raise it only
+deliberately, and say why.
+
 ### Redirect stubs for the old flat URLs
 
 Before the 2026-09 restructure every page lived directly under the site root,

@@ -81,6 +81,27 @@ jobs:
 
           build_docs
 
+      # Two different questions; see the Development section of the site.
+      # ``-b coverage`` asks whether every object of every imported module
+      # reaches a page.  ``docstring_gaps.py`` asks whether every public object
+      # has a docstring, and ratchets: raise --max-gaps only deliberately.
+      - name: Docstring and API coverage
+        shell: micromamba-shell {0}
+        run: |
+          set -euo pipefail
+
+          sphinx-build -b coverage doc/source doc/build/coverage
+          python doc/tools/docstring_gaps.py --max-gaps 5 \
+            --output doc/build/coverage/docstring-gaps.txt
+
+      - name: Upload coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-coverage-${{ github.run_id }}-${{ github.run_attempt }}
+          path: doc/build/coverage/
+          if-no-files-found: warn
+
   full_accuracy:
     name: Full Accuracy Tests
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
