@@ -78,7 +78,13 @@ request that introduced it, which is the point of the job running there.
 ## `Docs Pages` — publishing the site
 
 `.github/workflows/docs-pages.yml` builds this site from `main` and deploys it
-to GitHub Pages. It has two jobs: `Build`, which runs the same
+to GitHub Pages. It runs on every push to `main`, and manually — a
+`workflow_dispatch` exists for the first publication, when there may be no new
+commit to trigger one. Both jobs are guarded by
+`if: github.ref == 'refs/heads/main'`, because a dispatch takes a ref and an
+unguarded one would publish a feature branch to the production site.
+
+It has two jobs: `Build`, which runs the same
 `sphinx-build -W --keep-going -n -b html` as `CI` and hands the output to
 `actions/upload-pages-artifact`, and `Deploy`, which calls
 `actions/deploy-pages`. The workflow is read-only by default and the two
