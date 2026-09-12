@@ -106,14 +106,20 @@ exclude = [
   "examples",
   "test",
 ]
-# A ratchet, not a target: 91 is 91.5% -- what the tree measures today --
-# rounded down, so a new undocumented public object fails the check.  Raise it
-# in the commit that earns it; lowering it is a deliberate edit that has to say
-# why.  The 36 that are missing today are 30 module docstrings and six objects:
-# the five Duffy quadrature kernels of ``NearFieldInteractionTable``, whose
+# A ratchet, not a target: the tree measures 91.53% today (389 of 425), and
+# 91.5 is that truncated to the tenth.  The decimal is load-bearing -- a
+# whole-number threshold would leave several objects of slack, because
+# interrogate rounds the measured percentage to as many decimals as the
+# threshold carries before comparing, and one new gap here costs 0.24 points.
+# At 91.5 a single new undocumented public object (91.29%, rounded to 91.3)
+# fails the check.  Raise the number in the commit that earns it; lowering it
+# is a deliberate edit that has to say why.
+#
+# The 36 that are missing today are 30 module docstrings and six objects: the
+# five Duffy quadrature kernels of ``NearFieldInteractionTable``, whose
 # contract cannot be read off the source, and the setter half of its ``data``
 # property, documented on the getter.
-fail-under = 91
+fail-under = 91.5
 verbose = 1
 
 [tool.pytest.ini_options]
