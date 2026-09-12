@@ -470,6 +470,12 @@ linkcheck_ignore = [
     # Spelled out rather than matched by host, so that the next Springer link
     # someone adds is still checked.
     r"https?://link\.springer\.com/10\.1007/BF00370482/?$",
+    # One OpenCL specification page, cited by ``volumential.symbolic``.  It
+    # answers a GitHub Actions runner with 403 (observed in the Documentation
+    # job on 2026-09-12) while resolving normally from a browser and from a
+    # developer machine.  Named exactly, so that another Khronos link is
+    # still checked.
+    r"https?://registry\.khronos\.org/OpenCL/sdk/1\.0/docs/man/xhtml/mathFunctions\.html$",
     # The sphinx-autobuild preview server, which exists only while a
     # contributor is running it.
     r"https?://(127\.0\.0\.1|localhost)(:\d+)?/?.*",

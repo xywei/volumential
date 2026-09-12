@@ -22,13 +22,22 @@ gets **none** of these checks. See
 | Type checking | `basedpyright -p pyproject.toml --level error` |
 | Testing (Linux) | the default pytest suite under a micromamba environment, with a wrapper timeout and a diagnostics artifact (`linux-pytest.log`, `pytest.xml`) uploaded on every outcome |
 | Examples (Smoke) | three examples under `VOLUMENTIAL_EXAMPLE_SMOKE=1` — `laplace2d.py`, `helmholtz2d.py`, `helmholtz3d.py` — plus several benchmark drivers in `--mode smoke` |
-| Documentation | this site: `sphinx-build -W --keep-going -n -b html`, then `-b linkcheck`, then the two coverage reports (`-b coverage` and `interrogate`). The built HTML is uploaded as a `docs-html-*` artifact and the reports as `docs-coverage-*`; the job installs `.[test,doc]` |
+| Documentation | this site: `sphinx-build -W --keep-going -n -b html`, then the two coverage reports (`-b coverage` and `interrogate`), then `-b linkcheck` last. The built HTML is uploaded as a `docs-html-*` artifact and the reports as `docs-coverage-*`; the job installs `.[test,doc]` |
 
 `PYOPENCL_CTX` and `PYOPENCL_TEST` are pinned to `portable:0` at the workflow
 level, so CI always runs on PoCL rather than on whatever enumerates first.
 The documentation job needs no device, but it does import `volumential`, so it
 uses the same micromamba environment as the rest: `pyopencl` and `loopy` have
 to be importable.
+
+The link check runs last on purpose: it is the only step whose outcome depends
+on hosts nobody here controls, so a rate-limited or unreachable third party
+cannot stop the deterministic checks from being reported. The URLs that cannot
+be checked from a runner at all — a publisher and an OpenCL specification page
+that answer a runner with 403, and the local `sphinx-autobuild` address — are
+named one by one in `linkcheck_ignore` in `conf.py`, each with its reason. They
+are spelled out as single URLs rather than as hosts, so that the next link to
+the same site is still checked.
 
 To review a change to the site rather than to its build, download the
 `docs-html-*` artifact from the run's **Artifacts** section and open
