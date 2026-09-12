@@ -270,10 +270,12 @@ sphinx-build -W --keep-going -b html doc/source doc/build/html
 # External links.
 sphinx-build -b linkcheck doc/source doc/build/linkcheck
 
-# What CI keeps as the docs-coverage artifact: is every object of every
-# imported module on a page, and does every public object have a docstring.
+# What CI checks and keeps as the docs-coverage artifact: is every module of
+# the package on a page, and does every public object have a docstring.
+# --max-gaps is the ratchet; CI also passes --output, which only names the
+# file inside the artifact.
 sphinx-build -W --keep-going -b coverage doc/source doc/build/coverage
-python doc/tools/docstring_gaps.py
+python doc/tools/docstring_gaps.py --max-gaps 5
 
 # Live preview at http://127.0.0.1:8000, rebuilding on save.
 sphinx-autobuild doc/source doc/build/html

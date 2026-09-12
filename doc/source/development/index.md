@@ -164,12 +164,14 @@ docstring. It parses the tree with `ast`, so it needs no OpenCL stack, no
 import and no Sphinx, and runs anywhere:
 
 ```bash
-python doc/tools/docstring_gaps.py
+python doc/tools/docstring_gaps.py --max-gaps 5
 ```
 
-CI runs it with `--max-gaps`, which fails when the count rises. Lower the
-recorded number in the same commit that lowers the count; raise it only
-deliberately, and say why.
+`--max-gaps` is the ratchet, and that is the number CI passes, so the command
+above gives the same verdict CI does; drop it to read the report without a
+verdict. Lower the recorded number in the same commit that lowers the count;
+raise it only deliberately, and say why. (CI also passes `--output`, which
+only names the file inside the artifact.)
 
 ### Sitemap and social metadata
 

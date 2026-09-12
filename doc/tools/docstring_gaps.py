@@ -79,10 +79,17 @@ def _is_property_mutator(node: ast.AST) -> bool:
     )
 
 
-def _scan_module(path: Path, module: str) -> tuple[list[Gap], int]:
-    """Undocumented public objects of one module, and its public-object count."""
+def _scan_module(
+    path: Path, module: str, report_root: Path
+) -> tuple[list[Gap], int]:
+    """Undocumented public objects of one module, and its public-object count.
+
+    Paths in the report are relative to *report_root*, the directory the
+    scanned package sits in, so that ``--package`` works outside this
+    repository as well as inside it.
+    """
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    relative = path.relative_to(REPO_ROOT).as_posix()
+    relative = path.relative_to(report_root).as_posix()
 
     gaps: list[Gap] = []
     total = 0
@@ -125,7 +132,7 @@ def collect(package_root: Path) -> tuple[list[Gap], int]:
         if any(part.startswith("_") for part in module.split(".")):
             continue
 
-        module_gaps, module_total = _scan_module(path, module)
+        module_gaps, module_total = _scan_module(path, module, package_root.parent)
         gaps.extend(module_gaps)
         total += module_total
 
