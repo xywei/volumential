@@ -15,8 +15,8 @@ module-level class and function, and every method of a public class, whose name
 does not begin with an underscore, in a module whose dotted name has no
 underscore-prefixed component.  A definition nested in module-level control
 flow -- the ``except ImportError`` fallback for an optional dependency, say --
-counts, because it binds a module attribute like any other.  The two halves of
-a property count once.
+counts, and so does a method defined inside class-level control flow: both bind
+an attribute like any other.  The two halves of a property count once.
 
 Usage::
 
@@ -86,21 +86,22 @@ def _is_ignored(module: str) -> bool:
     )
 
 
-def _module_level_definitions(body: list[ast.stmt]) -> Iterator[ast.stmt]:
-    """Yield the class and function definitions of a module body, in order.
+def _definitions(body: list[ast.stmt]) -> Iterator[ast.stmt]:
+    """Yield the class and function definitions of one suite, in source order.
 
-    Control flow is entered, because a class defined in an ``except
-    ImportError`` fallback binds a module attribute like any other; a function
-    or class body is not, because what it defines is not module-level.
+    Control flow is entered, because a class or method defined in an ``except
+    ImportError`` fallback or under a version check binds an attribute like any
+    other.  A function or class body is *not* entered: what it defines belongs
+    to that scope, not to the suite this was called on.
     """
     for node in body:
         if isinstance(node, (ast.ClassDef, *_FUNCTION_NODES)):
             yield node
         elif isinstance(node, _CONTROL_FLOW_NODES):
             for field in ("body", "orelse", "finalbody"):
-                yield from _module_level_definitions(getattr(node, field, []))
+                yield from _definitions(getattr(node, field, []))
             for handler in getattr(node, "handlers", []):
-                yield from _module_level_definitions(handler.body)
+                yield from _definitions(handler.body)
 
 
 def _is_property_mutator(node: ast.AST) -> bool:
@@ -137,13 +138,13 @@ def _scan_module(
         if ast.get_docstring(node) is None:
             gaps.append(Gap(relative, node.lineno, kind, name))
 
-    for node in _module_level_definitions(tree.body):
+    for node in _definitions(tree.body):
         if not _is_public(node.name):
             continue
 
         if isinstance(node, ast.ClassDef):
             record(node, "class", f"{module}.{node.name}")
-            for member in node.body:
+            for member in _definitions(node.body):
                 if not isinstance(member, _FUNCTION_NODES):
                     continue
                 if not _is_public(member.name) or _is_property_mutator(member):

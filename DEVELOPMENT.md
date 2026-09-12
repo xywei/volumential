@@ -279,8 +279,10 @@ sphinx-build -b linkcheck doc/source doc/build/linkcheck
 sphinx-build -q -W --keep-going -b coverage doc/source doc/build/coverage
 python doc/tools/docstring_gaps.py --max-gaps 5
 
-# Live preview at http://127.0.0.1:8000, rebuilding on save.
-sphinx-autobuild doc/source doc/build/html
+# Live preview at http://127.0.0.1:8000, rebuilding on save.  --watch is what
+# picks up an edit to a notebook: they live outside doc/source, and the staging
+# copy in conf.py only runs when a build starts.
+sphinx-autobuild --watch examples doc/source doc/build/html
 ```
 
 New pages are MyST Markdown (`.md`); the remaining reStructuredText pages are

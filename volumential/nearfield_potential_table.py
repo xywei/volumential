@@ -1233,9 +1233,12 @@ class NearFieldInteractionTable:
     def data(self):
         """The table entries, allocated full of NaN on first access.
 
-        Assigning to it replaces them with an unreduced, full-length entry
-        array: the orbit representative ids are dropped and the table stops
-        being marked symmetry-reduced.
+        Assigning to it drops the orbit representative ids and marks the table
+        as no longer symmetry-reduced, so the value is taken as the *full*
+        entry array from then on.  The setter only coerces the dtype; giving it
+        anything but a one-dimensional array of ``_full_entry_count()`` values
+        is a caller error that later entry lookups will discover, not something
+        it rejects.
         """
         if self._data is None:
             self._data = np.empty(self._full_entry_count(), dtype=self.dtype)

@@ -74,8 +74,10 @@ sphinx-build -W --keep-going -b html doc/source doc/build/html
 # External links.
 sphinx-build -b linkcheck doc/source doc/build/linkcheck
 
-# Live preview at http://127.0.0.1:8000, rebuilding on save.
-sphinx-autobuild doc/source doc/build/html
+# Live preview at http://127.0.0.1:8000, rebuilding on save.  --watch is what
+# picks up an edit to a notebook: they live outside doc/source, and the
+# staging copy in conf.py only runs when a build starts.
+sphinx-autobuild --watch examples doc/source doc/build/html
 ```
 
 ### Writing pages
