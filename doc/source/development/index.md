@@ -187,6 +187,13 @@ verdict. Lower the recorded number in the same commit that lowers the count;
 raise it only deliberately, and say why. (CI also passes `--output`, which
 only names the file inside the artifact.)
 
+Deciding what a public name ends up holding is more than reading `def`
+statements — a definition can be superseded, conditional, an `@overload` stub,
+a property half, or an assignment — so the rules live in
+`test/test_docstring_gaps.py`, one case per code shape, each a whole module
+with the number of gaps it should produce. Change the checker and that file
+says what you changed.
+
 ### Sitemap and social metadata
 
 `html_baseurl` is the GitHub Pages URL the site is heading for, and three

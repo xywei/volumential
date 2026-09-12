@@ -106,6 +106,17 @@ class Gap(NamedTuple):
     name: str
 
 
+class Known(NamedTuple):
+    """What a name defined in this suite holds, for resolving aliases."""
+
+    #: ``"class"`` or ``"function"``.
+    kind: str
+    #: Whether that definition carries a docstring.
+    documented: bool
+    #: The definition itself, so an alias of a class can be scanned.
+    node: ast.stmt | None
+
+
 class Binding(NamedTuple):
     """One statement binding one name."""
 
@@ -121,6 +132,9 @@ class Binding(NamedTuple):
     #: ``True``/``False`` when the statement settles it, ``None`` to read the
     #: docstring of *node* itself.
     documented: bool | None
+    #: For an alias, the definition it resolves to, whose body a class scan
+    #: needs; ``None`` otherwise.
+    target: ast.stmt | None = None
 
 
 # {{{ guards and decorators
@@ -163,18 +177,49 @@ def _is_typing_overload(node: ast.AST, overload_names: frozenset[str]) -> bool:
     )
 
 
-def _is_type_checking_guard(node: ast.stmt, guard_names: frozenset[str]) -> bool:
+def _typing_module_names(tree: ast.Module) -> frozenset[str]:
+    """The names this module binds to ``typing`` or ``typing_extensions``."""
+    names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names.update(
+                alias.asname or alias.name
+                for alias in node.names
+                if alias.name in {"typing", "typing_extensions"}
+            )
+    return frozenset(names)
+
+
+class Guards(NamedTuple):
+    """How this module can spell ``TYPE_CHECKING``."""
+
+    #: Names imported from a typing module, ``TYPE_CHECKING`` or an alias.
+    direct: frozenset[str]
+    #: Names a typing module itself is bound to, for the qualified form.
+    modules: frozenset[str]
+
+
+def _is_type_checking_guard(node: ast.stmt, guards: Guards) -> bool:
     """Is *node* an ``if TYPE_CHECKING:``, whose body never runs?
 
     ``typing.TYPE_CHECKING`` is ``False`` at run time, so nothing under it
     binds anything a reader can import.  Only the ``if`` body is type-only; the
     ``else`` runs and is scanned as usual.
+
+    The attribute form is accepted only when its base is a typing module this
+    file imported: a project's own ``flags.TYPE_CHECKING`` can perfectly well
+    be true, and its body is ordinary code.
     """
     if not isinstance(node, ast.If):
         return False
     test = node.test
-    return (isinstance(test, ast.Name) and test.id in guard_names) or (
-        isinstance(test, ast.Attribute) and test.attr == "TYPE_CHECKING"
+    if isinstance(test, ast.Name):
+        return test.id in guards.direct
+    return (
+        isinstance(test, ast.Attribute)
+        and test.attr == "TYPE_CHECKING"
+        and isinstance(test.value, ast.Name)
+        and test.value.id in guards.modules
     )
 
 
@@ -193,17 +238,46 @@ def _is_property_mutator(node: ast.AST) -> bool:
     return bool(_property_mutator_decorators(node))
 
 
-def _overrides_inherited_property(node: ast.AST) -> bool:
-    """Does *node* override one half of a property defined on another class?
+def _inherited_property_sources(node: ast.AST) -> list[tuple[str, str]]:
+    """The ``(class, property)`` pairs a qualified mutator of *node* names.
 
     ``@Base.value.setter`` builds a new property from ``Base.value``, so it
     keeps that property's getter and its docstring; ``@value.setter`` refers to
-    a property of this class body, which has to carry its own.
+    a property of this class body, which has to carry its own, and contributes
+    no pair.
+    """
+    pairs = []
+    for decorator in _property_mutator_decorators(node):
+        base = decorator.value
+        if (
+            isinstance(base, ast.Attribute)
+            and isinstance(base.value, ast.Name)
+        ):
+            pairs.append((base.value.id, base.attr))
+    return pairs
+
+
+def _overrides_inherited_property(
+    node: ast.AST, inherited: dict[str, dict[str, bool]]
+) -> bool | None:
+    """Is *node* an override of a property documented on another class?
+
+    ``None`` when *node* is not a qualified mutator at all.  When the base
+    class is defined in this file its getter settles the answer; when it is
+    not, the answer is ``True``, because a false gap breaks a ratchet while a
+    missed one only fails to tighten it.
     """
     decorators = _property_mutator_decorators(node)
-    return bool(decorators) and all(
-        isinstance(decorator.value, ast.Attribute) for decorator in decorators
-    )
+    pairs = _inherited_property_sources(node)
+    if not decorators or len(pairs) != len(decorators):
+        return None
+
+    documented = True
+    for class_name, property_name in pairs:
+        local = inherited.get(class_name)
+        if local is not None and property_name in local:
+            documented = documented and local[property_name]
+    return documented
 
 
 # }}}
@@ -213,7 +287,7 @@ def _overrides_inherited_property(node: ast.AST) -> bool:
 
 
 def _suites_of(
-    node: ast.stmt, suite: tuple, guard_names: frozenset[str]
+    node: ast.stmt, suite: tuple, guards: Guards
 ) -> Iterator[tuple[list, tuple]]:
     """Yield ``(statements, suite)`` for each branch of a control-flow node.
 
@@ -231,7 +305,7 @@ def _suites_of(
         return
 
     body_suite = (*suite, node.lineno, "body")
-    if not _is_type_checking_guard(node, guard_names):
+    if not _is_type_checking_guard(node, guards):
         yield node.body, body_suite
 
     if isinstance(node, (ast.Try, ast.TryStar)):
@@ -259,20 +333,49 @@ def _is_public(name: str) -> bool:
     return not name.startswith("_")
 
 
+def _has_docstring(node: ast.AST) -> bool:
+    """Does *node* carry a docstring with something in it?
+
+    ``ast.get_docstring`` normalises ``\"\"\"   \"\"\"`` to an empty string
+    rather than ``None``, and an empty docstring puts nothing on the page.
+    """
+    return bool((ast.get_docstring(node) or "").strip())
+
+
 # }}}
 
 
 # {{{ reading one suite into bindings
 
 
-def _assignment_targets(node: ast.stmt) -> list[ast.Name]:
-    """The plain names an assignment statement binds.
+def _names_in(target: ast.expr) -> Iterator[str]:
+    """The names a destructuring target binds, however deeply nested."""
+    if isinstance(target, ast.Name):
+        yield target.id
+    elif isinstance(target, ast.Starred):
+        yield from _names_in(target.value)
+    elif isinstance(target, (ast.List, ast.Tuple)):
+        for element in target.elts:
+            yield from _names_in(element)
 
-    A chained assignment binds each of its targets, and a tuple or attribute
-    target binds nothing this module tracks.
+
+def _assignment_targets(node: ast.stmt) -> tuple[list[str], list[str]]:
+    """The names an assignment binds, split by whether the value is theirs.
+
+    A chained assignment gives each of its plain targets the whole value, so
+    those can be classified.  A destructuring target takes the value apart, and
+    this module does not follow that -- those names are returned separately and
+    recorded as opaque, which is enough for them to replace what they shadow.
     """
     targets = [node.target] if isinstance(node, ast.AnnAssign) else node.targets
-    return [target for target in targets if isinstance(target, ast.Name)]
+    plain = [target.id for target in targets if isinstance(target, ast.Name)]
+    unpacked = [
+        name
+        for target in targets
+        if not isinstance(target, ast.Name)
+        for name in _names_in(target)
+    ]
+    return plain, unpacked
 
 
 def _descriptor_documentation(
@@ -288,12 +391,18 @@ def _descriptor_documentation(
     """
     if kind == "property":
         for keyword in call.keywords:
-            if keyword.arg == "doc":
-                return (
-                    isinstance(keyword.value, ast.Constant)
-                    and isinstance(keyword.value.value, str)
-                    and bool(keyword.value.value.strip())
-                )
+            if keyword.arg != "doc":
+                continue
+            explicit = keyword.value
+            if isinstance(explicit, ast.Constant) and explicit.value is None:
+                # ``doc=None`` is the default, and tells ``property`` to copy
+                # the getter's docstring rather than to have none.
+                break
+            return (
+                isinstance(explicit, ast.Constant)
+                and isinstance(explicit.value, str)
+                and bool(explicit.value.strip())
+            )
 
     wrapped = call.args[0] if call.args else None
     if wrapped is None:
@@ -302,7 +411,8 @@ def _descriptor_documentation(
                 wrapped = keyword.value
                 break
     if isinstance(wrapped, ast.Name):
-        return function_docstrings.get(wrapped.id, False)
+        known = function_docstrings.get(wrapped.id)
+        return known.documented if known is not None else False
     return False
 
 
@@ -310,7 +420,7 @@ def _assignment_bindings(
     node: ast.stmt,
     following: ast.stmt | None,
     suite: tuple,
-    function_docstrings: dict[str, bool],
+    function_docstrings: dict[str, Known],
     in_class: bool,
 ) -> Iterator[Binding]:
     """Read an assignment to a public name as a :class:`Binding`.
@@ -325,18 +435,24 @@ def _assignment_bindings(
     recorded as :data:`_OPAQUE` rather than dropped, and the name leaves the
     report.
     """
-    targets = _assignment_targets(node)
-    if not targets:
+    targets, unpacked = _assignment_targets(node)
+    if not targets and not unpacked:
         return
     if isinstance(node, ast.AnnAssign) and node.value is None:
         # ``public: Callable[..., None]`` annotates the name without binding
         # it, so whatever the name already held is still what it holds.
         return
 
+    for name in unpacked:
+        yield Binding(name, node, suite, _OPAQUE, True)
+    if not targets:
+        return
+
     value = node.value
     callable_kind = "method" if in_class else "function"
     kind: str | None = None
     from_value = False
+    target: ast.stmt | None = None
     if in_class and isinstance(value, ast.Call):
         function = value.func
         builtin = (
@@ -350,17 +466,19 @@ def _assignment_bindings(
                 value, kind, function_docstrings
             )
     elif isinstance(value, ast.Name) and value.id in function_docstrings:
-        # ``public = _implementation`` exposes the private function under a
-        # public name, and the public object's ``__doc__`` is that function's.
-        kind = callable_kind
-        from_value = function_docstrings[value.id]
+        # ``Public = _Implementation`` exposes a private definition under a
+        # public name, and the public object's ``__doc__`` is that one's.
+        known = function_docstrings[value.id]
+        kind = "class" if known.kind == "class" else callable_kind
+        from_value = known.documented
+        target = known.node
     elif isinstance(value, ast.Lambda):
         # A lambda is a function with no docstring to expose.
         kind = callable_kind
 
     if kind is None:
-        for target in targets:
-            yield Binding(target.id, node, suite, _OPAQUE, True)
+        for name in targets:
+            yield Binding(name, node, suite, _OPAQUE, True)
         return
 
     attribute_docstring = (
@@ -369,14 +487,14 @@ def _assignment_bindings(
         and isinstance(following.value.value, str)
     )
     documented = attribute_docstring or from_value
-    for target in targets:
-        yield Binding(target.id, node, suite, kind, documented)
+    for name in targets:
+        yield Binding(name, node, suite, kind, documented, target)
 
 
 def _bindings(
     body: Iterable[ast.stmt],
-    guard_names: frozenset[str],
-    function_docstrings: dict[str, bool],
+    guards: Guards,
+    function_docstrings: dict[str, Known],
     *,
     in_class: bool,
     suite: tuple = (),
@@ -397,15 +515,15 @@ def _bindings(
             )
             yield Binding(node.name, node, suite, kind, None)
         elif isinstance(node, (*_CONTROL_FLOW_NODES, ast.Match)):
-            branches = list(_suites_of(node, suite, guard_names))
+            branches = list(_suites_of(node, suite, guards))
             for name in _rebound_by_every_branch(
-                node, branches, guard_names, function_docstrings, in_class
+                node, branches, guards, function_docstrings, in_class
             ):
                 yield Binding(name, node, suite, _SHADOW, None)
             for statements_of_branch, branch in branches:
                 yield from _bindings(
                     statements_of_branch,
-                    guard_names,
+                    guards,
                     function_docstrings,
                     in_class=in_class,
                     suite=branch,
@@ -423,8 +541,8 @@ def _bindings(
 def _rebound_by_every_branch(
     node: ast.stmt,
     branches: list[tuple[list, tuple]],
-    guard_names: frozenset[str],
-    function_docstrings: dict[str, bool],
+    guards: Guards,
+    function_docstrings: dict[str, Known],
     in_class: bool,
 ) -> set[str]:
     """Names that an exhaustive ``if``/``else`` rebinds whichever way it goes.
@@ -437,83 +555,139 @@ def _rebound_by_every_branch(
     """
     if not isinstance(node, ast.If) or not node.orelse:
         return set()
-    if _is_type_checking_guard(node, guard_names):
+    if _is_type_checking_guard(node, guards):
         return set()
 
     per_branch = [
-        {
-            binding.name
-            for binding in _bindings(
-                statements,
-                guard_names,
-                function_docstrings,
-                in_class=in_class,
-                suite=branch,
-            )
-        }
+        _definitely_bound(
+            statements, guards, function_docstrings, in_class, branch
+        )
         for statements, branch in branches
     ]
     return set.intersection(*per_branch) if per_branch else set()
 
 
+def _definitely_bound(
+    statements: Iterable[ast.stmt],
+    guards: Guards,
+    function_docstrings: dict[str, Known],
+    in_class: bool,
+    suite: tuple,
+) -> set[str]:
+    """Names this suite binds on *every* path through it.
+
+    A binding inside a conditional that may not run tells us nothing: the name
+    can still hold what it held before.  So only statements that always execute
+    count -- a definition or assignment in the suite itself, the body of a
+    ``with``, the ``finally`` of a ``try``, and an ``if`` with an ``else``
+    where both arms bind the name.
+    """
+    bound: set[str] = set()
+    for node in statements:
+        if isinstance(node, (ast.ClassDef, *_FUNCTION_NODES)):
+            bound.add(node.name)
+        elif isinstance(node, (ast.AnnAssign, ast.Assign)):
+            bound.update(
+                binding.name
+                for binding in _assignment_bindings(
+                    node, None, suite, function_docstrings, in_class
+                )
+            )
+        elif isinstance(node, ast.With):
+            bound |= _definitely_bound(
+                node.body, guards, function_docstrings, in_class, suite
+            )
+        elif isinstance(node, (ast.Try, ast.TryStar)):
+            bound |= _definitely_bound(
+                node.finalbody, guards, function_docstrings, in_class, suite
+            )
+        elif (
+            isinstance(node, ast.If)
+            and node.orelse
+            and not _is_type_checking_guard(node, guards)
+        ):
+            bound |= _definitely_bound(
+                node.body, guards, function_docstrings, in_class, suite
+            ) & _definitely_bound(
+                node.orelse, guards, function_docstrings, in_class, suite
+            )
+    return bound
+
+
 def _function_documentation(
-    body: Iterable[ast.stmt], guard_names: frozenset[str]
-) -> dict[str, bool]:
-    """Whether each function defined in one suite has a docstring, by name.
+    body: Iterable[ast.stmt], guards: Guards
+) -> dict[str, Known]:
+    """What each name defined in one suite holds, for resolving aliases.
 
     Private names are included, because that is what a descriptor's getter or
     an aliased implementation usually is, and a name defined in two surviving
     branches counts as documented only when both are.
     """
-    known = _function_documentation_pass(body, guard_names, {})
     # ``_alias = _impl`` then ``public = _alias``: the second assignment can
-    # only be read as a function once the first one has been.  Two names is
-    # already an unusual chain, so a handful of passes is ample, and the loop
-    # stops as soon as nothing new is learned.
-    for _ in range(4):
-        wider = _function_documentation_pass(body, guard_names, known)
+    # only be read as a function once the first one has been, so sweep until
+    # nothing new is learned.  Each sweep can only add names or turn one from
+    # documented to not, and there are finitely many, so this terminates.
+    known: dict[str, Known] = {}
+    while True:
+        wider = _function_documentation_pass(body, guards, known)
         if wider == known:
-            break
+            return known
         known = wider
-    return known
 
 
 def _function_documentation_pass(
     body: Iterable[ast.stmt],
-    guard_names: frozenset[str],
-    function_docstrings: dict[str, bool],
-) -> dict[str, bool]:
+    guards: Guards,
+    function_docstrings: dict[str, Known],
+) -> dict[str, Known]:
     """One sweep of :func:`_function_documentation`."""
     body = list(body)
-    surviving: dict[str, dict[tuple, bool | None]] = {}
+    surviving: dict[str, dict[tuple, Known | None]] = {}
     for binding in _bindings(
-        body, guard_names, function_docstrings, in_class=False
+        body, guards, function_docstrings, in_class=False
     ):
         node = binding.node
-        if isinstance(node, ast.ClassDef) or binding.kind == _SHADOW:
+        if binding.kind == _SHADOW:
+            bucket = surviving.setdefault(binding.name, {})
+            for bound in list(bucket):
+                if _dominates(binding.suite, bound):
+                    del bucket[bound]
             continue
-        if isinstance(node, _FUNCTION_NODES):
-            documented: bool | None = ast.get_docstring(node) is not None
+        if isinstance(node, ast.ClassDef):
+            held: Known | None = Known("class", _has_docstring(node), node)
+        elif isinstance(node, _FUNCTION_NODES):
+            held = Known("function", _has_docstring(node), node)
         elif binding.kind == _OPAQUE:
-            # Rebound to something this pass cannot call a function -- a
-            # constant, an import, a call.  ``None`` drops the name from the
-            # result, so an alias of it is not read as a function and a
-            # descriptor built on it gets no docstring from it.
-            documented = None
+            # Rebound to something this pass cannot resolve -- a constant, an
+            # import, a call.  ``None`` drops the name from the result, so an
+            # alias of it is not read as a definition and a descriptor built on
+            # it gets no docstring from it.
+            held = None
         else:
             # A ``lambda``, or an alias an earlier pass resolved.
-            documented = binding.documented
+            held = Known(
+                "class" if binding.kind == "class" else "function",
+                bool(binding.documented),
+                binding.target,
+            )
         bucket = surviving.setdefault(binding.name, {})
         for bound in list(bucket):
             if _dominates(binding.suite, bound):
                 del bucket[bound]
-        bucket[binding.suite] = documented
+        bucket[binding.suite] = held
 
-    return {
-        name: all(states.values())
-        for name, states in surviving.items()
-        if None not in states.values()
-    }
+    resolved: dict[str, Known] = {}
+    for name, states in surviving.items():
+        held_states = list(states.values())
+        if None in held_states:
+            continue
+        first = held_states[0]
+        resolved[name] = Known(
+            first.kind,
+            all(state.documented for state in held_states),
+            first.node if len(held_states) == 1 else None,
+        )
+    return resolved
 
 
 # }}}
@@ -539,7 +713,9 @@ class Carrier(NamedTuple):
 
 
 def _carriers(
-    bindings: Iterable[Binding], overload_names: frozenset[str]
+    bindings: Iterable[Binding],
+    overload_names: frozenset[str],
+    inherited: dict[str, dict[str, bool]] | None = None,
 ) -> Iterator[Carrier]:
     """One :class:`Carrier` per public name a source-ordered stream binds.
 
@@ -559,6 +735,7 @@ def _carriers(
       gap unless all of them are documented, and the earliest that is not is
       what the report points at.
     """
+    inherited = inherited or {}
     groups: dict[str, dict[tuple, Binding]] = {}
     for binding in bindings:
         if not _is_public(binding.name):
@@ -612,16 +789,19 @@ def _carriers(
         if not carriers:
             # Mutators only.  Qualified ones inherit the base property's
             # docstring; unqualified ones have no getter here to take one from.
-            inherited = all(
-                _overrides_inherited_property(binding.node)
+            overrides = [
+                _overrides_inherited_property(binding.node, inherited)
                 for binding in candidates
+            ]
+            documented_override = all(
+                answer is not None and answer for answer in overrides
             )
             first_binding = candidates[0]
             yield Carrier(
                 first_binding.name,
                 first_binding.node,
                 first_binding.kind,
-                inherited,
+                documented_override,
                 surviving,
             )
             continue
@@ -643,7 +823,7 @@ def _is_documented(binding: Binding) -> bool:
     """Does the object *binding* creates have a docstring?"""
     if binding.documented is not None:
         return binding.documented
-    return ast.get_docstring(binding.node) is not None
+    return _has_docstring(binding.node)
 
 
 # }}}
@@ -668,6 +848,35 @@ def _is_ignored(module: str) -> bool:
     )
 
 
+def _local_property_documentation(
+    tree: ast.Module, guards: Guards
+) -> dict[str, dict[str, bool]]:
+    """Per class defined in this file, whether each property getter is documented.
+
+    Only the decorated form is read, which is the one a subclass overrides half
+    of.  A class this file does not define is simply absent, and
+    :func:`_overrides_inherited_property` then falls back to assuming the base
+    is documented.
+    """
+    found: dict[str, dict[str, bool]] = {}
+    for binding in _bindings(tree.body, guards, {}, in_class=False):
+        node = binding.node
+        if not isinstance(node, ast.ClassDef):
+            continue
+        properties = found.setdefault(node.name, {})
+        for member, _ in ((m.node, m.suite) for m in _bindings(
+            node.body, guards, {}, in_class=True
+        )):
+            if not isinstance(member, _FUNCTION_NODES):
+                continue
+            if any(
+                isinstance(decorator, ast.Name) and decorator.id == "property"
+                for decorator in member.decorator_list
+            ):
+                properties[member.name] = _has_docstring(member)
+    return found
+
+
 def _scan_module(
     path: Path, module: str, report_root: Path
 ) -> tuple[list[Gap], int]:
@@ -680,7 +889,10 @@ def _scan_module(
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     relative = path.relative_to(report_root).as_posix()
     overload_names = _imported_as(tree, "overload")
-    guard_names = _imported_as(tree, "TYPE_CHECKING") | {"TYPE_CHECKING"}
+    guards = Guards(
+        direct=_imported_as(tree, "TYPE_CHECKING"),
+        modules=_typing_module_names(tree),
+    )
 
     gaps: list[Gap] = []
     total = 0
@@ -691,22 +903,23 @@ def _scan_module(
         if not carrier.documented:
             gaps.append(Gap(relative, carrier.node.lineno, carrier.kind, name))
 
-    module_functions = _function_documentation(tree.body, guard_names)
+    inherited = _local_property_documentation(tree, guards)
+    module_functions = _function_documentation(tree.body, guards)
     module_bindings = list(
-        _bindings(tree.body, guard_names, module_functions, in_class=False)
+        _bindings(tree.body, guards, module_functions, in_class=False)
     )
-    for carrier in _carriers(module_bindings, overload_names):
+    for carrier in _carriers(module_bindings, overload_names, inherited):
         name = carrier.name
         record(carrier, f"{module}.{name}")
 
         # Any branch of a conditionally defined class can be the one that binds
         # the name, so the members of all of them are in play -- including when
         # another branch binds that name to a function and carries it.
-        class_bodies = [
-            binding.node.body
-            for binding in carrier.surviving
-            if isinstance(binding.node, ast.ClassDef)
-        ]
+        class_bodies = []
+        for binding in carrier.surviving:
+            definition = binding.target if binding.target else binding.node
+            if isinstance(definition, ast.ClassDef):
+                class_bodies.append(definition.body)
         if not class_bodies:
             continue
 
@@ -716,14 +929,14 @@ def _scan_module(
         # where the previous class's trailing assignment looks for its own.
         members: list[Binding] = []
         for index, class_body in enumerate(class_bodies):
-            function_docstrings = _function_documentation(class_body, guard_names)
+            function_docstrings = _function_documentation(class_body, guards)
             members.extend(
                 binding._replace(suite=(index, *binding.suite))
                 for binding in _bindings(
-                    class_body, guard_names, function_docstrings, in_class=True
+                    class_body, guards, function_docstrings, in_class=True
                 )
             )
-        for member in _carriers(members, overload_names):
+        for member in _carriers(members, overload_names, inherited):
             record(member, f"{module}.{name}.{member.name}")
 
     # Grouping by name can pick a carrier that is not the first binding of the
