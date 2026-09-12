@@ -83,6 +83,25 @@ class Carrier(NamedTuple):
     group: list[ast.stmt]
 
 
+class Descriptor(NamedTuple):
+    """A class member created by assigning a descriptor, not by ``def``."""
+
+    #: The assignment statement.
+    node: ast.stmt
+    #: What the report calls it: ``"property"``, ``"method"``.
+    kind: str
+    #: Whether the object it creates ends up with a docstring.
+    documented: bool
+
+
+#: Builtins whose result is a class member, and what to call the member.
+_DESCRIPTOR_KINDS = {
+    "property": "property",
+    "classmethod": "method",
+    "staticmethod": "method",
+}
+
+
 def _module_name(path: Path, package_root: Path) -> str:
     """Dotted module name of *path* inside the package rooted at *package_root*."""
     parts = list(path.relative_to(package_root.parent).with_suffix("").parts)
@@ -93,6 +112,16 @@ def _module_name(path: Path, package_root: Path) -> str:
 
 def _is_public(name: str) -> bool:
     return not name.startswith("_")
+
+
+def _dominates(suite: tuple, other: tuple) -> bool:
+    """Does a binding in *suite* overwrite one already made in *other*?
+
+    Only if *other* is nested inside it: a definition in the enclosing suite
+    runs whatever the branches did, so it replaces anything they bound.  Two
+    branches of one ``if`` are nested in neither, and both survive.
+    """
+    return other[: len(suite)] == suite
 
 
 def _bound_name(node: ast.stmt) -> str:
@@ -191,38 +220,82 @@ def _is_property_mutator(node: ast.AST) -> bool:
     )
 
 
-def _property_assignments(
-    body: Iterable[ast.stmt], suite: tuple = ()
-) -> dict[str, dict[tuple, tuple[ast.stmt, bool]]]:
-    """Public ``name = property(...)`` statements of a class body.
+def _descriptor_documentation(
+    call: ast.Call, kind: str, function_docstrings: dict[str, bool]
+) -> bool:
+    """Will the object *call* creates have a docstring?
 
-    A property can be declared by assignment rather than by decorating a
-    getter, and then no function definition carries its name at all.  Control
-    flow is traversed like everywhere else, and every alternative is kept: a
-    branch can declare the property with an attribute docstring and another
-    without.  The flag beside each statement says whether it is followed by a
-    bare string literal, which is the attribute-docstring convention autodoc
-    reads.
+    ``property`` takes an explicit ``doc`` and otherwise copies its getter's;
+    ``classmethod`` and ``staticmethod`` copy the function they wrap.  A
+    ``lambda`` has no docstring to copy, and a getter this module cannot
+    resolve to a definition in the same class body counts as undocumented,
+    which errs towards reporting a gap rather than hiding one.
+    """
+    if kind == "property":
+        for keyword in call.keywords:
+            if keyword.arg == "doc":
+                return (
+                    isinstance(keyword.value, ast.Constant)
+                    and isinstance(keyword.value.value, str)
+                    and bool(keyword.value.value.strip())
+                )
+
+    wrapped = call.args[0] if call.args else None
+    if wrapped is None:
+        for keyword in call.keywords:
+            if keyword.arg in {"fget", "f"}:
+                wrapped = keyword.value
+                break
+    if isinstance(wrapped, ast.Name):
+        return function_docstrings.get(wrapped.id, False)
+    return False
+
+
+def _descriptor_assignments(
+    body: Iterable[ast.stmt],
+    function_docstrings: dict[str, bool],
+    suite: tuple = (),
+) -> dict[str, dict[tuple, Descriptor]]:
+    """Public members a class body creates by assigning a descriptor.
+
+    ``value = property()``, ``value: property = property(...)``,
+    ``public = classmethod(_impl)`` and the ``staticmethod`` form all bind a
+    class member that no ``def`` carries the name of, so nothing else in this
+    module would see them.  Control flow is traversed as everywhere else, and
+    a later binding in the same suite replaces an earlier one.
+
+    A bare string literal following the assignment counts as documentation --
+    the attribute-docstring convention autodoc reads -- and so does whatever
+    :func:`_descriptor_documentation` finds in the call itself.
     """
     statements = list(body)
-    found: dict[str, dict[tuple, tuple[ast.stmt, bool]]] = {}
+    found: dict[str, dict[tuple, Descriptor]] = {}
 
-    def merge(other: dict[str, dict[tuple, tuple[ast.stmt, bool]]]) -> None:
+    def merge(other: dict[str, dict[tuple, Descriptor]]) -> None:
         for name, alternatives in other.items():
-            found.setdefault(name, {}).update(alternatives)
+            bindings = found.setdefault(name, {})
+            for other_suite in list(bindings):
+                for new_suite in alternatives:
+                    if _dominates(new_suite, other_suite):
+                        del bindings[other_suite]
+                        break
+            bindings.update(alternatives)
 
     for index, node in enumerate(statements):
         if isinstance(node, _CONTROL_FLOW_NODES):
             for field in ("body", "orelse", "finalbody"):
                 merge(
-                    _property_assignments(
-                        getattr(node, field, []), (*suite, node.lineno, field)
+                    _descriptor_assignments(
+                        getattr(node, field, []),
+                        function_docstrings,
+                        (*suite, node.lineno, field),
                     )
                 )
             for handler_index, handler in enumerate(getattr(node, "handlers", [])):
                 merge(
-                    _property_assignments(
+                    _descriptor_assignments(
                         handler.body,
+                        function_docstrings,
                         (*suite, node.lineno, "handler", handler_index),
                     )
                 )
@@ -230,8 +303,10 @@ def _property_assignments(
         if isinstance(node, ast.Match):
             for case_index, case in enumerate(node.cases):
                 merge(
-                    _property_assignments(
-                        case.body, (*suite, node.lineno, "case", case_index)
+                    _descriptor_assignments(
+                        case.body,
+                        function_docstrings,
+                        (*suite, node.lineno, "case", case_index),
                     )
                 )
             continue
@@ -246,11 +321,16 @@ def _property_assignments(
             continue
         if not isinstance(value, ast.Call):
             continue
+
         function = value.func
-        is_property = (
-            isinstance(function, ast.Name) and function.id == "property"
-        ) or (isinstance(function, ast.Attribute) and function.attr == "property")
-        if not is_property:
+        if isinstance(function, ast.Name):
+            builtin = function.id
+        elif isinstance(function, ast.Attribute):
+            builtin = function.attr
+        else:
+            continue
+        kind = _DESCRIPTOR_KINDS.get(builtin)
+        if kind is None:
             continue
 
         following = statements[index + 1] if index + 1 < len(statements) else None
@@ -258,71 +338,90 @@ def _property_assignments(
             isinstance(following, ast.Expr)
             and isinstance(following.value, ast.Constant)
             and isinstance(following.value.value, str)
-        )
-        # A later assignment in the same suite replaces an earlier one.
-        found.setdefault(target.id, {})[suite] = (node, documented)
+        ) or _descriptor_documentation(value, kind, function_docstrings)
+
+        merge({target.id: {suite: Descriptor(node, kind, documented)}})
     return found
 
 
 def _carriers(
     nodes: Iterable[tuple[ast.stmt, tuple]],
     overload_names: frozenset[str],
-    property_assignments: (
-        dict[str, dict[tuple, tuple[ast.stmt, bool]]] | None
-    ) = None,
+    descriptors: dict[str, dict[tuple, Descriptor]] | None = None,
 ) -> Iterator[Carrier]:
-    """One ``(definition, always_a_gap)`` per public name a suite binds.
+    """One :class:`Carrier` per public name a suite binds.
 
     Several definitions can bind one name -- an ``@overload`` set, a branch
     that defines a name two ways, a property's getter and its setter -- and the
     docstring that matters is the one on whichever of them the reader ends up
-    with.  Two rules cover that:
+    with.  Four rules cover that:
 
     * a property takes its ``__doc__`` from its getter, never from a mutator,
       so a name bound only by mutators (a write-only ``value = property()`` and
       its setter) is a gap however well the setter is written;
     * an ``@overload`` stub loses to the implementation that follows the set;
-    * a definition rebound later in the same suite is gone; only the last
-      binding of each suite survives;
-    * of the definitions that remain, *any* of them can be the one a reader
-      imports -- alternative branches of a version check bind different ones on
-      different interpreters -- so the name is a gap unless they all carry a
-      docstring, assignments from *property_assignments* included, and the
-      earliest that does not is what the report points at.
+    * a binding is gone once a later one in the same suite, or in a suite that
+      encloses it, replaces it -- see :func:`_dominates`;
+    * of the bindings that remain, *any* of them can be the one a reader
+      imports, since alternative branches of a version check bind different
+      ones on different interpreters, so the name is a gap unless they all
+      carry a docstring, and the earliest that does not is what the report
+      points at.
 
-    *property_assignments* adds the properties a class body declares by
-    assignment rather than by decorating a getter, from
-    :func:`_property_assignments`; a name that has a getter takes its
-    documentation from the getter as usual.
+    *descriptors* adds the members a class body creates by assignment rather
+    than by ``def``, from :func:`_descriptor_assignments`; a ``def`` of the
+    same name that is not a property mutator supersedes them by the third rule.
     """
-    property_assignments = property_assignments or {}
-    # Keyed by suite, so that a rebinding in one suite keeps only its last
-    # definition while the branches of a conditional keep all of theirs.
-    groups: dict[str, dict[tuple, ast.stmt]] = {
-        name: {} for name in property_assignments
-    }
+    descriptors = descriptors or {}
+    # Keyed by suite, so a rebinding keeps only the last of its suite while the
+    # branches of a conditional keep all of theirs.
+    groups: dict[str, dict[tuple, ast.stmt]] = {}
+    kinds: dict[str, str] = {}
+    for name, alternatives in descriptors.items():
+        groups[name] = {suite: entry.node for suite, entry in alternatives.items()}
+        kinds[name] = next(iter(alternatives.values())).kind
+
+    def bind(name: str, suite: tuple, node: ast.stmt) -> None:
+        bucket = groups.setdefault(name, {})
+        for bound in list(bucket):
+            # ``("mutator", ...)`` keys are not suites and never dominated.
+            if isinstance(bound, tuple) and bound and bound[0] == "mutator":
+                continue
+            if _dominates(suite, bound):
+                del bucket[bound]
+        bucket[suite] = node
+
     for node, suite in nodes:
         if not _is_public(node.name):
             continue
-        bucket = groups.setdefault(node.name, {})
         if isinstance(node, _FUNCTION_NODES) and _is_property_mutator(node):
             # A mutator augments the property its getter created rather than
             # rebinding the name, so it must not displace that getter.
-            bucket[("mutator", suite, node.lineno)] = node
+            groups.setdefault(node.name, {})[("mutator", suite, node.lineno)] = node
         else:
-            bucket[suite] = node
+            bind(node.name, suite, node)
 
     for name, by_suite in groups.items():
         group = list(by_suite.values())
-        implementations = [
+        surviving_descriptors = {
+            suite: entry
+            for suite, entry in descriptors.get(name, {}).items()
+            if by_suite.get(suite) is entry.node
+        }
+        definitions = [
             node
             for node in group
+            if node not in {entry.node for entry in surviving_descriptors.values()}
+        ]
+        implementations = [
+            node
+            for node in definitions
             if not (
                 isinstance(node, _FUNCTION_NODES)
                 and _is_typing_overload(node, overload_names)
             )
         ]
-        candidates = implementations or group or []
+        candidates = implementations or definitions
         getters = [
             node
             for node in candidates
@@ -330,9 +429,10 @@ def _carriers(
                 isinstance(node, _FUNCTION_NODES) and _is_property_mutator(node)
             )
         ]
-        alternatives = list(property_assignments.get(name, {}).values())
+        alternatives = list(surviving_descriptors.values())
+
         undocumented = [
-            statement for statement, documented in alternatives if not documented
+            entry.node for entry in alternatives if not entry.documented
         ]
         undocumented += [
             node for node in getters if ast.get_docstring(node) is None
@@ -345,7 +445,7 @@ def _carriers(
         elif getters:
             yield Carrier(getters[-1], False, group)
         elif alternatives:
-            yield Carrier(alternatives[-1][0], False, group)
+            yield Carrier(alternatives[-1].node, False, group)
         else:
             yield Carrier(candidates[0], True, group)
 
@@ -372,8 +472,8 @@ def _scan_module(
         if isinstance(node, (ast.ClassDef, *_FUNCTION_NODES)):
             undocumented = always_a_gap or ast.get_docstring(node) is None
         else:
-            # A property declared by assignment carries no docstring node of
-            # its own; the carrier decided whether it is documented.
+            # A member created by assigning a descriptor carries no docstring
+            # node of its own; the carrier decided whether it is documented.
             undocumented = always_a_gap
         if undocumented:
             gaps.append(Gap(relative, node.lineno, kind, name))
@@ -398,28 +498,39 @@ def _scan_module(
         if not class_bodies:
             continue
 
-        # Property docstrings are positional, so each class body is scanned on
-        # its own: flattening them first would let one class's docstring sit
+        # Attribute docstrings are positional, so each class body is scanned
+        # on its own: flattening them first would let one class's docstring sit
         # where the previous class's trailing assignment looks for its own.
-        assignments: dict[str, dict[tuple, tuple[ast.stmt, bool]]] = {}
+        descriptors: dict[str, dict[tuple, Descriptor]] = {}
+        descriptor_kinds: dict[str, str] = {}
         for index, class_body in enumerate(class_bodies):
-            for assigned_name, alternatives in _property_assignments(
-                class_body, (index,)
+            # A descriptor can name a private getter, so every function of the
+            # body is in the lookup, not just the public ones.
+            function_docstrings = {
+                member.name: ast.get_docstring(member) is not None
+                for member, _ in _definitions(class_body)
+                if isinstance(member, _FUNCTION_NODES)
+            }
+            for assigned_name, alternatives in _descriptor_assignments(
+                class_body, function_docstrings, (index,)
             ).items():
-                assignments.setdefault(assigned_name, {}).update(alternatives)
+                descriptors.setdefault(assigned_name, {}).update(alternatives)
+                descriptor_kinds[assigned_name] = next(
+                    iter(alternatives.values())
+                ).kind
         methods = (
             (member, (index, suite))
             for index, class_body in enumerate(class_bodies)
             for member, suite in _definitions(class_body)
             if isinstance(member, _FUNCTION_NODES)
         )
-        for member in _carriers(methods, overload_names, assignments):
+        for member in _carriers(methods, overload_names, descriptors):
+            name = _bound_name(member.node)
             kind = (
                 "method"
                 if isinstance(member.node, _FUNCTION_NODES)
-                else "property"
+                else descriptor_kinds.get(name, "property")
             )
-            name = _bound_name(member.node)
             record(
                 member.node,
                 kind,

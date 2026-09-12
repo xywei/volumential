@@ -179,7 +179,7 @@ coverage_modules = ["volumential"]
 coverage_ignore_modules = [
     # A 2019 finite-element experiment that nothing in the tree imports; the
     # autosummary template leaves it out of the API reference too.
-    r"volumential\.qbfem",
+    r"volumential\.qbfem(\..*)?$",
     # Any module with an underscore-prefixed component.  Recursive autosummary
     # omits those, and ``doc/tools/docstring_gaps.py`` skips them, so without
     # this a private implementation module would be a missing-module warning
@@ -289,17 +289,24 @@ _NOTEBOOK_STAGE_DIR = Path(__file__).resolve().parent / "examples" / "notebooks"
 
 # Nothing is executed (``nb_execution_mode``), so a page shows the outputs the
 # notebook was committed with.  Today every notebook is committed stripped and
-# the largest is well under 100 KiB, but a notebook saved with its figures
-# would ship those bytes into the page, so above this size the staged copy
-# keeps the prose and the code and drops the outputs.  The file in
-# ``examples/`` is never modified.
+# the largest is well under 100 KiB, but a notebook saved with its figures --
+# or with an image pasted into a Markdown cell, which lands in that cell's
+# ``attachments`` -- would ship those bytes into the page, so above this size
+# the staged copy keeps the prose and the code and drops both payloads.  The
+# file in ``examples/`` is never modified.
 _MAX_STAGED_NOTEBOOK_BYTES = 2 * 1024 * 1024
 
 
-def _strip_notebook_outputs(text):
-    """Return *text*, a notebook document, with every code-cell output removed."""
+def _strip_notebook_payloads(text):
+    """Return *text*, a notebook document, with its heavy cell payloads removed.
+
+    Two of them, because either can be what made the file large: the outputs of
+    a code cell, and the ``attachments`` of a Markdown cell, which is where a
+    pasted image ends up.
+    """
     notebook = json.loads(text)
     for cell in notebook.get("cells", []):
+        cell.pop("attachments", None)
         if cell.get("cell_type") == "code":
             cell["outputs"] = []
             cell["execution_count"] = None
@@ -314,7 +321,7 @@ def _stage_example_notebooks(app):
     for source in sorted(_NOTEBOOK_SOURCE_DIR.glob("*.ipynb")):
         text = source.read_text(encoding="utf-8")
         if source.stat().st_size > _MAX_STAGED_NOTEBOOK_BYTES:
-            text = _strip_notebook_outputs(text)
+            text = _strip_notebook_payloads(text)
 
         target = _NOTEBOOK_STAGE_DIR / source.name
         # Write only on a real change: an unconditional write moves the mtime
