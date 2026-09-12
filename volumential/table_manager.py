@@ -797,8 +797,13 @@ class CahnHilliardKernel(ExpressionKernel):
 
     written in the Hankel form :math:`K_0(z) = \tfrac{\pi}{2}
     \mathrm{i}\, H^{(1)}_0(\mathrm{i}z)` that sumpy's Bessel callables
-    provide.  Degenerate coefficients, for which the two roots coincide, are
-    rejected in the constructor.
+    provide.
+
+    The constructor rejects near-degenerate coefficients, and the test is an
+    absolute one: :math:`\lvert \lambda_1^2 - \lambda_2^2 \rvert < 10^{-15}`
+    raises, which catches coincident roots and also genuinely distinct roots
+    whose separation is that small in absolute terms -- at coefficient scales
+    near :math:`10^{-16}`, say, where no pair of distinct roots passes.
     """
 
     init_arg_names = ("dim", "b", "c")

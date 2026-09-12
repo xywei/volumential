@@ -170,8 +170,11 @@ def _carriers(
     * a property takes its ``__doc__`` from its getter, never from a mutator,
       so a name bound only by mutators (a write-only ``value = property()`` and
       its setter) is a gap however well the setter is written;
-    * otherwise the last definition is the one that survives, and an
-      ``@overload`` stub loses to the implementation that follows the set.
+    * an ``@overload`` stub loses to the implementation that follows the set;
+    * of the definitions that remain, *any* of them can be the one a reader
+      imports -- alternative branches of a version check bind different ones on
+      different interpreters -- so the name is a gap unless they all carry a
+      docstring, and the first that does not is what the report points at.
     """
     groups: dict[str, list[ast.stmt]] = {}
     for node in nodes:
@@ -195,10 +198,17 @@ def _carriers(
                 isinstance(node, _FUNCTION_NODES) and _is_property_mutator(node)
             )
         ]
-        if getters:
-            yield getters[-1], False
-        else:
+        if not getters:
             yield candidates[0], True
+            continue
+
+        undocumented = [
+            node for node in getters if ast.get_docstring(node) is None
+        ]
+        if undocumented:
+            yield undocumented[0], True
+        else:
+            yield getters[-1], False
 
 
 def _scan_module(
