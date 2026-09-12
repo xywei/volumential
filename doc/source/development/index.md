@@ -176,7 +176,7 @@ It is *not* a docstring check. `undoc-members` is what puts the whole public
 surface on the API pages, and an object with no docstring still gets an entry
 there and still counts as covered.
 
-[`interrogate`](https://interrogate.readthedocs.io/) asks the other question:
+[`interrogate`](https://interrogate.readthedocs.io/en/latest/) asks the other question:
 does every public object *have* a docstring? It reads the syntax tree, so it
 needs no OpenCL stack, no import and no Sphinx, and runs anywhere:
 
