@@ -32,11 +32,11 @@ The documentation is configured `latest`-only.
 `doc/source/_static/switcher.json` carries a single `latest` entry and the
 theme's version switcher is wired to it, so publishing tagged versions later is
 a matter of adding entries rather than of changing the build. That entry points
-at the GitHub Pages URL, which does not serve the site yet — the deployment is
-the last phase of
-[#145](https://github.com/xywei/volumential/issues/145), and until it lands the
-published build is the one at <https://xiaoyu-wei.com/docs/volumential/>. The
-switcher is forward configuration, not a live index.
+at the GitHub Pages URL, which does not serve the site yet: the deploy workflow
+exists (`.github/workflows/docs-pages.yml`, see {doc}`ci`) but is inert until
+Pages is enabled for the repository, and until then the published build is the
+one at <https://xiaoyu-wei.com/docs/volumential/>. The switcher is forward
+configuration, not a live index.
 
 ## When tagging starts
 

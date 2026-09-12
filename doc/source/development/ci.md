@@ -1,7 +1,8 @@
 # CI and the review bots
 
-Two GitHub Actions workflows and two automated reviewers stand between a branch
-and `main`.
+Three GitHub Actions workflows and two automated reviewers stand between a
+branch and a published site: `CI` gates a pull request, `CI Full` carries the
+long jobs on `main`, and `Docs Pages` publishes this site.
 
 ## `CI` — pull requests targeting `main`
 
@@ -21,9 +22,18 @@ gets **none** of these checks. See
 | Type checking | `basedpyright -p pyproject.toml --level error` |
 | Testing (Linux) | the default pytest suite under a micromamba environment, with a wrapper timeout and a diagnostics artifact (`linux-pytest.log`, `pytest.xml`) uploaded on every outcome |
 | Examples (Smoke) | three examples under `VOLUMENTIAL_EXAMPLE_SMOKE=1` — `laplace2d.py`, `helmholtz2d.py`, `helmholtz3d.py` — plus several benchmark drivers in `--mode smoke` |
+| Documentation | this site: `sphinx-build -W --keep-going -n -b html`, then `-b linkcheck`, then the two coverage reports (`-b coverage` and `interrogate`). The built HTML is uploaded as a `docs-html-*` artifact and the reports as `docs-coverage-*`; the job installs `.[test,doc]` |
 
 `PYOPENCL_CTX` and `PYOPENCL_TEST` are pinned to `portable:0` at the workflow
 level, so CI always runs on PoCL rather than on whatever enumerates first.
+The documentation job needs no device, but it does import `volumential`, so it
+uses the same micromamba environment as the rest: `pyopencl` and `loopy` have
+to be importable.
+
+To review a change to the site rather than to its build, download the
+`docs-html-*` artifact from the run's **Artifacts** section and open
+`index.html`. It is built with the command the deployment uses, so it is what
+would go live; it is kept for 14 days.
 
 Note what the smoke job does **not** cover: `laplace3d.py`, `poisson3d.py`,
 `branched_flow_helmholtz2d.py` and the two `*_split_p_convergence.py` drivers
@@ -35,10 +45,15 @@ trigger. A change that breaks one of those is not caught before it reaches
 
 `.github/workflows/ci-full.yml` does not run on pull requests.
 
+The documentation build used to live here. It moved into `CI` in 2026-09, so
+that a broken page, a dead link or a docstring that fell off the API reference
+fails on the pull request that caused it rather than on `main`; `CI` also runs
+on pushes to `main` and on the weekly schedule, so nothing was given up by the
+move.
+
 | Job | What it does |
 | --- | --- |
 | Testing (macOS) | the suite on macOS |
-| Documentation | `sphinx-build` of this site, then the two coverage reports (`-b coverage` and `interrogate`) uploaded as a `docs-coverage-*` artifact; the job installs `.[test,doc]` |
 | Full Accuracy Tests | scheduled or manual only — collects **and** runs the `full_accuracy` marker |
 | Examples | the maintained examples at full settings, with a cached Laplace 3D table |
 
@@ -50,16 +65,54 @@ and accidental deselection surface instead of being mistaken for validation.
 ## Adding a documentation dependency
 
 Every new documentation dependency goes into the `doc` extra of
-`pyproject.toml`. The `Documentation` job of `CI Full` installs `.[test,doc]`,
-so anything in the base dependencies, the `test` extra or the `doc` extra is
-installed for it; only an extra that job does not select (`benchmark`,
-`fmmlib`, `gmsh_support`) is missing. The `doc` extra is where a documentation
-dependency belongs regardless, because it is what
-`uv sync --extra test --extra doc` gives a contributor locally.
+`pyproject.toml`. Both jobs that build this site — `Documentation` in `CI` and
+`Build` in `Docs Pages` — install `.[test,doc]`, so anything in the base
+dependencies, the `test` extra or the `doc` extra is installed for them; only
+an extra neither selects (`benchmark`, `fmmlib`, `gmsh_support`) is missing.
+The `doc` extra is where a documentation dependency belongs regardless, because
+it is what `uv sync --extra test --extra doc` gives a contributor locally.
 
-Note where the failure would surface: `CI Full` has no `pull_request` trigger,
-so a documentation dependency that is not installed fails on `main`, not on the
-pull request that introduced it.
+A dependency left out of the extra fails the `Documentation` job of the pull
+request that introduced it, which is the point of the job running there.
+
+## `Docs Pages` — publishing the site
+
+`.github/workflows/docs-pages.yml` builds this site from `main` and deploys it
+to GitHub Pages. It has two jobs: `Build`, which runs the same
+`sphinx-build -W --keep-going -n -b html` as `CI` and hands the output to
+`actions/upload-pages-artifact`, and `Deploy`, which calls
+`actions/deploy-pages`. The workflow asks for `pages: write` and
+`id-token: write` — the OIDC token the deploy action exchanges for a
+deployment — and serialises on a single `pages` concurrency group with
+`cancel-in-progress: false`, so two pushes queue rather than race and a deploy
+in flight is never cancelled half-way.
+
+The link check and the coverage reports are deliberately *not* repeated here.
+They gate a change in `CI`; a third-party host going down afterwards should not
+block the deployment of pages that already passed them.
+
+The workflow is **inert until Pages is enabled for the repository**, which is a
+one-click setting the maintainer owns: **Settings → Pages → Build and
+deployment → Source: `GitHub Actions`**. Until it is set, `Build` succeeds and
+`Deploy` fails with *Get Pages site failed*; nothing is published and no other
+check is affected. The workflow does not enable Pages for itself —
+`actions/configure-pages` can, with `enablement: true` and a token beyond
+`GITHUB_TOKEN`, and turning on a public site is not a decision a workflow
+should make.
+
+Once <https://xywei.github.io/volumential/> responds, three edits follow, and
+none of them is made in advance because each would point at a site that is not
+up yet:
+
+1. `doc/source/conf.py`: make the version switcher's `json_url` absolute
+   (`https://xywei.github.io/volumential/_static/switcher.json`), so that a
+   future tagged build reads the current index rather than its own frozen
+   copy, and drop the `linkcheck_ignore` entry for the Pages host.
+2. `README.md`: point the documentation link at the new site.
+3. The repository homepage field.
+
+`html_baseurl` in `conf.py` already names the Pages URL, so the `canonical`
+links, `sitemap.xml` and the OpenGraph metadata need no edit.
 
 ## The review bots
 

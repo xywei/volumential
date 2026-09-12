@@ -263,11 +263,15 @@ environment with the OpenCL stack (`pyopencl`, `loopy`) installed.
 # alone uninstalls the test extra.
 uv sync --extra test --extra doc
 
-# The build CI Full runs: -W makes every warning an error, --keep-going
-# reports all of them.  conf.py suppresses no warning class.
-sphinx-build -W --keep-going -b html doc/source doc/build/html
+# The build the Documentation job of CI runs on every pull request: -W makes
+# every warning an error, --keep-going reports all of them, -n (nitpicky) is
+# what makes an unresolvable cross-reference one.  conf.py sets nitpicky too
+# and suppresses no warning class.
+sphinx-build -W --keep-going -n -b html doc/source doc/build/html
 
-# External links.
+# External links.  The builder exits non-zero on a broken link by itself;
+# linkcheck_ignore in conf.py carries the few hosts that cannot be checked
+# from CI, with a reason each.
 sphinx-build -b linkcheck doc/source doc/build/linkcheck
 
 # What CI checks and keeps as the docs-coverage artifact.  Two questions.
