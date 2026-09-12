@@ -71,6 +71,17 @@ class Gap(NamedTuple):
     name: str
 
 
+class Carrier(NamedTuple):
+    """The definition that carries one public name's documentation."""
+
+    #: The definition the report points at.
+    node: ast.stmt
+    #: True when the name is a gap whatever docstring *node* carries.
+    always_a_gap: bool
+    #: Every definition that binds this name, the carrier included.
+    group: list[ast.stmt]
+
+
 def _module_name(path: Path, package_root: Path) -> str:
     """Dotted module name of *path* inside the package rooted at *package_root*."""
     parts = list(path.relative_to(package_root.parent).with_suffix("").parts)
@@ -157,9 +168,50 @@ def _is_property_mutator(node: ast.AST) -> bool:
     )
 
 
+def _property_assignments(
+    body: Iterable[ast.stmt],
+) -> dict[str, tuple[ast.stmt, bool]]:
+    """Public ``name = property(...)`` statements of a class body.
+
+    A property can be declared by assignment rather than by decorating a
+    getter, and then no function definition carries its name at all.  The
+    second element of each value says whether the statement is followed by a
+    bare string literal, which is the attribute-docstring convention autodoc
+    reads.
+    """
+    statements = list(body)
+    found: dict[str, tuple[ast.stmt, bool]] = {}
+    for index, node in enumerate(statements):
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        value = node.value
+        if not isinstance(target, ast.Name) or not _is_public(target.id):
+            continue
+        if not isinstance(value, ast.Call):
+            continue
+        function = value.func
+        is_property = (
+            isinstance(function, ast.Name) and function.id == "property"
+        ) or (isinstance(function, ast.Attribute) and function.attr == "property")
+        if not is_property:
+            continue
+
+        following = statements[index + 1] if index + 1 < len(statements) else None
+        documented = (
+            isinstance(following, ast.Expr)
+            and isinstance(following.value, ast.Constant)
+            and isinstance(following.value.value, str)
+        )
+        found[target.id] = (node, documented)
+    return found
+
+
 def _carriers(
-    nodes: Iterable[ast.stmt], overload_names: frozenset[str]
-) -> Iterator[tuple[ast.stmt, bool]]:
+    nodes: Iterable[ast.stmt],
+    overload_names: frozenset[str],
+    property_assignments: dict[str, tuple[ast.stmt, bool]] | None = None,
+) -> Iterator[Carrier]:
     """One ``(definition, always_a_gap)`` per public name a suite binds.
 
     Several definitions can bind one name -- an ``@overload`` set, a branch
@@ -175,13 +227,21 @@ def _carriers(
       imports -- alternative branches of a version check bind different ones on
       different interpreters -- so the name is a gap unless they all carry a
       docstring, and the first that does not is what the report points at.
+
+    *property_assignments* adds the properties a class body declares by
+    assignment rather than by decorating a getter, from
+    :func:`_property_assignments`; a name that has a getter takes its
+    documentation from the getter as usual.
     """
-    groups: dict[str, list[ast.stmt]] = {}
+    property_assignments = property_assignments or {}
+    groups: dict[str, list[ast.stmt]] = {
+        name: [] for name in property_assignments
+    }
     for node in nodes:
         if _is_public(node.name):
             groups.setdefault(node.name, []).append(node)
 
-    for group in groups.values():
+    for name, group in groups.items():
         implementations = [
             node
             for node in group
@@ -190,7 +250,7 @@ def _carriers(
                 and _is_typing_overload(node, overload_names)
             )
         ]
-        candidates = implementations or group
+        candidates = implementations or group or []
         getters = [
             node
             for node in candidates
@@ -199,16 +259,21 @@ def _carriers(
             )
         ]
         if not getters:
-            yield candidates[0], True
+            assignment = property_assignments.get(name)
+            if assignment is not None:
+                statement, documented = assignment
+                yield Carrier(statement, not documented, group)
+            else:
+                yield Carrier(candidates[0], True, group)
             continue
 
         undocumented = [
             node for node in getters if ast.get_docstring(node) is None
         ]
         if undocumented:
-            yield undocumented[0], True
+            yield Carrier(undocumented[0], True, group)
         else:
-            yield getters[-1], False
+            yield Carrier(getters[-1], False, group)
 
 
 def _scan_module(
@@ -230,30 +295,60 @@ def _scan_module(
     def record(node, kind: str, name: str, *, always_a_gap: bool = False) -> None:
         nonlocal total
         total += 1
-        if always_a_gap or ast.get_docstring(node) is None:
+        if isinstance(node, (ast.ClassDef, *_FUNCTION_NODES)):
+            undocumented = always_a_gap or ast.get_docstring(node) is None
+        else:
+            # A property declared by assignment carries no docstring node of
+            # its own; the carrier decided whether it is documented.
+            undocumented = always_a_gap
+        if undocumented:
             gaps.append(Gap(relative, node.lineno, kind, name))
 
-    for node, always_a_gap in _carriers(_definitions(tree.body), overload_names):
-        if isinstance(node, ast.ClassDef):
-            record(node, "class", f"{module}.{node.name}")
-            methods = (
-                member
-                for member in _definitions(node.body)
-                if isinstance(member, _FUNCTION_NODES)
-            )
-            for member, member_is_a_gap in _carriers(methods, overload_names):
-                record(
-                    member,
-                    "method",
-                    f"{module}.{node.name}.{member.name}",
-                    always_a_gap=member_is_a_gap,
-                )
-        else:
+    for carrier in _carriers(_definitions(tree.body), overload_names):
+        node = carrier.node
+        if not isinstance(node, ast.ClassDef):
             record(
                 node,
                 "function",
                 f"{module}.{node.name}",
-                always_a_gap=always_a_gap,
+                always_a_gap=carrier.always_a_gap,
+            )
+            continue
+
+        record(
+            node,
+            "class",
+            f"{module}.{node.name}",
+            always_a_gap=carrier.always_a_gap,
+        )
+
+        # Any branch of a conditionally defined class can be the one that
+        # binds the name, so the members of all of them are in play.
+        bodies = [
+            statement
+            for definition in carrier.group
+            if isinstance(definition, ast.ClassDef)
+            for statement in definition.body
+        ]
+        methods = (
+            member
+            for member in _definitions(bodies)
+            if isinstance(member, _FUNCTION_NODES)
+        )
+        for member in _carriers(
+            methods, overload_names, _property_assignments(bodies)
+        ):
+            kind = (
+                "method"
+                if isinstance(member.node, _FUNCTION_NODES)
+                else "property"
+            )
+            name = getattr(member.node, "name", None) or member.node.targets[0].id
+            record(
+                member.node,
+                kind,
+                f"{module}.{node.name}.{name}",
+                always_a_gap=member.always_a_gap,
             )
 
     # Grouping by name can pick a carrier that is not the first definition of

@@ -15,12 +15,15 @@ three environment overrides for its quadrature order, level count and
 multipole order. A small run is a correctness check, never a measurement — see
 {doc}`../benchmarks/index` for what a measurement has to record.
 
-**Near-field tables.** Every script writes its table cache to an SQLite file in
-the working directory, named in the table below. The *first* run of a script
-builds that table and is dominated by the build; later runs load it in
-milliseconds. Deleting the file, or running from a different directory, pays
-the build again. Which build path runs, and how long it takes, is the subject
-of {doc}`../user-guide/table-build-routing`.
+**Near-field tables.** Every script writes its table cache to an SQLite file
+named in the table below — in the working directory, except
+`branched_flow_helmholtz2d.py`, which puts it at
+`<--output-dir>/near_field_table.sqlite`. The *first* run of a script builds
+that table and is dominated by the build; later runs load it in milliseconds.
+Deleting the file, or running from a different directory (for the branched-flow
+script, passing a different `--output-dir`), pays the build again. Which build
+path runs, and how long it takes, is the subject of
+{doc}`../user-guide/table-build-routing`.
 
 ## At a glance
 
