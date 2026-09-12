@@ -275,7 +275,8 @@ sphinx-build -b linkcheck doc/source doc/build/linkcheck
 # the builder does not inspect them), and does every public object have a
 # docstring.
 # --max-gaps is the ratchet; CI also passes --output, which only names the
-# file inside the artifact.
+# file inside the artifact.  test/test_docstring_gaps.py pins what the checker
+# considers a public object, one case per code shape.
 # -q is load-bearing: an undocumented object is logged at info level unless
 # the app is quiet, and only a warning is what -W fails on.
 sphinx-build -q -W --keep-going -b coverage doc/source doc/build/coverage
