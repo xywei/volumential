@@ -462,12 +462,14 @@ linkcheck_ignore = [
     # .github/workflows/docs-pages.yml is inert until then.  Drop this entry
     # once the site responds.
     r"https://xywei\.github\.io/volumential/?.*",
-    # Publisher host behind bot protection.  The citation in
+    # One citation, not a host: the reference in
     # ``volumential.singular_integral_2d`` resolves from a browser and from a
     # developer machine, but academic publishers commonly answer a CI runner
     # with 403 or a challenge page, which linkcheck reports as broken.  The
     # URL is DOI-derived and stable, so there is nothing for a check to catch.
-    r"https?://link\.springer\.com/.*",
+    # Spelled out rather than matched by host, so that the next Springer link
+    # someone adds is still checked.
+    r"https?://link\.springer\.com/10\.1007/BF00370482/?$",
     # The sphinx-autobuild preview server, which exists only while a
     # contributor is running it.
     r"https?://(127\.0\.0\.1|localhost)(:\d+)?/?.*",

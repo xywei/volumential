@@ -81,9 +81,11 @@ request that introduced it, which is the point of the job running there.
 to GitHub Pages. It has two jobs: `Build`, which runs the same
 `sphinx-build -W --keep-going -n -b html` as `CI` and hands the output to
 `actions/upload-pages-artifact`, and `Deploy`, which calls
-`actions/deploy-pages`. The workflow asks for `pages: write` and
-`id-token: write` — the OIDC token the deploy action exchanges for a
-deployment — and serialises on a single `pages` concurrency group with
+`actions/deploy-pages`. The workflow is read-only by default and the two
+grants a deployment needs — `pages: write`, and `id-token: write` for the OIDC
+token the deploy action exchanges for one — sit on `Deploy` alone, so the job
+that runs the build cannot reach the Pages API. It serialises on a single
+`pages` concurrency group with
 `cancel-in-progress: false`, so two pushes queue rather than race and a deploy
 in flight is never cancelled half-way.
 

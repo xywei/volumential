@@ -25,13 +25,13 @@ on:
     branches: [ 'main' ]
   workflow_dispatch:
 
-# Least privilege plus exactly what a Pages deployment needs: ``pages: write``
-# to create the deployment, and ``id-token: write`` for the OIDC token
-# ``actions/deploy-pages`` exchanges for it.
+# Read-only by default.  The two grants a Pages deployment needs --
+# ``pages: write`` to create the deployment and ``id-token: write`` for the
+# OIDC token ``actions/deploy-pages`` exchanges for it -- are on the ``deploy``
+# job alone, so the job that runs the build (and with it every dependency's
+# setup code) cannot reach the Pages API or mint a token.
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 # One deployment at a time, and never cancel one in flight: a cancelled deploy
 # can leave the site half-updated.  Deliberately a single "pages" group rather
@@ -89,6 +89,10 @@ jobs:
     name: Deploy
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
