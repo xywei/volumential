@@ -11,6 +11,20 @@ for what will have to change when tagging starts.
 ### September 2026
 
 Documentation
+: [#152](https://github.com/xywei/volumential/pull/152) — build, link-check
+  and preview the site on every pull request through a `Documentation` CI job,
+  add the GitHub Pages deployment workflow, and retire the GitLab documentation
+  job ({doc}`development/ci`).
+: [#149](https://github.com/xywei/volumential/pull/149) — content hygiene: a
+  gallery page for the example scripts, the notebooks rendered without
+  execution, a sitemap and OpenGraph metadata, docstrings on six modules, and
+  docstring coverage reported by `sphinx.ext.coverage` and ratcheted by
+  `interrogate`.
+: [#148](https://github.com/xywei/volumential/pull/148) — information
+  architecture: the Diátaxis layout of this site, redirects for the old page
+  URLs, and `README.md` reduced to a landing page (reviewed as
+  [#147](https://github.com/xywei/volumential/pull/147), re-landed on `main`
+  as #148).
 : [#146](https://github.com/xywei/volumential/pull/146) — rebuild the
   documentation toolchain: `pydata-sphinx-theme`, MyST Markdown,
   `sphinx-copybutton`, `sphinx-design`, a recursive `autosummary` API tree, and
@@ -42,6 +56,11 @@ Tables and numerics
   ({doc}`design-notes/windowed-channels`).
 
 Infrastructure
+: [#150](https://github.com/xywei/volumential/pull/150) — follow upstream
+  `sumpy` `main`: its sympy-to-pymbolic mapper became sympy-only and its FFT-app
+  helper keyword-only, so the batched Duffy builders now fold symbol-free
+  scaling constants to literals and inherit sumpy's cached FFT-plan hook;
+  `sumpy` and `loopy` relocked.
 : [#141](https://github.com/xywei/volumential/pull/141) — restore CI on `main`
   (Python 3.12 test environments, `loopy` bounds check).
 : [#140](https://github.com/xywei/volumential/pull/140) — modernize the
