@@ -6,8 +6,9 @@ Code (including agentic sessions that implemented driver extensions, ran the
 benchmark drivers on the maintainers' compute pool and drafted the resulting
 documentation), and OpenAI GPT-5-series models through OpenCode. Pull requests
 are reviewed by the maintainer and by automated code-review services (OpenAI
-Codex and CodeRabbit). Every change is gated by the test suite and CI, and
-benchmark results carry metadata sidecars that pin the generating commit and
+Codex and CodeRabbit). Every change is gated by the test suite and CI before it
+reaches `main` (a pull request stacked on a parent branch gets that run when
+its stack lands), and benchmark results carry metadata sidecars that pin the generating commit and
 environment; the maintainers review and remain responsible for all code and
 claims in this repository.
 

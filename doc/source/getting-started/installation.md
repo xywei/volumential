@@ -48,7 +48,10 @@ cd volumential
 uv sync --extra test --extra doc
 ```
 
-Two lines there are load-bearing and both fail quietly if you skip them.
+Two lines there are load-bearing, and they fail differently if you skip them:
+without the `eval`, `micromamba activate` fails at once because the shell
+function does not exist yet; without `UV_PROJECT_ENVIRONMENT`, `uv` fails
+quietly and installs into a checkout-local `.venv` instead.
 
 `micromamba activate` is a shell function, not a binary, so a fresh shell has
 to evaluate the hook before it exists. `micromamba shell init -s bash` makes it

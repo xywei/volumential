@@ -277,6 +277,39 @@ def test_patching_the_legacy_validator_still_reaches_the_cached_wrapper(monkeypa
     assert calls == [16]
 
 
+def test_the_fft_plan_hook_is_sumpys_cached_one():
+    """The FFT plan must come from sumpy's memoizing hook.
+
+    This class used to reimplement ``opencl_fft_app`` as a bare call to
+    ``sumpy.tools.get_opencl_fft_app``, which is a copy of sumpy's body with
+    the ``memoize_in`` cache dropped: it rebuilt the loopy translation unit
+    or VkFFT plan on every FFT stage.  Inheriting also keeps us out of the
+    way of that signature, which inducer/sumpy@16e0e3c5 ("refactor fft
+    apps") turned keyword-only.
+    """
+    import inspect
+
+    from sumpy.fmm import SumpyTreeIndependentDataForWrangler
+
+    from volumential.wranglers.sumpy_backend import (
+        FPNDSumpyTreeIndependentDataForWrangler,
+    )
+
+    assert (
+        FPNDSumpyTreeIndependentDataForWrangler.opencl_fft_app
+        is SumpyTreeIndependentDataForWrangler.opencl_fft_app
+    )
+
+    inspect.signature(
+        FPNDSumpyTreeIndependentDataForWrangler.opencl_fft_app
+    ).bind(
+        object(),
+        shape=(4,),
+        dtype=np.dtype(np.complex128),
+        inverse=False,
+    )
+
+
 if __name__ == "__main__":
     import sys
 

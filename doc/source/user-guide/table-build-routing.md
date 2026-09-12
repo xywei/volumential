@@ -34,8 +34,10 @@ never a batched attempt looks exactly like a fast one in a default log.
 
 ## Every routing is recorded
 
-- The builder records `table.build_routing` — one of the four above — and, for
-  a fallback, `table.build_fallback_reason`. Both are persisted with the cached
+- The builder records `table.build_routing` — one of the four above for any
+  table built since routing recording exists; a payload cached before that
+  loads as `unknown`, a legacy state that says nothing about how it was built —
+  and, for a fallback, `table.build_fallback_reason`. Both are persisted with the cached
   payload, so a warm, cache-loaded table still reports how it was originally
   built (`volumential.opcounters.direct_build_routing`).
 - Seven drivers emit it as a `direct_build_routing` CSV column:

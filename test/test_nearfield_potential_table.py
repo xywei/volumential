@@ -2911,6 +2911,90 @@ def test_complex_exponential_rewriter_leaves_real_exponents_alone():
     assert rewriter(original) == original
 
 
+def _global_scaling_const_cases():
+    import math
+
+    from sumpy.kernel import (
+        BiharmonicKernel,
+        HelmholtzKernel,
+        LaplaceKernel,
+        YukawaKernel,
+    )
+
+    return [
+        (LaplaceKernel(2), -1 / (2 * math.pi)),
+        (LaplaceKernel(3), 1 / (4 * math.pi)),
+        (HelmholtzKernel(2), 0.25j),
+        (HelmholtzKernel(3), 1 / (4 * math.pi)),
+        (YukawaKernel(2), 0.25j),
+        (YukawaKernel(3), 1 / (4 * math.pi)),
+        (BiharmonicKernel(2), 1 / (8 * math.pi)),
+        (BiharmonicKernel(3), -1 / (8 * math.pi)),
+    ]
+
+
+def test_every_kernel_scaling_constant_maps_under_the_active_backend():
+    """The scaling constant must convert under whichever backend is active.
+
+    ``sumpy.symbolic.SympyToPymbolicMapper`` used to follow sumpy's chosen
+    backend; since inducer/sumpy@d543b743 it is :mod:`sympy`-only, and the
+    symengine ``Pi``/``Complex`` nodes these constants are made of raised
+    ``NotImplementedError`` there -- which sent every batched DuffyRadial
+    build into the (much slower) scalar per-entry fallback.
+    """
+    for kernel, expected in _global_scaling_const_cases():
+        scaling = npt.kernel_global_scaling_const_to_pymbolic(kernel)
+
+        # A literal, so the generated ``knl_scaling`` assignment stays a
+        # constant no matter how the upstream mappers shape the tree.
+        assert npt._is_numeric_constant(scaling), (str(kernel), scaling)
+        assert isinstance(scaling, complex) == isinstance(expected, complex), (
+            str(kernel),
+            scaling,
+        )
+        assert complex(scaling) == pytest.approx(expected, rel=1e-15, abs=0), (
+            str(kernel)
+        )
+
+
+def test_a_complex_scaling_constant_is_visible_to_the_rewrite():
+    """``I/4`` must reach the rewrite as a splittable imaginary constant."""
+    from sumpy.kernel import HelmholtzKernel
+
+    scaling = npt.kernel_global_scaling_const_to_pymbolic(HelmholtzKernel(2))
+
+    real_part, imag_part = npt._split_complex_expression(scaling)
+    assert npt._is_structural_zero(real_part)
+    assert imag_part == pytest.approx(0.25)
+
+
+def test_a_symbolic_scaling_constant_still_goes_through_the_mapper():
+    """A scaling that keeps a symbol cannot be folded, so it is mapped.
+
+    The elasticity kernels scale by ``-1/(4 pi mu)``; only the constant
+    case takes the folding shortcut.
+    """
+    import math
+
+    import sumpy.symbolic as sumpy_sym
+
+    expression = 1 / (4 * sumpy_sym.pi * sumpy_sym.Symbol("mu"))
+
+    class _KernelWithSymbolicScaling:
+        @staticmethod
+        def get_global_scaling_const():
+            return expression
+
+    scaling = npt.kernel_global_scaling_const_to_pymbolic(
+        _KernelWithSymbolicScaling()
+    )
+
+    assert not npt._is_numeric_constant(scaling)
+    assert _pymbolic_eval(scaling, {"mu": 2.0}) == pytest.approx(
+        1 / (8 * math.pi)
+    )
+
+
 def _fused_device_code(sumpy_kernel, dim, queue, *, n_entries=8, n_nodes=64):
     import loopy as lp
 

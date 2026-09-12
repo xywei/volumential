@@ -8,9 +8,10 @@ f(\boldsymbol{y})\,\mathrm{d}\boldsymbol{y}
 $$
 
 is not a particle sum. Where the target lies **inside** the source box the
-integrand is genuinely singular and no point quadrature converges on it at
-all; in the **neighbouring** boxes it is finite but near-singular, and point
-quadrature converges too slowly to be useful at the orders the method runs at.
+integrand is genuinely singular and the tensor-product point quadrature used
+for the far field does not resolve it; in the **neighbouring** boxes it is
+finite but near-singular, and that quadrature converges too slowly to be useful
+at the orders the method runs at.
 Volumential's answer to both is the same: split the domain by *distance in the
 tree* rather than by quadrature rule.
 
