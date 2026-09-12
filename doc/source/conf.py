@@ -440,9 +440,25 @@ def setup(app):
 
 linkcheck_timeout = 30
 linkcheck_retries = 2
+
+# The ``Documentation`` job of .github/workflows/ci.yml runs this builder on
+# every pull request, so an entry here is what keeps a host that cannot be
+# checked from failing an unrelated change.  Keep the list short and give each
+# entry a reason: a 404 that is muted here is a 404 a reader will hit.
 linkcheck_ignore = [
-    # Not published yet; the GitHub Pages deployment lands in a later phase.
+    # Not published yet; enabling GitHub Pages is the maintainer's step, and
+    # .github/workflows/docs-pages.yml is inert until then.  Drop this entry
+    # once the site responds.
     r"https://xywei\.github\.io/volumential/?.*",
+    # Publisher host behind bot protection.  The citation in
+    # ``volumential.singular_integral_2d`` resolves from a browser and from a
+    # developer machine, but academic publishers commonly answer a CI runner
+    # with 403 or a challenge page, which linkcheck reports as broken.  The
+    # URL is DOI-derived and stable, so there is nothing for a check to catch.
+    r"https?://link\.springer\.com/.*",
+    # The sphinx-autobuild preview server, which exists only while a
+    # contributor is running it.
+    r"https?://(127\.0\.0\.1|localhost)(:\d+)?/?.*",
 ]
 
 

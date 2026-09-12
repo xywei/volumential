@@ -56,55 +56,12 @@ jobs:
 
           test_py_project
 
-  docs:
-    name: Documentation
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: mamba-org/setup-micromamba@v2
-        with:
-          environment-file: .test-conda-env-py3.yml
-          environment-name: testing
-          cache-downloads: true
-          generate-run-shell: true
-      - name: Main Script
-        shell: micromamba-shell {0}
-        run: |
-          export PY_EXE=python
-
-          python -m pip install --upgrade pip
-          python -m pip install uv
-          uv pip install --system --editable ".[test,doc]"
-
-          curl -L -O https://tiker.net/ci-support-v0
-          . ./ci-support-v0
-
-          build_docs
-
-      # Two different questions; see the Development section of the site.
-      # ``-b coverage`` asks whether every object of every module of the
-      # package reaches a page, and writes them to python.txt.  ``interrogate``
-      # asks whether every public object has a docstring, and ratchets on the
-      # fail-under percentage recorded in pyproject.toml.
-      #
-      # ``-q`` is load-bearing, not tidiness: sphinx.ext.coverage logs an
-      # undocumented object at info level unless the app is quiet, in which
-      # case it logs a warning -- and only then does ``-W`` fail the job.
-      - name: Docstring and API coverage
-        shell: micromamba-shell {0}
-        run: |
-          set -euo pipefail
-
-          sphinx-build -q -W --keep-going -b coverage doc/source doc/build/coverage
-          interrogate -v volumential | tee doc/build/coverage/interrogate.txt
-
-      - name: Upload coverage reports
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: docs-coverage-${{ github.run_id }}-${{ github.run_attempt }}
-          path: doc/build/coverage/
-          if-no-files-found: warn
+  # The ``Documentation`` job moved to .github/workflows/ci.yml.  It is the
+  # same build plus a link check and an HTML artifact, and it runs where it is
+  # useful: on pull requests, which this workflow has no trigger for, and on
+  # pushes to main and the weekly schedule, which that workflow also has.
+  # Running it in both places would only build the site twice on main.  The
+  # published site is a third build, in .github/workflows/docs-pages.yml.
 
   full_accuracy:
     name: Full Accuracy Tests
