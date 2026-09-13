@@ -743,7 +743,7 @@ def run_benchmark(
 
     # ``backend`` is the request; this is what the ICD loader resolved, and
     # it is what a seconds column has to be attributed to.
-    run_provenance = collect_run_provenance(ctx)
+    run_provenance = collect_run_provenance(queue)
     print(resolved_device_line(run_provenance), flush=True)
 
     mixture = _source_mixture(source_alpha, source_center)

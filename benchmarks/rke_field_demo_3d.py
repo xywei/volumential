@@ -29,6 +29,8 @@ if str(_BENCH_DIR) not in sys.path:
 from _provenance import (  # noqa: E402
     collect_run_provenance,
     first_call_and_warm,
+    public_argv,
+    public_path,
     resolved_device_line,
     time_repeats,
 )
@@ -477,24 +479,11 @@ def _validate_full_order_convergence(rows: list[dict[str, Any]]) -> None:
             )
 
 
-def _public_path(path: Path) -> str:
-    path = Path(path)
-    try:
-        return str(path.resolve().relative_to(Path.cwd().resolve()))
-    except ValueError:
-        return path.name
-
-
-def _public_argv(argv: list[str]) -> list[str]:
-    result = []
-    for token in argv:
-        option, separator, value = token.partition("=")
-        candidate = value if separator else token
-        candidate_path = Path(candidate)
-        if candidate_path.is_absolute() or ".." in candidate_path.parts:
-            candidate = _public_path(Path(candidate))
-        result.append(option + separator + candidate if separator else candidate)
-    return result
+#: Both live in ``_provenance`` now, so every driver that writes a
+#: promotable sidecar redacts paths the same way.  The private names stay
+#: as aliases because this module's callers and tests use them.
+_public_path = public_path
+_public_argv = public_argv
 
 
 def run_benchmark(
@@ -522,7 +511,7 @@ def run_benchmark(
 
     # Say what the ICD loader resolved, not what --backend asked for: the
     # two differ, and a run's seconds cannot be attributed without it.
-    run_provenance = collect_run_provenance(ctx)
+    run_provenance = collect_run_provenance(queue)
     print(resolved_device_line(run_provenance), flush=True)
 
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -575,7 +564,9 @@ def run_benchmark(
             split=False,
             split_order=1,
         )
-        direct_results[lam] = (direct_potential, direct_wall_s, direct_costs)
+        direct_results[lam] = (
+            direct_potential, direct_wall_s, direct_samples_s, direct_costs
+        )
         tag = _lam_tag(lam)
         arrays[f"direct_potential_lam{tag}"] = direct_potential.real
         slice_fields[f"direct_lam{tag}"] = direct_potential.real
@@ -602,7 +593,12 @@ def run_benchmark(
         )
 
         for lam in yukawa_lam:
-            direct_potential, direct_wall_s, direct_costs = direct_results[lam]
+            (
+                direct_potential,
+                direct_wall_s,
+                direct_samples_s,
+                direct_costs,
+            ) = direct_results[lam]
             split_potential, split_wall_s, split_samples_s, _ = _run_path(
                 ctx=ctx,
                 queue=queue,

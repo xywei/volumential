@@ -353,7 +353,7 @@ def run_benchmark(
 
     # Say what the ICD loader resolved, not what --backend asked for: the
     # two differ, and a run's seconds cannot be attributed without it.
-    run_provenance = collect_run_provenance(ctx)
+    run_provenance = collect_run_provenance(queue)
     print(resolved_device_line(run_provenance), flush=True)
 
     mesh, bbox, q_points, q_weights, tree, traversal = _build_geometry(

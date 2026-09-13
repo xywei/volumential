@@ -1977,6 +1977,9 @@ class _FakeQueue:
     def __init__(self, device):
         self.device = device
 
+    def finish(self):
+        pass
+
 
 def test_run_provenance_shape_without_a_device(monkeypatch):
     module = _load_benchmark("_provenance")
@@ -1999,6 +2002,9 @@ def test_run_provenance_shape_without_a_device(monkeypatch):
     assert provenance["omp_num_threads"] == 30
     assert provenance["pocl_max_pthread_count"] == 30
     assert isinstance(provenance["pyvkfft_importable"], bool)
+    # a context is not a queue, and sumpy's FFT backend can only be asked
+    # of a queue -- "not determined" rather than a guess
+    assert provenance["sumpy_fft_backend"] is None
 
     # JSON serializable, because that is the only thing it is for
     json.dumps(provenance)
@@ -2048,6 +2054,53 @@ def test_thread_caps_distinguish_unset_from_set(monkeypatch):
     assert module.collect_run_provenance(_FakeDevice())[
         "omp_num_threads"
     ] == "4,2"
+
+
+def test_sumpy_fft_backend_is_not_guessed_from_the_import(monkeypatch):
+    """`pyvkfft` importing does not mean sumpy selected VkFFT.
+
+    sumpy also honours ``SUMPY_FFT_BACKEND``, refuses VkFFT on out-of-order
+    queues and refuses it on PoCL 7+, so the two fields answer different
+    questions and only the queue can settle the second one.
+    """
+    module = _load_benchmark("_provenance")
+
+    from_device = module.collect_run_provenance(_FakeDevice())
+    assert from_device["sumpy_fft_backend"] is None
+
+    from_queue = module.collect_run_provenance(_FakeQueue(_FakeDevice()))
+    # whatever sumpy answers for this queue, it is a name or "not
+    # determined" -- never the import flag echoed back
+    assert from_queue["sumpy_fft_backend"] is None or isinstance(
+        from_queue["sumpy_fft_backend"], str
+    )
+
+
+def test_public_paths_keep_infrastructure_out_of_a_sidecar(tmp_path, monkeypatch):
+    """A promoted sidecar must not publish a user name or a mount layout."""
+    module = _load_benchmark("_provenance")
+
+    monkeypatch.chdir(tmp_path)
+    inside = tmp_path / "results" / "field.csv"
+    assert module.public_path(inside) == str(Path("results") / "field.csv")
+    assert module.public_path(Path("/external/private/cache")) == "cache"
+
+    assert module.public_argv(["driver.py", f"--out={inside}"]) == [
+        "driver.py",
+        f"--out={Path('results') / 'field.csv'}",
+    ]
+    assert module.public_argv(["driver.py", "--out", "/external/private/x.csv"]) == [
+        "driver.py",
+        "--out",
+        "x.csv",
+    ]
+    # a token that is not an escaping path is left exactly as typed, so the
+    # recorded command still reproduces the run
+    assert module.public_argv(["driver.py", "--mode", "smoke"]) == [
+        "driver.py",
+        "--mode",
+        "smoke",
+    ]
 
 
 def test_resolved_device_line_names_what_answered():

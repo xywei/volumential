@@ -9,7 +9,9 @@ calls on its live OpenCL context. The sidecar (and `windowed_rke_sweep.py`'s
 config JSON) gains a top-level `run_provenance` block holding the **resolved**
 OpenCL platform, device, device type and driver version — not the requested
 `--backend` token — plus the host CPU model, the `OMP_NUM_THREADS` and
-`POCL_MAX_PTHREAD_COUNT` caps in force, and whether `pyvkfft` was importable.
+`POCL_MAX_PTHREAD_COUNT` caps in force, whether `pyvkfft` was importable, and
+which FFT backend sumpy actually selected (an importable `pyvkfft` is not
+enough: sumpy refuses VkFFT on PoCL 7+ and on out-of-order queues).
 Each of those drivers also prints one `RESOLVED-DEVICE` line on stdout before
 the work starts. Existing sidecar keys are unchanged; these are additions.
 

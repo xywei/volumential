@@ -49,6 +49,8 @@ import numpy as np
 
 from _provenance import (
     collect_run_provenance,
+    public_argv,
+    public_path,
     resolved_device_line,
 )
 from volumential.gaussian import write_json_metadata
@@ -3722,8 +3724,12 @@ def main() -> int:
     # asked for.  ``run_benchmark`` resolves the same device the same way.
     import pyopencl as cl
 
+    # A queue, not just the device: sumpy's FFT backend can only be
+    # determined from one, and it decides whether M2L runs a real FFT.  The
+    # transient context is dropped before ``run_benchmark`` builds its own.
+    _provenance_device = _select_opencl_device(cl, args.backend)
     run_provenance = collect_run_provenance(
-        _select_opencl_device(cl, args.backend)
+        cl.CommandQueue(cl.Context([_provenance_device]))
     )
     print(resolved_device_line(run_provenance), flush=True)
 
@@ -3739,10 +3745,12 @@ def main() -> int:
                 "mode": args.mode,
                 "dim": dim,
                 "backend": args.backend,
-                "command": {"argv": sys.argv, "cwd": str(Path.cwd())},
+                # Redacted: a sidecar is promoted next to its CSV, and a
+                # raw argv publishes a user name and a mount layout.
+                "command": {"argv": public_argv(sys.argv)},
                 "outputs": {
-                    "summary_csv": str(args.out),
-                    "metadata_json": str(metadata_out),
+                    "summary_csv": public_path(args.out),
+                    "metadata_json": public_path(metadata_out),
                 },
                 "row_count": row_count,
                 "gate_failed": gate_failed,
@@ -3786,8 +3794,11 @@ def main() -> int:
     # Write first, then report the far-field resolution check, so a long run
     # never loses its measurements to a failing diagnostic.
     write_csv(args.out, rows)
-    _write_metadata(len(rows), gate_failed=False)
+    # The far-field check is a gate too, so it has to be decided before the
+    # sidecar records a verdict: a run that exits 2 must not leave
+    # ``gate_failed: false`` behind for a consumer to read as a pass.
     failures = _far_field_resolution_failures(rows)
+    _write_metadata(len(rows), gate_failed=bool(failures))
     if failures:
         for message in failures:
             print(f"FAR-FIELD-UNRESOLVED: {message}")

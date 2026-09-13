@@ -14,9 +14,11 @@ command line after the fact:
   and ``OMP_NUM_THREADS`` / ``POCL_MAX_PTHREAD_COUNT`` decide how much of the
   host a run was allowed to use.
 * **Whether the FFT-accelerated multipole-to-local had a real FFT.**  sumpy
-  uses ``pyvkfft`` when it is importable and falls back to a loopy FFT --
-  several times the arithmetic -- when it is not.  That is a cost class, not
-  a detail.
+  uses VkFFT when it can and falls back to a loopy FFT -- several times the
+  arithmetic -- when it cannot.  That is a cost class, not a detail, and
+  "``pyvkfft`` is installed" does not settle it: sumpy also honours
+  ``SUMPY_FFT_BACKEND``, refuses VkFFT on an out-of-order queue, and refuses
+  it on PoCL 7 and later, which miscompiles it.
 
 Separately, a driver that reports one total for a timed solve or table build
 hides the largest single cost in a one-shot run: the first solve of a
@@ -38,6 +40,7 @@ import statistics
 import sys
 import time
 from collections.abc import Callable, Iterable
+from pathlib import Path
 from typing import Any
 
 
@@ -47,6 +50,8 @@ __all__ = (
     "collect_run_provenance",
     "first_call_and_warm",
     "opencl_provenance",
+    "public_argv",
+    "public_path",
     "resolved_device_line",
     "time_repeats",
 )
@@ -60,6 +65,7 @@ PROVENANCE_KEYS = (
     "omp_num_threads",
     "pocl_max_pthread_count",
     "pyvkfft_importable",
+    "sumpy_fft_backend",
 )
 
 #: Keys of the ``opencl`` sub-dict, in order.
@@ -142,8 +148,9 @@ def _pyvkfft_importable() -> bool:
     """Whether ``import pyvkfft`` succeeds in this process.
 
     Checked by import rather than by distribution metadata: an installed but
-    broken ``pyvkfft`` leaves sumpy on the loopy FFT fallback exactly as an
-    absent one does, and the flag is meant to record which arithmetic ran.
+    broken ``pyvkfft`` is as good as an absent one.  This is a *necessary*
+    condition for a real FFT, not a sufficient one -- what sumpy actually
+    selected is :func:`_sumpy_fft_backend`.
     """
     if "pyvkfft" in sys.modules:
         return True
@@ -156,6 +163,31 @@ def _pyvkfft_importable() -> bool:
         # device -- has the same consequence for the FFT that runs.
         return False
     return True
+
+
+def _looks_like_queue(source: Any) -> bool:
+    """Whether ``source`` is a command queue rather than a context/device."""
+    return hasattr(source, "device") and hasattr(source, "finish")
+
+
+def _sumpy_fft_backend(source: Any) -> str | None:
+    """Which FFT backend sumpy selects for ``source``, if it can be asked.
+
+    ``pyvkfft_importable`` is necessary but not sufficient: sumpy honours
+    ``SUMPY_FFT_BACKEND``, refuses VkFFT on an out-of-order queue, and
+    refuses it on PoCL 7 and later (which miscompiles it), so an importable
+    ``pyvkfft`` routinely still runs the loopy fallback.  This asks sumpy
+    itself, and returns ``None`` -- "not determined" -- when there is no
+    queue to ask about or sumpy does not expose the selector.
+    """
+    if not _looks_like_queue(source):
+        return None
+    try:
+        from sumpy.tools import _get_fft_backend
+
+        return str(_get_fft_backend(source).name)
+    except Exception:
+        return None
 
 
 # }}}
@@ -247,7 +279,9 @@ def collect_run_provenance(source: Any) -> dict[str, Any]:
     """Everything a promoted benchmark number needs about its machine.
 
     :arg source: a live :class:`pyopencl.Context`,
-        :class:`pyopencl.CommandQueue` or :class:`pyopencl.Device`.
+        :class:`pyopencl.CommandQueue` or :class:`pyopencl.Device`.  Pass the
+        **queue** where there is one: ``sumpy_fft_backend`` can only be
+        determined from a queue, and is ``None`` otherwise.
     :returns: a dict with the keys of :data:`PROVENANCE_KEYS`.  It is JSON
         serializable and carries no host name, user name or path, so it is
         safe to commit next to a CSV.
@@ -257,6 +291,7 @@ def collect_run_provenance(source: Any) -> dict[str, Any]:
     for key, variable in _THREAD_CAP_VARS:
         provenance[key] = _thread_cap(variable)
     provenance["pyvkfft_importable"] = _pyvkfft_importable()
+    provenance["sumpy_fft_backend"] = _sumpy_fft_backend(source)
     return provenance
 
 
@@ -276,6 +311,44 @@ def resolved_device_line(provenance: dict[str, Any]) -> str:
         f"device_type={opencl.get('device_type')} "
         f"driver_version={opencl.get('driver_version')!r}"
     )
+
+
+# }}}
+
+
+# {{{ keeping infrastructure out of a promotable sidecar
+
+
+def public_path(path) -> str:
+    """``path`` relative to the working directory, or just its basename.
+
+    A sidecar is promoted next to its CSV, so an absolute path in it
+    publishes a user name and a mount layout.  Anything outside the run's
+    own directory is reduced to a basename, which is all a reader needs.
+    """
+    path = Path(path)
+    try:
+        return str(path.resolve().relative_to(Path.cwd().resolve()))
+    except (OSError, ValueError):
+        return path.name
+
+
+def public_argv(argv: list[str]) -> list[str]:
+    """``argv`` with absolute and escaping paths reduced by :func:`public_path`.
+
+    Handles both ``--out /abs/path`` and ``--out=/abs/path``; a token that is
+    not a path outside the working directory is left exactly as typed, so the
+    recorded command still reproduces the run.
+    """
+    result = []
+    for token in argv:
+        option, separator, value = token.partition("=")
+        candidate = value if separator else token
+        candidate_path = Path(candidate)
+        if candidate_path.is_absolute() or ".." in candidate_path.parts:
+            candidate = public_path(candidate_path)
+        result.append(option + separator + candidate if separator else candidate)
+    return result
 
 
 # }}}

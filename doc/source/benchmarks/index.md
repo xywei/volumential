@@ -163,7 +163,8 @@ sidecar before has changed name or meaning.
   "cpu_model": "...",
   "omp_num_threads": 30,
   "pocl_max_pthread_count": 30,
-  "pyvkfft_importable": false
+  "pyvkfft_importable": false,
+  "sumpy_fft_backend": "LOOPY"
 }
 ```
 
@@ -180,9 +181,16 @@ sidecar before has changed name or meaning.
   force. `null` means the variable was unset, which is a different run from a
   cap of `1`; a value that is not a plain integer (`OMP_NUM_THREADS` accepts a
   per-nesting-level list) is recorded verbatim as a string.
-- `pyvkfft_importable` decides a cost class, not a detail: sumpy's
-  FFT-accelerated multipole-to-local uses `pyvkfft` when it is importable and
-  falls back to a loopy FFT — several times the arithmetic — when it is not.
+- `pyvkfft_importable` and `sumpy_fft_backend` are a cost class, not a
+  detail: sumpy's FFT-accelerated multipole-to-local runs a real FFT through
+  VkFFT or a loopy fallback with several times the arithmetic. The two fields
+  answer different questions, and only the second one is the answer.
+  `pyvkfft_importable` is necessary but **not sufficient** — sumpy also
+  honours `SUMPY_FFT_BACKEND`, refuses VkFFT on an out-of-order queue, and
+  refuses it on PoCL 7 and later because that miscompiles it, so an
+  importable `pyvkfft` routinely still runs `"LOOPY"`. `sumpy_fft_backend` is
+  what sumpy itself selected for the run's queue, and is `null` when there
+  was no queue to ask or sumpy did not expose the selector.
 
 Every one of those drivers also prints a single `RESOLVED-DEVICE` line on
 stdout as soon as the device is resolved, before the work starts, so a
@@ -192,8 +200,11 @@ multi-hour log says on its first lines what answered:
 RESOLVED-DEVICE platform='Portable Computing Language' platform_version='OpenCL 3.0 PoCL 7.0 ...' device='cpu-...' device_type=CPU driver_version='7.0'
 ```
 
-None of this carries a host name, user name or path, so a sidecar can be
-committed next to its CSV. `test/test_benchmark_helpers.py` pins the shape of
+None of this carries a host name, user name or path — and the sidecars that
+record a command redact it through the same module's `public_argv()` and
+`public_path()`, so an absolute output path becomes a basename rather than a
+user name and a mount layout. A sidecar can therefore be committed next to
+its CSV. `test/test_benchmark_helpers.py` pins the shape of
 the block against a mocked context, so it is checked on a machine with no
 OpenCL platform at all.
 
