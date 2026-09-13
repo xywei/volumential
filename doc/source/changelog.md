@@ -57,6 +57,16 @@ Tables and numerics
   ({doc}`design-notes/windowed-channels`).
 
 Infrastructure
+: [#157](https://github.com/xywei/volumential/pull/157) — three CI and
+  backend-portability fixes ([#151](https://github.com/xywei/volumential/issues/151)):
+  `set -euo pipefail` in the `Examples (Smoke)` job, which could only fail on
+  its last command and so reported a broken `helmholtz2d.py` green for weeks;
+  a branch-free `r**power * log(r + 1e-300)` in the Helmholtz split kernels, so
+  that no relational reaches sumpy's CSE and the split works on the symengine
+  backend as well as on sympy; and a source build of `pyfmmlib` in
+  `Testing (Linux)`, which puts the eight batched-P2M tests of
+  `test_fmmlib_batched_stages.py` under CI for the first time
+  ({doc}`development/ci`).
 : [#150](https://github.com/xywei/volumential/pull/150) — follow upstream
   `sumpy` `main`: its sympy-to-pymbolic mapper became sympy-only and its FFT-app
   helper keyword-only, so the batched Duffy builders now fold symbol-free
