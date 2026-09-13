@@ -258,11 +258,27 @@ html_theme_options = {
 }
 
 # Validate the committed switcher index ourselves, since the theme's remote
-# check is off: it must parse and carry the entry ``version_match`` names.
+# check is off: it must parse, every entry must carry the keys the theme's
+# browser code reads (``name``, ``version``, ``url``, each a non-empty string;
+# ``preferred`` optional and boolean), and one entry must match
+# ``version_match``.  This is the check that guards the first tagged entry
+# added per development/releases.md.
 with open(Path(__file__).parent / "_static" / "switcher.json", encoding="utf-8") as _f:
     _switcher_entries = json.load(_f)
+if not isinstance(_switcher_entries, list) or not _switcher_entries:
+    raise ValueError("doc/source/_static/switcher.json must be a non-empty list")
+for _index, _entry in enumerate(_switcher_entries):
+    if not isinstance(_entry, dict):
+        raise ValueError(f"switcher.json entry {_index} is not an object")
+    for _key in ("name", "version", "url"):
+        if not isinstance(_entry.get(_key), str) or not _entry[_key].strip():
+            raise ValueError(
+                f"switcher.json entry {_index} lacks a non-empty string {_key!r}"
+            )
+    if "preferred" in _entry and not isinstance(_entry["preferred"], bool):
+        raise ValueError(f"switcher.json entry {_index}: 'preferred' must be a boolean")
 if not any(
-    _entry.get("version") == html_theme_options["switcher"]["version_match"]
+    _entry["version"] == html_theme_options["switcher"]["version_match"]
     for _entry in _switcher_entries
 ):
     raise ValueError(
