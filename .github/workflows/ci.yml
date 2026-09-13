@@ -245,6 +245,11 @@ jobs:
       - name: Main Script
         shell: micromamba-shell {0}
         run: |
+          # Load-bearing: the shell setup-micromamba generates does not pass
+          # -e, so without this only the *last* command below decides the
+          # job's outcome and a failing example is reported green (#151).
+          set -euo pipefail
+
           export PY_EXE=python
           export VOLUMENTIAL_EXAMPLE_SMOKE=1
           export PYOPENCL_CTX="portable:0"
