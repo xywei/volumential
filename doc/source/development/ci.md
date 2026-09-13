@@ -108,28 +108,21 @@ The link check and the coverage reports are deliberately *not* repeated here.
 They gate a change in `CI`; a third-party host going down afterwards should not
 block the deployment of pages that already passed them.
 
-The workflow is **inert until Pages is enabled for the repository**, which is a
-one-click setting the maintainer owns: **Settings → Pages → Build and
-deployment → Source: `GitHub Actions`**. Until it is set, `Build` succeeds and
-`Deploy` fails with *Get Pages site failed*; nothing is published and no other
-check is affected. The workflow does not enable Pages for itself —
-`actions/configure-pages` can, with `enablement: true` and a token beyond
-`GITHUB_TOKEN`, and turning on a public site is not a decision a workflow
-should make.
+Pages has been enabled for the repository since 2026-09-13 (**Settings → Pages
+→ Build and deployment → Source: `GitHub Actions`**, a setting the maintainer
+owns), and the site is <https://xywei.github.io/volumential/>. The workflow
+does not enable Pages for itself — `actions/configure-pages` can, with
+`enablement: true` and a token beyond `GITHUB_TOKEN`, and turning on a public
+site is not a decision a workflow should make. If the setting is ever turned
+off again, `Build` still succeeds and `Deploy` fails with *Get Pages site
+failed*; nothing else is affected.
 
-Once <https://xywei.github.io/volumential/> responds, three edits follow, and
-none of them is made in advance because each would point at a site that is not
-up yet:
-
-1. `doc/source/conf.py`: make the version switcher's `json_url` absolute
-   (`https://xywei.github.io/volumential/_static/switcher.json`), so that a
-   future tagged build reads the current index rather than its own frozen
-   copy, and drop the `linkcheck_ignore` entry for the Pages host.
-2. `README.md`: point the documentation link at the new site.
-3. The repository homepage field.
-
-`html_baseurl` in `conf.py` already names the Pages URL, so the `canonical`
-links, `sitemap.xml` and the OpenGraph metadata need no edit.
+With the site live, the version switcher's `json_url` in `doc/source/conf.py`
+is the absolute `https://xywei.github.io/volumential/_static/switcher.json`
+(so a future tagged build reads the current index rather than its own frozen
+copy), `README.md` and the repository homepage point at the site, and
+`html_baseurl` names the same URL for the `canonical` links, `sitemap.xml` and
+the OpenGraph metadata.
 
 ## The review bots
 

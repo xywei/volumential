@@ -48,10 +48,11 @@ thing in seconds at reduced order. The
 
 ## Documentation
 
-The site is built from [`doc/source`](./doc/source). The currently published
-build is at <https://xiaoyu-wei.com/docs/volumential/>; a GitHub Pages
-deployment from `main` is tracked by
-[#145](https://github.com/xywei/volumential/issues/145).
+The site is published at <https://xywei.github.io/volumential/>, built from
+[`doc/source`](./doc/source) and deployed from `main` by the *Docs Pages*
+workflow on every merge. Every pull request gets a strict build and a
+downloadable HTML preview from the `Documentation` CI job. The earlier mirror at
+xiaoyu-wei.com is superseded by this site.
 
 - [Getting started][docs-getting-started] — install, a first volume potential,
   device selection
@@ -116,17 +117,17 @@ the Overseas Research Award.
 
 The project's name `volumential` [courtesy of Andreas Klöckner][volumential-name].
 
-[docs-install]: ./doc/source/getting-started/installation.md
-[docs-first]: ./doc/source/getting-started/first-volume-potential.md
-[docs-getting-started]: ./doc/source/getting-started/index.md
-[docs-user-guide]: ./doc/source/user-guide/index.md
-[docs-design-notes]: ./doc/source/design-notes/index.md
-[docs-benchmarks]: ./doc/source/benchmarks/index.md
-[docs-api]: ./doc/source/api/index.rst
-[docs-development]: ./doc/source/development/index.md
-[docs-testing]: ./doc/source/development/testing.md
-[docs-changelog]: ./doc/source/changelog.md
-[docs-ai]: ./doc/source/development/ai-assisted-development.md
+[docs-install]: https://xywei.github.io/volumential/getting-started/installation.html
+[docs-first]: https://xywei.github.io/volumential/getting-started/first-volume-potential.html
+[docs-getting-started]: https://xywei.github.io/volumential/getting-started/
+[docs-user-guide]: https://xywei.github.io/volumential/user-guide/
+[docs-design-notes]: https://xywei.github.io/volumential/design-notes/
+[docs-benchmarks]: https://xywei.github.io/volumential/benchmarks/
+[docs-api]: https://xywei.github.io/volumential/api/
+[docs-development]: https://xywei.github.io/volumential/development/
+[docs-testing]: https://xywei.github.io/volumential/development/testing.html
+[docs-changelog]: https://xywei.github.io/volumential/changelog.html
+[docs-ai]: https://xywei.github.io/volumential/development/ai-assisted-development.html
 [nsf]: https://www.nsf.gov/
 [hkust-math]: https://www.math.ust.hk/
 [hkust]: https://www.ust.hk/home
