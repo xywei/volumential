@@ -12,7 +12,7 @@ wrong is an order of magnitude rather than a few percent.
 | kernel and dimension | CPU OpenCL device | fp64 GPU |
 | --- | --- | --- |
 | 3D Helmholtz, high order, coincident source/target tree | **FMMLib**, with an OpenMP `pyfmmlib` | **sumpy** |
-| 3D Helmholtz, high order, distinct target array | **sumpy**, unless you interpolate yourself (see below) | **sumpy** |
+| 3D Helmholtz, high order, distinct target array | **sumpy** — FMMLib refuses this geometry | **sumpy** |
 | 3D Laplace | either; measure | **sumpy** |
 | 2D Laplace / Helmholtz | either; measure | **sumpy** |
 | Yukawa, any dimension | **sumpy** (FMMLib has no Yukawa) | **sumpy** |
@@ -159,16 +159,20 @@ belong in one table whatever recorded them.
   solve is still roughly three quarters of it. What changes is that M2M and
   L2L stop being free — they become roughly 19 % of the solve — so a profile
   taken before the switch does not describe the run after it.
-- **Distinct source and target arrays change the evaluation path, not just
-  the backend.** {func}`volumential.volume_fmm.drive_volume_fmm` runs its
-  automatic source-mode solve and interpolation onto the target array only
-  for a `FPNDSumpyExpansionWrangler`; an FMMLib wrangler skips that branch
-  and evaluates through the traversal as given. On such a geometry the two
-  wranglers are not doing the same computation, so their timings are not
-  comparable and their results need not agree. Either keep the
-  coincident-tree setup, or do the interpolation yourself before comparing.
+- **FMMLib requires a coincident source/target tree.** This is a refusal,
+  not a slower path. {func}`volumential.volume_fmm.drive_volume_fmm` runs its
+  automatic source-mode solve and interpolation onto a distinct target array
+  only for a `FPNDSumpyExpansionWrangler`; an FMMLib wrangler skips that
+  branch, reaches the List 1 stage with the traversal as given, and
+  `_compute_box_local_ids` raises `ValueError` there because table-based
+  near-field evaluation needs `tree.sources_are_targets`. So a
+  distinct-target run does not produce a different-but-valid answer — it
+  fails mid-solve. To use FMMLib on such a problem you have to run a
+  source-only solve on a coincident tree and interpolate to your targets
+  yourself, which is a different computation from the sumpy run and not
+  directly comparable to it.
 - **Check the OpenMP build.** Repeated because it is the single most common
-  way this measurement is mis-taken: without it, FMMLib is slower than sumpy
+  way this measurement is mistaken: without it, FMMLib is slower than sumpy
   here, not faster.
 
 ## How to decide for your own case

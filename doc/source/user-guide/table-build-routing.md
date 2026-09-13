@@ -93,10 +93,12 @@ operational strictness policy should not invalidate cached numerical data.
 
 ## Complex exponentials in the generated quadrature kernel
 
-The fused Duffy quadrature kernel rewrites every `exp(re + i*im)` into
-`exp(re) * (cos(im) + i*sin(im))` before code generation, so complex-valued
-kernels reach the device as real `exp`/`cos`/`sin` calls and never as
-`cdouble_exp`. `pyopencl` implements `cdouble_exp` with the OpenCL
+The fused Duffy quadrature kernel rewrites `exp(re + i*im)` into
+`exp(re) * (cos(im) + i*sin(im))` before code generation *wherever it can
+prove both halves are real doubles* — see "Why it is guarded" below, and note
+that an exponent it cannot prove keeps its `cdouble_exp`. For the kernels
+this table builds the rewrite applies, so complex-valued kernels reach the
+device as real `exp`/`cos`/`sin` calls. `pyopencl` implements `cdouble_exp` with the OpenCL
 `sincos(x, &cosx)` out-parameter builtin, which on the PoCL 7.0 / LLVM 19.1.7
 CPU driver costs about 200 ns per call against about 1.6 ns for a separate
 `sin`/`cos` pair; since the quadrature evaluates the kernel at every Duffy
