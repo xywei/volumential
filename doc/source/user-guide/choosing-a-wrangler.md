@@ -9,10 +9,16 @@ wrong is an order of magnitude rather than a few percent.
 
 ## The short version
 
+**Before reading the table: FMMLib requires a tree whose sources and targets
+coincide**, whatever the kernel or dimension. `_compute_box_local_ids` raises
+`ValueError` in the List 1 stage otherwise, and only a sumpy wrangler gets
+`drive_volume_fmm`'s automatic source-only solve and interpolation onto a
+distinct target array. Every "FMMLib" cell below therefore reads "sumpy" for
+a distinct-target traversal; see the caveats.
+
 | kernel and dimension | CPU OpenCL device | fp64 GPU |
 | --- | --- | --- |
-| 3D Helmholtz, high order, coincident source/target tree | **FMMLib**, with an OpenMP `pyfmmlib` | **sumpy** |
-| 3D Helmholtz, high order, distinct target array | **sumpy** — FMMLib refuses this geometry | **sumpy** |
+| 3D Helmholtz, high order | **FMMLib**, with an OpenMP `pyfmmlib` | **sumpy** |
 | 3D Laplace | either; measure | **sumpy** |
 | 2D Laplace / Helmholtz | either; measure | **sumpy** |
 | Yukawa, any dimension | **sumpy** (FMMLib has no Yukawa) | **sumpy** |
@@ -22,10 +28,13 @@ wrong is an order of magnitude rather than a few percent.
 The GPU column is sumpy everywhere for one reason: `pyfmmlib` is host
 Fortran, so choosing FMMLib on a GPU host moves the **far field** back onto
 the CPU and forfeits the acceleration that made the GPU worth selecting. The
-near field is unaffected either way — both wranglers share
-{mod}`volumential.list1`, and `FPNDFMMLibExpansionWrangler` still applies the
-near-field table on the device through `NearFieldFromCSR` — so a
-near-field-dominated problem loses less than a far-field-dominated one.
+near-field *kernel* is the same either way — both wranglers apply the table
+through `NearFieldFromCSR` in {mod}`volumential.list1` — but the FMMLib path
+does not keep sumpy's device residency around it: `drive_volume_fmm` brings
+the traversal and sources to the host for that wrangler, and each near-field
+call then uploads its inputs and downloads its result. Treat that as a
+shared kernel, not a shared end-to-end speedup; the 18 to 27x below is a
+sumpy-path measurement and the hybrid has not been measured.
 
 `FPNDFMMLibExpansionWrangler` covers 2D and 3D Laplace and Helmholtz and
 nothing else. Everywhere it does not reach, the question does not arise.
@@ -96,7 +105,11 @@ not be confused with it:
   still gets the parallel M2L above. Check by importing all four wrappers,
   as the installation page shows: the backend picks one from the equation
   and the dimension, so a successful 3D Laplace import does not rule out a
-  2D or Helmholtz fallback.
+  2D or Helmholtz fallback. That check covers **charge sources only**:
+  `_get_batched_formmp_routine()` returns `None` up front when
+  `use_dipoles` is set, which a `DirectionalSourceDerivative` configuration
+  supplying `dipole_vec` does, so a dipole run takes the per-box path (or
+  the inherited dipole routine) no matter what those four imports say.
 
 Neither announces itself, so a mis-provisioned environment is correct, slow,
 and indistinguishable from a correct one except by timing. Run both checks
@@ -114,11 +127,12 @@ committed CPU row to 2e-6 relative, and the solve's peak device memory is about
 
 The FFT-based M2L is therefore **not** a bottleneck on a GPU, and there is no
 reason to move a GPU run to FMMLib: its far-field stages are host Fortran, so
-they would take the 139x back off the table. The near-field table apply stays
-on the device under either wrangler — that stage is `NearFieldFromCSR` in
+they would take the 139x back off the table. The near-field table apply still
+runs on the device under either wrangler — `NearFieldFromCSR` in
 {mod}`volumential.list1`, which both share — so an FMMLib/GPU run is a hybrid
-that keeps the 18 to 27x near-field gain and gives up the far-field one, not
-a run with an idle GPU.
+rather than a run with an idle GPU, but it pays host round trips per
+near-field call that the sumpy path does not, and none of the numbers above
+were measured on it.
 
 ## First solve versus warm solve
 
