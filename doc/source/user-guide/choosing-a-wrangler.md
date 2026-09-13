@@ -19,8 +19,12 @@ wrong is an order of magnitude rather than a few percent.
 | any kernel sumpy can differentiate but `pyfmmlib` does not implement | sumpy — it is the only option | **sumpy** |
 
 The GPU column is sumpy everywhere for one reason: `pyfmmlib` is host
-Fortran. Choosing FMMLib on a GPU host moves the far field back onto the CPU
-and forfeits the acceleration that made the GPU worth selecting.
+Fortran, so choosing FMMLib on a GPU host moves the **far field** back onto
+the CPU and forfeits the acceleration that made the GPU worth selecting. The
+near field is unaffected either way — both wranglers share
+{mod}`volumential.list1`, and `FPNDFMMLibExpansionWrangler` still applies the
+near-field table on the device through `NearFieldFromCSR` — so a
+near-field-dominated problem loses less than a far-field-dominated one.
 
 `FPNDFMMLibExpansionWrangler` covers 2D and 3D Laplace and Helmholtz and
 nothing else. Everywhere it does not reach, the question does not arise.
@@ -94,8 +98,12 @@ committed CPU row to 2e-6 relative, and the solve's peak device memory is about
 57 GB, so the problem size and the card have to be matched deliberately.
 
 The FFT-based M2L is therefore **not** a bottleneck on a GPU, and there is no
-reason to move a GPU run to FMMLib: `pyfmmlib` is host Fortran and would give
-the GPU nothing to do.
+reason to move a GPU run to FMMLib: its far-field stages are host Fortran, so
+they would take the 139x back off the table. The near-field table apply stays
+on the device under either wrangler — that stage is `NearFieldFromCSR` in
+{mod}`volumential.list1`, which both share — so an FMMLib/GPU run is a hybrid
+that keeps the 18 to 27x near-field gain and gives up the far-field one, not
+a run with an idle GPU.
 
 ## First solve versus warm solve
 
