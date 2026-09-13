@@ -45,7 +45,24 @@ jobs:
         env:
           POCL_DEBUG: warning
         run: |
-          python -c "import pyopencl as cl; [print(p.name, p.version, [ (d.name, d.type, d.version) for d in p.get_devices()]) for p in cl.get_platforms()]"
+          python - <<'PYEOF'
+          import traceback
+
+          import pyopencl as cl
+
+          for platform in cl.get_platforms():
+              # Name the platform *before* enumerating it, and flush: if
+              # get_devices() is what aborts, a print that evaluates the
+              # device list first never reaches the log, and buffered output
+              # from earlier platforms is lost with the process.
+              print(platform.name, platform.version, flush=True)
+              try:
+                  for device in platform.get_devices():
+                      print("   ", device.name, device.type, device.version,
+                            flush=True)
+              except Exception:
+                  traceback.print_exc()
+          PYEOF
       - name: Compile and run one OpenCL kernel per CPU device (diagnostic)
         shell: micromamba-shell {0}
         continue-on-error: true
@@ -61,7 +78,17 @@ jobs:
 
           source = "kernel void k(global double *y){y[get_global_id(0)]=1.0;}"
           for platform in cl.get_platforms():
-              for device in platform.get_devices():
+              print(f"=== {platform.name!r}", flush=True)
+              # A platform whose ICD is present but unusable raises here,
+              # before the per-device try below; letting that end the step
+              # would hide every later platform, the Portable one the main
+              # test run selects included.
+              try:
+                  devices = platform.get_devices()
+              except Exception:
+                  traceback.print_exc()
+                  continue
+              for device in devices:
                   if not device.type & cl.device_type.CPU:
                       continue
                   print(f"--- {platform.name!r} / {device.name!r}", flush=True)
