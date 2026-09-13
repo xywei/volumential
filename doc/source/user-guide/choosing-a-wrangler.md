@@ -1,9 +1,13 @@
 # Choosing a wrangler
 
 {doc}`volume-fmm-workflow` describes the two far-field backends;
-this page says which one to pick. Nothing here changes a default: the
-drivers and the library still build `FPNDExpansionWrangler` unless you ask
-for something else. It exists because the right choice depends on the
+this page says which one to pick. Nothing here changes a default: every
+default is what it was. Most of them are sumpy — the library and the
+benchmark drivers build `FPNDExpansionWrangler` unless you ask for something
+else — but not all: `examples/branched_flow_helmholtz2d.py` defaults its
+*full* configuration to `fmm_backend="fmmlib"` (its smoke configuration stays
+on sumpy), so that example needs the `fmmlib` extra unless you pass
+`--fmm-backend sumpy`. Check the driver rather than assuming. It exists because the right choice depends on the
 kernel, the dimension *and* the device class, and the penalty for getting it
 wrong is an order of magnitude rather than a few percent.
 

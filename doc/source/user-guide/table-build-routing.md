@@ -96,9 +96,12 @@ operational strictness policy should not invalidate cached numerical data.
 The fused Duffy quadrature kernel rewrites `exp(re + i*im)` into
 `exp(re) * (cos(im) + i*sin(im))` before code generation *wherever it can
 prove both halves are real doubles* — see "Why it is guarded" below, and note
-that an exponent it cannot prove keeps its `cdouble_exp`. For the kernels
-this table builds the rewrite applies, so complex-valued kernels reach the
-device as real `exp`/`cos`/`sin` calls. `pyopencl` implements `cdouble_exp` with the OpenCL
+that an exponent it cannot prove keeps its `cdouble_exp`. The rewrite applies
+to the standard real-parameter kernels, which then reach the device as real
+`exp`/`cos`/`sin` calls; a caller-supplied `sumpy_knl` whose phase is not
+provably real — `HelmholtzKernel(dim, allow_evanescent=True)` is the case the
+suite pins — deliberately keeps `cdouble_exp` and does not get the speedup
+below. `pyopencl` implements `cdouble_exp` with the OpenCL
 `sincos(x, &cosx)` out-parameter builtin, which on the PoCL 7.0 / LLVM 19.1.7
 CPU driver costs about 200 ns per call against about 1.6 ns for a separate
 `sin`/`cos` pair; since the quadrature evaluates the kernel at every Duffy

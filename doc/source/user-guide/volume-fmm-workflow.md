@@ -202,9 +202,12 @@ sumpy one**, the default `auto_interpolate_targets=True` does the second step
 for you: it solves on the source modes, interpolates to `tree.targets`, and
 returns values in the requested target layout. Interpolating that result again
 is a shape error waiting to happen. The branch is guarded by
-`isinstance(expansion_wrangler, FPNDSumpyExpansionWrangler)`, so the FMMLib
-wrangler continues through the ordinary traversal and its output layout does
-not change.
+`isinstance(expansion_wrangler, FPNDSumpyExpansionWrangler)`, so an FMMLib
+wrangler does not take it — and does not reach an output layout either: it
+continues through the traversal as given and `_compute_box_local_ids` raises
+`ValueError` in the List 1 stage, because table-based near-field evaluation
+requires `tree.sources_are_targets`. A distinct-target run is a sumpy-only
+configuration.
 
 - {func}`volumential.volume_fmm.interpolate_volume_potential` evaluates a
   box-mesh potential at an arbitrary set of target points — the explicit form
