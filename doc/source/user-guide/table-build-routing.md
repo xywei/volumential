@@ -116,7 +116,8 @@ pre-Haswell — the backend cannot lower that to a hardware instruction and
 emits a call to the C library's *software* `fma`, at about 6.2 ns per element:
 18 of them predict 112 ns against the roughly 104 ns measured. `sin` and `cos`
 never enter the kernel library at all — they are clang builtins, vectorized
-and lowered to `libmvec` — which is why the pair costs under a nanosecond.
+and lowered to `libmvec` — which is why the pair costs the ~1.6 ns quoted
+above rather than 200.
 The ratio is about 146x on such a CPU, about 1x on the other CPU OpenCL
 runtime on the same machine, and about 1x on a GPU (both NVIDIA's runtime and
 PoCL's CUDA device compile `sincos` from the vendor's device library, and

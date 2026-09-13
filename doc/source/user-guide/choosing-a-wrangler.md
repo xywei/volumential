@@ -120,14 +120,13 @@ Two consequences:
   Amortize the code generation over many solves, or warm the compile cache,
   before either backend's per-solve speed decides anything.
 
-The drivers that write a JSON sidecar record the two separately, as
-`*_first_call_s` against `*_warm_s`, next to a `run_provenance` block naming
-the resolved device and the host CPU; {doc}`../benchmarks/index` documents
-both, and which driver carries which. The rest — `adaptive_timing.py` among
-them — discard an untimed warm-up and report only warm samples, so their
-first-call cost is not in a file at all and has to come from the paper
-repository's metadata wrapper. Either way, seconds from different device or
-CPU classes never belong in one table.
+What a given driver actually records is per driver, and
+{doc}`../benchmarks/index` is the authority on it — including which drivers
+write a sidecar at all, and which discard an untimed warm-up and report only
+warm samples. Read that page before quoting any of their seconds, and take
+the environment from the paper repository's metadata wrapper wherever a
+driver does not record it. Seconds from different device or CPU classes never
+belong in one table whatever recorded them.
 
 ## Caveats before switching a 3D Helmholtz run to FMMLib
 
@@ -151,10 +150,9 @@ CPU classes never belong in one table.
 
 ## How to decide for your own case
 
-1. Run the solve twice in one process and compare the *second* one. The
-   sidecar-writing drivers do this for you and record `*_first_call_s` and
-   `*_warm_s` separately; for the others, time the two calls yourself rather
-   than quoting a process total.
+1. Run the solve twice in one process and compare the *second* one. Never
+   quote a process total: see {doc}`../benchmarks/index` for which drivers
+   already separate the two calls for you and which leave it to you.
 2. Name the device class explicitly — `--backend pocl-cpu` or
    `--backend cuda-gpu`, or `PYOPENCL_CTX` for the drivers that call
    `cl.create_some_context` (see {doc}`../getting-started/device-selection`).
