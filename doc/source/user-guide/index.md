@@ -6,6 +6,7 @@ How the volume FMM is put together, and what each part of it costs you.
 :maxdepth: 1
 
 volume-fmm-workflow
+choosing-a-wrangler
 nearfield_symmetry
 table-build-routing
 derivative_support
@@ -25,6 +26,10 @@ whose provenance cannot be verified;
 {doc}`derivative_support` on the derivative wrappers and their sign
 bookkeeping; {doc}`helmholtz_split` on the near-field split that makes one
 table family serve a range of wave numbers.
+
+{doc}`choosing-a-wrangler` is the one to read before quoting a far-field
+timing: which of the two wranglers to prefer for which kernel, dimension and
+device class, with the measurements behind the advice. It changes no default.
 
 {doc}`m1_kernels` and {doc}`validation_matrix` record what is supported and
 what is actually tested, so a gap shows up as a gap rather than as an absent

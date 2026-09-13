@@ -128,6 +128,12 @@ calls. {mod}`volumential.wranglers` implements it twice:
   {doc}`../getting-started/installation`, or it silently drops to a serial
   per-box P2M path.
 
+Which one to prefer is not obvious and depends on the device as much as on the
+kernel — on a CPU OpenCL device a 3D Helmholtz solve at high order is 99 %
+sumpy's FFT-based M2L, and FMMLib with an OpenMP `pyfmmlib` is about 9x faster
+on the same hardware, while a current GPU runs the sumpy path in seconds.
+{doc}`choosing-a-wrangler` has the measurements and the caveats.
+
 Both share the near-field machinery: table marshalling
 (`volumential.wranglers.table_data`), orbit reconstruction
 (`volumential.wranglers.arithmetic_orbits`,

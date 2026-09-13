@@ -106,6 +106,32 @@ times slower than the otherwise identical Yukawa build. The rewrite is
 of the exponent, so it is valid for genuinely complex exponents (the damped
 `exp((-a + i b) r)` form included) and leaves real exponents untouched.
 
+### Where the 200 ns come from
+
+`sincos` itself is not slow. On PoCL's host-CPU device, fp64 `sincos` comes
+from the bundled kernel library, whose range reduction and polynomial call
+`fma()` 18 to 25 times per element, and `fma()` there is the correctly rounded
+fused operation. On an x86-64 CPU **without** an FMA unit — AVX-only,
+pre-Haswell — the backend cannot lower that to a hardware instruction and
+emits a call to the C library's *software* `fma`, at about 6.2 ns per element:
+18 of them predict 112 ns against the roughly 104 ns measured. `sin` and `cos`
+never enter the kernel library at all — they are clang builtins, vectorized
+and lowered to `libmvec` — which is why the pair costs under a nanosecond.
+The ratio is about 146x on such a CPU, about 1x on the other CPU OpenCL
+runtime on the same machine, and about 1x on a GPU (both NVIDIA's runtime and
+PoCL's CUDA device compile `sincos` from the vendor's device library, and
+`fma` is a single instruction there).
+
+So this is specific to PoCL's host-CPU device on targets with no FMA unit, and
+it is not confined to `sincos`: every fp64 builtin PoCL routes through its
+`fma()` — `remquo`, `remainder`, `acospi`, `asinpi`, `atanpi`, `atan2pi`,
+`acosh`, `asinh`, `atanh`, and the `sincos`/`log`/`exp` helpers — pays it on
+such a host. The rewrite above removes the table builder's exposure; the
+general consequence is that a run's metadata has to record the CPU class, and
+that seconds from a host without hardware FMA are not comparable with seconds
+from one that has it (see {doc}`../benchmarks/index`). Tracked in
+[#138](https://github.com/xywei/volumential/issues/138).
+
 ### Why it is guarded
 
 The rewrite is exact in value but not in conditioning once the *phase* `im` can
