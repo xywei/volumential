@@ -11,12 +11,16 @@ wrong is an order of magnitude rather than a few percent.
 
 | kernel and dimension | CPU OpenCL device | fp64 GPU |
 | --- | --- | --- |
-| 3D Helmholtz, high order | **FMMLib**, with an OpenMP `pyfmmlib` | either; sumpy is already fast |
-| 3D Laplace | either; measure | either |
-| 2D Laplace / Helmholtz | either; measure | either |
-| Yukawa, any dimension | **sumpy** (FMMLib has no Yukawa) | sumpy |
-| anything using the near-field Helmholtz split | **sumpy** (see the caveat below) | sumpy |
-| any kernel sumpy can differentiate but `pyfmmlib` does not implement | sumpy — it is the only option | sumpy |
+| 3D Helmholtz, high order | **FMMLib**, with an OpenMP `pyfmmlib` | **sumpy** |
+| 3D Laplace | either; measure | **sumpy** |
+| 2D Laplace / Helmholtz | either; measure | **sumpy** |
+| Yukawa, any dimension | **sumpy** (FMMLib has no Yukawa) | **sumpy** |
+| anything using the near-field Helmholtz split | **sumpy** (see the caveat below) | **sumpy** |
+| any kernel sumpy can differentiate but `pyfmmlib` does not implement | sumpy — it is the only option | **sumpy** |
+
+The GPU column is sumpy everywhere for one reason: `pyfmmlib` is host
+Fortran. Choosing FMMLib on a GPU host moves the far field back onto the CPU
+and forfeits the acceleration that made the GPU worth selecting.
 
 `FPNDFMMLibExpansionWrangler` covers 2D and 3D Laplace and Helmholtz and
 nothing else. Everywhere it does not reach, the question does not arise.
@@ -59,11 +63,26 @@ rotation-based M2L does roughly twenty times less total work:
 That is **9.1x on the same hardware**, and it is entirely a threading result:
 the serial FMMLib far field is *slower* than the sumpy one. The `_imany`
 routines scale about 17x from 1 to 30 threads, but only once `pyfmmlib`
-actually carries OpenMP, which the PyPI `2024.1.1` wheel does not. Build it as
-{doc}`../getting-started/installation` describes and run that page's
-`ldd`/`otool` check: `FPNDFMMLibExpansionWrangler` falls back to a serial
-per-box path **without complaining**, so a mis-provisioned environment is
-correct, slow, and indistinguishable from a correct one except by timing.
+actually carries OpenMP, which the PyPI `2024.1.1` wheel does not.
+
+Two *independent* ways a `pyfmmlib` build gives you the middle rows of that
+table instead of the last one, and the checks for them are different:
+
+- **The batched `{l,h}{2,3}dformmp_imany` wrappers are missing.**
+  `form_multipoles` selects them only when
+  `_get_batched_formmp_routine()` finds one, and otherwise takes the serial
+  per-box path — silently. Check by importing all four wrappers, as
+  {doc}`../getting-started/installation` shows: the backend picks one from
+  the equation and the dimension, so a successful 3D Laplace import does not
+  rule out a 2D or Helmholtz fallback.
+- **The wrappers are present but the build has no OpenMP.** Nothing falls
+  back here; the batched routines simply run on one thread, which is the
+  300.1 s row above. Only the `ldd`/`otool` check on `_internal*.so` sees
+  this — look for `libgomp` on Linux, `libomp` on macOS.
+
+Neither announces itself, so a mis-provisioned environment is correct, slow,
+and indistinguishable from a correct one except by timing. Run both checks
+before trusting any FMMLib number.
 
 ## On a GPU the question goes away
 
@@ -93,10 +112,14 @@ Two consequences:
   Amortize the code generation over many solves, or warm the compile cache,
   before either backend's per-solve speed decides anything.
 
-The drivers record the two separately — see
-{doc}`../benchmarks/index` for `*_first_call_s` against `*_warm_s`, and for
-the `run_provenance` block that says which device and which CPU a number came
-from. Seconds from different device or CPU classes never belong in one table.
+The drivers that write a JSON sidecar record the two separately, as
+`*_first_call_s` against `*_warm_s`, next to a `run_provenance` block naming
+the resolved device and the host CPU; {doc}`../benchmarks/index` documents
+both, and which driver carries which. The rest — `adaptive_timing.py` among
+them — discard an untimed warm-up and report only warm samples, so their
+first-call cost is not in a file at all and has to come from the paper
+repository's metadata wrapper. Either way, seconds from different device or
+CPU classes never belong in one table.
 
 ## Caveats before switching a 3D Helmholtz run to FMMLib
 
@@ -109,9 +132,11 @@ from. Seconds from different device or CPU classes never belong in one table.
   1e-11-level agreement some committed accuracy rows assert. A gate calibrated
   against one backend has to be re-certified against the other; a switch is
   not accuracy-neutral bookkeeping.
-- **M2M and L2L stop being free.** Once M2L drops from 99 % to a few percent,
-  the remaining translation stages become roughly 19 % of the solve, and the
-  profile to optimize next is a different one.
+- **The profile changes shape, but M2L still leads it.** Rotation M2L is
+  about 12x cheaper here, not negligible: 17.3–17.9 s of a 23.5–24.2 s warm
+  solve is still roughly three quarters of it. What changes is that M2M and
+  L2L stop being free — they become roughly 19 % of the solve — so a profile
+  taken before the switch does not describe the run after it.
 - **Check the OpenMP build.** Repeated because it is the single most common
   way this measurement is mis-taken: without it, FMMLib is slower than sumpy
   here, not faster.
@@ -119,8 +144,9 @@ from. Seconds from different device or CPU classes never belong in one table.
 ## How to decide for your own case
 
 1. Run the solve twice in one process and compare the *second* one. The
-   drivers do this for you and record `*_first_call_s` and `*_warm_s`
-   separately.
+   sidecar-writing drivers do this for you and record `*_first_call_s` and
+   `*_warm_s` separately; for the others, time the two calls yourself rather
+   than quoting a process total.
 2. Name the device class explicitly — `--backend pocl-cpu` or
    `--backend cuda-gpu`, or `PYOPENCL_CTX` for the drivers that call
    `cl.create_some_context` (see {doc}`../getting-started/device-selection`).
