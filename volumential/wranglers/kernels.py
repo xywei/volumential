@@ -33,6 +33,34 @@ import numpy as np
 from sumpy.kernel import ExpressionKernel
 
 
+#: Floor added inside ``log`` so that the ``r**power * log(r)`` terms of the
+#: split evaluate to zero, rather than ``0 * -inf == nan``, at ``r == 0`` --
+#: which a P2P that does not exclude self interactions does reach.
+#:
+#: ``1e-300`` is a normal double (the smallest normal is ``~2.2e-308``), and
+#: ``r + 1e-300`` is bitwise equal to ``r`` for every ``r`` above ``~9e-284``.
+#: Below that, ``r**power`` has already underflowed to zero for the even
+#: powers ``2n >= 2`` this module emits, so the term is zero either way.
+_LOG_ARG_FLOOR = 1.0e-300
+
+
+def _r_power_log_r(r, power):
+    """Return ``r**power * log(r)``, regularized to vanish at ``r == 0``.
+
+    The branch-free form is deliberate.  Writing the same guard as
+    ``If(Comparison(r, "<=", 1e-300), 0, (r**power) * log(r))`` puts a
+    relational into the kernel expression, and :mod:`sumpy`'s common
+    subexpression elimination rebuilds every subexpression through
+    ``expr.func(*args)`` -- an attribute symengine's relationals do not carry,
+    so the whole kernel fails to generate code under the symengine backend
+    with ``AttributeError: 'LessThan' object has no attribute 'func'``.
+    """
+
+    from pymbolic import var
+
+    return (r**power) * var("log")(r + _LOG_ARG_FLOOR)
+
+
 class _RadialPowerKernel(ExpressionKernel):
     init_arg_names = ("dim", "power")
     mapper_method = "map_expression_kernel"
@@ -72,7 +100,6 @@ class _RadialPowerLogKernel(ExpressionKernel):
     mapper_method = "map_expression_kernel"
 
     def __init__(self, dim, power):
-        from pymbolic import var
         from pymbolic.primitives import make_sym_vector
         from sumpy.symbolic import pymbolic_real_norm_2
 
@@ -82,7 +109,7 @@ class _RadialPowerLogKernel(ExpressionKernel):
 
         dim = int(dim)
         r = pymbolic_real_norm_2(make_sym_vector("d", dim))
-        expr = (r**self.power) * var("log")(r)
+        expr = _r_power_log_r(r, self.power)
 
         super().__init__(
             dim,
@@ -132,8 +159,7 @@ class _HelmholtzSplitSeriesRemainderKernel(ExpressionKernel):
     ):
         from math import factorial
 
-        from pymbolic import var
-        from pymbolic.primitives import Comparison, If, make_sym_vector
+        from pymbolic.primitives import make_sym_vector
         from sumpy.symbolic import pymbolic_real_norm_2
 
         dim = int(dim)
@@ -181,12 +207,7 @@ class _HelmholtzSplitSeriesRemainderKernel(ExpressionKernel):
 
                     power = 2 * n
                     if n >= self.split_order:
-                        log_term = If(
-                            Comparison(r, "<=", np.float64(1.0e-300)),
-                            np.float64(0.0),
-                            (r**power) * var("log")(r),
-                        )
-                        expr = expr + coeff_log * log_term
+                        expr = expr + coeff_log * _r_power_log_r(r, power)
                     expr = expr + coeff_power * (r**power)
         else:
             max_extracted_n = 2 * max(0, self.split_order - 1)
