@@ -225,12 +225,11 @@ html_last_updated_fmt = "%Y-%m-%d"
 # ``sphinxext.opengraph`` for the ``og:url`` metadata.  A trailing slash is
 # required by all three.
 #
-# This is the GitHub Pages destination the modernization is heading for, and
-# what ``_static/switcher.json`` and ``linkcheck_ignore`` already name.  Until
-# the Pages deployment lands, a build published anywhere else carries canonical
-# links to a site that is not up yet; that is a property of the deployment
-# order, not of this value, and pointing it at an interim host would have to be
-# reverted the moment Pages goes live.
+# The GitHub Pages site, live since 2026-09-13 and deployed from ``main`` by
+# .github/workflows/docs-pages.yml; ``_static/switcher.json`` names the same
+# URL.  A build published anywhere else carries canonical links here on
+# purpose: this is the one copy search engines and the switcher should treat
+# as current.
 html_baseurl = "https://xywei.github.io/volumential/"
 
 html_theme_options = {
@@ -242,24 +241,50 @@ html_theme_options = {
     # ``_disable_edit_button_on_generated_pages`` below.
     "use_edit_page_button": True,
     "switcher": {
-        # Served from the site itself: ``_static/switcher.json`` carries a
-        # single "latest" entry until tagged versions are published.
-        #
-        # TODO(#145): the moment GitHub Pages is enabled (Settings -> Pages ->
-        # Build and deployment -> Source: "GitHub Actions") and
-        # https://xywei.github.io/volumential/ responds, three edits follow.
-        # Here: make ``json_url`` the absolute
-        # ``https://xywei.github.io/volumential/_static/switcher.json`` -- a
-        # relative URL resolves against whichever build is being viewed, so an
-        # older tagged build would show its own frozen list rather than the
-        # current one -- and drop the ``linkcheck_ignore`` entry for that host
-        # below.  Elsewhere: the documentation link in README.md, and the
-        # repository homepage.  Until then this file points at nothing that is
-        # live, which is why the relative URL is the right placeholder.
-        "json_url": "_static/switcher.json",
+        # Served from the live site, not relative to the build being viewed:
+        # ``_static/switcher.json`` carries a single "latest" entry until
+        # tagged versions are published, and an absolute URL is what lets an
+        # older tagged build show the current list rather than its own frozen
+        # copy (#145).
+        "json_url": "https://xywei.github.io/volumential/_static/switcher.json",
         "version_match": "latest",
     },
+    # The theme would otherwise fetch ``json_url`` at build time and warn when
+    # it is unreachable, and every documentation build runs with ``-W``: the
+    # live site would become a prerequisite for rebuilding or recovering it.
+    # The committed copy is validated below instead; the browser still reads
+    # the absolute URL.
+    "check_switcher": False,
 }
+
+# Validate the committed switcher index ourselves, since the theme's remote
+# check is off: it must parse, every entry must carry the keys the theme's
+# browser code reads (``name``, ``version``, ``url``, each a non-empty string;
+# ``preferred`` optional and boolean), and one entry must match
+# ``version_match``.  This is the check that guards the first tagged entry
+# added per development/releases.md.
+with open(Path(__file__).parent / "_static" / "switcher.json", encoding="utf-8") as _f:
+    _switcher_entries = json.load(_f)
+if not isinstance(_switcher_entries, list) or not _switcher_entries:
+    raise ValueError("doc/source/_static/switcher.json must be a non-empty list")
+for _index, _entry in enumerate(_switcher_entries):
+    if not isinstance(_entry, dict):
+        raise ValueError(f"switcher.json entry {_index} is not an object")
+    for _key in ("name", "version", "url"):
+        if not isinstance(_entry.get(_key), str) or not _entry[_key].strip():
+            raise ValueError(
+                f"switcher.json entry {_index} lacks a non-empty string {_key!r}"
+            )
+    if "preferred" in _entry and not isinstance(_entry["preferred"], bool):
+        raise ValueError(f"switcher.json entry {_index}: 'preferred' must be a boolean")
+if not any(
+    _entry["version"] == html_theme_options["switcher"]["version_match"]
+    for _entry in _switcher_entries
+):
+    raise ValueError(
+        "doc/source/_static/switcher.json has no entry matching version_match "
+        f"{html_theme_options['switcher']['version_match']!r}"
+    )
 
 # -- Sitemap and social metadata ------------------------------------------
 
@@ -458,10 +483,6 @@ linkcheck_retries = 2
 # checked from failing an unrelated change.  Keep the list short and give each
 # entry a reason: a 404 that is muted here is a 404 a reader will hit.
 linkcheck_ignore = [
-    # Not published yet; enabling GitHub Pages is the maintainer's step, and
-    # .github/workflows/docs-pages.yml is inert until then.  Drop this entry
-    # once the site responds.
-    r"https://xywei\.github\.io/volumential/?.*",
     # One citation, not a host: the reference in
     # ``volumential.singular_integral_2d`` resolves from a browser and from a
     # developer machine, but academic publishers commonly answer a CI runner
