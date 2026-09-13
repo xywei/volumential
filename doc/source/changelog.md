@@ -12,14 +12,15 @@ for what will have to change when tagging starts.
 
 Documentation
 : [#152](https://github.com/xywei/volumential/pull/152) — build, link-check
-  and preview the site on every pull request through a `Documentation` CI job,
+  and preview the site on every pull request against `main` through a
+  `Documentation` CI job,
   add the GitHub Pages deployment workflow, and retire the GitLab documentation
   job ({doc}`development/ci`).
 : [#149](https://github.com/xywei/volumential/pull/149) — content hygiene: a
   gallery page for the example scripts, the notebooks rendered without
-  execution, a sitemap and OpenGraph metadata, docstrings on six modules, and
-  docstring coverage reported by `sphinx.ext.coverage` and ratcheted by
-  `interrogate`.
+  execution, a sitemap and OpenGraph metadata, docstrings on six modules, API-page
+  coverage reported by `sphinx.ext.coverage`, and docstring coverage
+  ratcheted by `interrogate`.
 : [#148](https://github.com/xywei/volumential/pull/148) — information
   architecture: the Diátaxis layout of this site, redirects for the old page
   URLs, and `README.md` reduced to a landing page (reviewed as
