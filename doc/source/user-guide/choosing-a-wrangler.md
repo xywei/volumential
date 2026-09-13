@@ -25,7 +25,7 @@ a distinct-target traversal; see the caveats.
 | 3D Helmholtz, high order | **FMMLib**, with an OpenMP `pyfmmlib` | **sumpy** |
 | 3D Laplace | either; measure | **sumpy** |
 | 2D Laplace / Helmholtz | either; measure | **sumpy** |
-| Yukawa, any dimension | **sumpy** (FMMLib has no Yukawa) | **sumpy** |
+| Yukawa, 2D or 3D | **sumpy** (FMMLib has no Yukawa) | **sumpy** |
 | anything using the near-field Helmholtz split | **sumpy** (see the caveat below) | **sumpy** |
 | any kernel sumpy can differentiate but `pyfmmlib` does not implement | sumpy — it is the only option | **sumpy** |
 
@@ -41,7 +41,9 @@ shared kernel, not a shared end-to-end speedup; the 18 to 27x below is a
 sumpy-path measurement and the hybrid has not been measured.
 
 `FPNDFMMLibExpansionWrangler` covers 2D and 3D Laplace and Helmholtz and
-nothing else. Everywhere it does not reach, the question does not arise.
+nothing else. Everywhere it does not reach, the question does not arise —
+and outside 2D and 3D neither wrangler does, because the near-field Duffy
+builder refuses those dimensions before either one is reached.
 
 ## Why 3D Helmholtz on a CPU device is the case that matters
 
@@ -62,8 +64,11 @@ near-field table:
 sumpy's default expansion for `HelmholtzKernel(3)` at that order is the
 linear-PDE-conforming volume Taylor expansion with `VolumeTaylorM2LWithFFT`:
 6,627 complex translation-class entries per box over 640,584 list-2 pairs.
-Inside the stage the forward FFT costs 34.5 s, the pointwise translation 92.7 s
-and the inverse FFT 87.0 s. With `pyvkfft` unavailable the FFT is loopy's
+Inside the stage the forward FFT costs 34.5 s, the pointwise translation
+92.7 s and the inverse FFT 87.0 s. Those three come from a separate,
+finer-grained instrumentation of the same configuration, not from a
+decomposition of the 210.61 s above — which is why they sum to slightly more
+— so read them as proportions, not as a budget that has to add up. With `pyvkfft` unavailable the FFT is loopy's
 fallback, roughly 7.6 times the arithmetic of a real FFT — and on PoCL 7 that
 is not a choice, because it miscompiles VkFFT
 ([pocl/pocl#2069](https://github.com/pocl/pocl/issues/2069)).
@@ -95,9 +100,12 @@ there are two ways to get one, which the same numbers cannot tell apart:
 
 - **The build has no OpenMP.** `OMP_NUM_THREADS` is then inert, as in the
   317.5 s row, where it was set to 8. Only the `ldd`/`otool` check on
-  `_internal*.so` sees this — look for `libgomp` on Linux, `libomp` on
-  macOS. It is what {doc}`../getting-started/installation` means by "verify
-  the build before trusting any FMMLib timing".
+  `_internal*.so` sees this — look for *an* OpenMP runtime, whichever the
+  compiler linked: `libgomp` for GCC, `libomp` for Clang, `libiomp` for
+  Intel. The name follows the compiler, not the operating system, so a Linux
+  build compiled with Clang correctly shows `libomp`. It is what
+  {doc}`../getting-started/installation` means by "verify the build before
+  trusting any FMMLib timing".
 - **The build has OpenMP and you asked for one thread**, as in the 300.1 s
   row. That build passes the `ldd`/`otool` check, so a slow run is *not*
   evidence of a bad build; check the thread count you actually set as well.

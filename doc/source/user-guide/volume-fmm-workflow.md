@@ -209,8 +209,10 @@ is a shape error waiting to happen. The branch is guarded by
 wrangler does not take it — and does not reach an output layout either: it
 continues through the traversal as given and `_compute_box_local_ids` raises
 `ValueError` in the List 1 stage, because table-based near-field evaluation
-requires `tree.sources_are_targets`. A distinct-target run is a sumpy-only
-configuration.
+requires `tree.sources_are_targets`. The *automatic* path is therefore
+sumpy-only; FMMLib reaches distinct targets only through the manual route of
+{doc}`choosing-a-wrangler` — a source-only coincident solve followed by
+{func}`volumential.volume_fmm.interpolate_volume_potential`.
 
 - {func}`volumential.volume_fmm.interpolate_volume_potential` evaluates a
   box-mesh potential at an arbitrary set of target points — the explicit form

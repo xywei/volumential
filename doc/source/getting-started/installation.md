@@ -141,9 +141,12 @@ else:
 PY
 ```
 
-Expect a `libgomp` line on Linux and a `libomp` one on macOS. A missing OpenMP
-runtime and an unavailable `ldd` look the same otherwise, which is why the
-check branches instead of assuming Linux.
+Expect a line for *an* OpenMP runtime: `libgomp` for a GCC build, `libomp`
+for Clang (the usual case on macOS, and a possible one on Linux), `libiomp`
+for Intel. The name follows the compiler, not the operating system, so do not
+read a missing `libgomp` on Linux as a missing OpenMP. A missing runtime and
+an unavailable `ldd` look the same otherwise, which is why the check branches
+instead of assuming Linux.
 
 Batched P2M is bit-identical to the per-box path and GEMM L2P agrees at
 roundoff (`test/test_fmmlib_batched_stages.py`), so adopting them needs no
