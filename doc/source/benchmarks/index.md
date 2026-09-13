@@ -54,34 +54,39 @@ individually; `benchmarks/README.md` documents each one's flags and gates.
 A CSV on its own is not evidence. Metadata reaches a promoted result by two
 different routes, and they are not interchangeable.
 
-**Per-driver sidecars.** Four drivers write a JSON sidecar themselves:
+**Per-driver sidecars.** Five drivers write a JSON sidecar themselves:
 `graded_tree_convergence.py`, `gaussian_free_space.py`,
-`dmk_effective_density.py` and `rke_field_demo_3d.py`. Every sidecar carries
-the mode, the problem, and the configuration of the run.
+`dmk_effective_density.py`, `rke_field_demo_3d.py` and
+`split_parameter_sweep.py`. Every sidecar carries the mode, the problem, the
+configuration of the run, and a `run_provenance` block describing the machine
+that produced it (see [Run provenance](#run-provenance) below).
 
 Do not key a reader on more than that. Case identity is spelled three ways:
 `gaussian_free_space.py` and `dmk_effective_density.py` write `case_id`,
-`graded_tree_convergence.py` writes `case`, and `rke_field_demo_3d.py` has no
-top-level case field at all — it carries per-case data under `cases`.
+`graded_tree_convergence.py` and `split_parameter_sweep.py` write `case`, and
+`rke_field_demo_3d.py` has no top-level case field at all — it carries
+per-case data under `cases`.
 
 They all take `--metadata-out`, but their defaults differ, and the difference
-is a provenance trap: only `graded_tree_convergence.py` derives the default
-from `--out` (`<out stem>-metadata.json`, beside the CSV). The other three each
-default to a fixed `build/benchmarks/<case>-metadata.json`, so a run with a
-custom `--out` and no `--metadata-out` puts the sidecar somewhere else than the
-CSV, and two such runs overwrite one another's metadata. **Pass
-`--metadata-out` explicitly whenever you pass `--out`.**
+is a provenance trap: only `graded_tree_convergence.py` and
+`split_parameter_sweep.py` derive the default from `--out`
+(`<out stem>-metadata.json`, beside the CSV). The other three each default to
+a fixed `build/benchmarks/<case>-metadata.json`, so a run with a custom
+`--out` and no `--metadata-out` puts the sidecar somewhere else than the CSV,
+and two such runs overwrite one another's metadata. **Pass `--metadata-out`
+explicitly whenever you pass `--out`.**
 
 Beyond that shared core, what a sidecar holds varies, and two axes are worth
 knowing before promoting one:
 
-- **Device.** `gaussian_free_space.py`, `dmk_effective_density.py` and
-  `rke_field_demo_3d.py` record `environment.opencl_device` — the *resolved*
-  platform, device name, vendor, version and device type — which is stronger
-  provenance than a class label, and their `command.argv` preserves an
-  explicitly passed `--backend`. What they do not carry is a normalized
-  top-level backend field. `graded_tree_convergence.py` is the mirror image:
-  it records `"backend"` as a label and no resolved device.
+- **Device.** Every sidecar now carries `run_provenance.opencl`, the
+  *resolved* platform, device, driver version and device type. Three of them
+  also keep the older `environment.opencl_device` block
+  (`gaussian_free_space.py`, `dmk_effective_density.py`,
+  `rke_field_demo_3d.py`), and `graded_tree_convergence.py` and
+  `split_parameter_sweep.py` additionally record `"backend"` as a requested
+  label. Read the label as a *request* and `run_provenance.opencl` as what
+  answered; `command.argv` preserves an explicitly passed `--backend`.
 - **Verdict.** Only `graded_tree_convergence.py` writes one — observed orders,
   the asymptotic-regime statement, the matched-error DOF advantage — and only
   on a successful run: a gate failure there writes the CSV and re-raises
@@ -91,10 +96,10 @@ knowing before promoting one:
 
 **Every other driver in `benchmarks/` has no `--metadata-out` at all** — the
 two adaptive timing drivers, `table_equivalence_cache.py`,
-`accuracy_preservation.py`, `split_parameter_sweep.py`,
-`windowed_rke_sweep.py`, both composition drivers, `break_even_validation.py`,
-`derivative_log_preservation.py`, `keller_segel_continuation.py`,
-`complex_bessel_parameterized.py` and `complex_channel_closure.py`. Those four
+`accuracy_preservation.py`, `windowed_rke_sweep.py`, both composition
+drivers, `break_even_validation.py`, `derivative_log_preservation.py`,
+`keller_segel_continuation.py`, `complex_bessel_parameterized.py` and
+`complex_channel_closure.py`. Those five
 above are the closed set; treat everything else as sidecar-free, and check
 `--help` rather than this list if a driver is added. Passing the option to one
 of them is an argparse error, and its run is not self-describing.
@@ -104,8 +109,10 @@ only":
 
 - `windowed_rke_sweep.py` unconditionally writes
   `<out-dir>/windowed_rke_sweep_config.json` after its CSV, holding the
-  resolved arguments and run information. That is a *configuration* record,
-  useful for reproducing the invocation — not environment provenance.
+  resolved arguments and run information. That is mostly a *configuration*
+  record, useful for reproducing the invocation — but it does carry the same
+  `run_provenance` block as the sidecars, so a promoted sweep from it is
+  attributable to a device.
 - `adaptive_timing_3d.py` writes visualization NPZ files by default, and
   `keller_segel_continuation.py` can write field NPZ files. Those are results,
   and a promotion has to carry them with the CSV.
@@ -132,6 +139,63 @@ python /path/to/boxcode-paper/tools/run_benchmark_with_metadata.py \
   -- python benchmarks/table_equivalence_cache.py --mode full \
      --out-dir /path/to/raw-runs
 ```
+
+## Run provenance
+
+`benchmarks/_provenance.py` is the one place that answers "which machine
+produced this number". Every driver that writes a sidecar calls
+`collect_run_provenance()` on its live OpenCL context and stores the result
+under the top-level key `run_provenance`; `windowed_rke_sweep.py` stores the
+same block in its config JSON. The keys are additive — nothing that was in a
+sidecar before has changed name or meaning.
+
+```json
+"run_provenance": {
+  "opencl": {
+    "platform": "Portable Computing Language",
+    "platform_version": "OpenCL 3.0 PoCL 7.0  Linux, ...",
+    "device": "cpu-...",
+    "device_type": "CPU",
+    "driver_version": "7.0",
+    "vendor": "...",
+    "max_compute_units": 30
+  },
+  "cpu_model": "...",
+  "omp_num_threads": 30,
+  "pocl_max_pthread_count": 30,
+  "pyvkfft_importable": false
+}
+```
+
+- `opencl` is the **resolved** device, not the requested `--backend` token.
+  `--backend cuda-gpu` and `cl.create_some_context(interactive=False)` are
+  requests; this is what the ICD loader returned. `device_type` renders the
+  `cl_device_type` bit field (`"CPU"`, `"GPU"`, `"DEFAULT|CPU"`), so a device
+  that reports several bits is not flattened to one.
+- `cpu_model` is the host CPU's model string. Seconds without it silently
+  measure host age: the identical PoCL build of one 3D Duffy table differs by
+  well over an order of magnitude between a CPU without hardware FMA and a
+  current one.
+- `omp_num_threads` and `pocl_max_pthread_count` are the worker-thread caps in
+  force. `null` means the variable was unset, which is a different run from a
+  cap of `1`; a value that is not a plain integer (`OMP_NUM_THREADS` accepts a
+  per-nesting-level list) is recorded verbatim as a string.
+- `pyvkfft_importable` decides a cost class, not a detail: sumpy's
+  FFT-accelerated multipole-to-local uses `pyvkfft` when it is importable and
+  falls back to a loopy FFT — several times the arithmetic — when it is not.
+
+Every one of those drivers also prints a single `RESOLVED-DEVICE` line on
+stdout as soon as the device is resolved, before the work starts, so a
+multi-hour log says on its first lines what answered:
+
+```text
+RESOLVED-DEVICE platform='Portable Computing Language' platform_version='OpenCL 3.0 PoCL 7.0 ...' device='cpu-...' device_type=CPU driver_version='7.0'
+```
+
+None of this carries a host name, user name or path, so a sidecar can be
+committed next to its CSV. `test/test_benchmark_helpers.py` pins the shape of
+the block against a mocked context, so it is checked on a machine with no
+OpenCL platform at all.
 
 ## What a promoted measurement must record
 
@@ -184,6 +248,35 @@ all three:
    majority of the wall clock, which is why moving such a run to a GPU buys far
    less than the per-solve speedup suggests.
 3. **The solve itself** — the only number that scales with the problem.
+
+The sidecars keep (1) apart from (3) by construction, and now keep (2) apart
+as well. `benchmarks/_provenance.py`'s `time_repeats()` and
+`first_call_and_warm()` split a repeat series into
+
+- `<thing>_first_call_s` — the first call of the *process* for that code
+  path, including whatever code generation and kernel compilation it
+  triggered;
+- `<thing>_warm_s` — the median of the remaining repeats, or `null` when the
+  driver made only one call. A `null` is an honest "not measured", never a
+  warm number contaminated by code generation;
+- `<thing>_warm_repeat_count` and `<thing>_samples_s` — the count and the
+  raw series, in call order.
+
+Where they appear:
+
+- `gaussian_free_space.py`, `dmk_effective_density.py` and
+  `graded_tree_convergence.py` take `--warm-repeats` (default 1) and record
+  the split under `timing` (per ladder rung, under `fmm_timing`, for the
+  graded driver). `--warm-repeats 0` restores the single timed call and
+  leaves `warm_s` at `null`.
+- `rke_field_demo_3d.py` already ran an untimed warm-up before its timed
+  solve; that call is now timed, so the split costs nothing. Its
+  `direct_solve_wall_s` / `split_solve_wall_s` remain the *warm* numbers they
+  always were.
+- `split_parameter_sweep.py` and `windowed_rke_sweep.py` already separate a
+  warm-up from the repeatable path in their own columns
+  (`_time_repeated`'s untimed first call; `classical_warmup_seconds` against
+  `classical_assemble_seconds`).
 
 Three different recorders produce the seconds in these CSVs, and a column
 should never mix them:

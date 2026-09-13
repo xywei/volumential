@@ -37,6 +37,7 @@ import csv
 import logging
 import math
 import sqlite3
+import sys
 import time
 from contextlib import contextmanager
 from dataclasses import asdict
@@ -45,6 +46,12 @@ from types import MethodType
 from typing import Any
 
 import numpy as np
+
+from _provenance import (
+    collect_run_provenance,
+    resolved_device_line,
+)
+from volumential.gaussian import write_json_metadata
 
 
 # {{{ per-phase share columns (E6)
@@ -3498,6 +3505,15 @@ def main() -> int:
         default=Path("build/benchmarks/split-parameter-sweep.csv"),
     )
     parser.add_argument(
+        "--metadata-out",
+        type=Path,
+        default=None,
+        help=(
+            "JSON metadata sidecar recording the resolved device and the "
+            "host caps in force (default: <out stem>-metadata.json)"
+        ),
+    )
+    parser.add_argument(
         "--cache-dir",
         type=Path,
         default=Path("build/benchmarks/split-parameter-cache"),
@@ -3701,6 +3717,39 @@ def main() -> int:
     if args.max_fmm_order is not None and args.max_fmm_order < fmm_order:
         parser.error("--max-fmm-order must be at least --fmm-order")
 
+    # Resolve the device before the sweep starts, so a multi-hour log says
+    # on its first line what answered --backend rather than only what was
+    # asked for.  ``run_benchmark`` resolves the same device the same way.
+    import pyopencl as cl
+
+    run_provenance = collect_run_provenance(
+        _select_opencl_device(cl, args.backend)
+    )
+    print(resolved_device_line(run_provenance), flush=True)
+
+    metadata_out = args.metadata_out
+    if metadata_out is None:
+        metadata_out = args.out.parent / f"{args.out.stem}-metadata.json"
+
+    def _write_metadata(row_count: int, *, gate_failed: bool) -> None:
+        write_json_metadata(
+            metadata_out,
+            {
+                "case": "split-parameter-sweep",
+                "mode": args.mode,
+                "dim": dim,
+                "backend": args.backend,
+                "command": {"argv": sys.argv, "cwd": str(Path.cwd())},
+                "outputs": {
+                    "summary_csv": str(args.out),
+                    "metadata_json": str(metadata_out),
+                },
+                "row_count": row_count,
+                "gate_failed": gate_failed,
+                "run_provenance": run_provenance,
+            },
+        )
+
     try:
         rows = run_benchmark(
             mode=args.mode,
@@ -3731,11 +3780,13 @@ def main() -> int:
         # The rows are measured; only the verdict on them failed.  Write them
         # before re-raising, so a multi-hour run keeps its CSV.
         write_csv(args.out, exc.rows)
+        _write_metadata(len(exc.rows), gate_failed=True)
         print(f"GATE-FAILED (CSV written to {args.out}): {exc}")
         raise
     # Write first, then report the far-field resolution check, so a long run
     # never loses its measurements to a failing diagnostic.
     write_csv(args.out, rows)
+    _write_metadata(len(rows), gate_failed=False)
     failures = _far_field_resolution_failures(rows)
     if failures:
         for message in failures:

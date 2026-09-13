@@ -1,5 +1,7 @@
 import importlib.util
+import json
 import sqlite3
+import subprocess
 import sys
 from pathlib import Path
 
@@ -1928,6 +1930,280 @@ def test_split_sweep_rows_report_their_own_parameter_s_routing():
         row_routing=None,
     )
     assert aggregate["direct_build_routing"] == "batched;scalar-fallback"
+
+
+# }}}
+
+
+# {{{ run provenance and first-call/warm split
+
+
+class _FakePlatform:
+    def __init__(self, name, version):
+        self.name = name
+        self.version = version
+
+
+class _FakeDevice:
+    """Enough of a ``pyopencl.Device`` for the provenance helper.
+
+    The helper must work on a machine with no OpenCL platform at all, so
+    the shape of what it returns is tested against this rather than
+    against whatever device happens to be installed.  The queries are
+    class attributes so that a subclass can replace one with a property
+    that raises, the way an ICD refusing a query behaves.
+    """
+
+    platform = _FakePlatform("Fake CL", "OpenCL 3.0 Fake 1.2")
+    name = "fake-cpu-device"
+    # CPU | DEFAULT: cl_device_type is a bit field, and real CPU devices
+    # do report the default bit as well.
+    type = (1 << 1) | (1 << 0)
+    driver_version = "1.2"
+    vendor = "Fake Vendor"
+    max_compute_units = 30
+
+    def __init__(self, **overrides):
+        for key, value in overrides.items():
+            setattr(self, key, value)
+
+
+class _FakeContext:
+    def __init__(self, devices):
+        self.devices = devices
+
+
+class _FakeQueue:
+    def __init__(self, device):
+        self.device = device
+
+
+def test_run_provenance_shape_without_a_device(monkeypatch):
+    module = _load_benchmark("_provenance")
+
+    monkeypatch.setenv("OMP_NUM_THREADS", "30")
+    monkeypatch.setenv("POCL_MAX_PTHREAD_COUNT", "30")
+
+    provenance = module.collect_run_provenance(
+        _FakeContext([_FakeDevice()])
+    )
+
+    assert set(provenance) == set(module.PROVENANCE_KEYS)
+    assert set(provenance["opencl"]) == set(module.OPENCL_PROVENANCE_KEYS)
+    assert provenance["opencl"]["platform"] == "Fake CL"
+    assert provenance["opencl"]["platform_version"] == "OpenCL 3.0 Fake 1.2"
+    assert provenance["opencl"]["device"] == "fake-cpu-device"
+    assert provenance["opencl"]["driver_version"] == "1.2"
+    # the bit field renders both bits, not an opaque integer
+    assert provenance["opencl"]["device_type"] == "DEFAULT|CPU"
+    assert provenance["omp_num_threads"] == 30
+    assert provenance["pocl_max_pthread_count"] == 30
+    assert isinstance(provenance["pyvkfft_importable"], bool)
+
+    # JSON serializable, because that is the only thing it is for
+    json.dumps(provenance)
+
+
+def test_run_provenance_accepts_a_queue_or_a_device():
+    module = _load_benchmark("_provenance")
+
+    device = _FakeDevice()
+    from_context = module.opencl_provenance(_FakeContext([device]))
+    assert module.opencl_provenance(_FakeQueue(device)) == from_context
+    assert module.opencl_provenance(device) == from_context
+
+    with pytest.raises(ValueError, match="no devices"):
+        module.opencl_provenance(_FakeContext([]))
+    with pytest.raises(TypeError, match="pyopencl"):
+        module.opencl_provenance(object())
+
+
+def test_run_provenance_survives_an_unanswerable_device_query():
+    """Provenance capture must not fail a completed benchmark run."""
+    module = _load_benchmark("_provenance")
+
+    class _Grumpy(_FakeDevice):
+        @property
+        def driver_version(self):
+            raise RuntimeError("this ICD refuses that query")
+
+    provenance = module.opencl_provenance(_Grumpy())
+    assert provenance["driver_version"] is None
+    assert provenance["device"] == "fake-cpu-device"
+
+
+def test_thread_caps_distinguish_unset_from_set(monkeypatch):
+    """An unset cap and a cap of one are different runs."""
+    module = _load_benchmark("_provenance")
+
+    monkeypatch.delenv("OMP_NUM_THREADS", raising=False)
+    monkeypatch.delenv("POCL_MAX_PTHREAD_COUNT", raising=False)
+    provenance = module.collect_run_provenance(_FakeDevice())
+    assert provenance["omp_num_threads"] is None
+    assert provenance["pocl_max_pthread_count"] is None
+
+    # OMP_NUM_THREADS also accepts a per-nesting-level list, which is not
+    # an int and must not be dropped on the floor
+    monkeypatch.setenv("OMP_NUM_THREADS", "4,2")
+    assert module.collect_run_provenance(_FakeDevice())[
+        "omp_num_threads"
+    ] == "4,2"
+
+
+def test_resolved_device_line_names_what_answered():
+    module = _load_benchmark("_provenance")
+
+    line = module.resolved_device_line(
+        module.collect_run_provenance(_FakeDevice())
+    )
+    assert line.startswith("RESOLVED-DEVICE ")
+    assert "fake-cpu-device" in line
+    assert "Fake CL" in line
+    assert "1.2" in line
+
+    # the opencl sub-dict on its own is accepted too
+    assert module.resolved_device_line(
+        module.opencl_provenance(_FakeDevice())
+    ) == line
+
+
+def test_first_call_and_warm_reports_an_unmeasured_warm_as_none():
+    module = _load_benchmark("_provenance")
+
+    single = module.first_call_and_warm([884.0])
+    assert single["first_call_s"] == 884.0
+    # never a warm number contaminated by code generation
+    assert single["warm_s"] is None
+    assert single["warm_repeat_count"] == 0
+
+    split = module.first_call_and_warm([884.0, 1.6, 1.4, 1.5], prefix="fmm_")
+    assert split["fmm_first_call_s"] == 884.0
+    assert split["fmm_warm_s"] == 1.5
+    assert split["fmm_warm_repeat_count"] == 3
+    assert split["fmm_samples_s"] == [884.0, 1.6, 1.4, 1.5]
+
+    with pytest.raises(ValueError, match="at least one"):
+        module.first_call_and_warm([])
+
+
+def test_time_repeats_synchronizes_inside_the_timed_region():
+    """An unsynchronized clock measures enqueue time, not execution time."""
+    module = _load_benchmark("_provenance")
+
+    events = []
+    calls = []
+
+    def work():
+        events.append("call")
+        calls.append(len(calls) + 1)
+        return calls[-1]
+
+    def sync():
+        events.append("sync")
+
+    result, samples = module.time_repeats(work, repeats=3, sync=sync)
+
+    # the *last* call's result comes back, not the first one's
+    assert result == 3
+    assert len(samples) == 3
+    assert all(sample >= 0.0 for sample in samples)
+    # one sync before the first sample, then one after every call
+    assert events == ["sync", "call", "sync", "call", "sync", "call", "sync"]
+
+    with pytest.raises(ValueError, match="at least 1"):
+        module.time_repeats(work, repeats=0)
+
+
+#: The drivers that write a JSON sidecar, with the smoke invocation that
+#: produces one and the path inside the sidecar that must carry the
+#: resolved device.  Keeping this next to the test is the point: a driver
+#: added to the set without provenance fails here.
+_SIDECAR_SMOKE_DRIVERS = (
+    (
+        "gaussian_free_space",
+        ("--mode", "smoke", "--slice-size", "8"),
+        "gaussian-free-space",
+    ),
+    (
+        "dmk_effective_density",
+        ("--mode", "smoke", "--slice-size", "8"),
+        "dmk-effective-density",
+    ),
+    (
+        "graded_tree_convergence",
+        ("--mode", "smoke"),
+        "graded-tree-convergence",
+    ),
+    (
+        "rke_field_demo_3d",
+        ("--mode", "smoke", "--force-recompute"),
+        "rke-field-demo-3d",
+    ),
+    (
+        "split_parameter_sweep",
+        ("--mode", "smoke"),
+        "split-parameter-sweep",
+    ),
+)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    ("name", "extra_args", "stem"), _SIDECAR_SMOKE_DRIVERS
+)
+def test_smoke_sidecar_records_the_resolved_device(
+    longrun, tmp_path, name, extra_args, stem
+):
+    """Every sidecar a driver writes must say which device produced it.
+
+    This needs a real OpenCL device, and a driver's smoke mode is minutes
+    rather than seconds, so it is behind ``--longrun`` as well.
+    """
+    import pyopencl as cl
+
+    try:
+        cl.create_some_context(interactive=False)
+    except Exception as exc:
+        pytest.skip(f"no OpenCL context available: {exc}")
+
+    provenance = _load_benchmark("_provenance")
+
+    out = tmp_path / f"{stem}.csv"
+    metadata_out = tmp_path / f"{stem}-metadata.json"
+    command = [
+        sys.executable,
+        str(_REPOSITORY_ROOT / "benchmarks" / f"{name}.py"),
+        *extra_args,
+        "--out",
+        str(out),
+        "--metadata-out",
+        str(metadata_out),
+        "--cache-dir",
+        str(tmp_path / "cache"),
+    ]
+    if name in ("gaussian_free_space", "dmk_effective_density",
+                "rke_field_demo_3d"):
+        command += ["--arrays-out", str(tmp_path / f"{stem}-arrays.npz")]
+
+    completed = subprocess.run(
+        command,
+        cwd=_REPOSITORY_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "RESOLVED-DEVICE " in completed.stdout
+
+    metadata = json.loads(metadata_out.read_text())
+    run_provenance = metadata["run_provenance"]
+    assert set(run_provenance) == set(provenance.PROVENANCE_KEYS)
+    assert set(run_provenance["opencl"]) == set(
+        provenance.OPENCL_PROVENANCE_KEYS
+    )
+    # the resolved device, not the requested --backend token
+    assert run_provenance["opencl"]["device"]
+    assert run_provenance["opencl"]["platform"]
 
 
 # }}}

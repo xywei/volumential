@@ -13,7 +13,6 @@ import csv
 import platform
 import subprocess
 import sys
-import time
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -22,6 +21,12 @@ import numpy as np
 import pyopencl as cl
 import pyopencl.array as cla
 
+from _provenance import (
+    collect_run_provenance,
+    first_call_and_warm,
+    resolved_device_line,
+    time_repeats,
+)
 from volumential.gaussian import (
     axis_aligned_slice_grid,
     default_overlapping_gaussian_mixture,
@@ -241,7 +246,15 @@ def _run_fmm(
     fmm_order: int,
     q_weights,
     source_host: np.ndarray,
+    repeat_count: int = 1,
 ):
+    """Drive the volume FMM ``repeat_count`` times.
+
+    Returns ``(potential, samples_s)``.  The samples are in call order, so
+    the first one carries this process's sumpy code generation for the
+    expansion kernels and the rest are warm; a single total would hide a
+    cost that can dominate a one-shot run.
+    """
     from volumential.volume_fmm import drive_volume_fmm
 
     source_vals = cla.to_device(queue, np.ascontiguousarray(source_host.astype(np.float64)))
@@ -253,18 +266,22 @@ def _run_fmm(
         q_order=q_order,
         fmm_order=fmm_order,
     )
-    queue.finish()
-    start = time.perf_counter()
-    (potential,) = drive_volume_fmm(
-        traversal,
-        wrangler,
-        source_vals * q_weights,
-        source_vals,
-        direct_evaluation=False,
-        list1_only=False,
+
+    def solve():
+        (potential,) = drive_volume_fmm(
+            traversal,
+            wrangler,
+            source_vals * q_weights,
+            source_vals,
+            direct_evaluation=False,
+            list1_only=False,
+        )
+        return potential
+
+    potential, samples_s = time_repeats(
+        solve, repeats=repeat_count, sync=queue.finish
     )
-    queue.finish()
-    return potential.get(queue), time.perf_counter() - start
+    return potential.get(queue), samples_s
 
 
 def _table_phase_seconds(timings, phase: str) -> float | str:
@@ -327,11 +344,17 @@ def run_benchmark(
     root_radius: float,
     force_recompute: bool,
     slice_size: int,
+    warm_repeats: int = 1,
 ) -> dict[str, Any]:
     mixture = default_overlapping_gaussian_mixture(3)
     device = _select_opencl_device(backend)
     ctx = cl.Context([device])
     queue = cl.CommandQueue(ctx)
+
+    # Say what the ICD loader resolved, not what --backend asked for: the
+    # two differ, and a run's seconds cannot be attributed without it.
+    run_provenance = collect_run_provenance(ctx)
+    print(resolved_device_line(run_provenance), flush=True)
 
     mesh, bbox, q_points, q_weights, tree, traversal = _build_geometry(
         ctx,
@@ -362,7 +385,7 @@ def run_benchmark(
         radial_quad_order=radial_quad_order,
         force_recompute=force_recompute,
     )
-    potential, fmm_wall_s = _run_fmm(
+    potential, fmm_samples_s = _run_fmm(
         ctx,
         queue,
         traversal,
@@ -371,7 +394,10 @@ def run_benchmark(
         fmm_order=fmm_order,
         q_weights=q_weights,
         source_host=source,
+        repeat_count=1 + warm_repeats,
     )
+    fmm_timing = first_call_and_warm(fmm_samples_s, prefix="fmm_")
+    fmm_wall_s = fmm_samples_s[0]
     error = potential - reference
     reference_norm = max(float(np.linalg.norm(reference)), 1.0e-300)
     weighted_reference_norm = max(float(np.sqrt(np.sum(weights * reference**2))), 1.0e-300)
@@ -520,6 +546,9 @@ def run_benchmark(
             "table_load_s": row["table_load_s"],
             "table_payload_bytes": row["table_payload_bytes"],
             "fmm_wall_s": row["fmm_wall_s"],
+            # fmm_wall_s stays the first call, so nothing that reads it
+            # changes meaning; the split below is what a cost claim quotes.
+            **fmm_timing,
         },
         "cache": {
             "cache_dir": str(cache_dir),
@@ -535,6 +564,7 @@ def run_benchmark(
             "version": VERSION_TEXT,
             "git_commit": _git_commit(),
         },
+        "run_provenance": run_provenance,
     }
     return {"rows": [row], "arrays": arrays, "metadata": metadata}
 
@@ -560,6 +590,16 @@ def main() -> int:
     parser.add_argument("--radial-quad-order", type=int)
     parser.add_argument("--root-radius", type=float, default=0.5)
     parser.add_argument("--slice-size", type=int, default=64)
+    parser.add_argument(
+        "--warm-repeats",
+        type=int,
+        default=1,
+        help=(
+            "extra FMM solves after the timed first call, used for the "
+            "warm median in the metadata sidecar; 0 records only the "
+            "first call and leaves warm_s unmeasured"
+        ),
+    )
     parser.add_argument("--force-recompute", action="store_true")
     parser.add_argument(
         "--out",
@@ -582,6 +622,9 @@ def main() -> int:
         default=Path("build/benchmarks/gaussian-free-space-cache"),
     )
     args = parser.parse_args()
+
+    if args.warm_repeats < 0:
+        parser.error("--warm-repeats must be >= 0")
 
     smoke = args.mode == "smoke"
     q_order = args.q_order if args.q_order is not None else (2 if smoke else 3)
@@ -609,6 +652,7 @@ def main() -> int:
         root_radius=args.root_radius,
         force_recompute=args.force_recompute,
         slice_size=args.slice_size,
+        warm_repeats=args.warm_repeats,
     )
     metadata = result["metadata"]
     metadata["command"] = {

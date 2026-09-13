@@ -36,6 +36,11 @@ from typing import Any
 import numpy as np
 import pyopencl as cl
 
+from _provenance import (
+    collect_run_provenance,
+    first_call_and_warm,
+    resolved_device_line,
+)
 from gaussian_free_space import (  # noqa: PLC2701 - sibling benchmark helper reuse
     _build_geometry,
     _coords_host,
@@ -186,11 +191,17 @@ def run_benchmark(
     residual_asymptotic_order: int,
     force_recompute: bool,
     slice_size: int,
+    warm_repeats: int = 1,
 ) -> dict[str, Any]:
     mixture = _source_mixture(source_alpha)
     device = _select_opencl_device(backend)
     ctx = cl.Context([device])
     queue = cl.CommandQueue(ctx)
+
+    # Say what the ICD loader resolved, not what --backend asked for: the
+    # two differ, and a run's seconds cannot be attributed without it.
+    run_provenance = collect_run_provenance(ctx)
+    print(resolved_device_line(run_provenance), flush=True)
 
     mesh, bbox, q_points, q_weights, tree, traversal = _build_geometry(
         ctx,
@@ -262,7 +273,7 @@ def run_benchmark(
         radial_quad_order=radial_quad_order,
         force_recompute=force_recompute,
     )
-    potential, fmm_wall_s = _run_fmm(
+    potential, fmm_samples_s = _run_fmm(
         ctx,
         queue,
         traversal,
@@ -271,7 +282,10 @@ def run_benchmark(
         fmm_order=fmm_order,
         q_weights=q_weights,
         source_host=effective_density,
+        repeat_count=1 + warm_repeats,
     )
+    fmm_timing = first_call_and_warm(fmm_samples_s, prefix="fmm_")
+    fmm_wall_s = fmm_samples_s[0]
 
     min_leaf_level, max_leaf_level = _leaf_stats(leaf_arrays)
     source_tail = gaussian_mixture_tail_report(mixture, bbox)
@@ -656,6 +670,9 @@ def run_benchmark(
             "table_load_s": row["table_load_s"],
             "table_payload_bytes": row["table_payload_bytes"],
             "fmm_wall_s": row["fmm_wall_s"],
+            # fmm_wall_s stays the first call, so nothing that reads it
+            # changes meaning; the split below is what a cost claim quotes.
+            **fmm_timing,
         },
         "cache": {
             "cache_dir": str(cache_dir),
@@ -671,6 +688,7 @@ def run_benchmark(
             "version": VERSION_TEXT,
             "git_commit": _git_commit(),
         },
+        "run_provenance": run_provenance,
         "stress_cases_designed_not_run": [
             "cut or clipped Gaussian support to expose boundary-layer "
             "rho_eff artifacts",
@@ -720,6 +738,16 @@ def main() -> int:
         help="Taylor order for the erfc residual potential correction",
     )
     parser.add_argument("--slice-size", type=int, default=64)
+    parser.add_argument(
+        "--warm-repeats",
+        type=int,
+        default=1,
+        help=(
+            "extra FMM solves after the timed first call, used for the "
+            "warm median in the metadata sidecar; 0 records only the "
+            "first call and leaves warm_s unmeasured"
+        ),
+    )
     parser.add_argument("--force-recompute", action="store_true")
     parser.add_argument(
         "--out",
@@ -747,6 +775,9 @@ def main() -> int:
         default=Path("build/benchmarks/dmk-effective-density-cache"),
     )
     args = parser.parse_args()
+
+    if args.warm_repeats < 0:
+        parser.error("--warm-repeats must be >= 0")
 
     smoke = args.mode == "smoke"
     q_order = args.q_order if args.q_order is not None else 4
@@ -784,6 +815,7 @@ def main() -> int:
         residual_asymptotic_order=args.residual_asymptotic_order,
         force_recompute=args.force_recompute,
         slice_size=args.slice_size,
+        warm_repeats=args.warm_repeats,
     )
     metadata = result["metadata"]
     metadata["command"] = {

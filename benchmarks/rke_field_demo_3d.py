@@ -16,7 +16,6 @@ import csv
 import platform
 import subprocess
 import sys
-import time
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +26,12 @@ _BENCH_DIR = Path(__file__).resolve().parent
 if str(_BENCH_DIR) not in sys.path:
     sys.path.insert(0, str(_BENCH_DIR))
 
+from _provenance import (  # noqa: E402
+    collect_run_provenance,
+    first_call_and_warm,
+    resolved_device_line,
+    time_repeats,
+)
 from split_parameter_sweep import (  # noqa: E402
     _capture_table_get_timings,
     _clear_sqlite_cache,
@@ -301,14 +306,16 @@ def _run_path(
             list1_only=False,
         )
 
-    # One untimed warmup absorbs JIT compilation, then one timed solve.
-    solve()
-    queue.finish()
-    start = time.perf_counter()
-    (potential,) = solve()
-    queue.finish()
-    wall_s = time.perf_counter() - start
-    return potential.get(queue), wall_s, wrangler
+    # The first solve of a process absorbs sumpy's code generation and the
+    # kernel compilation, and can be orders of magnitude larger than the
+    # solve itself.  It used to be an untimed warmup; timing it costs
+    # nothing and turns a discarded number into the one that explains a
+    # one-shot driver's wall clock.
+    (potential,), samples_s = time_repeats(
+        solve, repeats=2, sync=queue.finish
+    )
+    wall_s = samples_s[-1]
+    return potential.get(queue), wall_s, samples_s, wrangler
 
 
 def _prepare_direct_table(
@@ -512,6 +519,12 @@ def run_benchmark(
     device = _select_opencl_device(cl, backend)
     ctx = cl.Context([device])
     queue = cl.CommandQueue(ctx)
+
+    # Say what the ICD loader resolved, not what --backend asked for: the
+    # two differ, and a run's seconds cannot be attributed without it.
+    run_provenance = collect_run_provenance(ctx)
+    print(resolved_device_line(run_provenance), flush=True)
+
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     mesh, q_points, q_weights, tree, traversal = _build_geometry(
@@ -549,7 +562,7 @@ def run_benchmark(
             build_config=direct_build_config,
             force_recompute=force_recompute,
         )
-        direct_potential, direct_wall_s, _ = _run_path(
+        direct_potential, direct_wall_s, direct_samples_s, _ = _run_path(
             ctx=ctx,
             queue=queue,
             traversal=traversal,
@@ -590,7 +603,7 @@ def run_benchmark(
 
         for lam in yukawa_lam:
             direct_potential, direct_wall_s, direct_costs = direct_results[lam]
-            split_potential, split_wall_s, _ = _run_path(
+            split_potential, split_wall_s, split_samples_s, _ = _run_path(
                 ctx=ctx,
                 queue=queue,
                 traversal=traversal,
@@ -689,6 +702,15 @@ def run_benchmark(
                     "timing": {
                         "direct_solve_wall_s": direct_wall_s,
                         "split_solve_wall_s": split_wall_s,
+                        # The *_wall_s pair stays warm, as it always was;
+                        # these say what the first solve of the process
+                        # cost, which is mostly sumpy code generation.
+                        **first_call_and_warm(
+                            direct_samples_s, prefix="direct_solve_"
+                        ),
+                        **first_call_and_warm(
+                            split_samples_s, prefix="split_solve_"
+                        ),
                     },
                 }
             )
@@ -773,6 +795,7 @@ def run_benchmark(
             "version": VERSION_TEXT,
             "git_commit": _git_commit(),
         },
+        "run_provenance": run_provenance,
     }
     return {"rows": rows, "arrays": arrays, "metadata": metadata}
 
