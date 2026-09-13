@@ -30,6 +30,57 @@ jobs:
           environment-name: testing
           cache-downloads: true
           generate-run-shell: true
+      # This job has aborted with SIGABRT after the first 28 tests on every
+      # run since at least 2026-08-02, at the point where the first OpenCL
+      # program is compiled (xywei/volumential#158).  We have no macOS
+      # machine, so these two steps exist to make the next run's log say
+      # which platform and which step dies: the inventory separates "no
+      # usable platform" from "a platform that crashes on enumeration", and
+      # the one-kernel build separates a platform crash from a
+      # kernel-compilation crash.  ``continue-on-error`` keeps them
+      # diagnostic: neither may change this job's verdict.
+      - name: OpenCL platform inventory (diagnostic)
+        shell: micromamba-shell {0}
+        continue-on-error: true
+        env:
+          POCL_DEBUG: warning
+        run: |
+          python -c "import pyopencl as cl; [print(p.name, p.version, [ (d.name, d.type, d.version) for d in p.get_devices()]) for p in cl.get_platforms()]"
+      - name: Compile and run one OpenCL kernel per CPU device (diagnostic)
+        shell: micromamba-shell {0}
+        continue-on-error: true
+        env:
+          POCL_DEBUG: warning
+        run: |
+          python - <<'PYEOF'
+          import traceback
+
+          import numpy as np
+          import pyopencl as cl
+          import pyopencl.array as cla
+
+          source = "kernel void k(global double *y){y[get_global_id(0)]=1.0;}"
+          for platform in cl.get_platforms():
+              for device in platform.get_devices():
+                  if not device.type & cl.device_type.CPU:
+                      continue
+                  print(f"--- {platform.name!r} / {device.name!r}", flush=True)
+                  # A Python exception is a finding, not a reason to stop:
+                  # the next device may be the one that aborts, and only the
+                  # abort itself should end this step.
+                  try:
+                      ctx = cl.Context([device])
+                      queue = cl.CommandQueue(ctx)
+                      print("    building", flush=True)
+                      program = cl.Program(ctx, source).build()
+                      print("    built", flush=True)
+                      y = cla.zeros(queue, 4, np.float64)
+                      program.k(queue, y.shape, None, y.data)
+                      queue.finish()
+                      print(f"    ran -> {y.get()}", flush=True)
+                  except Exception:
+                      traceback.print_exc()
+          PYEOF
       - name: Main Script
         shell: micromamba-shell {0}
         run: |
