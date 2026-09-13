@@ -87,12 +87,17 @@ knowing before promoting one:
   `split_parameter_sweep.py` additionally record `"backend"` as a requested
   label. Read the label as a *request* and `run_provenance.opencl` as what
   answered; `command.argv` preserves an explicitly passed `--backend`.
-- **Verdict.** Only `graded_tree_convergence.py` writes one — observed orders,
-  the asymptotic-regime statement, the matched-error DOF advantage — and only
-  on a successful run: a gate failure there writes the CSV and re-raises
+- **Verdict.** Two of them write one, and differently.
+  `graded_tree_convergence.py` writes a rich one — observed orders, the
+  asymptotic-regime statement, the matched-error DOF advantage — but only on
+  a successful run: a gate failure there writes the CSV and re-raises
   *before* the sidecar, so the failing verdict is not in a file at all.
-  `rke_field_demo_3d.py` validates before it builds metadata, and the other
-  two record errors and timings without a status field.
+  `split_parameter_sweep.py` is the opposite: its sidecar is written on
+  every path, and carries a boolean `gate_failed` covering both the gates
+  that raise (`GATE-FAILED`) and the far-field check that exits 2, so a
+  failed run is machine-readable rather than absent. `rke_field_demo_3d.py`
+  validates before it builds metadata, and the remaining two record errors
+  and timings without a status field.
 
 **Every other driver in `benchmarks/` has no `--metadata-out` at all** — the
 two adaptive timing drivers, `table_equivalence_cache.py`,

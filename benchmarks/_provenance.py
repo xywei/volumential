@@ -383,7 +383,14 @@ def time_repeats(
 
     result = None
     samples: list[float] = []
-    for _ in range(repeats):
+    for index in range(repeats):
+        if index:
+            # Drop the previous call's result *outside* the timed region.
+            # These results are device allocations: holding one while the
+            # next call runs needs a second output buffer for the whole of
+            # that call, and charges its deallocation to that call's
+            # sample.  Only the last result survives the loop.
+            result = None
         start = time.perf_counter()
         result = func()
         if sync is not None:

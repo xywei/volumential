@@ -3719,6 +3719,22 @@ def main() -> int:
     if args.max_fmm_order is not None and args.max_fmm_order < fmm_order:
         parser.error("--max-fmm-order must be at least --fmm-order")
 
+    if args.min_targets is not None:
+        # ``run_benchmark`` documents this check as happening before any
+        # device is selected, and the provenance preflight below touches the
+        # ICD.  Run the pure node-count check first so a misconfigured
+        # dispatch still reports *that*, on a machine with no OpenCL
+        # platform included.  ``run_benchmark`` repeats it; it is pure.
+        # Deliberately not wrapped: letting the RuntimeError propagate
+        # keeps the exact failure ``run_benchmark`` used to produce, rather
+        # than turning it into an argparse exit code that collides with the
+        # far-field one.
+        _require_min_targets(
+            _uniform_target_count(dim, q_order, nlevels),
+            args.min_targets,
+            dim,
+        )
+
     # Resolve the device before the sweep starts, so a multi-hour log says
     # on its first line what answered --backend rather than only what was
     # asked for.  ``run_benchmark`` resolves the same device the same way.
