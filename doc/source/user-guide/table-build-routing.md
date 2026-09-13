@@ -138,8 +138,10 @@ So this is specific to PoCL's host-CPU device on targets with no FMA unit, and
 it is not confined to `sincos`: every fp64 builtin PoCL routes through its
 `fma()` — `remquo`, `remainder`, `acospi`, `asinpi`, `atanpi`, `atan2pi`,
 `acosh`, `asinh`, `atanh`, and the `sincos`/`log`/`exp` helpers — pays it on
-such a host. The rewrite above removes the table builder's exposure; the
-general consequence is that a run's metadata has to record the CPU class, and
+such a host. The rewrite above removes the exposure for the standard real-parameter
+kernels, and only for those — an evanescent Helmholtz or other unprovable
+phase keeps its `cdouble_exp` and stays exposed on such a host. The general
+consequence is that a run's metadata has to record the CPU class, and
 that seconds from a host without hardware FMA are not comparable with seconds
 from one that has it (see {doc}`../benchmarks/index`). Tracked in
 [#138](https://github.com/xywei/volumential/issues/138).

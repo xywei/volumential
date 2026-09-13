@@ -90,14 +90,17 @@ the serial FMMLib far field is *slower* than the sumpy one. The `_imany`
 routines scale about 17x from 1 to 30 threads, but only once `pyfmmlib`
 actually carries OpenMP, which the PyPI `2024.1.1` wheel does not.
 
-Only one property of the build explains those middle rows:
+Those middle rows are both the same thing — a **serial** rotation M2L — and
+there are two ways to get one, which the same numbers cannot tell apart:
 
-- **No OpenMP.** The rotation M2L then runs on one thread whatever
-  `OMP_NUM_THREADS` says, which is the 300.1 s and 317.5 s rows. Only the
-  `ldd`/`otool` check on `_internal*.so` sees this — look for `libgomp` on
-  Linux, `libomp` on macOS. It is what
-  {doc}`../getting-started/installation` means by "verify the build before
-  trusting any FMMLib timing".
+- **The build has no OpenMP.** `OMP_NUM_THREADS` is then inert, as in the
+  317.5 s row, where it was set to 8. Only the `ldd`/`otool` check on
+  `_internal*.so` sees this — look for `libgomp` on Linux, `libomp` on
+  macOS. It is what {doc}`../getting-started/installation` means by "verify
+  the build before trusting any FMMLib timing".
+- **The build has OpenMP and you asked for one thread**, as in the 300.1 s
+  row. That build passes the `ldd`/`otool` check, so a slow run is *not*
+  evidence of a bad build; check the thread count you actually set as well.
 
 A second, *independent* build property costs you a different stage and must
 not be confused with it:
@@ -115,10 +118,12 @@ not be confused with it:
   supplying `dipole_vec` does, so a dipole run takes the per-box path (or
   the inherited dipole routine) no matter what those four imports say.
 
-Neither announces itself, so a mis-provisioned environment is correct, slow,
-and indistinguishable from a correct one except by timing. Run both checks
-before trusting any FMMLib number, and read a 300-second M2L as the first
-condition, never the second.
+None of these announces itself, so a mis-provisioned environment is correct,
+slow, and indistinguishable from a correct one except by timing. Before
+trusting any FMMLib number, check the OpenMP runtime, the thread count in
+force, and the four wrapper imports — and read a 300-second M2L as serial
+execution from one of the first two, never as the wrapper condition, which
+is a different stage.
 
 ## On a GPU the question goes away
 
