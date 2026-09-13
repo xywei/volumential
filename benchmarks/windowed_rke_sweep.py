@@ -72,6 +72,7 @@ import numpy as np
 
 from _provenance import (
     collect_run_provenance,
+    public_path,
     resolved_device_line,
 )
 
@@ -2152,9 +2153,9 @@ def main() -> int:
         ),
         "classical_tolerance": CLASSICAL_TOLERANCE,
         "complex_phases": complex_phases,
-        "cache_dir": str(args.cache_dir),
+        "cache_dir": public_path(args.cache_dir),
         "skip_3d_tight": args.skip_3d_tight,
-        "csv_path": str(csv_path),
+        "csv_path": public_path(csv_path),
         "row_count": len(rows),
         **run_info,
     }

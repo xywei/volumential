@@ -24,6 +24,8 @@ import pyopencl.array as cla
 from _provenance import (
     collect_run_provenance,
     first_call_and_warm,
+    public_argv,
+    public_path,
     resolved_device_line,
     time_repeats,
 )
@@ -551,11 +553,15 @@ def run_benchmark(
             **fmm_timing,
         },
         "cache": {
-            "cache_dir": str(cache_dir),
+            "cache_dir": public_path(cache_dir),
             "force_recompute": force_recompute,
         },
         "environment": {
-            "hostname": platform.node(),
+            # A neutral label, as ``rke_field_demo_3d.py`` already writes:
+            # this sidecar is promoted next to its CSV, and the real node
+            # name is infrastructure, not evidence.  What the number
+            # depends on is in ``run_provenance`` instead.
+            "hostname": "remote-compute-host",
             "python": platform.python_version(),
             "platform": platform.platform(),
             "opencl_device": _device_metadata(device),
@@ -656,13 +662,13 @@ def main() -> int:
     )
     metadata = result["metadata"]
     metadata["command"] = {
-        "argv": sys.argv,
-        "cwd": str(Path.cwd()),
+        "argv": public_argv(sys.argv),
+        "cwd": public_path(Path.cwd()),
     }
     metadata["outputs"] = {
-        "summary_csv": str(args.out),
-        "arrays_npz": str(args.arrays_out),
-        "metadata_json": str(args.metadata_out),
+        "summary_csv": public_path(args.out),
+        "arrays_npz": public_path(args.arrays_out),
+        "metadata_json": public_path(args.metadata_out),
     }
     write_csv(args.out, result["rows"])
     write_npz(args.arrays_out, **result["arrays"])

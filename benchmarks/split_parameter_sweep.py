@@ -3747,7 +3747,10 @@ def main() -> int:
                 "backend": args.backend,
                 # Redacted: a sidecar is promoted next to its CSV, and a
                 # raw argv publishes a user name and a mount layout.
-                "command": {"argv": public_argv(sys.argv)},
+                "command": {
+                    "argv": public_argv(sys.argv),
+                    "cwd": public_path(Path.cwd()),
+                },
                 "outputs": {
                     "summary_csv": public_path(args.out),
                     "metadata_json": public_path(metadata_out),

@@ -200,11 +200,15 @@ multi-hour log says on its first lines what answered:
 RESOLVED-DEVICE platform='Portable Computing Language' platform_version='OpenCL 3.0 PoCL 7.0 ...' device='cpu-...' device_type=CPU driver_version='7.0'
 ```
 
-None of this carries a host name, user name or path — and the sidecars that
-record a command redact it through the same module's `public_argv()` and
-`public_path()`, so an absolute output path becomes a basename rather than a
-user name and a mount layout. A sidecar can therefore be committed next to
-its CSV. `test/test_benchmark_helpers.py` pins the shape of
+None of this carries a host name, user name or path, and neither does the
+rest of a sidecar any more: every driver that records a command, an output
+path or a cache directory now passes it through the same module's
+`public_argv()` and `public_path()`, so an absolute path becomes a path
+relative to the run directory or a bare basename, and `environment.hostname`
+is the neutral label `"remote-compute-host"` rather than `platform.node()`
+(the key is unchanged; only the value stops being infrastructure). A sidecar
+can therefore be committed next to its CSV — which is the point, since the
+wrapper metadata that would otherwise carry the environment is private. `test/test_benchmark_helpers.py` pins the shape of
 the block against a mocked context, so it is checked on a machine with no
 OpenCL platform at all.
 
