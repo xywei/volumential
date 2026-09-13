@@ -20,8 +20,8 @@ gets **none** of these checks. See
 | Typos | `crate-ci/typos` over the workflows, `volumential/`, `README.md`, `DEVELOPMENT.md` and `pyproject.toml`, configured by `.typos.toml` |
 | Ruff | `ruff check --select E9,F63,F7,F82` — the error-level smoke subset, not the full `ruff.toml` rule set |
 | Type checking | `basedpyright -p pyproject.toml --level error` |
-| Testing (Linux) | the default pytest suite under a micromamba environment, with a wrapper timeout and a diagnostics artifact (`linux-pytest.log`, `pytest.xml`) uploaded on every outcome |
-| Examples (Smoke) | three examples under `VOLUMENTIAL_EXAMPLE_SMOKE=1` — `laplace2d.py`, `helmholtz2d.py`, `helmholtz3d.py` — plus several benchmark drivers in `--mode smoke` |
+| Testing (Linux) | the default pytest suite under a micromamba environment, installing `.[test,fmmlib]`, with a wrapper timeout and a diagnostics artifact (`linux-pytest.log`, `pytest.xml`) uploaded on every outcome |
+| Examples (Smoke) | three examples under `VOLUMENTIAL_EXAMPLE_SMOKE=1` — `laplace2d.py`, `helmholtz2d.py`, `helmholtz3d.py` — plus several benchmark drivers in `--mode smoke`, under `set -euo pipefail` |
 | Documentation | this site: `sphinx-build -W --keep-going -n -b html`, then the two coverage reports (`-b coverage` and `interrogate`), then `-b linkcheck` last. The built HTML is uploaded as a `docs-html-*` artifact and the reports as `docs-coverage-*`; the job installs `.[test,doc]` |
 
 `PYOPENCL_CTX` and `PYOPENCL_TEST` are pinned to `portable:0` at the workflow
@@ -29,6 +29,25 @@ level, so CI always runs on PoCL rather than on whatever enumerates first.
 The documentation job needs no device, but it does import `volumential`, so it
 uses the same micromamba environment as the rest: `pyopencl` and `loopy` have
 to be importable.
+
+Two details of these jobs are load-bearing rather than incidental, and both
+were added in [#151](https://github.com/xywei/volumential/issues/151):
+
+- The smoke job runs its ten commands in **one** `run:` block, and the shell
+  `setup-micromamba` generates does not pass `-e`. Without the `set -euo
+  pipefail` that now opens the block, only the last command's exit status
+  reaches GitHub, and a failing example is reported green — which is exactly
+  what happened to `helmholtz2d.py` for as long as it was broken. Keep the
+  `set` line if the block is ever rewritten, or give each command its own step.
+- `Testing (Linux)` installs the `fmmlib` extra, which resolves `pyfmmlib` to
+  the upstream `main` commit `uv.lock` pins and **builds it from source**
+  against the Fortran compiler `.test-conda-env-py3.yml` installs. That build
+  is what gives `test/test_fmmlib_batched_stages.py` its batched
+  `{l,h}{2,3}dformmp_imany` entry points; against a released wheel, PyPI's or
+  conda-forge's, eight of its tests skip and the batched-P2M path has no CI
+  coverage. The install step asserts the four wrappers are importable, so a
+  build that silently fell back fails the environment rather than quietly
+  reducing the suite (see {doc}`../getting-started/installation`).
 
 The link check runs last on purpose: it is the only step whose outcome depends
 on hosts nobody here controls, so a rate-limited or unreachable third party

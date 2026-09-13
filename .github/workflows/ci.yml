@@ -188,10 +188,25 @@ jobs:
 
           python -m pip install --upgrade pip
           python -m pip install uv
-          uv pip install --system --editable ".[test]"
+
+          # The ``fmmlib`` extra is what gives test_fmmlib_batched_stages.py
+          # something to test: it resolves pyfmmlib to the upstream ``main``
+          # commit uv.lock pins, which carries the batched
+          # ``{l,h}{2,3}dformmp_imany`` wrappers and the OpenMP feature option.
+          # No released wheel -- PyPI's or conda-forge's -- has them, so the
+          # batched-P2M tests skipped for "pyfmmlib lacks the formmp_imany
+          # routines".  The source build needs a Fortran compiler, which
+          # .test-conda-env-py3.yml installs; meson-python and ninja come from
+          # uv's build isolation.
+          uv pip install --system --editable ".[test,fmmlib]"
 
           python -V
           python -m pip --version
+
+          # Fail the environment, not the tests, if the build silently fell
+          # back to a wrapper-less pyfmmlib (see DEVELOPMENT.md).
+          python -c "from pyfmmlib import \
+              h2dformmp_imany, h3dformmp_imany, l2dformmp_imany, l3dformmp_imany"
 
       - name: Run pytest suite (guarded)
         shell: micromamba-shell {0}
