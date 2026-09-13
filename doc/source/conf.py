@@ -249,7 +249,26 @@ html_theme_options = {
         "json_url": "https://xywei.github.io/volumential/_static/switcher.json",
         "version_match": "latest",
     },
+    # The theme would otherwise fetch ``json_url`` at build time and warn when
+    # it is unreachable, and every documentation build runs with ``-W``: the
+    # live site would become a prerequisite for rebuilding or recovering it.
+    # The committed copy is validated below instead; the browser still reads
+    # the absolute URL.
+    "check_switcher": False,
 }
+
+# Validate the committed switcher index ourselves, since the theme's remote
+# check is off: it must parse and carry the entry ``version_match`` names.
+with open(Path(__file__).parent / "_static" / "switcher.json", encoding="utf-8") as _f:
+    _switcher_entries = json.load(_f)
+if not any(
+    _entry.get("version") == html_theme_options["switcher"]["version_match"]
+    for _entry in _switcher_entries
+):
+    raise ValueError(
+        "doc/source/_static/switcher.json has no entry matching version_match "
+        f"{html_theme_options['switcher']['version_match']!r}"
+    )
 
 # -- Sitemap and social metadata ------------------------------------------
 

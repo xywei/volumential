@@ -206,7 +206,7 @@ run is worse than none.
 
 ### Sitemap and social metadata
 
-`html_baseurl` is the GitHub Pages URL the site is heading for, and three
+`html_baseurl` is the GitHub Pages URL the site is published at, and three
 things read it: Sphinx writes a `canonical` link per page, `sphinx-sitemap`
 writes `sitemap.xml`, and `sphinxext.opengraph` writes `og:url`. The sitemap
 uses the flat `{link}` scheme, since the site publishes `latest` only, and
