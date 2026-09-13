@@ -3,28 +3,24 @@ name: Docs Pages
 # Builds the documentation site from ``main`` and publishes it to GitHub Pages
 # at https://xywei.github.io/volumential/ .
 #
-# INERT UNTIL PAGES IS TURNED ON.  Publishing changes a public surface, so the
-# repository owner enables it, not this workflow: Settings -> Pages -> Build
-# and deployment -> Source: "GitHub Actions".  Until that is set, the ``build``
-# job succeeds and the ``deploy`` job fails with "Get Pages site failed" --
-# nothing is published and nothing else in CI is affected.  The workflow does
-# not enable Pages for itself (``actions/configure-pages`` with
-# ``enablement: true`` would, and needs a token beyond GITHUB_TOKEN); that
-# choice stays with the owner.
+# Pages has been enabled for the repository since 2026-09-13 (Settings ->
+# Pages -> Build and deployment -> Source: "GitHub Actions"), a setting the
+# repository owner controls, not this workflow: publishing changes a public
+# surface, so the workflow never enables Pages for itself
+# (``actions/configure-pages`` with ``enablement: true`` would, and needs a
+# token beyond GITHUB_TOKEN).  Should the setting ever be turned off, the
+# ``build`` job still succeeds and the ``deploy`` job fails with "Get Pages
+# site failed"; nothing else in CI is affected.
 #
-# Three follow-ups belong to the same moment the site first responds, and are
-# deliberately not made here: the switcher URL in doc/source/conf.py (with the
-# ``linkcheck_ignore`` entry for the Pages host dropped), the documentation
-# link in README.md, and the repository homepage.  Until then the published
-# build is still the one the README points at.
-#
-# See xywei/volumential#145.
+# The site is what doc/source/conf.py's ``html_baseurl`` and the version
+# switcher's absolute ``json_url`` name, and what README.md and the repository
+# homepage link to.  See xywei/volumential#145.
 
 on:
   push:
     branches: [ 'main' ]
-  # Manual runs exist for the first publication after Pages is enabled, when
-  # there may be no new commit on main to trigger one.  ``workflow_dispatch``
+  # Manual runs exist for republishing without a new commit on main (the
+  # first publication on 2026-09-13 was one).  ``workflow_dispatch``
   # takes a ref, though, and a dispatch from a branch or a tag would otherwise
   # publish that ref to the production site; both jobs below are guarded
   # against it.

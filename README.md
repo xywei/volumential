@@ -50,9 +50,9 @@ thing in seconds at reduced order. The
 
 The site is published at <https://xywei.github.io/volumential/>, built from
 [`doc/source`](./doc/source) and deployed from `main` by the *Docs Pages*
-workflow on every merge. Every pull request gets a strict build and a
-downloadable HTML preview from the `Documentation` CI job. The earlier mirror at
-xiaoyu-wei.com is superseded by this site.
+workflow on every merge. Every pull request against `main` gets a strict build
+and a downloadable HTML preview from the `Documentation` CI job. The earlier
+mirror at xiaoyu-wei.com is superseded by this site.
 
 - [Getting started][docs-getting-started] — install, a first volume potential,
   device selection
