@@ -114,14 +114,20 @@ from the bundled kernel library, whose range reduction and polynomial call
 fused operation. On an x86-64 CPU **without** an FMA unit — AVX-only,
 pre-Haswell — the backend cannot lower that to a hardware instruction and
 emits a call to the C library's *software* `fma`, at about 6.2 ns per element:
-18 of them predict 112 ns against the roughly 104 ns measured. `sin` and `cos`
-never enter the kernel library at all — they are clang builtins, vectorized
-and lowered to `libmvec` — which is why the pair costs the ~1.6 ns quoted
-above rather than 200.
-The ratio is about 146x on such a CPU, about 1x on the other CPU OpenCL
-runtime on the same machine, and about 1x on a GPU (both NVIDIA's runtime and
-PoCL's CUDA device compile `sincos` from the vendor's device library, and
-`fma` is a single instruction there).
+18 of them predict 112 ns, against 104 ns measured for `sincos` in a
+self-contained reproducer. `sin` and `cos` never enter the kernel library at
+all — they are clang builtins, vectorized and lowered to `libmvec` — and in
+that same reproducer the pair costs about 0.7 ns, a ratio of about **146x**.
+
+Those two numbers are the reproducer's, not the ones quoted above: the
+~200 ns and ~1.6 ns figures were measured through the fused Duffy program,
+where each call sits in the surrounding quadrature kernel, so the absolute
+costs differ and the ratio there is about 130x. Two harnesses, one
+conclusion — do not mix a numerator from one with a denominator from the
+other. On the other CPU OpenCL runtime on the same machine the ratio is about
+1x, and on a GPU about 1x as well (both NVIDIA's runtime and PoCL's CUDA
+device compile `sincos` from the vendor's device library, and `fma` is a
+single instruction there).
 
 So this is specific to PoCL's host-CPU device on targets with no FMA unit, and
 it is not confined to `sincos`: every fp64 builtin PoCL routes through its

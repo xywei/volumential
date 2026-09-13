@@ -11,7 +11,8 @@ wrong is an order of magnitude rather than a few percent.
 
 | kernel and dimension | CPU OpenCL device | fp64 GPU |
 | --- | --- | --- |
-| 3D Helmholtz, high order | **FMMLib**, with an OpenMP `pyfmmlib` | **sumpy** |
+| 3D Helmholtz, high order, coincident source/target tree | **FMMLib**, with an OpenMP `pyfmmlib` | **sumpy** |
+| 3D Helmholtz, high order, distinct target array | **sumpy**, unless you interpolate yourself (see below) | **sumpy** |
 | 3D Laplace | either; measure | **sumpy** |
 | 2D Laplace / Helmholtz | either; measure | **sumpy** |
 | Yukawa, any dimension | **sumpy** (FMMLib has no Yukawa) | **sumpy** |
@@ -64,29 +65,43 @@ rotation-based M2L does roughly twenty times less total work:
 | FMMLib rotation M2L | OpenMP build, 1 thread | 1 | 300.1 | 310.5 |
 | **FMMLib rotation M2L** | **OpenMP build** | **30** | **17.3–17.9** | **23.5–24.2** |
 
+The two columns are **not a decomposition of one another**: the M2L column
+comes from the phase profiler, which synchronizes the OpenCL queue at every
+stage boundary, and the warm-solve column from unprofiled repeats of the same
+configuration. That is why the no-OpenMP row's M2L slightly exceeds its own
+solve — different runs, different instrumentation — and why neither column
+should be subtracted from the other.
+
 That is **9.1x on the same hardware**, and it is entirely a threading result:
 the serial FMMLib far field is *slower* than the sumpy one. The `_imany`
 routines scale about 17x from 1 to 30 threads, but only once `pyfmmlib`
 actually carries OpenMP, which the PyPI `2024.1.1` wheel does not.
 
-Two *independent* ways a `pyfmmlib` build gives you the middle rows of that
-table instead of the last one, and the checks for them are different:
+Only one property of the build explains those middle rows:
 
-- **The batched `{l,h}{2,3}dformmp_imany` wrappers are missing.**
-  `form_multipoles` selects them only when
-  `_get_batched_formmp_routine()` finds one, and otherwise takes the serial
-  per-box path — silently. Check by importing all four wrappers, as
-  {doc}`../getting-started/installation` shows: the backend picks one from
-  the equation and the dimension, so a successful 3D Laplace import does not
-  rule out a 2D or Helmholtz fallback.
-- **The wrappers are present but the build has no OpenMP.** Nothing falls
-  back here; the batched routines simply run on one thread, which is the
-  300.1 s row above. Only the `ldd`/`otool` check on `_internal*.so` sees
-  this — look for `libgomp` on Linux, `libomp` on macOS.
+- **No OpenMP.** The rotation M2L then runs on one thread whatever
+  `OMP_NUM_THREADS` says, which is the 300.1 s and 317.5 s rows. Only the
+  `ldd`/`otool` check on `_internal*.so` sees this — look for `libgomp` on
+  Linux, `libomp` on macOS. It is what
+  {doc}`../getting-started/installation` means by "verify the build before
+  trusting any FMMLib timing".
+
+A second, *independent* build property costs you a different stage and must
+not be confused with it:
+
+- **The batched `{l,h}{2,3}dformmp_imany` wrappers are missing.** Only
+  `FPNDFMMLibExpansionWrangler.form_multipoles` consults
+  `_get_batched_formmp_routine()`, so their absence selects the serial
+  per-box **P2M** path and leaves M2L alone — an OpenMP build without them
+  still gets the parallel M2L above. Check by importing all four wrappers,
+  as the installation page shows: the backend picks one from the equation
+  and the dimension, so a successful 3D Laplace import does not rule out a
+  2D or Helmholtz fallback.
 
 Neither announces itself, so a mis-provisioned environment is correct, slow,
 and indistinguishable from a correct one except by timing. Run both checks
-before trusting any FMMLib number.
+before trusting any FMMLib number, and read a 300-second M2L as the first
+condition, never the second.
 
 ## On a GPU the question goes away
 
@@ -144,6 +159,14 @@ belong in one table whatever recorded them.
   solve is still roughly three quarters of it. What changes is that M2M and
   L2L stop being free — they become roughly 19 % of the solve — so a profile
   taken before the switch does not describe the run after it.
+- **Distinct source and target arrays change the evaluation path, not just
+  the backend.** {func}`volumential.volume_fmm.drive_volume_fmm` runs its
+  automatic source-mode solve and interpolation onto the target array only
+  for a `FPNDSumpyExpansionWrangler`; an FMMLib wrangler skips that branch
+  and evaluates through the traversal as given. On such a geometry the two
+  wranglers are not doing the same computation, so their timings are not
+  comparable and their results need not agree. Either keep the
+  coincident-tree setup, or do the interpolation yourself before comparing.
 - **Check the OpenMP build.** Repeated because it is the single most common
   way this measurement is mis-taken: without it, FMMLib is slower than sumpy
   here, not faster.
