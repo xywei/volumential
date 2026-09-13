@@ -40,14 +40,25 @@ were added in [#151](https://github.com/xywei/volumential/issues/151):
   what happened to `helmholtz2d.py` for as long as it was broken. Keep the
   `set` line if the block is ever rewritten, or give each command its own step.
 - `Testing (Linux)` installs the `fmmlib` extra, which resolves `pyfmmlib` to
-  the upstream `main` commit `uv.lock` pins and **builds it from source**
+  a Git source rather than to a release and so **builds it from source**
   against the Fortran compiler `.test-conda-env-py3.yml` installs. That build
   is what gives `test/test_fmmlib_batched_stages.py` its batched
   `{l,h}{2,3}dformmp_imany` entry points; against a released wheel, PyPI's or
   conda-forge's, eight of its tests skip and the batched-P2M path has no CI
-  coverage. The install step asserts the four wrappers are importable, so a
-  build that silently fell back fails the environment rather than quietly
-  reducing the suite (see {doc}`../getting-started/installation`).
+  coverage (see {doc}`../getting-started/installation`).
+
+  Two details of *that* are worth knowing before editing the step. First,
+  `uv pip install` does not read `uv.lock` — only `uv sync` does, and an exact
+  sync would uninstall the conda-provided half of the environment — so the
+  `[tool.uv.sources]` entry, which names a repository but no revision, would
+  float on upstream `main`. `.github/scripts/pyfmmlib_requirement.py` reads the
+  locked commit and prints it as a requirement, which the step passes to `uv`;
+  `uv.lock` therefore stays both the one place the revision is written down and
+  the thing that decides what CI builds. Second, the step then imports the four
+  wrappers, because `FPNDFMMLibExpansionWrangler` falls back to the serial
+  per-box path *without complaining* when they are missing: a build that
+  silently fell back has to fail the environment rather than quietly reduce the
+  suite to what it covered before.
 
 The link check runs last on purpose: it is the only step whose outcome depends
 on hosts nobody here controls, so a rate-limited or unreachable third party

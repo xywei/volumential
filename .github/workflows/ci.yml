@@ -190,15 +190,26 @@ jobs:
           python -m pip install uv
 
           # The ``fmmlib`` extra is what gives test_fmmlib_batched_stages.py
-          # something to test: it resolves pyfmmlib to the upstream ``main``
-          # commit uv.lock pins, which carries the batched
+          # something to test: it resolves pyfmmlib to a Git source rather
+          # than to a release, and only upstream ``main`` carries the batched
           # ``{l,h}{2,3}dformmp_imany`` wrappers and the OpenMP feature option.
           # No released wheel -- PyPI's or conda-forge's -- has them, so the
           # batched-P2M tests skipped for "pyfmmlib lacks the formmp_imany
           # routines".  The source build needs a Fortran compiler, which
           # .test-conda-env-py3.yml installs; meson-python and ninja come from
           # uv's build isolation.
-          uv pip install --system --editable ".[test,fmmlib]"
+          #
+          # Which commit of it, though, uv.lock does not decide by itself
+          # here: ``uv pip install`` does not read the lock -- only ``uv sync``
+          # does, and an exact sync would uninstall the conda half of this
+          # environment -- so the unqualified source in ``[tool.uv.sources]``
+          # would float on upstream ``main``.  The helper reads the pinned
+          # revision out of the lock and prints it as a requirement, which
+          # keeps uv.lock both the one place the revision is written down and
+          # the thing that decides what CI builds.
+          PYFMMLIB_SPEC="$(python .github/scripts/pyfmmlib_requirement.py)"
+
+          uv pip install --system --editable ".[test,fmmlib]" "$PYFMMLIB_SPEC"
 
           python -V
           python -m pip --version
