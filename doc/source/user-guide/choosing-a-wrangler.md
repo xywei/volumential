@@ -190,10 +190,13 @@ belong in one table whatever recorded them.
   `_compute_box_local_ids` raises `ValueError` there because table-based
   near-field evaluation needs `tree.sources_are_targets`. So a
   distinct-target run does not produce a different-but-valid answer — it
-  fails mid-solve. To use FMMLib on such a problem you have to run a
-  source-only solve on a coincident tree and interpolate to your targets
-  yourself, which is a different computation from the sumpy run and not
-  directly comparable to it.
+  fails mid-solve. To use FMMLib on such a problem, do by hand what
+  `drive_volume_fmm` does for a sumpy wrangler: solve on a source-only
+  coincident traversal, then call
+  {func}`volumential.volume_fmm.interpolate_volume_potential` on your
+  targets, which accepts an FMMLib wrangler. Matched that way the two
+  backends evaluate at the same points and *are* comparable — it is the
+  automatic path that is sumpy-only, not the computation.
 - **Check the OpenMP build.** Repeated because it is the single most common
   way this measurement is mistaken: without it, FMMLib is slower than sumpy
   here, not faster.

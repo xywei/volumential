@@ -127,9 +127,12 @@ calls. {mod}`volumential.wranglers` implements it twice:
   to a tree whose sources and targets coincide, and considerably faster given
   the environment of {doc}`../getting-started/installation`. Two *separate*
   properties of that build matter, and confusing them misdiagnoses a slow
-  run: without OpenMP the rotation M2L runs on one thread, and without the
-  batched `{l,h}{2,3}dformmp_imany` wrappers `form_multipoles` silently drops
-  to a serial per-box P2M. Neither announces itself.
+  run: without OpenMP the rotation M2L runs on one thread, and — for **charge
+  sources** — without the batched `{l,h}{2,3}dformmp_imany` wrappers
+  `form_multipoles` silently drops to a serial per-box P2M. (A
+  `DirectionalSourceDerivative` configuration sets `use_dipoles`, which
+  bypasses that lookup entirely and takes boxtree's inherited dipole path, so
+  those four symbols say nothing about it.) Neither announces itself.
 
 Which one to prefer is not obvious and depends on the device as much as on the
 kernel — on a CPU OpenCL device a 3D Helmholtz solve at high order is 99 %
