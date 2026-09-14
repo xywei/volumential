@@ -55,16 +55,22 @@ does. A run that ends up with the split on falls under the split row whatever
 its dimension or order, because FMMLib has no split correction.
 
 `helmholtz_split=False` is a valid way to reach those two Helmholtz
-split-off entries only on tables that are already Helmholtz-backed; it says
-nothing about the Laplace and Yukawa rows, which have no split to disable.
-It is not a switch to flip on the Laplace-backed tables of the committed
-examples: the constructor's table compatibility check —
-`_split_base_table_support_status` in
-`volumential/wranglers/sumpy_backend.py`, which is what would report a
-`kernel mismatch` — runs only inside `if self.helmholtz_split:`, so passing
-`False` skips the Helmholtz correction *and* the check that would have caught
-the mismatched table, and the Laplace table is applied unchanged in List 1.
-That is a silently wrong near field, not a backend choice.
+split-off entries only on tables that are already Helmholtz-backed. It moves
+nothing on the Laplace rows, where `_split_target_kernel_support_status`
+admits only Helmholtz and Yukawa base kernels and there is no split to
+disable, and nothing on the Yukawa row either, which is sumpy in both columns
+because `pyfmmlib` has no Yukawa at all — split or no split.
+
+On the rows where it does apply, it is still not a switch to flip on the
+Laplace-backed tables of the committed examples. The table compatibility
+check — `_split_base_table_support_status`, which is what would report a
+`kernel mismatch` — is called only inside `if self.helmholtz_split:` in the
+sumpy wrangler's constructor, so passing `False` skips the Helmholtz
+correction *and* the check that would have caught the mismatched table, and
+the Laplace table is applied unchanged in List 1. That is a silently wrong
+near field, not a backend choice. (Both checks live on
+`HelmholtzSplitCorrectionMixin` in `volumential/wranglers/helmholtz_split.py`
+and are called from `volumential/wranglers/sumpy_backend.py`.)
 
 The GPU column is sumpy everywhere for one reason: `pyfmmlib` is host
 Fortran, so choosing FMMLib on a GPU host moves the **far field** back onto
