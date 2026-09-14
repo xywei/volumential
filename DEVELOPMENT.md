@@ -136,15 +136,19 @@ import pyfmmlib
 so = next(pathlib.Path(pyfmmlib.__file__).parent.glob("_internal*.so"))
 print(so)
 if platform.system() == "Darwin":
-    # macOS has no ldd; otool -L is the equivalent, and the OpenMP runtime
-    # is libomp rather than libgomp.
+    # macOS has no ldd; otool -L is the equivalent.
     subprocess.run(["otool", "-L", str(so)], check=True)
 else:
     subprocess.run(["ldd", str(so)], check=True)
 PY
 ```
 
-Expect a `libgomp` line on Linux, a `libomp` one on macOS.
+Expect a line for *an* OpenMP runtime, and accept any of them: the name
+follows the compiler, not the operating system -- `libgomp` for a GCC build,
+`libomp` for Clang (the usual case on macOS, and a possible one on Linux),
+`libiomp` for Intel. A Linux build that shows `libomp` is a working OpenMP
+build, not a mis-provisioned one; only the absence of any OpenMP runtime is.
+`doc/source/getting-started/installation.md` states the same rule.
 
 Batched P2M is bit-identical to the per-box path and GEMM L2P agrees at
 roundoff (`test/test_fmmlib_batched_stages.py`), so adopting them needs no

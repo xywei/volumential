@@ -18,7 +18,13 @@ coincide**, whatever the kernel or dimension. `_compute_box_local_ids` raises
 `ValueError` in the List 1 stage otherwise, and only a sumpy wrangler gets
 `drive_volume_fmm`'s automatic source-only solve and interpolation onto a
 distinct target array. Every "FMMLib" cell below therefore reads "sumpy" for
-a distinct-target traversal; see the caveats.
+a distinct-target traversal; see the caveats. **The Helmholtz "FMMLib" cells
+additionally assume Helmholtz-backed near-field tables**, for the same reason
+the split-off rows do: `FPNDFMMLibExpansionWrangler` defines no
+`eval_direct_helmholtz_split_correction`, the only method
+{func}`volumential.volume_fmm.drive_volume_fmm` will call to correct a
+Laplace-backed table, so an FMMLib run applies its table unchanged whatever
+kernel built it.
 
 | kernel and dimension | CPU OpenCL device | fp64 GPU |
 | --- | --- | --- |
@@ -29,17 +35,33 @@ a distinct-target traversal; see the caveats.
 | any Helmholtz run with the near-field split **on** | **sumpy** (see the caveat below) | **sumpy** |
 | any kernel sumpy can differentiate but `pyfmmlib` does not implement | sumpy — it is the only option | **sumpy** |
 
-The two Helmholtz rows apply only with the split off, and whether it is off
-depends on the tables as much as on the flag. With `helmholtz_split` left at
-`None`, the sumpy wrangler keeps the split on when the target kernel and the
-supplied near-field tables support it — Laplace-backed tables, the
-configuration the committed Helmholtz examples request with
-`helmholtz_split=True` — and resets it to off when they do not, as a
-Helmholtz-backed table does. A run that ends up with the split on falls under
-the split row whatever its dimension or order, because FMMLib has no split
-correction; a run with Helmholtz-backed tables, or with
-`helmholtz_split=False` passed explicitly, is a split-off run and the first
-two rows apply.
+The two Helmholtz rows apply only with the split off, and what puts a run
+there is the near-field tables, not the flag. A split-off Helmholtz run
+**requires tables built for the Helmholtz kernel itself**, such as a windowed
+RKE assembly registered through
+`NearFieldInteractionTableManager.register_external_table` with
+`sumpy_knl=HelmholtzKernel(dim)` (see {doc}`table-build-routing`), because
+with the split off nothing corrects a table for a kernel it was not built
+for: List 1 applies whatever table it is given, unchanged.
+
+With `helmholtz_split` left at `None`, the sumpy wrangler keeps the split on
+when the target kernel and the supplied tables support it — Laplace-backed
+tables, the configuration the committed Helmholtz examples request with
+`helmholtz_split=True`, both `examples/helmholtz2d.py` and
+`examples/helmholtz3d.py` building theirs from the table manager's `"Laplace"`
+kernel — and resets it to off when they do not, as a Helmholtz-backed table
+does. A run that ends up with the split on falls under the split row whatever
+its dimension or order, because FMMLib has no split correction.
+
+`helmholtz_split=False` is a valid way to reach the first two rows only on
+tables that are already Helmholtz-backed. It is not a switch to flip on the
+Laplace-backed tables of the committed examples: the constructor's table
+compatibility check — `_split_base_table_support_status` in
+`volumential/wranglers/sumpy_backend.py`, which is what would report a
+`kernel mismatch` — runs only inside `if self.helmholtz_split:`, so passing
+`False` skips the Helmholtz correction *and* the check that would have caught
+the mismatched table, and the Laplace table is applied unchanged in List 1.
+That is a silently wrong near field, not a backend choice.
 
 The GPU column is sumpy everywhere for one reason: `pyfmmlib` is host
 Fortran, so choosing FMMLib on a GPU host moves the **far field** back onto
@@ -240,8 +262,13 @@ belong in one table whatever recorded them.
 
 1. Run the solve twice in one process and compare the *second* one, unless
    the real workload is a single solve in a fresh environment — then the
-   process total is the number that matters and it favours FMMLib, whose far
-   field has no code-generation step. Otherwise never quote a process total:
+   process total is the number that matters, and it can favour FMMLib, whose
+   far field has no code-generation step. Only *can*: FMMLib is unavailable
+   for Yukawa and for split-mode runs at all, and where it is available its
+   host far field can cost more than the code generation it avoids — on a
+   GPU, or at a Laplace or lower-order case where that compilation is small.
+   Compare the cold totals for your own case; the measured win above is the
+   high-order 3D Helmholtz CPU one. Otherwise never quote a process total:
    see {doc}`../benchmarks/index` for which drivers already separate the two
    calls for you and which leave it to you.
 2. Name the device class explicitly — `--backend pocl-cpu` or
