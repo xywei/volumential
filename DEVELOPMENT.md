@@ -123,9 +123,16 @@ entry points are missing, so a mis-provisioned environment is correct but slow:
 
 ```bash
 # Batched wrappers present.  The backend selects {l,h}{2,3}dformmp_imany from
-# the equation and dimension, so check all four.
+# the equation and dimension, so check all four.  Charge sources only.
 python -c "from pyfmmlib import \
     h2dformmp_imany, h3dformmp_imany, l2dformmp_imany, l3dformmp_imany"
+# Dipole sources (a DirectionalSourceDerivative kernel, i.e. a dipole_vec) go
+# through {l,h}{2,3}dformmp_dp_imany instead, with the same silent per-box
+# fallback when it is missing.  The pinned pyfmmlib generates both families,
+# so an import failure here means a per-box dipole P2M, not a broken build.
+python -c "from pyfmmlib import \
+    h2dformmp_dp_imany, h3dformmp_dp_imany, \
+    l2dformmp_dp_imany, l3dformmp_dp_imany"
 python - <<'PY'
 import pathlib
 import platform

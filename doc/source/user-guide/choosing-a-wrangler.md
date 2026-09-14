@@ -35,10 +35,11 @@ kernel built it.
 | any Helmholtz run with the near-field split **on** | **sumpy** (see the caveat below) | **sumpy** |
 | any kernel sumpy can differentiate but `pyfmmlib` does not implement | sumpy — it is the only option | **sumpy** |
 
-The two Helmholtz rows apply only with the split off, and what puts a run
-there is the near-field tables, not the flag. A split-off Helmholtz run
-**requires tables built for the Helmholtz kernel itself**, such as a windowed
-RKE assembly registered through
+The table's two Helmholtz split-off entries — the first row, and the 2D
+Helmholtz half of the row it shares with 2D Laplace — apply only with the
+split off, and what puts a run there is the near-field tables, not the flag.
+A split-off Helmholtz run **requires tables built for the Helmholtz kernel
+itself**, such as a windowed RKE assembly registered through
 `NearFieldInteractionTableManager.register_external_table` with
 `sumpy_knl=HelmholtzKernel(dim)` (see {doc}`table-build-routing`), because
 with the split off nothing corrects a table for a kernel it was not built
@@ -53,10 +54,12 @@ kernel — and resets it to off when they do not, as a Helmholtz-backed table
 does. A run that ends up with the split on falls under the split row whatever
 its dimension or order, because FMMLib has no split correction.
 
-`helmholtz_split=False` is a valid way to reach the first two rows only on
-tables that are already Helmholtz-backed. It is not a switch to flip on the
-Laplace-backed tables of the committed examples: the constructor's table
-compatibility check — `_split_base_table_support_status` in
+`helmholtz_split=False` is a valid way to reach those two Helmholtz
+split-off entries only on tables that are already Helmholtz-backed; it says
+nothing about the Laplace and Yukawa rows, which have no split to disable.
+It is not a switch to flip on the Laplace-backed tables of the committed
+examples: the constructor's table compatibility check —
+`_split_base_table_support_status` in
 `volumential/wranglers/sumpy_backend.py`, which is what would report a
 `kernel mismatch` — runs only inside `if self.helmholtz_split:`, so passing
 `False` skips the Helmholtz correction *and* the check that would have caught

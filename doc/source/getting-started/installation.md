@@ -121,9 +121,18 @@ mis-provisioned environment is correct but slow:
 ```bash
 # Batched wrappers present.  The backend picks {l,h}{2,3}dformmp_imany from the
 # equation and the dimension, so check all four: a successful 3D Laplace import
-# does not rule out a 2D or Helmholtz fallback.
+# does not rule out a 2D or Helmholtz fallback.  This covers charge sources
+# only.
 python -c "from pyfmmlib import \
     h2dformmp_imany, h3dformmp_imany, l2dformmp_imany, l3dformmp_imany"
+# Dipole sources (a DirectionalSourceDerivative kernel, i.e. a dipole_vec)
+# take a different P2M wrapper, {l,h}{2,3}dformmp_dp_imany, and fall back to
+# the per-box routine just as silently when it is absent.  pyfmmlib generates
+# both families at the revision uv.lock pins, so an import failure here means
+# the dipole P2M will run per box, not that the charge path is broken.
+python -c "from pyfmmlib import \
+    h2dformmp_dp_imany, h3dformmp_dp_imany, \
+    l2dformmp_dp_imany, l3dformmp_dp_imany"
 python - <<'PY'
 import pathlib
 import platform
