@@ -135,10 +135,13 @@ device compile `sincos` from the vendor's device library, and `fma` is a
 single instruction there).
 
 So this is specific to PoCL's host-CPU device on targets with no FMA unit, and
-it is not confined to `sincos`: every fp64 builtin PoCL routes through its
+it is not confined to `sincos`: every fp64 builtin that PoCL implements using
 `fma()` — `remquo`, `remainder`, `acospi`, `asinpi`, `atanpi`, `atan2pi`,
 `acosh`, `asinh`, `atanh`, and the `sincos`/`log`/`exp` helpers — pays it on
-such a host. The rewrite above removes the exposure for the standard real-parameter
+such a host, and only those: ordinary fp64 builtins and arithmetic that do
+not route through `fma()` (`fabs`, `floor`, `sqrt`, plain `*` and `+`) are
+unaffected, so fp64 results that never touch the listed builtins need no
+reclassification. The rewrite above removes the exposure for the standard real-parameter
 kernels, and only for those — an evanescent Helmholtz or other unprovable
 phase keeps its `cdouble_exp` and stays exposed on such a host. The general
 consequence is that a run's metadata has to record the CPU class, and

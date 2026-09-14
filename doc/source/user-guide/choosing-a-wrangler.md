@@ -134,8 +134,13 @@ not be confused with it:
   2D or Helmholtz fallback. That check covers **charge sources only**:
   `_get_batched_formmp_routine()` returns `None` up front when
   `use_dipoles` is set, which a `DirectionalSourceDerivative` configuration
-  supplying `dipole_vec` does, so a dipole run takes the per-box path (or
-  the inherited dipole routine) no matter what those four imports say.
+  supplying `dipole_vec` does. A dipole run then always enters the
+  inherited `form_multipoles`, which asks `pyfmmlib` for the batched dipole
+  wrapper `<eqn><dim>dformmp_dp_imany` and falls back to the per-box routine
+  only when that symbol is missing — so a dipole run may still batch, but
+  through a fifth wrapper the four imports above say nothing about. Import
+  the `_dp_imany` wrapper for your equation and dimension as well before
+  reading a dipole P2M time.
 
 None of these announces itself, so a mis-provisioned environment is correct,
 slow, and indistinguishable from a correct one except by timing. Before
@@ -172,10 +177,16 @@ gained 2.2x overall, not 139x.
 
 Two consequences:
 
-- Compare wranglers on warm solves, never on a process total.
-- A one-shot run is not the workload a wrangler choice should be made for.
-  Amortize the code generation over many solves, or warm the compile cache,
-  before either backend's per-solve speed decides anything.
+- For a workload that solves many times, compare wranglers on warm solves,
+  never on a process total. Amortize the code generation over many solves,
+  or warm the compile cache, before either backend's per-solve speed decides
+  anything.
+- For a genuine one-shot solve in a fresh environment the process total *is*
+  the cost, and it is backend-dependent: the sumpy path pays the expansion
+  code generation (the 884 s above) while FMMLib's far field is precompiled
+  host Fortran with no such step. Compare cold totals as well as warm solves
+  for that workload; FMMLib can win a one-shot 3D Helmholtz solve on a CPU
+  host even where the sumpy warm solve is the faster of the two.
 
 What a given driver actually records is per driver, and
 {doc}`../benchmarks/index` is the authority on it — including which drivers
