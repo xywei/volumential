@@ -22,11 +22,19 @@ a distinct-target traversal; see the caveats.
 
 | kernel and dimension | CPU OpenCL device | fp64 GPU |
 | --- | --- | --- |
-| 3D Helmholtz, high order | **FMMLib**, with an OpenMP `pyfmmlib` | **sumpy** |
+| 3D Helmholtz, high order, split **off** | **FMMLib**, with an OpenMP `pyfmmlib` | **sumpy** |
 | 3D Laplace | either; measure | **sumpy** |
-| 2D Laplace / Helmholtz | either; measure | **sumpy** |
+| 2D Laplace, and 2D Helmholtz with the split **off** | either; measure | **sumpy** |
 | Yukawa, 2D or 3D | **sumpy** (FMMLib has no Yukawa) | **sumpy** |
-| anything using the near-field Helmholtz split | **sumpy** (see the caveat below) | **sumpy** |
+| any Helmholtz run with the near-field split **on** | **sumpy** (see the caveat below) | **sumpy** |
+
+The two Helmholtz rows apply only with the split off, and that is not the
+default: the sumpy wrangler turns the split on when `helmholtz_split` is left
+at `None`, and the committed Helmholtz examples pass `helmholtz_split=True`
+with Laplace-backed tables. A Helmholtz run that keeps the split therefore
+falls under the last row whatever its dimension or order, because FMMLib has
+no split correction. Pass `helmholtz_split=False` explicitly before the first
+two rows can apply.
 | any kernel sumpy can differentiate but `pyfmmlib` does not implement | sumpy — it is the only option | **sumpy** |
 
 The GPU column is sumpy everywhere for one reason: `pyfmmlib` is host
@@ -41,9 +49,12 @@ shared kernel, not a shared end-to-end speedup; the 18 to 27x below is a
 sumpy-path measurement and the hybrid has not been measured.
 
 `FPNDFMMLibExpansionWrangler` covers 2D and 3D Laplace and Helmholtz and
-nothing else. Everywhere it does not reach, the question does not arise —
-and outside 2D and 3D neither wrangler does, because the near-field Duffy
-builder refuses those dimensions before either one is reached.
+nothing else. Everywhere it does not reach, the question does not arise. The
+dimension limits are not the same on both sides: the near-field Duffy builder
+supports dimensions 1 to 3 (the 1D table path exists and is tested), so a 1D
+problem with a sumpy-compatible kernel runs through the sumpy wrangler with
+FMMLib simply unavailable, while above 3D neither wrangler has a near-field
+table to apply.
 
 ## Why 3D Helmholtz on a CPU device is the case that matters
 
