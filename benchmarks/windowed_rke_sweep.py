@@ -70,6 +70,12 @@ from typing import Any
 
 import numpy as np
 
+from _provenance import (
+    collect_run_provenance,
+    public_path,
+    resolved_device_line,
+)
+
 FIELDS = (
     "case_id",
     "mode",
@@ -1252,6 +1258,12 @@ def run_sweep(
     cache_dir.mkdir(parents=True, exist_ok=True)
     queue = _make_queue()
 
+    # ``cl.create_some_context`` picks a device from PYOPENCL_CTX or from
+    # whatever the ICD loader offers first, and records nothing about the
+    # choice.  This is the record.
+    run_provenance = collect_run_provenance(queue)
+    print(resolved_device_line(run_provenance), flush=True)
+
     rows: list[dict[str, Any]] = []
     channel_prep_records: dict[str, Any] = {}
 
@@ -1903,6 +1915,7 @@ def run_sweep(
         "channel_prep": channel_prep_records,
         "mus_by_dim": {str(dim): values for dim, values in mus_by_dim.items()},
         "total_seconds": total_seconds,
+        "run_provenance": run_provenance,
     }
 
 
@@ -2140,9 +2153,9 @@ def main() -> int:
         ),
         "classical_tolerance": CLASSICAL_TOLERANCE,
         "complex_phases": complex_phases,
-        "cache_dir": str(args.cache_dir),
+        "cache_dir": public_path(args.cache_dir),
         "skip_3d_tight": args.skip_3d_tight,
-        "csv_path": str(csv_path),
+        "csv_path": public_path(csv_path),
         "row_count": len(rows),
         **run_info,
     }

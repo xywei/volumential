@@ -2,6 +2,27 @@
 
 These scripts emit reproducible CSV artifacts for manuscript evidence. Keep smoke modes lightweight enough for CI/local checks and reserve full sweeps for a suitable, currently idle remote compute host. Keep infrastructure-identifying metadata private and redact it from public artifacts.
 
+## Run Provenance And First-Call Timing
+
+`_provenance.py` is the shared helper every driver that writes a JSON sidecar
+calls on its live OpenCL context. The sidecar (and `windowed_rke_sweep.py`'s
+config JSON) gains a top-level `run_provenance` block holding the **resolved**
+OpenCL platform, device, device type and driver version — not the requested
+`--backend` token — plus the host CPU model, the `OMP_NUM_THREADS` and
+`POCL_MAX_PTHREAD_COUNT` caps in force, whether `pyvkfft` was importable, and
+which FFT backend sumpy actually selected (an importable `pyvkfft` is not
+enough: sumpy refuses VkFFT on PoCL 7+ and on out-of-order queues).
+Each of those drivers also prints one `RESOLVED-DEVICE` line on stdout before
+the work starts. Existing sidecar keys are unchanged; these are additions.
+
+The same helper splits a repeat series into `*_first_call_s` and `*_warm_s`
+(the median of the remaining repeats, or `null` when only one call was made).
+`gaussian_free_space.py`, `dmk_effective_density.py` and
+`graded_tree_convergence.py` take `--warm-repeats` (default 1, `0` to restore
+a single timed call); `rke_field_demo_3d.py` now times the warm-up it used to
+discard. The first solve of a process can be almost all sumpy code
+generation, so a one-shot total is not a solve time.
+
 ## Performance Suite Driver
 
 Use the suite driver to run the maintained benchmark set with a shared output
@@ -71,7 +92,7 @@ The benchmark compares canonical rescaled tables, direct per-level tables, and d
 python benchmarks/split_parameter_sweep.py --mode smoke --out build/benchmarks/split-parameter-sweep.csv
 ```
 
-The benchmark sweeps scalar Helmholtz wave numbers and Yukawa screening parameters in the dimension selected by `--dim` (2, the default, or 3). Each row compares the full implemented split evaluator against a direct fixed-parameter near-field table at the same parameter and application level. Full mode prevents the split-order trend from being limited by quadrature noise: at `q=4`, Yukawa direct references use regular/radial Duffy orders 80/320, channel tables use 48/160, and retained orders above one use smooth-remainder order `2q`. The effective orders are recorded in every row, and full runs reject a nonconvergent Yukawa `p=1,2,3` sweep. The benchmark separately records direct-table and RKE-channel setup/load costs, payload, repeated full applications, isolated coefficient and residual diagnostics, cold/warm strategy totals, and a linear break-even model. `--direct-levels` controls the levels provisioned by the direct setup strategy, while `--nlevels` is the application level; `--repeat-count` is the number of applications per parameter, and `break_even_repeat_count` uses the same per-parameter unit.
+The benchmark sweeps scalar Helmholtz wave numbers and Yukawa screening parameters in the dimension selected by `--dim` (2, the default, or 3). Each row compares the full implemented split evaluator against a direct fixed-parameter near-field table at the same parameter and application level. Full mode prevents the split-order trend from being limited by quadrature noise: at `q=4`, Yukawa direct references use regular/radial Duffy orders 80/320, channel tables use 48/160, and retained orders above one use smooth-remainder order `2q`. The effective orders are recorded in every row, and full runs reject a nonconvergent Yukawa `p=1,2,3` sweep. The benchmark separately records direct-table and RKE-channel setup/load costs, payload, repeated full applications, isolated coefficient and residual diagnostics, cold/warm strategy totals, and a linear break-even model. `--direct-levels` controls the levels provisioned by the direct setup strategy, while `--nlevels` is the application level; `--repeat-count` is the number of applications per parameter, and `break_even_repeat_count` uses the same per-parameter unit. The driver also writes a JSON sidecar (`--metadata-out`, defaulting to `<out stem>-metadata.json` beside the CSV) carrying the command, the row count and the `run_provenance` block; it is written on the gate-failure path too, so a failed run stays attributable.
 
 The sweep additionally runs a windowed-assembled table-provisioning strategy (rows tagged `table_strategy=windowed_assembled`): for each `--windowed-thetas` value (a theta at the application level, up to the `--window-theta` declaration, default 16), a fixed-parameter table is offline-assembled from the windowed channel family, registered through the standard table manager (`register_external_table`), reloaded through the ordinary cache path, and applied through the identical evaluator against the same direct fixed-parameter reference. Rows carry the certificate status (`ok`/`refused`/`failed`), condition number, per-parameter assembly/registration/load costs, and a polynomial-completion certificate probe per theta (`--classical-probe`: cheap truncation-only in smoke, full assembly in full mode) so one CSV holds the evaluator-level windowed + polynomial + direct comparison. The driver fails on any `failed` row, on a refusal inside the declaration, and on small-theta disagreement with the direct reference.
 

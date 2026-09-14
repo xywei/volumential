@@ -46,6 +46,12 @@ _BENCH_DIR = Path(__file__).resolve().parent
 if str(_BENCH_DIR) not in sys.path:
     sys.path.insert(0, str(_BENCH_DIR))
 
+from _provenance import (  # noqa: E402
+    collect_run_provenance,
+    first_call_and_warm,
+    resolved_device_line,
+    time_repeats,
+)
 from adaptive_timing import (  # noqa: E402
     _leaf_diagnostics,
     _list1_diagnostics,
@@ -521,7 +527,14 @@ def _run_fmm(
     fmm_order: int,
     q_weights,
     source_host: np.ndarray,
+    repeat_count: int = 1,
 ):
+    """Drive the volume FMM ``repeat_count`` times on one ladder rung.
+
+    Returns ``(potential, samples_s)`` in call order.  The first sample of
+    the first rung carries this process's sumpy code generation, which is
+    not a property of the rung's problem size and must not be read as one.
+    """
     import pyopencl.array as cla
 
     from volumential.volume_fmm import drive_volume_fmm
@@ -530,18 +543,22 @@ def _run_fmm(
         queue, np.ascontiguousarray(source_host.astype(np.float64))
     )
     wrangler = _build_wrangler(ctx, queue, traversal, table, q_order, fmm_order)
-    queue.finish()
-    start = time.perf_counter()
-    (potential,) = drive_volume_fmm(
-        traversal,
-        wrangler,
-        source_vals * q_weights,
-        source_vals,
-        direct_evaluation=False,
-        list1_only=False,
+
+    def solve():
+        (potential,) = drive_volume_fmm(
+            traversal,
+            wrangler,
+            source_vals * q_weights,
+            source_vals,
+            direct_evaluation=False,
+            list1_only=False,
+        )
+        return potential
+
+    potential, samples_s = time_repeats(
+        solve, repeats=repeat_count, sync=queue.finish
     )
-    queue.finish()
-    return potential.get(queue), time.perf_counter() - start
+    return potential.get(queue), samples_s
 
 
 def _run_rung(
@@ -563,7 +580,8 @@ def _run_rung(
     tail: dict[str, Any],
     table,
     table_timings,
-) -> dict[str, Any]:
+    warm_repeats: int = 1,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     mesh_start = time.perf_counter()
     mesh = _build_uniform_mesh(queue, q_order, nlevels)
     if refinement == "adaptive" and adapt_steps:
@@ -590,7 +608,7 @@ def _run_rung(
         mixture, coords, kernel_scale=KERNEL_SCALE
     )
 
-    potential, fmm_wall_s = _run_fmm(
+    potential, fmm_samples_s = _run_fmm(
         ctx,
         queue,
         traversal,
@@ -599,7 +617,10 @@ def _run_rung(
         fmm_order=fmm_order,
         q_weights=q_weights,
         source_host=source,
+        repeat_count=1 + warm_repeats,
     )
+    fmm_timing = first_call_and_warm(fmm_samples_s, prefix="fmm_")
+    fmm_wall_s = fmm_samples_s[0]
     error = potential - reference
     reference_norm = max(float(np.linalg.norm(reference)), 1.0e-300)
     weighted_reference_norm = max(
@@ -685,7 +706,7 @@ def _run_rung(
         f"weighted_rel_l2={row['weighted_rel_l2_vs_analytic']:.3e}",
         flush=True,
     )
-    return row
+    return row, fmm_timing
 
 
 def _annotate_ladder(rows: list[dict[str, Any]], dim: int) -> dict[str, Any]:
@@ -714,10 +735,16 @@ def run_benchmark(
     radial_quad_order: int,
     source_alpha: float,
     source_center: tuple[float, float, float],
+    warm_repeats: int = 1,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     device = _select_opencl_device(backend)
     ctx = cl.Context([device])
     queue = cl.CommandQueue(ctx)
+
+    # ``backend`` is the request; this is what the ICD loader resolved, and
+    # it is what a seconds column has to be attributed to.
+    run_provenance = collect_run_provenance(queue)
+    print(resolved_device_line(run_provenance), flush=True)
 
     mixture = _source_mixture(source_alpha, source_center)
     bbox = np.array([list(ROOT_BOUNDS)] * 3, dtype=np.float64)
@@ -740,52 +767,56 @@ def run_benchmark(
     )
 
     uniform_rows = []
+    uniform_fmm_timings = []
     for rung, nlevels in enumerate(uniform_nlevels):
-        uniform_rows.append(
-            _run_rung(
-                ctx,
-                queue,
-                mode=mode,
-                refinement="uniform",
-                ladder_rung=rung,
-                q_order=q_order,
-                base_nlevels=nlevels,
-                nlevels=nlevels,
-                adapt_steps=0,
-                adapt_fraction=adapt_fraction,
-                fmm_order=fmm_order,
-                regular_quad_order=regular_quad_order,
-                radial_quad_order=radial_quad_order,
-                mixture=mixture,
-                tail=tail,
-                table=table,
-                table_timings=table_timings,
-            )
+        row, fmm_timing = _run_rung(
+            ctx,
+            queue,
+            mode=mode,
+            refinement="uniform",
+            ladder_rung=rung,
+            q_order=q_order,
+            base_nlevels=nlevels,
+            nlevels=nlevels,
+            adapt_steps=0,
+            adapt_fraction=adapt_fraction,
+            fmm_order=fmm_order,
+            regular_quad_order=regular_quad_order,
+            radial_quad_order=radial_quad_order,
+            mixture=mixture,
+            tail=tail,
+            table=table,
+            table_timings=table_timings,
+            warm_repeats=warm_repeats,
         )
+        uniform_rows.append(row)
+        uniform_fmm_timings.append(fmm_timing)
 
     adaptive_rows = []
+    adaptive_fmm_timings = []
     for rung, steps in enumerate(adapt_steps):
-        adaptive_rows.append(
-            _run_rung(
-                ctx,
-                queue,
-                mode=mode,
-                refinement="adaptive",
-                ladder_rung=rung,
-                q_order=q_order,
-                base_nlevels=base_nlevels,
-                nlevels=base_nlevels,
-                adapt_steps=steps,
-                adapt_fraction=adapt_fraction,
-                fmm_order=fmm_order,
-                regular_quad_order=regular_quad_order,
-                radial_quad_order=radial_quad_order,
-                mixture=mixture,
-                tail=tail,
-                table=table,
-                table_timings=table_timings,
-            )
+        row, fmm_timing = _run_rung(
+            ctx,
+            queue,
+            mode=mode,
+            refinement="adaptive",
+            ladder_rung=rung,
+            q_order=q_order,
+            base_nlevels=base_nlevels,
+            nlevels=base_nlevels,
+            adapt_steps=steps,
+            adapt_fraction=adapt_fraction,
+            fmm_order=fmm_order,
+            regular_quad_order=regular_quad_order,
+            radial_quad_order=radial_quad_order,
+            mixture=mixture,
+            tail=tail,
+            table=table,
+            table_timings=table_timings,
+            warm_repeats=warm_repeats,
         )
+        adaptive_rows.append(row)
+        adaptive_fmm_timings.append(fmm_timing)
 
     uniform_summary = _annotate_ladder(uniform_rows, 3)
     adaptive_summary = _annotate_ladder(adaptive_rows, 3)
@@ -849,6 +880,15 @@ def run_benchmark(
             },
         },
         "matched_error_dof_advantage_uniform_over_adaptive": dof_advantage,
+        # Per rung, parallel to ``ladders.*.dofs``.  The rungs differ in
+        # size, so there is no meaningful median across them; what is
+        # meaningful is that the first rung's first call also paid this
+        # process's sumpy code generation.
+        "fmm_timing": {
+            "uniform": uniform_fmm_timings,
+            "adaptive": adaptive_fmm_timings,
+        },
+        "run_provenance": run_provenance,
     }
     print(
         f"[graded-tree-convergence] uniform verdict: "
@@ -975,7 +1015,20 @@ def main() -> int:
         type=Path,
         default=Path("build/benchmarks/graded-tree-convergence-cache"),
     )
+    parser.add_argument(
+        "--warm-repeats",
+        type=int,
+        default=1,
+        help=(
+            "extra FMM solves per ladder rung after the timed first call, "
+            "used for the rung's warm median in the metadata sidecar; 0 "
+            "records only the first call and leaves warm_s unmeasured"
+        ),
+    )
     args = parser.parse_args()
+
+    if args.warm_repeats < 0:
+        parser.error("--warm-repeats must be >= 0")
 
     config = SMOKE_CONFIG if args.mode == "smoke" else FULL_CONFIG
     q_order = args.q_order if args.q_order is not None else config["q_order"]
@@ -1035,6 +1088,7 @@ def main() -> int:
             radial_quad_order=radial_quad_order,
             source_alpha=args.source_alpha,
             source_center=source_center,  # pyright: ignore[reportArgumentType]
+            warm_repeats=args.warm_repeats,
         )
     except _BenchmarkGateError as exc:
         # The rows are measured; only the verdict on them failed.  Write
