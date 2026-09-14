@@ -27,15 +27,19 @@ a distinct-target traversal; see the caveats.
 | 2D Laplace, and 2D Helmholtz with the split **off** | either; measure | **sumpy** |
 | Yukawa, 2D or 3D | **sumpy** (FMMLib has no Yukawa) | **sumpy** |
 | any Helmholtz run with the near-field split **on** | **sumpy** (see the caveat below) | **sumpy** |
-
-The two Helmholtz rows apply only with the split off, and that is not the
-default: the sumpy wrangler turns the split on when `helmholtz_split` is left
-at `None`, and the committed Helmholtz examples pass `helmholtz_split=True`
-with Laplace-backed tables. A Helmholtz run that keeps the split therefore
-falls under the last row whatever its dimension or order, because FMMLib has
-no split correction. Pass `helmholtz_split=False` explicitly before the first
-two rows can apply.
 | any kernel sumpy can differentiate but `pyfmmlib` does not implement | sumpy — it is the only option | **sumpy** |
+
+The two Helmholtz rows apply only with the split off, and whether it is off
+depends on the tables as much as on the flag. With `helmholtz_split` left at
+`None`, the sumpy wrangler keeps the split on when the target kernel and the
+supplied near-field tables support it — Laplace-backed tables, the
+configuration the committed Helmholtz examples request with
+`helmholtz_split=True` — and resets it to off when they do not, as a
+Helmholtz-backed table does. A run that ends up with the split on falls under
+the split row whatever its dimension or order, because FMMLib has no split
+correction; a run with Helmholtz-backed tables, or with
+`helmholtz_split=False` passed explicitly, is a split-off run and the first
+two rows apply.
 
 The GPU column is sumpy everywhere for one reason: `pyfmmlib` is host
 Fortran, so choosing FMMLib on a GPU host moves the **far field** back onto
@@ -145,7 +149,8 @@ not be confused with it:
 None of these announces itself, so a mis-provisioned environment is correct,
 slow, and indistinguishable from a correct one except by timing. Before
 trusting any FMMLib number, check the OpenMP runtime, the thread count in
-force, and the four wrapper imports — and read a 300-second M2L as serial
+force, the four charge-wrapper imports and, for a dipole run, the
+`_dp_imany` wrapper as well — and read a 300-second M2L as serial
 execution from one of the first two, never as the wrapper condition, which
 is a different stage.
 
@@ -233,9 +238,12 @@ belong in one table whatever recorded them.
 
 ## How to decide for your own case
 
-1. Run the solve twice in one process and compare the *second* one. Never
-   quote a process total: see {doc}`../benchmarks/index` for which drivers
-   already separate the two calls for you and which leave it to you.
+1. Run the solve twice in one process and compare the *second* one, unless
+   the real workload is a single solve in a fresh environment — then the
+   process total is the number that matters and it favours FMMLib, whose far
+   field has no code-generation step. Otherwise never quote a process total:
+   see {doc}`../benchmarks/index` for which drivers already separate the two
+   calls for you and which leave it to you.
 2. Name the device class explicitly — `--backend pocl-cpu` or
    `--backend cuda-gpu`, or `PYOPENCL_CTX` for the drivers that call
    `cl.create_some_context` (see {doc}`../getting-started/device-selection`).
