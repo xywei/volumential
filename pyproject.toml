@@ -104,6 +104,14 @@ exclude = [
   "benchmarks",
   "doc",
   "examples",
+  # Exploratory campaign scripts (not part of the documented API surface).
+  # Defensive only: CI invokes ``interrogate -v volumential``, so this entry
+  # matters just for an ad-hoc run from the repository root.  The gate that
+  # does see ``experiments/`` is ruff -- ``ruff check --select E9,F63,F7,F82``
+  # runs from the root with no path argument and ``ruff.toml``'s
+  # ``extend-exclude`` does not list the directory -- so the scripts are kept
+  # importable and clean of undefined names rather than excluded from linting.
+  "experiments",
   "test",
 ]
 # A ratchet, not a target: the tree measures 91.53% today (389 of 425), and
@@ -130,7 +138,9 @@ markers = [
 
 [tool.basedpyright]
 include = ["volumential/version.py"]
-exclude = ["test", "examples"]
+# ``include`` already confines the checker to one file, so ``exclude`` is
+# defensive: it records intent for an ad-hoc run with a widened ``include``.
+exclude = ["test", "examples", "experiments"]
 typeCheckingMode = "basic"
 failOnWarnings = false
 reportMissingImports = "none"
