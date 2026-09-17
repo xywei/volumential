@@ -93,10 +93,15 @@ operational strictness policy should not invalidate cached numerical data.
 
 ## Complex exponentials in the generated quadrature kernel
 
-The fused Duffy quadrature kernel rewrites every `exp(re + i*im)` into
-`exp(re) * (cos(im) + i*sin(im))` before code generation, so complex-valued
-kernels reach the device as real `exp`/`cos`/`sin` calls and never as
-`cdouble_exp`. `pyopencl` implements `cdouble_exp` with the OpenCL
+The fused Duffy quadrature kernel rewrites `exp(re + i*im)` into
+`exp(re) * (cos(im) + i*sin(im))` before code generation *wherever it can
+prove both halves are real doubles* — see "Why it is guarded" below, and note
+that an exponent it cannot prove keeps its `cdouble_exp`. The rewrite applies
+to the standard real-parameter kernels, which then reach the device as real
+`exp`/`cos`/`sin` calls; a caller-supplied `sumpy_knl` whose phase is not
+provably real — `HelmholtzKernel(dim, allow_evanescent=True)` is the case the
+suite pins — deliberately keeps `cdouble_exp` and does not get the speedup
+below. `pyopencl` implements `cdouble_exp` with the OpenCL
 `sincos(x, &cosx)` out-parameter builtin, which on the PoCL 7.0 / LLVM 19.1.7
 CPU driver costs about 200 ns per call against about 1.6 ns for a separate
 `sin`/`cos` pair; since the quadrature evaluates the kernel at every Duffy
@@ -105,6 +110,45 @@ times slower than the otherwise identical Yukawa build. The rewrite is
 `exp(a+b) = exp(a)exp(b)` with Euler's formula over an exact structural split
 of the exponent, so it is valid for genuinely complex exponents (the damped
 `exp((-a + i b) r)` form included) and leaves real exponents untouched.
+
+### Where the 200 ns come from
+
+`sincos` itself is not slow. On PoCL's host-CPU device, fp64 `sincos` comes
+from the bundled kernel library, whose range reduction and polynomial call
+`fma()` 18 to 25 times per element, and `fma()` there is the correctly rounded
+fused operation. On an x86-64 CPU **without** an FMA unit — AVX-only,
+pre-Haswell — the backend cannot lower that to a hardware instruction and
+emits a call to the C library's *software* `fma`, at about 6.2 ns per element:
+18 of them predict 112 ns, against 104 ns measured for `sincos` in a
+self-contained reproducer. `sin` and `cos` never enter the kernel library at
+all — they are clang builtins, vectorized and lowered to `libmvec` — and in
+that same reproducer the pair costs about 0.7 ns, a ratio of about **146x**.
+
+Those two numbers are the reproducer's, not the ones quoted above: the
+~200 ns and ~1.6 ns figures were measured through the fused Duffy program,
+where each call sits in the surrounding quadrature kernel, so the absolute
+costs differ and the ratio there is about 130x. Two harnesses, one
+conclusion — do not mix a numerator from one with a denominator from the
+other. On the other CPU OpenCL runtime on the same machine the ratio is about
+1x, and on a GPU about 1x as well (both NVIDIA's runtime and PoCL's CUDA
+device compile `sincos` from the vendor's device library, and `fma` is a
+single instruction there).
+
+So this is specific to PoCL's host-CPU device on targets with no FMA unit, and
+it is not confined to `sincos`: every fp64 builtin that PoCL implements using
+`fma()` — `remquo`, `remainder`, `acospi`, `asinpi`, `atanpi`, `atan2pi`,
+`acosh`, `asinh`, `atanh`, and the `sincos`/`log`/`exp` helpers — pays it on
+such a host, as does an explicit fp64 `fma()` call in kernel code, which is
+the same software libcall (about 6 ns per call measured). Ordinary fp64
+builtins and arithmetic that do not route through `fma()` (`fabs`, `floor`,
+`sqrt`, plain `*` and `+`) are unaffected, so fp64 results that touch neither
+the listed builtins nor an explicit `fma()` need no reclassification. The rewrite above removes the exposure for the standard real-parameter
+kernels, and only for those — an evanescent Helmholtz or other unprovable
+phase keeps its `cdouble_exp` and stays exposed on such a host. The general
+consequence is that a run's metadata has to record the CPU class, and
+that seconds from a host without hardware FMA are not comparable with seconds
+from one that has it (see {doc}`../benchmarks/index`). Tracked in
+[#138](https://github.com/xywei/volumential/issues/138).
 
 ### Why it is guarded
 

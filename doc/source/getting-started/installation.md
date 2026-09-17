@@ -121,9 +121,18 @@ mis-provisioned environment is correct but slow:
 ```bash
 # Batched wrappers present.  The backend picks {l,h}{2,3}dformmp_imany from the
 # equation and the dimension, so check all four: a successful 3D Laplace import
-# does not rule out a 2D or Helmholtz fallback.
+# does not rule out a 2D or Helmholtz fallback.  This covers charge sources
+# only.
 python -c "from pyfmmlib import \
     h2dformmp_imany, h3dformmp_imany, l2dformmp_imany, l3dformmp_imany"
+# Dipole sources (a DirectionalSourceDerivative kernel, i.e. a dipole_vec)
+# take a different P2M wrapper, {l,h}{2,3}dformmp_dp_imany, and fall back to
+# the per-box routine just as silently when it is absent.  pyfmmlib generates
+# both families at the revision uv.lock pins, so an import failure here means
+# the dipole P2M will run per box, not that the charge path is broken.
+python -c "from pyfmmlib import \
+    h2dformmp_dp_imany, h3dformmp_dp_imany, \
+    l2dformmp_dp_imany, l3dformmp_dp_imany"
 python - <<'PY'
 import pathlib
 import platform
@@ -141,9 +150,12 @@ else:
 PY
 ```
 
-Expect a `libgomp` line on Linux and a `libomp` one on macOS. A missing OpenMP
-runtime and an unavailable `ldd` look the same otherwise, which is why the
-check branches instead of assuming Linux.
+Expect a line for *an* OpenMP runtime: `libgomp` for a GCC build, `libomp`
+for Clang (the usual case on macOS, and a possible one on Linux), `libiomp`
+for Intel. The name follows the compiler, not the operating system, so do not
+read a missing `libgomp` on Linux as a missing OpenMP. A missing runtime and
+an unavailable `ldd` look the same otherwise, which is why the check branches
+instead of assuming Linux.
 
 Batched P2M is bit-identical to the per-box path and GEMM L2P agrees at
 roundoff (`test/test_fmmlib_batched_stages.py`), so adopting them needs no

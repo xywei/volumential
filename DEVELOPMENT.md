@@ -123,9 +123,16 @@ entry points are missing, so a mis-provisioned environment is correct but slow:
 
 ```bash
 # Batched wrappers present.  The backend selects {l,h}{2,3}dformmp_imany from
-# the equation and dimension, so check all four.
+# the equation and dimension, so check all four.  Charge sources only.
 python -c "from pyfmmlib import \
     h2dformmp_imany, h3dformmp_imany, l2dformmp_imany, l3dformmp_imany"
+# Dipole sources (a DirectionalSourceDerivative kernel, i.e. a dipole_vec) go
+# through {l,h}{2,3}dformmp_dp_imany instead, with the same silent per-box
+# fallback when it is missing.  The pinned pyfmmlib generates both families,
+# so an import failure here means a per-box dipole P2M, not a broken build.
+python -c "from pyfmmlib import \
+    h2dformmp_dp_imany, h3dformmp_dp_imany, \
+    l2dformmp_dp_imany, l3dformmp_dp_imany"
 python - <<'PY'
 import pathlib
 import platform
@@ -136,15 +143,19 @@ import pyfmmlib
 so = next(pathlib.Path(pyfmmlib.__file__).parent.glob("_internal*.so"))
 print(so)
 if platform.system() == "Darwin":
-    # macOS has no ldd; otool -L is the equivalent, and the OpenMP runtime
-    # is libomp rather than libgomp.
+    # macOS has no ldd; otool -L is the equivalent.
     subprocess.run(["otool", "-L", str(so)], check=True)
 else:
     subprocess.run(["ldd", str(so)], check=True)
 PY
 ```
 
-Expect a `libgomp` line on Linux, a `libomp` one on macOS.
+Expect a line for *an* OpenMP runtime, and accept any of them: the name
+follows the compiler, not the operating system -- `libgomp` for a GCC build,
+`libomp` for Clang (the usual case on macOS, and a possible one on Linux),
+`libiomp` for Intel. A Linux build that shows `libomp` is a working OpenMP
+build, not a mis-provisioned one; only the absence of any OpenMP runtime is.
+`doc/source/getting-started/installation.md` states the same rule.
 
 Batched P2M is bit-identical to the per-box path and GEMM L2P agrees at
 roundoff (`test/test_fmmlib_batched_stages.py`), so adopting them needs no
