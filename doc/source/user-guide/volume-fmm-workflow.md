@@ -124,9 +124,21 @@ calls. {mod}`volumential.wranglers` implements it twice:
   and carries the near-field Helmholtz split.
 - `FPNDFMMLibExpansionWrangler` — expansions from {mod}`pyfmmlib` through
   `boxtree.pyfmmlib_integration`. Restricted to 2D/3D Laplace and Helmholtz,
-  and considerably faster. Needs the environment of
-  {doc}`../getting-started/installation`, or it silently drops to a serial
-  per-box P2M path.
+  to a tree whose sources and targets coincide, and considerably faster given
+  the environment of {doc}`../getting-started/installation`. Two *separate*
+  properties of that build matter, and confusing them misdiagnoses a slow
+  run: without OpenMP the rotation M2L runs on one thread, and — for **charge
+  sources** — without the batched `{l,h}{2,3}dformmp_imany` wrappers
+  `form_multipoles` silently drops to a serial per-box P2M. (A
+  `DirectionalSourceDerivative` configuration sets `use_dipoles`, which
+  bypasses that lookup entirely and takes boxtree's inherited dipole path, so
+  those four symbols say nothing about it.) Neither announces itself.
+
+Which one to prefer is not obvious and depends on the device as much as on the
+kernel — on a CPU OpenCL device a 3D Helmholtz solve at high order is 99 %
+sumpy's FFT-based M2L, and FMMLib with an OpenMP `pyfmmlib` is about 9x faster
+on the same hardware, while a current GPU runs the sumpy path in seconds.
+{doc}`choosing-a-wrangler` has the measurements and the caveats.
 
 Both share the near-field machinery: table marshalling
 (`volumential.wranglers.table_data`), orbit reconstruction
@@ -193,9 +205,14 @@ sumpy one**, the default `auto_interpolate_targets=True` does the second step
 for you: it solves on the source modes, interpolates to `tree.targets`, and
 returns values in the requested target layout. Interpolating that result again
 is a shape error waiting to happen. The branch is guarded by
-`isinstance(expansion_wrangler, FPNDSumpyExpansionWrangler)`, so the FMMLib
-wrangler continues through the ordinary traversal and its output layout does
-not change.
+`isinstance(expansion_wrangler, FPNDSumpyExpansionWrangler)`, so an FMMLib
+wrangler does not take it — and does not reach an output layout either: it
+continues through the traversal as given and `_compute_box_local_ids` raises
+`ValueError` in the List 1 stage, because table-based near-field evaluation
+requires `tree.sources_are_targets`. The *automatic* path is therefore
+sumpy-only; FMMLib reaches distinct targets only through the manual route of
+{doc}`choosing-a-wrangler` — a source-only coincident solve followed by
+{func}`volumential.volume_fmm.interpolate_volume_potential`.
 
 - {func}`volumential.volume_fmm.interpolate_volume_potential` evaluates a
   box-mesh potential at an arbitrary set of target points — the explicit form

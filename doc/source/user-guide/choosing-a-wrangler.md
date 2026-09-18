@@ -1,0 +1,304 @@
+# Choosing a wrangler
+
+{doc}`volume-fmm-workflow` describes the two far-field backends;
+this page says which one to pick. Nothing here changes a default: every
+default is what it was. Most of them are sumpy — the library and the
+benchmark drivers build `FPNDExpansionWrangler` unless you ask for something
+else — but not all: `examples/branched_flow_helmholtz2d.py` defaults its
+*full* configuration to `fmm_backend="fmmlib"` (its smoke configuration stays
+on sumpy), so that example needs the `fmmlib` extra unless you pass
+`--fmm-backend sumpy`. Check the driver rather than assuming. It exists because the right choice depends on the
+kernel, the dimension *and* the device class, and the penalty for getting it
+wrong is an order of magnitude rather than a few percent.
+
+## The short version
+
+**Before reading the table: FMMLib requires a tree whose sources and targets
+coincide**, whatever the kernel or dimension. `_compute_box_local_ids` raises
+`ValueError` in the List 1 stage otherwise, and only a sumpy wrangler gets
+`drive_volume_fmm`'s automatic source-only solve and interpolation onto a
+distinct target array. Every "FMMLib" cell below therefore reads "sumpy" for
+a distinct-target traversal; see the caveats. **The Helmholtz "FMMLib" cells
+additionally assume Helmholtz-backed near-field tables**, for the same reason
+the split-off rows do: `FPNDFMMLibExpansionWrangler` defines no
+`eval_direct_helmholtz_split_correction`, the only method
+{func}`volumential.volume_fmm.drive_volume_fmm` will call to correct a
+Laplace-backed table, so an FMMLib run applies its table unchanged whatever
+kernel built it.
+
+| kernel and dimension | CPU OpenCL device | fp64 GPU |
+| --- | --- | --- |
+| 3D Helmholtz, high order, split **off** | **FMMLib**, with an OpenMP `pyfmmlib` | **sumpy** |
+| 3D Laplace | either; measure | **sumpy** |
+| 2D Laplace, and 2D Helmholtz with the split **off** | either; measure | **sumpy** |
+| Yukawa, 2D or 3D | **sumpy** (FMMLib has no Yukawa) | **sumpy** |
+| any Helmholtz run with the near-field split **on** | **sumpy** (see the caveat below) | **sumpy** |
+| any kernel sumpy can differentiate but `pyfmmlib` does not implement | sumpy — it is the only option | **sumpy** |
+
+The table's two Helmholtz split-off entries — the first row, and the 2D
+Helmholtz half of the row it shares with 2D Laplace — apply only with the
+split off, and what puts a run there is the near-field tables, not the flag.
+A split-off Helmholtz run **requires tables built for the Helmholtz kernel
+itself**, such as a windowed RKE assembly registered through
+`NearFieldInteractionTableManager.register_external_table` with
+`sumpy_knl=HelmholtzKernel(dim)` (see {doc}`table-build-routing`), because
+with the split off nothing corrects a table for a kernel it was not built
+for: List 1 applies whatever table it is given, unchanged.
+
+With `helmholtz_split` left at `None`, the sumpy wrangler keeps the split on
+when the target kernel and the supplied tables support it — Laplace-backed
+tables, the configuration the committed Helmholtz examples request with
+`helmholtz_split=True`, both `examples/helmholtz2d.py` and
+`examples/helmholtz3d.py` building theirs from the table manager's `"Laplace"`
+kernel — and resets it to off when they do not, as a Helmholtz-backed table
+does. A run that ends up with the split on falls under the split row whatever
+its dimension or order, because FMMLib has no split correction.
+
+`helmholtz_split=False` is a valid way to reach those two Helmholtz
+split-off entries only on tables that are already Helmholtz-backed. It moves
+nothing on the Laplace rows, where `_split_target_kernel_support_status`
+admits only Helmholtz and Yukawa base kernels and there is no split to
+disable, and nothing on the Yukawa row either, which is sumpy in both columns
+because `pyfmmlib` has no Yukawa at all — split or no split.
+
+On the rows where it does apply, it is still not a switch to flip on the
+Laplace-backed tables of the committed examples. The table compatibility
+check — `_split_base_table_support_status`, which is what would report a
+`kernel mismatch` — is called only inside `if self.helmholtz_split:` in the
+sumpy wrangler's constructor, so passing `False` skips the Helmholtz
+correction *and* the check that would have caught the mismatched table, and
+the Laplace table is applied unchanged in List 1. That is a silently wrong
+near field, not a backend choice. (Both checks live on
+`HelmholtzSplitCorrectionMixin` in `volumential/wranglers/helmholtz_split.py`
+and are called from `volumential/wranglers/sumpy_backend.py`.)
+
+The GPU column is sumpy everywhere for one reason: `pyfmmlib` is host
+Fortran, so choosing FMMLib on a GPU host moves the **far field** back onto
+the CPU and forfeits the acceleration that made the GPU worth selecting. The
+near-field *kernel* is the same either way — both wranglers apply the table
+through `NearFieldFromCSR` in {mod}`volumential.list1` — but the FMMLib path
+does not keep sumpy's device residency around it: `drive_volume_fmm` brings
+the traversal and sources to the host for that wrangler, and each near-field
+call then uploads its inputs and downloads its result. Treat that as a
+shared kernel, not a shared end-to-end speedup; the 18 to 27x below is a
+sumpy-path measurement and the hybrid has not been measured.
+
+`FPNDFMMLibExpansionWrangler` covers 2D and 3D Laplace and Helmholtz and
+nothing else. Everywhere it does not reach, the question does not arise. The
+dimension limits are not the same on both sides: the near-field Duffy builder
+supports dimensions 1 to 3 (the 1D table path exists and is tested), so a 1D
+problem with a sumpy-compatible kernel runs through the sumpy wrangler with
+FMMLib simply unavailable, while above 3D neither wrangler has a near-field
+table to apply.
+
+## Why 3D Helmholtz on a CPU device is the case that matters
+
+A 3D Helmholtz evaluator solve at FMM order 23 spends essentially all of its
+time in one stage. Measured on a 2013-class 40-thread CPU under PoCL, with the
+OpenCL queue synchronized at every phase boundary — 3D, source order 3, 5
+levels, 110,592 targets, wave number 32, FMM order 23, an assembled windowed
+near-field table:
+
+| phase | s | share |
+| --- | --- | --- |
+| form_multipoles | 0.12 | 0.06 % |
+| coarsen_multipoles | 0.05 | 0.02 % |
+| near-field table apply | 1.66 | 0.78 % |
+| **multipole_to_local** | **210.61** | **99.05 %** |
+| eval_multipoles + form_locals + refine_locals + eval_locals | 0.18 | 0.09 % |
+
+sumpy's default expansion for `HelmholtzKernel(3)` at that order is the
+linear-PDE-conforming volume Taylor expansion with `VolumeTaylorM2LWithFFT`:
+6,627 complex translation-class entries per box over 640,584 list-2 pairs.
+Inside the stage the forward FFT costs 34.5 s, the pointwise translation
+92.7 s and the inverse FFT 87.0 s. Those three come from a separate,
+finer-grained instrumentation of the same configuration, not from a
+decomposition of the 210.61 s above — which is why they sum to slightly more
+— so read them as proportions, not as a budget that has to add up. With `pyvkfft` unavailable the FFT is loopy's
+fallback, roughly 7.6 times the arithmetic of a real FFT — and on PoCL 7 that
+is not a choice, because it miscompiles VkFFT
+([pocl/pocl#2069](https://github.com/pocl/pocl/issues/2069)).
+
+The same geometry, table and order through `FPNDFMMLibExpansionWrangler`, whose
+rotation-based M2L does roughly twenty times less total work:
+
+| far field | `pyfmmlib` | OpenMP threads | M2L (s) | warm solve (s) |
+| --- | --- | --- | --- | --- |
+| sumpy/loopy on PoCL | – | – | 210.6 | 217.3 |
+| FMMLib rotation M2L | 2024.1.1 wheel, no OpenMP | 8, inert | 317.5 | 312.4 |
+| FMMLib rotation M2L | OpenMP build, 1 thread | 1 | 300.1 | 310.5 |
+| **FMMLib rotation M2L** | **OpenMP build** | **30** | **17.3–17.9** | **23.5–24.2** |
+
+The two columns are **not a decomposition of one another**: the M2L column
+comes from the phase profiler, which synchronizes the OpenCL queue at every
+stage boundary, and the warm-solve column from unprofiled repeats of the same
+configuration. That is why the no-OpenMP row's M2L slightly exceeds its own
+solve — different runs, different instrumentation — and why neither column
+should be subtracted from the other.
+
+That is **9.1x on the same hardware**, and it is entirely a threading result:
+the serial FMMLib far field is *slower* than the sumpy one. The `_imany`
+routines scale about 17x from 1 to 30 threads, but only once `pyfmmlib`
+actually carries OpenMP, which the PyPI `2024.1.1` wheel does not.
+
+Those middle rows are both the same thing — a **serial** rotation M2L — and
+there are two ways to get one, which the same numbers cannot tell apart:
+
+- **The build has no OpenMP.** `OMP_NUM_THREADS` is then inert, as in the
+  317.5 s row, where it was set to 8. Only the `ldd`/`otool` check on
+  `_internal*.so` sees this — look for *an* OpenMP runtime, whichever the
+  compiler linked: `libgomp` for GCC, `libomp` for Clang, `libiomp` for
+  Intel. The name follows the compiler, not the operating system, so a Linux
+  build compiled with Clang correctly shows `libomp`. It is what
+  {doc}`../getting-started/installation` means by "verify the build before
+  trusting any FMMLib timing".
+- **The build has OpenMP and you asked for one thread**, as in the 300.1 s
+  row. That build passes the `ldd`/`otool` check, so a slow run is *not*
+  evidence of a bad build; check the thread count you actually set as well.
+
+A second, *independent* build property costs you a different stage and must
+not be confused with it:
+
+- **The batched `{l,h}{2,3}dformmp_imany` wrappers are missing.** Only
+  `FPNDFMMLibExpansionWrangler.form_multipoles` consults
+  `_get_batched_formmp_routine()`, so their absence selects the serial
+  per-box **P2M** path and leaves M2L alone — an OpenMP build without them
+  still gets the parallel M2L above. Check by importing all four wrappers,
+  as the installation page shows: the backend picks one from the equation
+  and the dimension, so a successful 3D Laplace import does not rule out a
+  2D or Helmholtz fallback. That check covers **charge sources only**:
+  `_get_batched_formmp_routine()` returns `None` up front when
+  `use_dipoles` is set, which a `DirectionalSourceDerivative` configuration
+  supplying `dipole_vec` does. A dipole run then always enters the
+  inherited `form_multipoles`, which asks `pyfmmlib` for the batched dipole
+  wrapper `<eqn><dim>dformmp_dp_imany` and falls back to the per-box routine
+  only when that symbol is missing — so a dipole run may still batch, but
+  through a fifth wrapper the four imports above say nothing about. Import
+  the `_dp_imany` wrapper for your equation and dimension as well before
+  reading a dipole P2M time.
+
+None of these announces itself, so a mis-provisioned environment is correct,
+slow, and indistinguishable from a correct one except by timing. Before
+trusting any FMMLib number, check the OpenMP runtime, the thread count in
+force, the four charge-wrapper imports and, for a dipole run, the
+`_dp_imany` wrapper as well — and read a 300-second M2L as serial
+execution from one of the first two, never as the wrapper condition, which
+is a different stage.
+
+## On a GPU the question goes away
+
+The same solve on a current data-centre GPU, through `--backend cuda-gpu` and
+with no code change, runs the sumpy path's warm Helmholtz solve in 1.5 s
+against 214 s on that CPU (139x), and a Yukawa order-12 solve in 0.40 s against
+38 s (96x); the near-field table apply gains 18 to 27x. Results agree with the
+committed CPU row to 2e-6 relative, and the solve's peak device memory is about
+57 GB, so the problem size and the card have to be matched deliberately.
+
+The FFT-based M2L is therefore **not** a bottleneck on a GPU, and there is no
+reason to move a GPU run to FMMLib: its far-field stages are host Fortran, so
+they would take the 139x back off the table. The near-field table apply still
+runs on the device under either wrangler — `NearFieldFromCSR` in
+{mod}`volumential.list1`, which both share — so an FMMLib/GPU run is a hybrid
+rather than a run with an idle GPU, but it pays host round trips per
+near-field call that the sumpy path does not, and none of the numbers above
+were measured on it.
+
+## First solve versus warm solve
+
+Every number above is a *warm* solve. The first solve of a process pays
+sumpy's code generation for the expansion kernels, and at order 23 that has
+been measured at 884 s — against a 1.5 s warm solve on the GPU. A one-shot
+driver run is therefore mostly code generation: moving one such run to a GPU
+gained 2.2x overall, not 139x.
+
+Two consequences:
+
+- For a workload that solves many times, compare wranglers on warm solves,
+  never on a process total. Amortize the code generation over many solves,
+  or warm the compile cache, before either backend's per-solve speed decides
+  anything.
+- For a genuine one-shot solve in a fresh environment the process total *is*
+  the cost, and it is backend-dependent: the sumpy path pays the expansion
+  code generation (the 884 s above) while FMMLib's far field is precompiled
+  host Fortran with no such step. Compare cold totals as well as warm solves
+  for that workload; FMMLib can win a one-shot 3D Helmholtz solve on a CPU
+  host even where the sumpy warm solve is the faster of the two.
+
+What a given driver actually records is per driver, and
+{doc}`../benchmarks/index` is the authority on it — including which drivers
+write a sidecar at all, and which discard an untimed warm-up and report only
+warm samples. Read that page before quoting any of their seconds, and take
+the environment from the paper repository's metadata wrapper wherever a
+driver does not record it. Seconds from different device or CPU classes never
+belong in one table whatever recorded them.
+
+## Caveats before switching a 3D Helmholtz run to FMMLib
+
+- **No near-field Helmholtz split.** The FMMLib wrangler has no
+  `eval_direct_helmholtz_split_correction`, so anything using the online split
+  of {doc}`helmholtz_split` stays on sumpy.
+- **The backends do not agree to roundoff.** Rotation M2L and volume-Taylor
+  M2L agree to about 6.2e-8 relative on the solve above — both give
+  1.0760894e-4 against the manufactured solution — which is far above the
+  1e-11-level agreement some committed accuracy rows assert. A gate calibrated
+  against one backend has to be re-certified against the other; a switch is
+  not accuracy-neutral bookkeeping.
+- **The profile changes shape, but M2L still leads it.** Rotation M2L is
+  about 12x cheaper here, not negligible: 17.3–17.9 s of a 23.5–24.2 s warm
+  solve is still roughly three quarters of it. What changes is that M2M and
+  L2L stop being free — they become roughly 19 % of the solve — so a profile
+  taken before the switch does not describe the run after it.
+- **FMMLib requires a coincident source/target tree.** This is a refusal,
+  not a slower path. {func}`volumential.volume_fmm.drive_volume_fmm` runs its
+  automatic source-mode solve and interpolation onto a distinct target array
+  only for a `FPNDSumpyExpansionWrangler`; an FMMLib wrangler skips that
+  branch, reaches the List 1 stage with the traversal as given, and
+  `_compute_box_local_ids` raises `ValueError` there because table-based
+  near-field evaluation needs `tree.sources_are_targets`. So a
+  distinct-target run does not produce a different-but-valid answer — it
+  fails mid-solve. To use FMMLib on such a problem, do by hand what
+  `drive_volume_fmm` does for a sumpy wrangler: solve on a source-only
+  coincident traversal, then call
+  {func}`volumential.volume_fmm.interpolate_volume_potential` on your
+  targets, which accepts an FMMLib wrangler. Matched that way the two
+  backends evaluate at the same points and *are* comparable — it is the
+  automatic path that is sumpy-only, not the computation.
+- **Check the OpenMP build.** Repeated because it is the single most common
+  way this measurement is mistaken: without it, FMMLib is slower than sumpy
+  here, not faster.
+
+## How to decide for your own case
+
+1. Run the solve twice in one process and compare the *second* one, unless
+   the real workload is a single solve in a fresh environment — then the
+   process total is the number that matters, and it can favour FMMLib, whose
+   far field has no code-generation step. Only *can*: FMMLib is unavailable
+   for Yukawa and for split-mode runs at all, and where it is available its
+   host far field can cost more than the code generation it avoids — on a
+   GPU, or at a Laplace or lower-order case where that compilation is small.
+   Compare the cold totals for your own case; the measured win above is the
+   high-order 3D Helmholtz CPU one. Otherwise never quote a process total:
+   see {doc}`../benchmarks/index` for which drivers already separate the two
+   calls for you and which leave it to you.
+2. Name the device class explicitly — `--backend pocl-cpu` or
+   `--backend cuda-gpu`, or `PYOPENCL_CTX` for the drivers that call
+   `cl.create_some_context` (see {doc}`../getting-started/device-selection`).
+   `auto` prefers any fp64 GPU it finds and silently changes the cost class
+   between hosts.
+3. On a CPU device, set the thread caps you mean (`OMP_NUM_THREADS` for the
+   FMMLib far field, `POCL_MAX_PTHREAD_COUNT` for the OpenCL device) and
+   record them. An FMMLib comparison at one thread measures nothing.
+4. Check that the two backends agree on *your* problem before quoting either,
+   at the tolerance your gates assert rather than at the tolerance that looks
+   small.
+
+## Related
+
+- {doc}`volume-fmm-workflow` — what each wrangler is and what it plugs into.
+- {doc}`../getting-started/installation` — the OpenMP `pyfmmlib` build and its
+  verification.
+- {doc}`../getting-started/device-selection` — `--backend`, `PYOPENCL_CTX`,
+  thread caps.
+- {doc}`../benchmarks/index` — what a promoted measurement must record.
+- [#136](https://github.com/xywei/volumential/issues/136) — the measurements
+  quoted here.
