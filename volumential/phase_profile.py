@@ -1,4 +1,5 @@
-"""Per-phase wall-clock profiling for the Paper 1 benchmark drivers (E6).
+"""Per-phase wall-clock profiling for the measurement drivers kept with
+the manuscripts (experiment E6).
 
 The operation-count cost model prices *provisioning* strategies (see
 :mod:`volumential.opcounters`).  Experiment E6 asks the complementary

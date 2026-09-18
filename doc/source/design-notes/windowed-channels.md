@@ -1,8 +1,7 @@
 # Windowed singular channels and certified assembly
 
-*Implemented in {mod}`volumential.rke_table_assembly`. Exercised by
-`benchmarks/windowed_rke_sweep.py`, `benchmarks/complex_channel_closure.py`
-and the `--include-windowed` paths of the composition drivers.*
+*Implemented in {mod}`volumential.rke_table_assembly`, and covered by the
+library tests of `test/test_windowed_damped.py`.*
 
 ## The problem
 
@@ -52,11 +51,11 @@ return a refused certificate, it *raises* — `RKETruncationError` or
 `RKEWindowConditioningError` for the windowed one. A caller branches on the
 exception, not on a field.
 
-The `ok` / `refused` / `failed` taxonomy that appears in the benchmark CSVs is
-a *driver-level* classification layered on top of that: the wrappers call the
-assembler, record `refused` when it raises one of the certified refusals above,
-and `failed` when it raises anything else. A refusal is a measurement, not an
-error, which is exactly why the drivers keep the row.
+The `ok` / `refused` / `failed` taxonomy that appears in measurement CSVs is a
+*caller-level* classification layered on top of that: the caller invokes the
+assembler, records `refused` when it raises one of the certified refusals
+above, and `failed` when it raises anything else. A refusal is a measurement,
+not an error, which is exactly why the row is kept rather than dropped.
 
 ## Why the classical channels are not enough
 
@@ -132,6 +131,7 @@ payload checksum the load path verifies.
 - Mechanism and certificates: {mod}`volumential.rke_table_assembly`.
 - Online split that motivates the channel structure:
   {doc}`../user-guide/helmholtz_split`.
-- Evidence, including certificate status, condition numbers, per-parameter
-  assembly/registration/load costs and break-even models:
+- What a measurement of the assembly costs has to record before it is worth
+  quoting — certificate status, condition numbers and per-parameter
+  assembly, registration and load seconds all sit on top of it:
   {doc}`../benchmarks/index`.

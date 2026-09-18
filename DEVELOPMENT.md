@@ -165,21 +165,27 @@ re-measured after adoption.
 ### Traversal sanity check after provisioning
 
 Run this once after creating an environment and after any inducer-stack update,
-before the environment is used for evidence. It builds the graded 3D case
-`(q_order, initial levels, adapt steps) = (3, 4, 3)` and reports its List 1
-diagnostics:
+before the environment is used for evidence. The driver that builds the graded
+3D case `(q_order, initial levels, adapt steps) = (3, 4, 3)` and reports its
+List 1 diagnostics left the tree with the rest of the benchmark drivers
+([benchmarks and reproducibility](doc/source/benchmarks/index.md)), but it is
+one `git archive` away: `7c75ed1` is the last revision of `main` that carries
+it, and it imports only its sibling `adaptive_timing.py` besides the installed
+library.
 
 ```bash
-python benchmarks/adaptive_timing_3d.py --mode full \
-  --out build/benchmarks/adaptive-timing-3d.csv
+mkdir -p build/traversal-check
+git archive 7c75ed1 benchmarks | tar -x -C build/traversal-check
+python build/traversal-check/benchmarks/adaptive_timing_3d.py --mode full \
+  --out build/traversal-check/adaptive-timing-3d.csv
 ```
 
-In the `laplace3d-q3-l4-a3` row, `cross_level_list1_fraction` must equal
-`0.16588653810147913`, i.e. `n_cross_level_list1_interactions` = `3544` out of
-`n_list1_interactions` = `21364`. A different value means the tree-of-boxes
-refinement is the broken one; stop and re-provision.
-The driver also fails loudly if the adaptive tree comes out uniform, unbalanced,
-or free of cross-level List 1 work.
+In the `laplace3d-q3-l4-a3` row of that CSV, `cross_level_list1_fraction` must
+equal `0.16588653810147913`, i.e. `n_cross_level_list1_interactions` = `3544`
+out of `n_list1_interactions` = `21364`. A different value means the
+tree-of-boxes refinement is the broken one; stop and re-provision. The driver
+also fails loudly if the adaptive tree comes out uniform, unbalanced, or free of
+cross-level List 1 work; that is the same verdict.
 
 ### Thread caps and run metadata
 

@@ -9,8 +9,8 @@ land as pull requests against `main`.
   traversal sanity check. A contribution measured in an environment that fails
   that check cannot be evaluated.
 - If the change touches numerics, decide up front which test tier it belongs in
-  ({doc}`testing`) and whether it needs a benchmark row
-  ({doc}`../benchmarks/index`).
+  ({doc}`testing`), and if it comes with a cost claim, what that measurement
+  has to record ({doc}`../benchmarks/index`).
 
 ## The loop
 
@@ -76,7 +76,7 @@ four unrelated review threads on the same diff.
 - Building a traversal with separate-but-identical source and target arrays.
   Use `targets=None`; `VOLUMENTIAL_STRICT_SOURCE_TARGET_TREE=1` makes the
   mistake fail loudly.
-- Quoting a timing from `--backend auto`, or from a cold process, without
-  saying so. See {doc}`../benchmarks/index`.
+- Quoting a timing from an `auto` device selection, or from a cold process,
+  without saying so. See {doc}`../benchmarks/index`.
 - Assuming a cached table is the table you think it is. Check
   `build_routing`; see {doc}`../user-guide/table-build-routing`.

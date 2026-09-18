@@ -47,6 +47,6 @@ The pieces that have to move together:
 4. A section in {doc}`../changelog`.
 
 Until then, anything that needs to identify a build should identify a commit —
-which is what the run metadata of {doc}`../benchmarks/index` already does, and
+which is what {doc}`../benchmarks/index` requires of a measurement anyway, and
 why promoted evidence pins the generating commit and the locked dependency
 commits rather than a version string.

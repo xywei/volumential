@@ -101,7 +101,6 @@ exclude = [
   # A 2019 finite-element experiment that nothing in the tree imports; the API
   # reference leaves it out too.
   "volumential/qbfem",
-  "benchmarks",
   "doc",
   "examples",
   "test",

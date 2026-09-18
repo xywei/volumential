@@ -2,9 +2,8 @@
 
 {doc}`volume-fmm-workflow` describes the two far-field backends;
 this page says which one to pick. Nothing here changes a default: every
-default is what it was. Most of them are sumpy — the library and the
-benchmark drivers build `FPNDExpansionWrangler` unless you ask for something
-else — but not all: `examples/branched_flow_helmholtz2d.py` defaults its
+default is what it was. Most of them are sumpy — the library builds
+`FPNDExpansionWrangler` unless you ask for something else — but not all: `examples/branched_flow_helmholtz2d.py` defaults its
 *full* configuration to `fmm_backend="fmmlib"` (its smoke configuration stays
 on sumpy), so that example needs the `fmmlib` extra unless you pass
 `--fmm-backend sumpy`. Check the driver rather than assuming. It exists because the right choice depends on the
@@ -187,7 +186,7 @@ is a different stage.
 
 ## On a GPU the question goes away
 
-The same solve on a current data-centre GPU, through `--backend cuda-gpu` and
+The same solve on a current data-centre GPU, on the fp64 CUDA device class and
 with no code change, runs the sumpy path's warm Helmholtz solve in 1.5 s
 against 214 s on that CPU (139x), and a Yukawa order-12 solve in 0.40 s against
 38 s (96x); the near-field table apply gains 18 to 27x. Results agree with the
@@ -207,9 +206,9 @@ were measured on it.
 
 Every number above is a *warm* solve. The first solve of a process pays
 sumpy's code generation for the expansion kernels, and at order 23 that has
-been measured at 884 s — against a 1.5 s warm solve on the GPU. A one-shot
-driver run is therefore mostly code generation: moving one such run to a GPU
-gained 2.2x overall, not 139x.
+been measured at 884 s — against a 1.5 s warm solve on the GPU. A one-shot run
+is therefore mostly code generation: moving one such run to a GPU gained 2.2x
+overall, not 139x.
 
 Two consequences:
 
@@ -224,13 +223,11 @@ Two consequences:
   for that workload; FMMLib can win a one-shot 3D Helmholtz solve on a CPU
   host even where the sumpy warm solve is the faster of the two.
 
-What a given driver actually records is per driver, and
-{doc}`../benchmarks/index` is the authority on it — including which drivers
-write a sidecar at all, and which discard an untimed warm-up and report only
-warm samples. Read that page before quoting any of their seconds, and take
-the environment from the paper repository's metadata wrapper wherever a
-driver does not record it. Seconds from different device or CPU classes never
-belong in one table whatever recorded them.
+What a comparison of the two backends has to record before it is worth
+quoting — the resolved device, the revision, the parameters, and first-call
+seconds kept apart from warm ones — is {doc}`../benchmarks/index`. Read that
+page before quoting any seconds of your own. Seconds from different device or
+CPU classes never belong in one table whatever produced them.
 
 ## Caveats before switching a 3D Helmholtz run to FMMLib
 
@@ -277,14 +274,13 @@ belong in one table whatever recorded them.
    host far field can cost more than the code generation it avoids — on a
    GPU, or at a Laplace or lower-order case where that compilation is small.
    Compare the cold totals for your own case; the measured win above is the
-   high-order 3D Helmholtz CPU one. Otherwise never quote a process total:
-   see {doc}`../benchmarks/index` for which drivers already separate the two
-   calls for you and which leave it to you.
-2. Name the device class explicitly — `--backend pocl-cpu` or
-   `--backend cuda-gpu`, or `PYOPENCL_CTX` for the drivers that call
-   `cl.create_some_context` (see {doc}`../getting-started/device-selection`).
-   `auto` prefers any fp64 GPU it finds and silently changes the cost class
-   between hosts.
+   high-order 3D Helmholtz CPU one. Otherwise never quote a process total
+   without saying so — {doc}`../benchmarks/index` is why, and how to report
+   the two calls apart.
+2. Name the device class explicitly — an fp64 CPU on PoCL, an fp64 GPU on
+   CUDA — or pin `PYOPENCL_CTX` where the code calls `cl.create_some_context`
+   (see {doc}`../getting-started/device-selection`). An `auto` rule prefers
+   any fp64 GPU it finds and silently changes the cost class between hosts.
 3. On a CPU device, set the thread caps you mean (`OMP_NUM_THREADS` for the
    FMMLib far field, `POCL_MAX_PTHREAD_COUNT` for the OpenCL device) and
    record them. An FMMLib comparison at one thread measures nothing.
@@ -297,7 +293,7 @@ belong in one table whatever recorded them.
 - {doc}`volume-fmm-workflow` — what each wrangler is and what it plugs into.
 - {doc}`../getting-started/installation` — the OpenMP `pyfmmlib` build and its
   verification.
-- {doc}`../getting-started/device-selection` — `--backend`, `PYOPENCL_CTX`,
+- {doc}`../getting-started/device-selection` — `PYOPENCL_CTX`, device classes,
   thread caps.
 - {doc}`../benchmarks/index` — what a promoted measurement must record.
 - [#136](https://github.com/xywei/volumential/issues/136) — the measurements

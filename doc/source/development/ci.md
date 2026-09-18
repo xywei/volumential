@@ -20,8 +20,8 @@ gets **none** of these checks. See
 | Typos | `crate-ci/typos` over the workflows, `volumential/`, `README.md`, `DEVELOPMENT.md` and `pyproject.toml`, configured by `.typos.toml` |
 | Ruff | `ruff check --select E9,F63,F7,F82` — the error-level smoke subset, not the full `ruff.toml` rule set |
 | Type checking | `basedpyright -p pyproject.toml --level error` |
-| Testing (Linux) | the default pytest suite under a micromamba environment, installing `.[test,fmmlib]`, with a wrapper timeout and a diagnostics artifact (`linux-pytest.log`, `pytest.xml`) uploaded on every outcome |
-| Examples (Smoke) | three examples under `VOLUMENTIAL_EXAMPLE_SMOKE=1` — `laplace2d.py`, `helmholtz2d.py`, `helmholtz3d.py` — plus several benchmark drivers in `--mode smoke`, under `set -euo pipefail` |
+| Testing (Linux) | the default pytest suite under a micromamba environment, installing `.[test]` plus the `pyfmmlib` commit that `uv.lock` pins (the `fmmlib` extra's content, passed as a pinned requirement so uv sees one Git URL), with a wrapper timeout and a diagnostics artifact (`linux-pytest.log`, `pytest.xml`) uploaded on every outcome |
+| Examples (Smoke) | three examples under `VOLUMENTIAL_EXAMPLE_SMOKE=1` — `laplace2d.py`, `helmholtz2d.py`, `helmholtz3d.py` — under `set -euo pipefail` |
 | Documentation | this site: `sphinx-build -W --keep-going -n -b html`, then the two coverage reports (`-b coverage` and `interrogate`), then `-b linkcheck` last. The built HTML is uploaded as a `docs-html-*` artifact and the reports as `docs-coverage-*`; the job installs `.[test,doc]` |
 
 `PYOPENCL_CTX` and `PYOPENCL_TEST` are pinned to `portable:0` at the workflow
@@ -33,9 +33,9 @@ to be importable.
 Two details of these jobs are load-bearing rather than incidental, and both
 were added in [#151](https://github.com/xywei/volumential/issues/151):
 
-- The smoke job runs its ten commands in **one** `run:` block, and the shell
-  `setup-micromamba` generates does not pass `-e`. Without the `set -euo
-  pipefail` that now opens the block, only the last command's exit status
+- The smoke job runs every one of its commands in **one** `run:` block, and
+  the shell `setup-micromamba` generates does not pass `-e`. Without the
+  `set -euo pipefail` that now opens the block, only the last command's exit status
   reaches GitHub, and a failing example is reported green — which is exactly
   what happened to `helmholtz2d.py` for as long as it was broken. Keep the
   `set` line if the block is ever rewritten, or give each command its own step.
@@ -74,11 +74,10 @@ To review a change to the site rather than to its build, download the
 `index.html`. It is built with the command the deployment uses, so it is what
 would go live; it is kept for 14 days.
 
-Note what the smoke job does **not** cover: `laplace3d.py`, `poisson3d.py`,
-`branched_flow_helmholtz2d.py` and the two `*_split_p_convergence.py` drivers
-run only in the `Examples` job of `CI Full`, which has no `pull_request`
-trigger. A change that breaks one of those is not caught before it reaches
-`main`.
+Note what the smoke job does **not** cover: `laplace3d.py`, `poisson3d.py`
+and `branched_flow_helmholtz2d.py` run only in the `Examples` job of
+`CI Full`, which has no `pull_request` trigger. A change that breaks one of
+those is not caught before it reaches `main`.
 
 ## `CI Full` — `main`, weekly, and on demand
 
@@ -107,7 +106,8 @@ Every new documentation dependency goes into the `doc` extra of
 `pyproject.toml`. Both jobs that build this site — `Documentation` in `CI` and
 `Build` in `Docs Pages` — install `.[test,doc]`, so anything in the base
 dependencies, the `test` extra or the `doc` extra is installed for them; only
-an extra neither selects (`benchmark`, `fmmlib`, `gmsh_support`) is missing.
+an extra that neither selects (`fmmlib` and `gmsh_support`, for instance) is
+missing.
 The `doc` extra is where a documentation dependency belongs regardless, because
 it is what `uv sync --extra test --extra doc` gives a contributor locally.
 

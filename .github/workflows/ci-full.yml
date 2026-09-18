@@ -171,7 +171,6 @@ jobs:
           FULL_ACCURACY_TESTS=(
             test/test_duffy_full_accuracy.py
             test/test_volume_fmm.py
-            test/test_benchmark_helpers.py
           )
           pytest -vv --collect-only -m full_accuracy --full-accuracy \
             "${FULL_ACCURACY_TESTS[@]}"

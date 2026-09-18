@@ -50,7 +50,7 @@ device you meant to use.
 :link: examples/index
 :link-type: doc
 
-The eight programs under `examples/`, what each one costs to run and which
+The six programs under `examples/`, what each one costs to run and which
 device it lands on, plus the notebooks rendered as pages.
 :::
 
@@ -76,8 +76,8 @@ canonicalization.
 :link: benchmarks/index
 :link-type: doc
 
-The drivers under `benchmarks/`, their metadata sidecars, what a promoted
-measurement has to record, and how results are promoted.
+What a measurement of this library has to record to be worth quoting: the
+resolved device, the revision, the parameters, first call versus warm.
 :::
 
 :::{grid-item-card} {octicon}`code` API reference
@@ -106,7 +106,7 @@ release and versioning.
 - Want to understand the machinery: {doc}`user-guide/volume-fmm-workflow`.
 - Chasing a slow or wrong table: {doc}`user-guide/table-build-routing` and
   {doc}`user-guide/nearfield_symmetry`.
-- Reproducing a number from a paper: {doc}`benchmarks/index`.
+- Measuring, or quoting a measurement: {doc}`benchmarks/index`.
 
 ```{toctree}
 :hidden:

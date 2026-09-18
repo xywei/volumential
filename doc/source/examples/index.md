@@ -1,6 +1,6 @@
 # Examples
 
-`examples/` holds eight self-contained programs and three notebooks. Each one
+`examples/` holds six self-contained programs and three notebooks. Each one
 solves a whole problem — build a mesh, build or load a near-field table, run
 the volume FMM, report an error — rather than demonstrating a single call, so
 the shortest path from {doc}`../getting-started/first-volume-potential` to your
@@ -8,7 +8,7 @@ own driver is usually to copy the closest example and change it.
 
 Two things decide what a run costs, and neither is visible in the file name.
 
-**Small runs.** Six of the eight scripts drop to a small configuration when
+**Small runs.** Four of the six scripts drop to a small configuration when
 `VOLUMENTIAL_EXAMPLE_SMOKE=1` is set; `branched_flow_helmholtz2d.py` uses its
 own `--smoke` flag instead, and `laplace3d.py` has no preset at all — only
 three environment overrides for its quadrature order, level count and
@@ -35,8 +35,6 @@ again. Which build path runs, and how long it takes, is the subject of
 | [`poisson3d.py`][poisson3d] | `VOLUMENTIAL_EXAMPLE_SMOKE=1` | `nft_poisson3d[_smoke].sqlite` | `PYOPENCL_CTX` |
 | [`helmholtz2d.py`][helmholtz2d] | `VOLUMENTIAL_EXAMPLE_SMOKE=1` | `nft_laplace2d_for_helmholtz[_smoke].sqlite` | picks its own |
 | [`helmholtz3d.py`][helmholtz3d] | `VOLUMENTIAL_EXAMPLE_SMOKE=1` | `nft_laplace3d_for_helmholtz[_smoke].sqlite` | picks its own |
-| [`helmholtz2d_split_p_convergence.py`][h2dsplit] | `VOLUMENTIAL_EXAMPLE_SMOKE=1` | `nft_laplace2d_split_p_convergence[_smoke].sqlite` | picks its own |
-| [`helmholtz3d_split_p_convergence.py`][h3dsplit] | `VOLUMENTIAL_EXAMPLE_SMOKE=1` | `nft_laplace3d_split_p_convergence[_smoke].sqlite` | `--backend` |
 | [`branched_flow_helmholtz2d.py`][branched] | `--smoke` | under `--output-dir` | picks its own |
 
 "Picks its own" means the script builds an OpenCL context directly and
@@ -46,11 +44,11 @@ cost class of a run. {doc}`../getting-started/device-selection` lists which
 script does what, and how to pin the device you meant.
 
 Only `laplace2d.py`, `helmholtz2d.py` and `helmholtz3d.py` run on pull
-requests, under `VOLUMENTIAL_EXAMPLE_SMOKE=1`, in a job with a 30-minute
-budget it shares with six benchmark smoke runs. The rest run only in the
-`Examples` job of `CI Full`, at full settings, in a 240-minute budget shared by
-all eight — so treat "full settings" as *tens of minutes each*, and expect the
-3D ones to sit at the expensive end. See {doc}`../development/ci`.
+requests, under `VOLUMENTIAL_EXAMPLE_SMOKE=1`, in a 30-minute job that holds
+nothing else. The rest run only in the `Examples` job of `CI Full`, at
+full settings, in a 240-minute budget shared by all six — so treat "full
+settings" as *tens of minutes each*, and expect the 3D ones to sit at the
+expensive end. See {doc}`../development/ci`.
 
 ## Laplace
 
@@ -137,35 +135,6 @@ Helmholtz notebook below imports, so the two stay in step.
 VOLUMENTIAL_EXAMPLE_SMOKE=1 uv run python examples/helmholtz3d.py
 ```
 
-### `helmholtz2d_split_p_convergence.py`
-
-A sweep over `helmholtz_split_order` for a manufactured Gaussian solution,
-which is the driver behind the claims in {doc}`../user-guide/helmholtz_split`.
-It writes a JSON summary, a plot-friendly CSV and, when matplotlib is present,
-a PNG. `--input-json` re-renders the CSV and the plot from a previous run
-without computing anything, and
-`examples/helmholtz2d_split_p_convergence_from_final_case.csv` is a recorded
-output of the tuned case to compare against.
-
-```bash
-VOLUMENTIAL_EXAMPLE_SMOKE=1 uv run python \
-    examples/helmholtz2d_split_p_convergence.py
-```
-
-### `helmholtz3d_split_p_convergence.py`
-
-The 3D version of the sweep, with `examples/helmholtz3d_split_p_convergence_from_q5n3.csv`
-as its recorded output. It is the one example with an explicit `--backend`
-flag, and its default is mode-dependent in a way worth knowing before you time
-it: `auto` under smoke, but **`pocl-cpu` at full settings**. A full run
-therefore lands on the CPU even on a host with a GPU unless you pass
-`--backend cuda-gpu`.
-
-```bash
-VOLUMENTIAL_EXAMPLE_SMOKE=1 uv run python \
-    examples/helmholtz3d_split_p_convergence.py
-```
-
 ### `branched_flow_helmholtz2d.py`
 
 :::{warning}
@@ -243,8 +212,6 @@ used to write a box mesh out as `box_grid.msh`.
 [poisson3d]: https://github.com/xywei/volumential/blob/main/examples/poisson3d.py
 [helmholtz2d]: https://github.com/xywei/volumential/blob/main/examples/helmholtz2d.py
 [helmholtz3d]: https://github.com/xywei/volumential/blob/main/examples/helmholtz3d.py
-[h2dsplit]: https://github.com/xywei/volumential/blob/main/examples/helmholtz2d_split_p_convergence.py
-[h3dsplit]: https://github.com/xywei/volumential/blob/main/examples/helmholtz3d_split_p_convergence.py
 [branched]: https://github.com/xywei/volumential/blob/main/examples/branched_flow_helmholtz2d.py
 [nb2d]: https://github.com/xywei/volumential/blob/main/examples/poisson2d_pytential_volumential.ipynb
 [nb3d]: https://github.com/xywei/volumential/blob/main/examples/poisson3d_volumential.ipynb

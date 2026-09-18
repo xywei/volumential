@@ -35,6 +35,13 @@ Documentation
   ({doc}`development/ai-assisted-development`).
 
 Evidence and benchmarks
+: [#163](https://github.com/xywei/volumential/pull/163) — move the benchmark
+  drivers, the two split-order convergence sweeps and their driver-only tests
+  out to the manuscript repository, which pins the Volumential revision it
+  measured; `7c75ed1` is the last revision that carries them in this tree. The
+  `Examples (Smoke)` CI job no longer runs their smoke modes, and
+  {doc}`benchmarks/index` is now contributor guidance on what a measurement
+  must record rather than a per-driver reference.
 : [#143](https://github.com/xywei/volumential/pull/143) — Paper 1 evidence
   library, drivers, table-builder fixes and modernization.
 : [#134](https://github.com/xywei/volumential/pull/134) — per-phase operation

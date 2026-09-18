@@ -246,7 +246,7 @@ of these:
 | Examples | What each program under `examples/` does and costs | the gallery |
 | User guide | Understanding a mechanism you are using | the Helmholtz split |
 | Design notes | Why a mechanism has its shape; no derivations | windowed channels |
-| Benchmarks | Producing and promoting evidence | metadata sidecars |
+| Benchmarks | What a measurement has to record to be worth quoting | first call versus warm |
 | API reference | `api/generated/` is generated — edit the docstring; `api/index.rst` is the hand-written overview | the module map |
 | Development | The project, not the library | this page |
 

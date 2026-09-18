@@ -202,10 +202,11 @@ def _require_dim_q_order(dim: Any, q_order: Any) -> tuple[int, int]:
 # {{{ refusal taxonomy
 
 # The two certified refusal modes of the classical assembly are named on the
-# exception itself, so callers (the sweep driver and its figures) classify
-# them structurally instead of by matching free-form message text.  Both keep
-# their historical base classes, so ``except (ValueError, RuntimeError)`` and
-# message-matching callers are unaffected.
+# exception itself, so callers (the measurement drivers kept with the
+# manuscripts, and their figures) classify them structurally instead of by
+# matching free-form message text.  Both keep their historical base classes,
+# so ``except (ValueError, RuntimeError)`` and message-matching callers are
+# unaffected.
 
 class RKETruncationError(ValueError):
     """The series tail majorant never falls below the requested tolerance."""

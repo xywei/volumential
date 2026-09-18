@@ -614,5 +614,8 @@ split order ``p``  relative L2 error
 4                  ``2.423978e-06``
 =================  ========================
 
-To reproduce and plot 3D split-order convergence, use
-``examples/helmholtz3d_split_p_convergence.py``.
+The split-order convergence sweeps that produced tables like the one above are
+no longer part of this repository; ``7c75ed1`` is the last revision of ``main``
+that carries them. To re-measure the effect, sweep ``helmholtz_split_order``
+over an otherwise fixed configuration and record the run as
+:doc:`../benchmarks/index` describes.

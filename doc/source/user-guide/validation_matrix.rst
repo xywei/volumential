@@ -33,10 +33,12 @@ Test Tiers
        GitHub-hosted ``CI Full`` workflow collects the marked tests on
        scheduled/manual runs so marker drift and import errors are visible
        without pretending that CPU-only runners exercise GPU-required cases.
-   * - Benchmarks
-     - ``python benchmarks/<name>.py --mode smoke`` or full benchmark commands
-     - Smoke variants in pull-request CI; full runs are promoted manually
-     - Paper-facing timing, cache, and parameter-sweep evidence.
+   * - Measured evidence
+     - Driver code kept outside this repository, run against a pinned
+       revision of it
+     - Dedicated hosts; never in pull-request CI
+     - Timing, cache, and parameter-sweep evidence. What such a run has to
+       record is :doc:`../benchmarks/index`.
 
 Current Capability Matrix
 -------------------------

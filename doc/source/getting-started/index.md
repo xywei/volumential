@@ -28,13 +28,10 @@ stops and asks, and anywhere else (a batch job, a pipeline, CI) it picks a
 device in an implementation-defined manner. The first wastes your time, the
 second quietly makes the run unreproducible.
 
-The variable is not universal. The Helmholtz examples —
-`helmholtz2d.py`, `helmholtz3d.py`, `branched_flow_helmholtz2d.py` and the two
-`*_split_p_convergence.py` drivers — enumerate the platforms themselves and
-build a `cl.Context` directly, so `PYOPENCL_CTX` does not reach them. Four of
-them prefer an fp64 GPU; `helmholtz3d_split_p_convergence.py` instead takes a
-`--backend` that defaults to `pocl-cpu` outside smoke mode, so its full runs
-land on the CPU on the same host. Check the device the run reports rather than
-assuming either the variable or the default settled it.
+The variable is not universal. The Helmholtz examples — `helmholtz2d.py`,
+`helmholtz3d.py` and `branched_flow_helmholtz2d.py` — enumerate the platforms
+themselves and build a `cl.Context` directly, so `PYOPENCL_CTX` does not reach
+them; all three prefer an fp64 GPU where there is one. Check the device the run
+reports rather than assuming the variable settled it.
 {doc}`device-selection` covers the rest; this one line is enough to get through
 {doc}`first-volume-potential`.

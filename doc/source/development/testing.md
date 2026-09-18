@@ -12,11 +12,15 @@ what each tier currently covers; this page is how to run them.
 | Smoke and regression | `uv run pytest -q` | Pull-request CI and `main` |
 | Long-run | `uv run pytest --longrun` | Developer or dedicated runs |
 | Full accuracy | `uv run pytest -m full_accuracy --full-accuracy` | GPU-capable or dedicated runners |
-| Benchmarks | `python benchmarks/<name>.py --mode smoke` | Five drivers' smoke modes on a `main`-targeting pull request; full runs promoted manually |
 
-These assume `UV_PROJECT_ENVIRONMENT` points at the conda environment, as in
-{doc}`../getting-started/installation`; without it `uv run` uses the project's
-own `.venv`, which has no OpenCL runtime.
+There is no benchmark tier any more: the drivers that produced timing, cache
+and parameter-sweep evidence are no longer in the tree, and what a measurement
+of this library has to record is {doc}`../benchmarks/index`.
+
+The commands above assume `UV_PROJECT_ENVIRONMENT` points at the conda
+environment, as in
+{doc}`../getting-started/installation`; without it `uv run` uses the
+project's own `.venv`, which has no OpenCL runtime.
 
 ```bash
 uv run pytest -q                     # default suite
@@ -79,15 +83,11 @@ Smoke mode drops the quadrature order, level count and multipole order and uses
 a separate table cache file, so it finishes in seconds. An example that stops
 working in smoke mode is a broken example.
 
-The other maintained examples — `laplace3d.py`, `poisson3d.py`,
-`branched_flow_helmholtz2d.py` and the two `*_split_p_convergence.py` drivers —
-run at full settings in `CI Full`, which has no `pull_request` trigger. Nothing
-gates them on a pull request, so run the one you touched yourself.
+The other maintained examples — `laplace3d.py`, `poisson3d.py` and
+`branched_flow_helmholtz2d.py` — run at full settings in `CI Full`, which has
+no `pull_request` trigger. Nothing gates them on a pull request, so run the one
+you touched yourself.
 
-The pull-request job that runs those three examples also runs five benchmark
-drivers in `--mode smoke`:
-`table_equivalence_cache.py`, `accuracy_preservation.py`,
-`gaussian_free_space.py`, `dmk_effective_density.py` and `adaptive_timing.py`.
-The `performance_suite.py` lines beside them are `--list-cases` and
-`--dry-run`, which execute no case. Every other benchmark driver's smoke mode
-is ungated — run it yourself when you touch one.
+Those three smoke examples are now the whole of the `Examples (Smoke)` job. It
+used to run five benchmark drivers' smoke modes beside them; the drivers left
+the tree, and the job's benchmark lines left with them.

@@ -1,5 +1,4 @@
-"""Tests for the damped complex-frequency windowed assembly (E8) and its
-sweep-driver integration.
+"""Tests for the damped complex-frequency windowed assembly (E8).
 
 The branch contract is the module's pointwise selection: the decaying root
 on the Yukawa ray and the outgoing lower-half-plane limit on the negative
@@ -30,9 +29,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 
-import importlib.util
 import sys
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -44,8 +41,6 @@ from volumential.rke_table_assembly import (
     damped_kernel_radial,
 )
 
-
-_REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 ROOT_EXTENT = 2.0
 WINDOW_THETA = 16.0
@@ -59,20 +54,6 @@ FAST_KW = {
     "chan_regular_order": 8,
     "chan_radial_order": 21,
 }
-
-
-def _load_sweep_driver():
-    path = _REPOSITORY_ROOT / "benchmarks" / "windowed_rke_sweep.py"
-    spec = importlib.util.spec_from_file_location("windowed_rke_sweep", path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    try:
-        spec.loader.exec_module(module)
-    except BaseException:
-        sys.modules.pop(spec.name, None)
-        raise
-    return module
 
 
 # {{{ kernel branch contract
@@ -200,122 +181,6 @@ def test_damped_assembly_refuses_outside_coverage(damped_cache):
 def test_damped_assembly_rejects_zero_zeta(damped_cache):
     with pytest.raises(ValueError, match="nonzero"):
         assemble_windowed_damped_table(damped_cache, 2, 2, 0.0, **FAST_KW)
-
-# }}}
-
-
-# {{{ sweep-driver integration
-
-def test_sweep_driver_damped_reference_matches_assembly(damped_cache):
-    module = _load_sweep_driver()
-
-    dim, q_order, level = 2, 2, 3
-    lam = 4.0
-    zeta = (lam * lam) * np.exp(0.5j * np.pi)
-    table, _ = assemble_windowed_damped_table(
-        damped_cache, dim, q_order, zeta, **FAST_KW
-    )
-    entry_ids = np.asarray(table.get_reduced_entry_ids(), dtype=np.int64)
-    reference = module._build_damped_reference(
-        dim=dim,
-        q_order=q_order,
-        source_box_level=level,
-        root_extent=ROOT_EXTENT,
-        window_theta=WINDOW_THETA,
-        zeta=zeta,
-        regular_order=24,
-        radial_order=61,
-        entry_ids=entry_ids,
-    )
-    assert reference["status"] == "ok"
-    values = np.asarray(table.get_entry_data_for_full_indices(entry_ids))
-    scale = max(float(np.max(np.abs(reference["values"]))), 1e-300)
-    deviation = float(
-        np.max(np.abs(values - reference["values"])) / scale
-    )
-    # the fast assembly orders are deliberately loose; the reference need
-    # only agree at the level those orders can support
-    assert deviation < 1e-2, deviation
-
-
-def test_sweep_driver_validates_complex_phases_before_side_effects(
-    tmp_path, monkeypatch
-):
-    module = _load_sweep_driver()
-    cache_dir = tmp_path / "cache"
-    monkeypatch.setattr(
-        module,
-        "_make_queue",
-        lambda: pytest.fail("queue creation must not be attempted"),
-    )
-    kwargs = {
-        "mode": "smoke",
-        "dims": [2],
-        "kernels": ["Yukawa"],
-        "q_order_override": 1,
-        "source_level_override": 0,
-        "root_extent": 2.0,
-        "window_theta": 16.0,
-        "p_stars": [1],
-        "smooth_orders": [2],
-        "mus": [1.0],
-        "direct_policies": [(2, 7), (3, 8)],
-        "classical_channel_orders": (2, 7),
-        "chan_orders": [(2, 7)],
-        "cache_dir": cache_dir,
-        "skip_3d_tight": False,
-    }
-
-    for bad in ([0.0], [1.0], [-0.5], [float("nan")], [0.25, 0.25], []):
-        with pytest.raises(ValueError):
-            module.run_sweep(**kwargs, complex_phases=bad)
-        assert not cache_dir.exists()
-
-
-@pytest.mark.parametrize("raw", ["0", "1", "-0.25", "nan", "0.25,0.25"])
-def test_sweep_driver_cli_rejects_bad_complex_phases(raw, monkeypatch):
-    module = _load_sweep_driver()
-    monkeypatch.setattr(
-        sys, "argv", ["windowed_rke_sweep.py", "--complex-phases", raw]
-    )
-    monkeypatch.setattr(
-        module,
-        "run_sweep",
-        lambda **kwargs: pytest.fail("run_sweep must not be called"),
-    )
-    with pytest.raises(SystemExit) as exc_info:
-        module.main()
-    assert exc_info.value.code == 2
-
-
-def test_sweep_fields_extend_the_committed_layout():
-    module = _load_sweep_driver()
-    fields = list(module.FIELDS)
-    # append-only contract: the historical columns keep their positions
-    assert fields.index("case_id") == 0
-    # the routing columns are appended, not inserted beside the other
-    # direct_* fields, so a positional reader of an older CSV is unaffected
-    assert fields[-3:] == [
-        "direct_loose_build_routing",
-        "direct_tight_build_routing",
-        "direct_build_routing",
-    ]
-    assert fields.index("direct_tight_regular_order") < fields.index(
-        "direct_loose_build_routing"
-    )
-    assert fields.index("benchmark_total_seconds") < fields.index(
-        "zeta_phase_fraction"
-    )
-    for name in (
-        "zeta_phase_fraction",
-        "zeta_real",
-        "zeta_imag",
-        "ops_smooth_rule_nodes",
-        "ops_smooth_rule_nodes_analytic",
-        "ops_channel_build_singular_nodes",
-        "ops_special_function_evals",
-    ):
-        assert name in fields
 
 # }}}
 

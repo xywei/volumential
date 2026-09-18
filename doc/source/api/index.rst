@@ -97,7 +97,7 @@ modules: the :mod:`loopy` kernel cache wrapper
 (:mod:`volumential.expression_eval`) and the box-specific operators
 (:mod:`volumential.box_operators`).  :mod:`volumential.lagrange` holds the
 barycentric Lagrange weights, and :mod:`volumential.opcounters` the explicit
-operation counters the benchmark drivers report.
+operation counters and the build-routing readout that timing runs report.
 
 Indices
 -------
