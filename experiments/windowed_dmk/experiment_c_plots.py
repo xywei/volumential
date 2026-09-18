@@ -27,15 +27,25 @@ import matplotlib.pyplot as plt  # noqa: E402
 FLOOR = 1.0e-18
 
 SWEEP_CASES = (
-    ("case2_halfplane", "case 2: half-plane cut y1 <= 0.3"),
-    ("case3_wedge90", "case 3: right-angle wedge"),
-    ("case4_wedge60", "case 4: 60-degree wedge"),
+    ("case2_halfplane", "case 2: half-plane cut y1 <= 0.3, global cubic"),
+    (
+        "case2_halfplane_piecewise",
+        "case 2p: half-plane cut, piecewise per-leaf density",
+    ),
+    ("case3_wedge90", "case 3: right-angle wedge, on the bisector"),
+    ("case3_wedge90_face", "case 3f: right-angle wedge, one face, away from apex"),
+    ("case4_wedge60", "case 4: 60-degree wedge, on the bisector"),
 )
 
 COLUMNS = (
-    ("err_physical", "o-", "physical-side windowed prefix"),
-    ("err_extended", "s--", "box-extended prefix"),
-    ("err_legacy", "^:", "legacy asymptotic series"),
+    ("err_physical", "o-", "RKE + DMK (physical-side windowed prefix)"),
+    ("err_extended", "s--", "box code with extended source"),
+    ("err_legacy", "^:", "plain DMK, interior series"),
+)
+
+FRYKLUND_LABEL = "DMK line, Fryklund Lemma 4.5"
+FRYKLUND_LABEL_AMBIGUOUS = (
+    "DMK line, Fryklund Lemma 4.5\n(closest point not unique; hollow markers)"
 )
 
 
@@ -58,7 +68,7 @@ def as_float(value, default: float = float("nan")) -> float:
 
 
 def plot_sweeps(out: Path) -> str | None:
-    """Relative error of the three leaf columns against distance to the cut."""
+    """Relative error of the four leaf columns against distance to the cut."""
     available = []
     for name, title in SWEEP_CASES:
         rows = read_rows(out / f"experiment_c_{name}.csv")
@@ -66,22 +76,38 @@ def plot_sweeps(out: Path) -> str | None:
             available.append((name, title, rows))
     if not available:
         return None
+    ncols = min(3, len(available))
+    nrows = (len(available) + ncols - 1) // ncols
     fig, axes = plt.subplots(
-        1, len(available), figsize=(5.0 * len(available), 4.2), squeeze=False
+        nrows, ncols, figsize=(5.4 * ncols, 4.4 * nrows), squeeze=False
     )
-    for ax, (_, title, rows) in zip(axes[0], available, strict=False):
+    panels = [ax for row in axes for ax in row]
+    for ax, (_, title, rows) in zip(panels, available, strict=False):
         delta = [as_float(r["delta_over_sqrt_t_leaf"]) for r in rows]
         for key, style, label in COLUMNS:
             values = [max(as_float(r[key], FLOOR), FLOOR) for r in rows]
             ax.loglog(delta, values, style, label=label, markersize=4)
+        fryklund = [r for r in rows if r.get("err_fryklund", "") not in ("", None)]
+        if fryklund:
+            unique = str(fryklund[0].get("fryklund_defined", "")).strip() == "True"
+            ax.loglog(
+                [as_float(r["delta_over_sqrt_t_leaf"]) for r in fryklund],
+                [max(as_float(r["err_fryklund"], FLOOR), FLOOR) for r in fryklund],
+                "D-." if unique else "D--",
+                label=FRYKLUND_LABEL if unique else FRYKLUND_LABEL_AMBIGUOUS,
+                markersize=5,
+                **({} if unique else {"markerfacecolor": "none"}),
+            )
         ax.set_xlabel(
-            "target distance to the cut (cases 3, 4: to the apex),\n"
+            "target distance to the cut (bisector sweeps: to the apex),\n"
             "in units of sqrt(t_L)"
         )
         ax.set_ylabel("relative error of the split total")
         ax.set_title(title, fontsize=9)
         ax.grid(True, which="both", alpha=0.3)
-        ax.legend(fontsize=7)
+        ax.legend(fontsize=6)
+    for ax in panels[len(available):]:
+        ax.axis("off")
     fig.tight_layout()
     path = out / "experiment_c_boundary_sweep.png"
     fig.savefig(path, dpi=150)
@@ -113,17 +139,20 @@ def plot_smoothness(out: Path) -> str | None:
 
 
 def plot_prefix_magnitude(out: Path) -> str | None:
-    """The three leaf columns themselves, next to the reference potential."""
+    """The four leaf columns themselves, next to the reference potential."""
     rows = read_rows(out / "experiment_c_case2_halfplane.csv")
     if not rows:
         return None
     delta = [as_float(r["delta_over_sqrt_t_leaf"]) for r in rows]
     fig, ax = plt.subplots(figsize=(6.0, 4.2))
     for key, style, label in (
-        ("prefix_physical", "o-", "physical-side windowed prefix"),
-        ("prefix_extended", "s--", "box-extended prefix"),
-        ("prefix_legacy", "^:", "legacy asymptotic series"),
+        ("prefix_physical", "o-", "RKE + DMK (physical-side windowed prefix)"),
+        ("prefix_extended", "s--", "box code with extended source"),
+        ("prefix_legacy", "^:", "plain DMK, interior series"),
+        ("prefix_fryklund", "D-.", FRYKLUND_LABEL),
     ):
+        if key not in rows[0]:
+            continue
         values = [as_float(r[key]) for r in rows]
         ax.semilogx(delta, values, style, markersize=4, label=label)
     ax.set_xlabel("target distance to the cut, in units of sqrt(t_L)")

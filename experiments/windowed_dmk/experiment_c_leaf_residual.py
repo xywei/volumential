@@ -23,16 +23,34 @@ Checks
 2. case 1, interior full box: split total against a high-accuracy reference,
    windowed prefix by the separable ``u``-integral (D7) against target-centred
    polar quadrature, with a globally smooth and a genuinely piecewise density;
-3. case 2, half-plane cut ``y_1 <= 0.3``: three leaf columns (physical-side
-   prefix, box-extended prefix, legacy asymptotic) against the reference as the
-   target approaches the cut;
-4. case 3, right-angle wedge ``y_1 <= 0.3, y_2 <= 0.1``: same three columns;
+3. case 2, half-plane cut ``y_1 <= 0.3``: four leaf columns (physical-side
+   prefix, box-extended prefix, legacy asymptotic, and the Fryklund Lemma 4.5
+   line described below) against the reference as the target approaches the
+   cut, with the same sweep repeated for a genuinely piecewise per-leaf density;
+4. case 3, right-angle wedge ``y_1 <= 0.3, y_2 <= 0.1``: the same four columns
+   on the bisector, where no boundary point is the unique closest one, plus a
+   second short sweep towards one face and away from the apex, where one is;
 5. case 4, 60-degree wedge: physical-side prefix by polar quadrature only
    (the region is not separable in Cartesian coordinates);
 6. smoothness evidence: tensor-Gauss order convergence of the shells and of the
    coarsest term over the target's own leaf, against the singular kernel;
 7. node count of the ``u``-quadrature (in ``u = v^2``) needed by the separable
    prefix as a function of the target's distance to the cut.
+
+The fourth column is the fairest comparison a DMK-style local treatment can
+make at a flat wall: ``fryklund_VL`` of ``experiment_e_baseline``, that is Lemma
+4.5 of Fryklund, Greengard, Jiang and Potter (2024) for the local volume
+potential, reused unchanged and evaluated with window heat time ``delta = t_L``
+(the same leaf window the other columns use), curvature ``kappa_b = 0``, and the
+exact Taylor jet of the target leaf's polynomial in the frame of the chosen wall
+(``xi`` along the tangent, ``eta`` along the inward normal).  The lemma is exact
+through ``delta^2``; at a flat wall its first omitted group is the degree-three
+part of the density, which ``flat_wall_cubic_remainder`` supplies in closed
+form, so the measured gap can be checked against theory instead of merely
+observed.  On a wedge bisector every boundary point is equidistant and the
+expansion has no closest point; it is applied there anyway with the
+deterministic choice ``y_1 = 0.3``, and those rows carry
+``fryklund_defined = False``.
 
 Reference values use target-centred polar (Duffy) quadrature over the fan of
 triangles with the target as apex, with the radial ``r^k log r`` moments taken
@@ -56,6 +74,12 @@ from pathlib import Path
 
 import numpy as np
 from scipy.special import erf, erfc, exp1
+
+try:  # Fryklund's Lemma 4.5 line is reused here, never reimplemented
+    from experiment_e_baseline import fryklund_VL
+except ImportError:  # pragma: no cover - run from another working directory
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from experiment_e_baseline import fryklund_VL
 
 
 EULER_GAMMA = 0.5772156649015328606
@@ -254,6 +278,64 @@ def poly_laplacian(c):
         for j in range(2, c.shape[1]):
             out[i, j - 2] += j * (j - 1) * c[i, j]
     return out
+
+
+def poly_partial(c, axis):
+    """Coefficient array of the partial derivative of ``c`` along ``axis``."""
+    out = np.zeros_like(c)
+    if axis == 0:
+        for i in range(1, c.shape[0]):
+            out[i - 1, :] += i * c[i, :]
+    else:
+        for j in range(1, c.shape[1]):
+            out[:, j - 1] += j * c[:, j]
+    return out
+
+
+def poly_jet_in_frame(c, x, tangent, inward_normal):
+    """Exact Taylor jet of the polynomial ``c`` at ``x`` in a rotated frame.
+
+    Returns ``(jet, f_xixieta, f_etaetaeta)``: Fryklund's six second-order jet
+    entries in the frame whose first axis is ``tangent`` and whose second axis
+    is ``inward_normal``, then the two third derivatives that Lemma 4.5 omits.
+    Every derivative is taken on the coefficient array, so no numerical
+    differencing of the density enters anywhere.
+    """
+    tan = np.asarray(tangent, dtype=np.float64)
+    nrm = np.asarray(inward_normal, dtype=np.float64)
+    arrays = {}
+    arrays[(1, 0)] = poly_partial(c, 0)
+    arrays[(0, 1)] = poly_partial(c, 1)
+    arrays[(2, 0)] = poly_partial(arrays[(1, 0)], 0)
+    arrays[(1, 1)] = poly_partial(arrays[(1, 0)], 1)
+    arrays[(0, 2)] = poly_partial(arrays[(0, 1)], 1)
+    arrays[(3, 0)] = poly_partial(arrays[(2, 0)], 0)
+    arrays[(2, 1)] = poly_partial(arrays[(2, 0)], 1)
+    arrays[(1, 2)] = poly_partial(arrays[(1, 1)], 1)
+    arrays[(0, 3)] = poly_partial(arrays[(0, 2)], 1)
+    value = {key: poly_eval(arr, x) for key, arr in arrays.items()}
+    grad = np.array([value[(1, 0)], value[(0, 1)]])
+    hess = np.array(
+        [[value[(2, 0)], value[(1, 1)]], [value[(1, 1)], value[(0, 2)]]]
+    )
+    third = np.zeros((2, 2, 2))
+    third[0, 0, 0] = value[(3, 0)]
+    third[1, 1, 1] = value[(0, 3)]
+    for index in ((0, 0, 1), (0, 1, 0), (1, 0, 0)):
+        third[index] = value[(2, 1)]
+    for index in ((0, 1, 1), (1, 0, 1), (1, 1, 0)):
+        third[index] = value[(1, 2)]
+    jet = {
+        "f": poly_eval(c, x),
+        "f_xi": float(tan @ grad),
+        "f_eta": float(nrm @ grad),
+        "f_xixi": float(tan @ hess @ tan),
+        "f_xieta": float(tan @ hess @ nrm),
+        "f_etaeta": float(nrm @ hess @ nrm),
+    }
+    f_xixieta = float(np.einsum("abc,a,b,c->", third, tan, tan, nrm))
+    f_etaetaeta = float(np.einsum("abc,a,b,c->", third, nrm, nrm, nrm))
+    return jet, f_xixieta, f_etaetaeta
 
 
 def legacy_asymptotic(c, x, t_leaf):
@@ -559,6 +641,90 @@ def separable_prefix_rect(rect, target, dens, t_leaf, n_panel=26, order=16):
 
 
 # ---------------------------------------------------------------------------
+# the Fryklund Lemma 4.5 line at a flat wall
+# ---------------------------------------------------------------------------
+
+
+def _t_power_gauss_moment(power, r, delta):
+    """``int_0^delta t^p exp(-r^2 / (4 t)) dt``, by graded Gauss in ``t = delta w^2``.
+
+    The substitution makes the integrand ``2 delta^{p+1} w^{2p+1}
+    exp(-r^2 / (4 delta w^2))``, which is flat at ``w = 0``; the panels are
+    graded dyadically towards ``0`` and refined uniformly near ``w = 1``.
+    """
+    marks = {0.0, 1.0}
+    for k in range(31):
+        marks.add(2.0**-k)
+    for i in range(1, 20):
+        marks.add(i / 20.0)
+    nodes, weights = _panel_rule(np.array(sorted(marks), dtype=np.float64), 20)
+    exponent = np.zeros_like(nodes)
+    if r > 0.0:
+        exponent = -(r * r) / (4.0 * delta * nodes * nodes)
+    integrand = nodes ** (2.0 * power + 1.0) * np.exp(exponent)
+    return float(2.0 * delta ** (power + 1.0) * np.sum(weights * integrand))
+
+
+def flat_wall_cubic_remainder(f_xixieta, f_etaetaeta, r, delta):
+    """The term Lemma 4.5 omits at a flat wall for a density of degree three.
+
+    The lemma is exact through ``delta^2``, i.e. through the quadratic part of
+    the density's Taylor expansion at the target.  Over the half-plane
+    ``{eta > -r}`` the cubic part contributes, after the Gaussian ``xi``
+    integral kills the terms odd in ``xi``,
+
+        pi^{-1/2} [ (f_xixieta + 2 f_etaetaeta / 3) A_{3/2}
+                    + f_etaetaeta r^2 A_{1/2} / 6 ],
+        A_p = int_0^delta t^p exp(-r^2 / (4 t)) dt,
+
+    which on the wall itself is ``2 delta^{5/2} (f_xixieta
+    + 2 f_etaetaeta / 3) / (5 sqrt(pi))``.  For a density of degree at most
+    three this is the *whole* remainder, so the lemma plus this term is the
+    exact half-plane value and the sum can be checked to roundoff.
+    """
+    a_half = _t_power_gauss_moment(0.5, r, delta)
+    a_three_half = _t_power_gauss_moment(1.5, r, delta)
+    return float(
+        (
+            (f_xixieta + 2.0 * f_etaetaeta / 3.0) * a_three_half
+            + f_etaetaeta * r * r * a_half / 6.0
+        )
+        / math.sqrt(math.pi)
+    )
+
+
+def fryklund_line(case, model, target, t_leaf):
+    """Lemma 4.5 at ``target`` for the wall the case declares, or ``None``.
+
+    The window heat time is the leaf window ``t_L`` the other columns use, the
+    curvature is zero (every wall here is straight), and the density jet is the
+    exact Taylor jet of the target leaf's polynomial in the frame whose inward
+    normal points away from the wall.  ``defined`` is ``False`` when the case
+    knows that no boundary point is the unique closest one, in which case the
+    wall is the deterministic first choice and the number is reported anyway.
+    """
+    spec = case.get("fryklund")
+    if spec is None:
+        return None
+    axis = int(spec["axis"])
+    wall = float(spec["value"])
+    base = np.array(target, dtype=np.float64)
+    base[axis] = wall
+    inward = np.zeros(2)
+    inward[axis] = -1.0
+    tangent = np.array([inward[1], -inward[0]])
+    dens = model.dens[model.leaf_index(target)]
+    jet, f_xixieta, f_etaetaeta = poly_jet_in_frame(dens, target, tangent, inward)
+    r = float(wall - float(target[axis]))
+    return {
+        "value": float(fryklund_VL(target, base, 0.0, jet, t_leaf, sign=1.0)),
+        "r": r,
+        "remainder": flat_wall_cubic_remainder(f_xixieta, f_etaetaeta, r, t_leaf),
+        "defined": bool(spec.get("unique_closest", True)),
+    }
+
+
+# ---------------------------------------------------------------------------
 # tensor-Gauss quadrature over a triangle (smoothness evidence)
 # ---------------------------------------------------------------------------
 
@@ -756,7 +922,7 @@ def evaluate_target(
 
 
 def sweep_case(case, model, kernels, windows, targets, n_ang, n_rad, polar_every):
-    """Run the three-column comparison over a list of targets."""
+    """Run the four-column comparison over a list of targets."""
     rows = []
     for k, (label, target) in enumerate(targets):
         want_polar = (k % polar_every == 0) or case.get("polar_prefix_only", False)
@@ -767,6 +933,7 @@ def sweep_case(case, model, kernels, windows, targets, n_ang, n_rad, polar_every
         if case.get("polar_prefix_only", False):
             physical = data["prefix_polar"]
         ref = data["reference"]
+        fryklund = fryklund_line(case, model, np.asarray(target), windows[-1])
         row = {
             "case": case["name"],
             "label": label,
@@ -787,6 +954,23 @@ def sweep_case(case, model, kernels, windows, targets, n_ang, n_rad, polar_every
             / abs(ref),
             "err_legacy": abs(data["smooth_total"] + data["prefix_legacy"] - ref)
             / abs(ref),
+            "prefix_fryklund": fryklund["value"] if fryklund else "",
+            "err_fryklund": (
+                abs(data["smooth_total"] + fryklund["value"] - ref) / abs(ref)
+                if fryklund
+                else ""
+            ),
+            "fryklund_defined": fryklund["defined"] if fryklund else "",
+            "fryklund_r": fryklund["r"] if fryklund else "",
+            "fryklund_minus_physical": (
+                abs(fryklund["value"] - physical) if fryklund else ""
+            ),
+            "fryklund_remainder_pred": fryklund["remainder"] if fryklund else "",
+            "fryklund_remainder_residual": (
+                abs(physical - fryklund["value"] - fryklund["remainder"])
+                if fryklund
+                else ""
+            ),
             "prefix_separable_vs_polar": (
                 abs(data["prefix_physical"] - data["prefix_polar"])
                 if (data["prefix_polar"] is not None and not case.get(
@@ -909,25 +1093,70 @@ def build_cases(n_targets):
     )
 
     cut = 0.3
+    halfplane_targets = [(float(d), np.array([cut - d, -0.07])) for d in deltas]
+    halfplane_wall = {"axis": 0, "value": cut, "unique_closest": True}
     cases.append(
         {
             "name": "case2_halfplane",
             "half_planes": [((cut, 0.0), (1.0, 0.0))],
             "axis_bounds": [(0, cut)],
             "piecewise": False,
-            "targets": [(float(d), np.array([cut - d, -0.07])) for d in deltas],
+            "fryklund": halfplane_wall,
+            "targets": halfplane_targets,
+        }
+    )
+    cases.append(
+        {
+            "name": "case2_halfplane_piecewise",
+            "half_planes": [((cut, 0.0), (1.0, 0.0))],
+            "axis_bounds": [(0, cut)],
+            "piecewise": True,
+            "fryklund": halfplane_wall,
+            "targets": halfplane_targets,
         }
     )
 
     apex = np.array([0.3, 0.1])
     diag = np.array([-1.0, -1.0]) / math.sqrt(2.0)
+    wedge_geometry = {
+        "half_planes": [(apex, (1.0, 0.0)), (apex, (0.0, 1.0))],
+        "axis_bounds": [(0, float(apex[0])), (1, float(apex[1]))],
+        "piecewise": False,
+    }
     cases.append(
         {
             "name": "case3_wedge90",
-            "half_planes": [(apex, (1.0, 0.0)), (apex, (0.0, 1.0))],
-            "axis_bounds": [(0, float(apex[0])), (1, float(apex[1]))],
-            "piecewise": False,
+            **wedge_geometry,
+            "fryklund": {
+                "axis": 0,
+                "value": float(apex[0]),
+                "unique_closest": False,
+            },
             "targets": [(float(d), apex + d * diag) for d in deltas],
+        }
+    )
+
+    # A second, short sweep on one face of the same wedge, far enough from the
+    # apex (at least 4 sqrt(t_L), here 0.55 = 8.8 sqrt(t_L)) that the closest
+    # boundary point is unique and the other face is outside the window.
+    face_offset = 0.55
+    face_deltas = np.logspace(math.log10(0.0022), math.log10(0.30), 6)
+    cases.append(
+        {
+            "name": "case3_wedge90_face",
+            **wedge_geometry,
+            "fryklund": {
+                "axis": 0,
+                "value": float(apex[0]),
+                "unique_closest": True,
+            },
+            "targets": [
+                (
+                    float(d),
+                    np.array([float(apex[0]) - d, float(apex[1]) - face_offset]),
+                )
+                for d in face_deltas
+            ],
         }
     )
 
@@ -942,6 +1171,11 @@ def build_cases(n_targets):
             "axis_bounds": None,
             "piecewise": False,
             "polar_prefix_only": True,
+            "fryklund": {
+                "axis": 0,
+                "value": float(apex[0]),
+                "unique_closest": False,
+            },
             "targets": [(float(d), apex + d * inward) for d in deltas],
         }
     )
@@ -953,6 +1187,28 @@ def build_cases(n_targets):
 # ---------------------------------------------------------------------------
 
 
+SWEEP_CASE_ORDER = (
+    "case2_halfplane",
+    "case2_halfplane_piecewise",
+    "case3_wedge90",
+    "case3_wedge90_face",
+    "case4_wedge60",
+)
+"""Cut-geometry sweeps that get a panel in the boundary-sweep figure."""
+
+SWEEP_COLUMNS = (
+    ("err_physical", "o-", "RKE + DMK (physical-side windowed prefix)"),
+    ("err_extended", "s--", "box code with extended source"),
+    ("err_legacy", "^:", "plain DMK, interior series"),
+)
+"""The three columns that do not depend on a closest boundary point."""
+
+FRYKLUND_LABEL = "DMK line, Fryklund Lemma 4.5"
+FRYKLUND_LABEL_AMBIGUOUS = (
+    "DMK line, Fryklund Lemma 4.5\n(closest point not unique; hollow markers)"
+)
+
+
 def make_plots(out, case_rows, smooth_rows):
     """Write the sweep and smoothness plots, if matplotlib is importable."""
     plt = get_pyplot()
@@ -960,30 +1216,38 @@ def make_plots(out, case_rows, smooth_rows):
         return []
     written = []
 
-    sweeps = [
-        name
-        for name in ("case2_halfplane", "case3_wedge90", "case4_wedge60")
-        if name in case_rows
-    ]
+    sweeps = [name for name in SWEEP_CASE_ORDER if name in case_rows]
     if sweeps:
+        ncols = min(3, len(sweeps))
+        nrows = (len(sweeps) + ncols - 1) // ncols
         fig, axes = plt.subplots(
-            1, len(sweeps), figsize=(5.0 * len(sweeps), 4.0), squeeze=False
+            nrows, ncols, figsize=(5.0 * ncols, 4.2 * nrows), squeeze=False
         )
-        for ax, name in zip(axes[0], sweeps, strict=False):
+        panels = [ax for row in axes for ax in row]
+        for ax, name in zip(panels, sweeps, strict=False):
             rows = case_rows[name]
             delta = [r["delta_over_sqrt_t_leaf"] for r in rows]
-            for key, style, label in (
-                ("err_physical", "o-", "physical-side windowed prefix"),
-                ("err_extended", "s--", "box-extended prefix"),
-                ("err_legacy", "^:", "legacy asymptotic series"),
-            ):
-                values = [max(r[key], 1e-17) for r in rows]
-                ax.loglog(delta, values, style, label=label)
+            for key, style, label in SWEEP_COLUMNS:
+                values = [max(r[key], 1e-18) for r in rows]
+                ax.loglog(delta, values, style, label=label, markersize=4)
+            fryklund = [r for r in rows if r["prefix_fryklund"] != ""]
+            if fryklund:
+                unique = bool(fryklund[0]["fryklund_defined"])
+                ax.loglog(
+                    [r["delta_over_sqrt_t_leaf"] for r in fryklund],
+                    [max(r["err_fryklund"], 1e-18) for r in fryklund],
+                    "D-." if unique else "D--",
+                    label=FRYKLUND_LABEL if unique else FRYKLUND_LABEL_AMBIGUOUS,
+                    markersize=5,
+                    **({} if unique else {"markerfacecolor": "none"}),
+                )
             ax.set_xlabel("distance to the cut / sqrt(t_L)")
             ax.set_ylabel("relative error of the split total")
             ax.set_title(name)
             ax.grid(True, which="both", alpha=0.3)
             ax.legend(fontsize=7)
+        for ax in panels[len(sweeps):]:
+            ax.axis("off")
         fig.tight_layout()
         path = out / "experiment_c_boundary_sweep.png"
         fig.savefig(path, dpi=150)
@@ -1088,6 +1352,33 @@ def main():
             ],
         }
 
+        fryklund_rows = [r for r in rows if r["prefix_fryklund"] != ""]
+        if fryklund_rows:
+            errors = [r["err_fryklund"] for r in fryklund_rows]
+            case_summary[case["name"]].update(
+                {
+                    "fryklund_closest_point_unique": bool(
+                        fryklund_rows[0]["fryklund_defined"]
+                    ),
+                    "max_rel_err_fryklund": max(errors),
+                    "median_rel_err_fryklund": float(np.median(errors)),
+                    "rel_err_fryklund_at_closest": fryklund_rows[0]["err_fryklund"],
+                    "rel_err_fryklund_at_farthest": fryklund_rows[-1]["err_fryklund"],
+                    "max_abs_fryklund_minus_physical": max(
+                        r["fryklund_minus_physical"] for r in fryklund_rows
+                    ),
+                    "abs_fryklund_minus_physical_at_closest": fryklund_rows[0][
+                        "fryklund_minus_physical"
+                    ],
+                    "max_abs_cubic_remainder_residual": max(
+                        r["fryklund_remainder_residual"] for r in fryklund_rows
+                    ),
+                    "abs_cubic_remainder_at_closest": fryklund_rows[0][
+                        "fryklund_remainder_pred"
+                    ],
+                }
+            )
+
         if not args.no_refine:
             coarse_rows = sweep_case(
                 case,
@@ -1152,6 +1443,31 @@ def main():
         "check1_kernel_identity": summary1,
         "cases": case_summary,
         "reference_quadrature_self_check": refine_summary,
+        "check8_fryklund_line": {
+            "source": (
+                "experiment_e_baseline.fryklund_VL, Lemma 4.5 of Fryklund, "
+                "Greengard, Jiang and Potter (2024), reused unchanged"
+            ),
+            "delta": windows[-1],
+            "kappa_b": 0.0,
+            "jet": (
+                "exact Taylor jet of the target leaf's polynomial at the "
+                "target, in the (tangent, inward normal) frame of the wall"
+            ),
+            "wall_choice": (
+                "the first edge y_1 = 0.3 in every cut case; on a wedge "
+                "bisector no boundary point is the unique closest one and "
+                "those rows carry fryklund_defined = False"
+            ),
+            "remainder": (
+                "flat_wall_cubic_remainder is the degree-three group the "
+                "lemma omits at a flat wall; for a cubic density it is the "
+                "whole remainder, of size delta^{5/2}, so "
+                "fryklund_remainder_residual should be roundoff wherever the "
+                "wall is flat, the closest point unique and the density one "
+                "global polynomial"
+            ),
+        },
         "check6_smoothness": {
             "rows": smooth_rows,
             "polar_reference_values": smooth_summary.get("polar_values"),

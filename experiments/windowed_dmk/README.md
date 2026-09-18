@@ -166,6 +166,25 @@ rectangle (optionally clipped by axis-aligned cuts) is computed both by the
 separable one-dimensional `u`-integral of erf moments and by target-centred
 polar quadrature.
 
+A fourth leaf column makes the comparison fair at a flat wall, where the
+free-space series is not the best a local treatment can do. It is
+`fryklund_VL` of `experiment_e_baseline` (Lemma 4.5 of Fryklund, Greengard,
+Jiang and Potter, 2024, for the asymptotic local volume potential), reused
+unchanged, evaluated with the window heat time set to the same leaf window
+`t_L`, with `kappa_b = 0`, and with the exact Taylor jet of the target leaf's
+polynomial in the wall frame (tangent `xi`, inward normal `eta`); the jet is
+differentiated on the coefficient array by `poly_jet_in_frame`, never by
+numerical differencing. The lemma is exact through `delta^2`, so for a density
+of degree three it leaves a `delta^{5/2}` group behind;
+`flat_wall_cubic_remainder` supplies that group in closed form and the CSVs
+carry it, so the measured gap can be checked against theory. On a wedge
+bisector no boundary point is the unique closest one, so the column is computed
+with the deterministic choice `y_1 = 0.3` and flagged `fryklund_defined =
+False` (hollow markers in the plot). Two extra sweeps come with the column: the
+half-plane repeated with the genuinely piecewise per-leaf density, and a short
+sweep towards one face of the right-angle wedge held `0.55` from the apex, that
+is `8.8 sqrt(t_L)`, where the closest point is unique.
+
 References are target-centred polar (Duffy) quadrature over the fan of
 triangles with the target as apex, with the `r^k log r` moments in closed form,
 so only the angular variable is quadrature; the script reports the
@@ -173,7 +192,7 @@ self-convergence of that rule (about `1e-16` relative here).
 
 | Script | Needs |
 |---|---|
-| `experiment_c_leaf_residual.py` | numpy, scipy |
+| `experiment_c_leaf_residual.py` | numpy, scipy, `experiment_e_baseline` (hence `experiment_e_common`) for the Lemma 4.5 column |
 | `experiment_c_plots.py` | matplotlib (run separately if the numerics interpreter lacks it) |
 
 Invocation (from the repository root, with `PYTHONPATH` set to it):
@@ -183,24 +202,33 @@ python experiments/windowed_dmk/experiment_c_leaf_residual.py --out OUT --target
 python experiments/windowed_dmk/experiment_c_plots.py --out OUT
 ```
 
+Running the script by path puts its own directory on `sys.path`, which is what
+resolves the `experiment_e_baseline` import; if it is imported some other way,
+that directory has to be importable.
+
 Flags: `--targets` (targets per case), `--n-ang` / `--n-rad` (polar quadrature
 orders), `--polar-every` (how often the separable prefix is cross-checked
 against the polar prefix), `--no-refine` (skip the quadrature self-check).
-The full run takes about half a minute on one core.
+The full run takes about two and a half minutes on one core.
 
 Outputs:
 
 - `experiment_c_kernel_split.csv` (telescoping identity at the kernel level)
 - `experiment_c_case1_interior_global.csv`,
   `experiment_c_case1_interior_piecewise.csv`,
-  `experiment_c_case2_halfplane.csv`, `experiment_c_case3_wedge90.csv`,
-  `experiment_c_case4_wedge60.csv`
+  `experiment_c_case2_halfplane.csv`,
+  `experiment_c_case2_halfplane_piecewise.csv`,
+  `experiment_c_case3_wedge90.csv`, `experiment_c_case3_wedge90_face.csv`,
+  `experiment_c_case4_wedge60.csv` (the cut sweeps carry the Fryklund columns
+  `prefix_fryklund`, `err_fryklund`, `fryklund_defined`, `fryklund_r`,
+  `fryklund_minus_physical`, `fryklund_remainder_pred`,
+  `fryklund_remainder_residual`)
 - `experiment_c_smooth_quadrature.csv` (tensor-Gauss order convergence of each
   split piece over the target's own leaf)
 - `experiment_c_uquad_nodes.csv` (`v`-node count of the separable prefix)
 - `experiment_c_summary.json`
-- `experiment_c_boundary_sweep.png`, `experiment_c_smooth_convergence.png`,
-  `experiment_c_leaf_columns.png`
+- `experiment_c_boundary_sweep.png` (four columns per panel, one panel per cut
+  sweep), `experiment_c_smooth_convergence.png`, `experiment_c_leaf_columns.png`
 
 Findings and verdicts:
 the experiment C write-up in the private manuscript repository.
