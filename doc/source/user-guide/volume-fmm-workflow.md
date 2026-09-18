@@ -184,12 +184,11 @@ point quadrature does not resolve the singular near-field integrand, so a
 disagreement with it says nothing on its own. The reference the near-field
 accuracy checks actually use is a *table* comparison — direct per-level tables
 against a rescaled canonical level-0 table, and both against a manufactured
-solution — which is what `benchmarks/table_equivalence_cache.py` and
-`benchmarks/accuracy_preservation.py` measure.
+solution.
 
 `timing_data={}` collects the per-stage times `drive_volume_fmm` records
-through its `TimingRecorder`. The per-phase *shares* the benchmark drivers
-report are a separate API: build a
+through its `TimingRecorder`. The per-phase *shares* are a separate API: build
+a
 {class}`volumential.phase_profile.PhaseProfile`, activate it around the solve
 with {func}`volumential.phase_profile.profiling`, and call its `shares()`
 method. That path synchronizes the OpenCL queue at phase boundaries, so its
@@ -259,5 +258,5 @@ Roughly, in a first run: table build, then sumpy code generation for the first
 solve, then the FMM itself. In a warm run the table is a millisecond-scale load
 and the code-generation cache is hit, so the FMM dominates. Any timing claim
 therefore has to separate first-call from warm seconds and say which device
-class it ran on — {doc}`../benchmarks/index` is what that looks like in
-practice.
+class it ran on — {doc}`../benchmarks/index` is the rest of what it has to
+record.

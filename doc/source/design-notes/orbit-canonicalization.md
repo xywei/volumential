@@ -89,5 +89,5 @@ large read-only buffer from the List 1 kernel's working set.
 - Symmetry discovery: {mod}`volumential.list1_symmetry`.
 - Case enumeration: {mod}`volumential.list1_gallery`.
 - Arithmetic addressing: {mod}`volumential.orbit_arithmetic`.
-- Symmetry-reduction counts as measured evidence (`cache_economics.csv`):
+- What a measurement of the symmetry-reduction counts has to record:
   {doc}`../benchmarks/index`.

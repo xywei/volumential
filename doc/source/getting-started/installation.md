@@ -178,21 +178,21 @@ uv run pytest -q test/test_duffy_tanh_sinh.py
 ### The traversal check
 
 Run this once after creating an environment, and again after any inducer-stack
-update, *before* the environment is used for evidence. It builds the graded 3D
-case `(q_order, initial levels, adapt steps) = (3, 4, 3)` and reports its
-List 1 diagnostics:
+update, *before* the environment is used for evidence: build the graded 3D case
+`(q_order, initial levels, adapt steps) = (3, 4, 3)` and read its List 1
+diagnostics.
 
-```bash
-python benchmarks/adaptive_timing_3d.py --mode full \
-  --out build/benchmarks/adaptive-timing-3d.csv
-```
+For that case, `cross_level_list1_fraction` must equal `0.16588653810147913`,
+that is `n_cross_level_list1_interactions` = `3544` out of
+`n_list1_interactions` = `21364`. A different value means the tree-of-boxes
+refinement is the broken one: stop and re-provision. An adaptive tree that
+comes out uniform, unbalanced, or free of cross-level List 1 work is the same
+verdict.
 
-In the `laplace3d-q3-l4-a3` row, `cross_level_list1_fraction` must equal
-`0.16588653810147913`, that is `n_cross_level_list1_interactions` = `3544` out
-of `n_list1_interactions` = `21364`. A different value means the tree-of-boxes
-refinement is the broken one: stop and re-provision. The driver also fails
-loudly if the adaptive tree comes out uniform, unbalanced, or free of
-cross-level List 1 work.
+The driver that automated this check is no longer in the tree — it left with
+the rest of the benchmark drivers ({doc}`../benchmarks/index`), and `7c75ed1`
+is the last revision of `main` that carries it. The numbers above are the
+acceptance criterion whatever runs the case.
 
 This check is the reason the Git sources above are not optional. It is cheap,
 it is decisive, and skipping it is how a corrupted neighbour list reaches a

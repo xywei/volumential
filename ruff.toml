@@ -104,42 +104,15 @@ line-ending = "lf"
 [lint.per-file-ignores]
 # Notebooks put imports after prose and setup cells by nature.
 "*.ipynb" = ["E402"]
-"benchmarks/accuracy_preservation.py" = ["E501", "I001", "RUF007"]
-"benchmarks/adaptive_split_composition.py" = ["C420", "I001", "RUF007"]
-"benchmarks/adaptive_timing.py" = ["E501", "I001", "RUF046"]
-"benchmarks/adaptive_timing_3d.py" = ["E501", "I001"]
-"benchmarks/break_even_validation.py" = ["I001", "PLR0402", "RUF046"]
-"benchmarks/complex_bessel_parameterized.py" = ["I001"]
-"benchmarks/complex_channel_closure.py" = ["E501", "I001", "RUF046"]
-"benchmarks/derivative_log_preservation.py" = ["C420", "I001", "RUF007"]
-"benchmarks/dmk_effective_density.py" = ["E501", "I001", "RUF100"]
-"benchmarks/gaussian_free_space.py" = ["E501", "I001"]
-"benchmarks/graded_tree_convergence.py" = ["I001", "RUF007", "SIM108"]
-"benchmarks/keller_segel_continuation.py" = [
-    "C408", "I001", "RUF046", "RUF059", "SIM117",
-]
-"benchmarks/performance_suite.py" = ["E501"]
-"benchmarks/rke_field_demo_3d.py" = ["E501", "I001"]
-"benchmarks/split_parameter_sweep.py" = ["C420", "E501", "I001", "RUF100", "SIM117"]
-"benchmarks/table_equivalence_cache.py" = ["E501"]
-"benchmarks/windowed_rke_sweep.py" = ["C420", "I001", "PLR0402", "PLW2901"]
 "examples/branched_flow_helmholtz2d.py" = ["I001"]
 "examples/helmholtz2d.py" = ["E501", "I001", "RUF100"]
-"examples/helmholtz2d_split_p_convergence.py" = [
-    "E501", "I001", "PLW2901", "RUF100", "SIM102",
-]
 "examples/helmholtz3d.py" = ["E501", "I001", "RUF100"]
-"examples/helmholtz3d_split_p_convergence.py" = [
-    "E501", "I001", "PLW2901", "RUF100", "SIM102",
-]
 "examples/helmholtz3d_volumential.ipynb" = ["I001"]
 "examples/laplace2d.py" = ["E402", "E501", "PIE808", "RUF100"]
 "examples/laplace3d.py" = ["E501", "PIE808", "RUF100", "SIM105"]
 "examples/poisson2d_pytential_volumential.ipynb" = ["B905", "E501", "I001", "RUF059"]
 "examples/poisson3d.py" = ["E501", "I001", "PIE808", "RUF100", "SIM108"]
 "examples/poisson3d_volumential.ipynb" = ["E501", "I001", "RUF100"]
-"test/test_benchmark_helpers.py" = ["C420", "I001", "PLR0402"]
-"test/test_break_even_extensions.py" = ["I001"]
 "test/test_duffy_batched_manufactured.py" = ["E501"]
 "test/test_duffy_full_accuracy.py" = ["E501"]
 "test/test_function_extension_helpers.py" = ["E501"]
@@ -151,7 +124,6 @@ line-ending = "lf"
 "test/test_tree_interactive_build.py" = ["E501"]
 "test/test_volume_fmm.py" = ["E501"]
 "test/test_windowed_rke.py" = ["I001"]
-"test/test_windowed_strategy_benchmarks.py" = ["C420"]
 # OPT_ENABLED/CACHING_ENABLED are module-level switches in the public
 # API, so their setters have to rebind globals.
 "volumential/__init__.py" = ["PLW0603"]

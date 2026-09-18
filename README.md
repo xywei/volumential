@@ -61,8 +61,8 @@ mirror at xiaoyu-wei.com is superseded by this site.
   split, what is validated
 - [Design notes][docs-design-notes] — windowed singular channels and certified
   assembly, ORBIT canonicalization
-- [Benchmarks and reproducibility][docs-benchmarks] — the drivers, metadata
-  sidecars, what a promoted measurement must record
+- [Benchmarks and reproducibility][docs-benchmarks] — what a measurement of
+  this library must record to be worth quoting
 - [API reference][docs-api] — one page per module
 - [Development][docs-development] — contributing, tests and markers, CI and the
   review bots, release and versioning
@@ -76,17 +76,15 @@ Build it locally with `uv sync --extra test --extra doc` and
 - `volumential/` — library source
 - `test/` — pytest suite ([tiers and markers][docs-testing])
 - `examples/` — maintained end-to-end examples
-- `benchmarks/` — reproducible benchmark drivers
-  ([`benchmarks/README.md`](./benchmarks/README.md))
 - `doc/` — this documentation
 - `DEVELOPMENT.md` — environment provisioning and day-to-day workflow
 - `ruff.toml` — the single lint configuration
 
 ## AI-assisted development
 
-Parts of this codebase, its tests, benchmark drivers and documentation were
-written or revised with AI assistance, and pull requests are reviewed by the
-maintainer and by automated code-review services. The full statement is
+Parts of this codebase, its tests and documentation were written or revised
+with AI assistance, and pull requests are reviewed by the maintainer and by
+automated code-review services. The full statement is
 [AI-assisted development][docs-ai] in the documentation.
 
 ## License

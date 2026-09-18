@@ -40,14 +40,12 @@ never a batched attempt looks exactly like a fast one in a default log.
   and, for a fallback, `table.build_fallback_reason`. Both are persisted with the cached
   payload, so a warm, cache-loaded table still reports how it was originally
   built (`volumential.opcounters.direct_build_routing`).
-- Seven drivers emit it as a `direct_build_routing` CSV column:
-  `adaptive_timing.py`, `adaptive_timing_3d.py`,
-  `adaptive_split_composition.py`, `adaptive_split_composition_3d.py`,
-  `break_even_validation.py`, `split_parameter_sweep.py` and
-  `windowed_rke_sweep.py`. Others that provision tables —
-  `graded_tree_convergence.py`, `keller_segel_continuation.py` — do not, so
-  their CSVs cannot be checked this way; read the routing off the table object
-  or run them under strict mode.
+- `volumential.opcounters.direct_build_routing` is what measurement code
+  reads to emit the routing as a `direct_build_routing` CSV column, which is
+  why it belongs in the record of any table-timing run
+  ({doc}`../benchmarks/index`). A run that does not record it cannot be
+  checked after the fact: read the routing off the table object instead, or
+  run under strict mode.
 
 ## Strict mode
 
@@ -147,7 +145,8 @@ kernels, and only for those — an evanescent Helmholtz or other unprovable
 phase keeps its `cdouble_exp` and stays exposed on such a host. The general
 consequence is that a run's metadata has to record the CPU class, and
 that seconds from a host without hardware FMA are not comparable with seconds
-from one that has it (see {doc}`../benchmarks/index`). Tracked in
+from one that has it ({doc}`../benchmarks/index` is the full list of what a run
+has to record). Tracked in
 [#138](https://github.com/xywei/volumential/issues/138).
 
 ### Why it is guarded

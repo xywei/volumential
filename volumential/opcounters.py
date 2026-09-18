@@ -1,4 +1,5 @@
-"""Explicit operation counters for the Paper 1 benchmark drivers (E3).
+"""Explicit operation counters for the measurement drivers kept with the
+manuscripts (experiment E3).
 
 The categories mirror the operation-count cost model that replaces
 wall-clock seconds as the primary cost currency (Section 6 of the paper):

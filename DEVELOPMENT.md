@@ -165,21 +165,21 @@ re-measured after adoption.
 ### Traversal sanity check after provisioning
 
 Run this once after creating an environment and after any inducer-stack update,
-before the environment is used for evidence. It builds the graded 3D case
-`(q_order, initial levels, adapt steps) = (3, 4, 3)` and reports its List 1
-diagnostics:
+before the environment is used for evidence: build the graded 3D case
+`(q_order, initial levels, adapt steps) = (3, 4, 3)` and read its List 1
+diagnostics.
 
-```bash
-python benchmarks/adaptive_timing_3d.py --mode full \
-  --out build/benchmarks/adaptive-timing-3d.csv
-```
-
-In the `laplace3d-q3-l4-a3` row, `cross_level_list1_fraction` must equal
-`0.16588653810147913`, i.e. `n_cross_level_list1_interactions` = `3544` out of
+For that case, `cross_level_list1_fraction` must equal `0.16588653810147913`,
+i.e. `n_cross_level_list1_interactions` = `3544` out of
 `n_list1_interactions` = `21364`. A different value means the tree-of-boxes
-refinement is the broken one; stop and re-provision.
-The driver also fails loudly if the adaptive tree comes out uniform, unbalanced,
-or free of cross-level List 1 work.
+refinement is the broken one; stop and re-provision. An adaptive tree that
+comes out uniform, unbalanced, or free of cross-level List 1 work is the same
+verdict.
+
+The driver that automated this check is no longer in the tree -- it left with
+the rest of the benchmark drivers (`doc/source/benchmarks/index.md`), and
+`7c75ed1` is the last revision of `main` that carries it. The numbers above are
+the acceptance criterion whatever runs the case.
 
 ### Thread caps and run metadata
 
