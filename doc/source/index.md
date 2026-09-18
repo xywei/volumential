@@ -50,7 +50,7 @@ device you meant to use.
 :link: examples/index
 :link-type: doc
 
-The eight programs under `examples/`, what each one costs to run and which
+The six programs under `examples/`, what each one costs to run and which
 device it lands on, plus the notebooks rendered as pages.
 :::
 

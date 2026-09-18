@@ -207,9 +207,16 @@ jobs:
           # revision out of the lock and prints it as a requirement, which
           # keeps uv.lock both the one place the revision is written down and
           # the thing that decides what CI builds.
+          #
+          # The pinned requirement stands in for the ``fmmlib`` extra rather
+          # than joining it: naming both hands uv two Git URLs for pyfmmlib,
+          # the extra's unpinned repository and the helper's pinned commit,
+          # and uv 0.12.15 and later refuse that as conflicting URLs (0.12.13
+          # still let the pinned one win).  The extra pulls in nothing else,
+          # so the environment is the same one ``.[test,fmmlib]`` described.
           PYFMMLIB_SPEC="$(python .github/scripts/pyfmmlib_requirement.py)"
 
-          uv pip install --system --editable ".[test,fmmlib]" "$PYFMMLIB_SPEC"
+          uv pip install --system --editable ".[test]" "$PYFMMLIB_SPEC"
 
           python -V
           python -m pip --version

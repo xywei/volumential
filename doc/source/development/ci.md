@@ -20,7 +20,7 @@ gets **none** of these checks. See
 | Typos | `crate-ci/typos` over the workflows, `volumential/`, `README.md`, `DEVELOPMENT.md` and `pyproject.toml`, configured by `.typos.toml` |
 | Ruff | `ruff check --select E9,F63,F7,F82` — the error-level smoke subset, not the full `ruff.toml` rule set |
 | Type checking | `basedpyright -p pyproject.toml --level error` |
-| Testing (Linux) | the default pytest suite under a micromamba environment, installing `.[test,fmmlib]`, with a wrapper timeout and a diagnostics artifact (`linux-pytest.log`, `pytest.xml`) uploaded on every outcome |
+| Testing (Linux) | the default pytest suite under a micromamba environment, installing `.[test]` plus the `pyfmmlib` commit that `uv.lock` pins (the `fmmlib` extra's content, passed as a pinned requirement so uv sees one Git URL), with a wrapper timeout and a diagnostics artifact (`linux-pytest.log`, `pytest.xml`) uploaded on every outcome |
 | Examples (Smoke) | three examples under `VOLUMENTIAL_EXAMPLE_SMOKE=1` — `laplace2d.py`, `helmholtz2d.py`, `helmholtz3d.py` — under `set -euo pipefail` |
 | Documentation | this site: `sphinx-build -W --keep-going -n -b html`, then the two coverage reports (`-b coverage` and `interrogate`), then `-b linkcheck` last. The built HTML is uploaded as a `docs-html-*` artifact and the reports as `docs-coverage-*`; the job installs `.[test,doc]` |
 
