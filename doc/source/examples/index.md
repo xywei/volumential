@@ -1,6 +1,12 @@
 # Examples
 
-:::{tip}\nWant to see the problems before reading the operational details? Start with the\n{doc}`gallery`, then come back here when you need cache names, smoke modes and\ndevice behavior.\n:::\n\n`examples/` holds six self-contained programs and three notebooks. Each one
+:::{tip}
+Want to see the problems before reading the operational details? Start with the
+{doc}`gallery`, then come back here when you need cache names, smoke modes and
+device behavior.
+:::
+
+`examples/` holds six self-contained programs and three notebooks. Each one
 solves a whole problem — build a mesh, build or load a near-field table, run
 the volume FMM, report an error — rather than demonstrating a single call, so
 the shortest path from {doc}`../getting-started/first-volume-potential` to your
