@@ -26,7 +26,7 @@ Run a manufactured Gaussian problem, see the source/reference fields, then walk
 through mesh → tree → near-field table → far-field FMM → error check.
 :::
 
-:::{grid-item-card} {octicon}`image` Poisson on a starfish domain
+:::{grid-item-card} {octicon}`beaker` Poisson on a starfish domain
 
 **Poisson · 2-D · geometry + AMR**
 
@@ -37,7 +37,7 @@ compares uniform refinement with boundary-focused AMR.
 {doc}`notebooks/poisson2d_pytential_volumential`
 :::
 
-:::{grid-item-card} {octicon}`stack` Poisson in three dimensions
+:::{grid-item-card} {octicon}`graph` Poisson in three dimensions
 
 **Poisson · 3-D · slices + error localization**
 
@@ -47,7 +47,7 @@ the notebook adds an interactive isosurface view when Plotly is available.
 {doc}`notebooks/poisson3d_volumential`
 :::
 
-:::{grid-item-card} {octicon}`pulse` Helmholtz branched flow
+:::{grid-item-card} {octicon}`code` Helmholtz branched flow
 
 **Helmholtz · 2-D · full application**
 
@@ -58,7 +58,7 @@ real part of the total field.
 See {ref}`branched-flow-example` for the run command and cost warning.
 :::
 
-:::{grid-item-card} {octicon}`split` Near field vs. far field
+:::{grid-item-card} {octicon}`light-bulb` Near field vs. far field
 :link: ../user-guide/near-field-anatomy
 :link-type: doc
 
