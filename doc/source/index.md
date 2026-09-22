@@ -18,6 +18,20 @@ myst:
 
 # Volumential
 
+**See the problem before the machinery.** The first tutorial starts from a
+source density with a known exact potential, runs the volume FMM, and finishes
+by measuring the numerical error.
+
+```{figure} _static/gallery/laplace2d-reference.svg
+:alt: The manufactured source density and exact Gaussian potential used by the
+      first two-dimensional Laplace tutorial.
+:width: 100%
+
+The maintained `laplace2d.py` example computes the potential on the right
+from the source on the left. {doc}`getting-started/first-volume-potential`
+walks through the run; {doc}`examples/gallery` shows where to go next.
+```
+
 **Volumential** (VOLUME poteNTIAL) evaluates volume potentials
 
 $$
@@ -50,8 +64,8 @@ device you meant to use.
 :link: examples/index
 :link-type: doc
 
-The six programs under `examples/`, what each one costs to run and which
-device it lands on, plus the notebooks rendered as pages.
+A visual map of the maintained programs and notebooks, followed by the
+device, cache and cost details needed to reproduce them.
 :::
 
 :::{grid-item-card} {octicon}`book` User guide
