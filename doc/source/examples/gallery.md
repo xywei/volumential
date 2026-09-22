@@ -4,9 +4,10 @@ Start here if you want to understand Volumential by looking at problems and
 outputs before reading the implementation.
 
 The diagrams on this page are **schematics**, not measured numerical output.
-Computed plots from the maintained examples are generated explicitly by the
-gallery-rendering workflow described in the follow-up to issue #164; normal
-Sphinx builds never execute OpenCL workloads.
+Computed plots from the maintained examples are regenerated explicitly with
+`doc/tools/render_gallery.py`; normal Sphinx builds never execute OpenCL
+workloads. The renderer records the Git revision and commands beside the images
+so a gallery update remains reviewable evidence rather than decoration.
 
 ## The core idea
 
@@ -87,3 +88,28 @@ when you want the storage and reconstruction details.
 
 The full operational notes — first-run table cost, cache names, smoke modes,
 device selection, and notebook setup — remain on {doc}`index`.
+
+
+## Regenerating computed figures
+
+On a configured OpenCL host:
+
+```bash
+export PYOPENCL_CTX=portable:0
+python doc/tools/render_gallery.py
+```
+
+The renderer delegates to the maintained examples rather than reimplementing
+their numerical problems:
+
+- `laplace2d.py` writes a four-panel source / FMM / exact / log-error overview
+  plus the actual volume tree when
+  `VOLUMENTIAL_LAPLACE2D_OUTPUT_DIR` is set;
+- `poisson3d.py` supplies its existing orthogonal slices and 3-D error cloud;
+- `branched_flow_helmholtz2d.py --smoke` supplies its existing
+  refractive-index / intensity / field figure.
+
+The outputs and `manifest.json` land under
+`doc/source/images/generated/`. This is an explicit maintainer operation:
+table builds and OpenCL execution never become a prerequisite for reading or
+building the documentation.
