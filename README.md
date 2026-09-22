@@ -56,6 +56,7 @@ mirror at xiaoyu-wei.com is superseded by this site.
 
 - [Getting started][docs-getting-started] — install, a first volume potential,
   device selection
+- [Examples][docs-examples] — visual gallery first, then run/cost/cache details
 - [User guide][docs-user-guide] — the volume-FMM workflow, near-field tables
   and their symmetry reduction, table build routing, derivatives, the Helmholtz
   split, what is validated
@@ -118,6 +119,7 @@ The project's name `volumential` [courtesy of Andreas Klöckner][volumential-nam
 [docs-install]: https://xywei.github.io/volumential/getting-started/installation.html
 [docs-first]: https://xywei.github.io/volumential/getting-started/first-volume-potential.html
 [docs-getting-started]: https://xywei.github.io/volumential/getting-started/
+[docs-examples]: https://xywei.github.io/volumential/examples/gallery.html
 [docs-user-guide]: https://xywei.github.io/volumential/user-guide/
 [docs-design-notes]: https://xywei.github.io/volumential/design-notes/
 [docs-benchmarks]: https://xywei.github.io/volumential/benchmarks/
