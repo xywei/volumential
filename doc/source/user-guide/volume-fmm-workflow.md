@@ -5,7 +5,17 @@ A volume potential
 $$
 u(\boldsymbol{x}) = \int_{\Omega} G(\boldsymbol{x}, \boldsymbol{y})\,
 f(\boldsymbol{y})\,\mathrm{d}\boldsymbol{y}
-$$
+$
+
+```{figure} ../_static/gallery/volume-fmm-workflow.svg
+:alt: The source density is sampled on volume quadrature nodes, organized
+      into a tree, split into near-field table and far-field FMM paths,
+      and accumulated into the output potential.
+:width: 100%
+
+The complete computation in one picture. The rest of this page names the
+objects and modules behind each box.
+```
 
 is not a particle sum. Where the target lies **inside** the source box the
 integrand is genuinely singular and the tensor-product point quadrature used
