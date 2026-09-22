@@ -4,8 +4,7 @@ The central numerical idea in Volumential is easier to understand as a picture
 than as a wrangler class name.
 
 ```{figure} ../_static/gallery/near-far-anatomy.svg
-:alt: A target box, its near neighbors handled by interaction tables, and
-      farther boxes handled by FMM expansions.
+:alt: A target box, its near neighbors handled by interaction tables, and farther boxes handled by FMM expansions.
 :width: 100%
 
 A schematic uniform neighborhood. Adaptive traversals add level relationships,
@@ -49,8 +48,7 @@ Multipole and local expansions are ordinary `sumpy`/FMM machinery. The two
 paths are accumulated into the same target potential.
 
 ```{figure} ../_static/gallery/volume-fmm-workflow.svg
-:alt: Source density passing through quadrature nodes and a tree, splitting
-      into near-field table and far-field FMM paths, then recombining.
+:alt: Source density passing through quadrature nodes and a tree, splitting into near-field table and far-field FMM paths, then recombining.
 :width: 100%
 ```
 
