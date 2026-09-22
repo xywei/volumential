@@ -5,8 +5,7 @@ with the API reference. The examples below are maintained programs or notebooks,
 not separate documentation demos.
 
 ```{figure} ../_static/gallery/examples-showcase.svg
-:alt: Illustrated overview of the Poisson 2-D, Poisson 3-D and Helmholtz
-      branched-flow examples.
+:alt: Illustrated overview of the Poisson 2-D, Poisson 3-D and Helmholtz branched-flow examples.
 :width: 100%
 
 A map of the example families. The panels are navigation illustrations, not
