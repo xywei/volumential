@@ -1,25 +1,172 @@
 # A first volume potential
 
-The script below is `examples/laplace2d.py` reduced to its load-bearing
-twenty-odd lines. It evaluates
+Start with the result and work backward into the machinery.
+
+This example evaluates the 2-D Laplace volume potential
 
 $$
-u(\boldsymbol{x}) = \int_{[-1/2,\,1/2]^2}
-\frac{-1}{2\pi} \log \lVert \boldsymbol{x} - \boldsymbol{y} \rVert \,
-f(\boldsymbol{y}) \, \mathrm{d}\boldsymbol{y}
+\nu(\boldsymbol{x}) =
+\int_{[-1/2,\,1/2]^2}
+\frac{-1}{2\pi}\log \lVert \boldsymbol{x}-\boldsymbol{y}\rVert
+\,f(\boldsymbol{y})\,\mathrm{d}\boldsymbol{y}
 $$
 
-for a source $f$ manufactured so that the answer is the Gaussian
-$u(\boldsymbol{x}) = e^{-\alpha \lVert \boldsymbol{x} \rVert^2}$, which is what
-the error print at the end compares against.
+for a manufactured source chosen so that the exact answer is the Gaussian
 
-Set `PYOPENCL_CTX` before running it. Otherwise `cl.create_some_context()`
-stops and asks which device to use at a terminal, and picks one in an
-implementation-defined manner anywhere else:
+$$
+u(\boldsymbol{x}) = e^{-\alpha\lVert\boldsymbol{x}\rVert^2}.
+$$
+
+That gives us something unusually useful for a first example: we can run the
+whole volume-FMM pipeline and check the answer everywhere.
+
+## Run it first
+
+Pick an OpenCL device and run the maintained smoke configuration:
 
 ```bash
 export PYOPENCL_CTX=portable:0
+VOLUMENTIAL_EXAMPLE_SMOKE=1 uv run python examples/laplace2d.py
 ```
+
+The smoke configuration is deliberately small: it is for seeing the path work,
+not for measuring performance or quoting an accuracy result. The first run may
+still spend most of its time building the near-field table; later runs reuse
+the SQLite cache.
+
+```{figure} ../images/volumential-overview.svg
+:alt: A source density is sampled on volume nodes, interactions are split into near-field table lookup and far-field FMM, and the resulting potential is checked against an exact manufactured solution.
+:align: center
+
+The rest of this page opens that picture one stage at a time.
+```
+
+## 1. Define the source
+
+The manufactured source is represented symbolically and evaluated on the
+volume quadrature nodes:
+
+```python
+x, y, exp = pmbl.var("x"), pmbl.var("y"), pmbl.var("exp")
+norm2 = x**2 + y**2
+source_expr = -(4 * alpha**2 * norm2 - 4 * alpha) * exp(-alpha * norm2)
+```
+
+Nothing FMM-specific has happened yet. This is just the function
+$f(\boldsymbol y)$ that will be integrated against the Laplace kernel.
+
+## 2. Put quadrature nodes in boxes
+
+Volumential's mesh generator fills each leaf box with tensor-product
+Gauss-Legendre nodes:
+
+```python
+mesh = mg.MeshGen2D(q_order, n_levels, -0.5, 0.5, queue=queue)
+q_points = np.ascontiguousarray(mesh.get_q_points().T)
+q_weights = cl.array.to_device(queue, mesh.get_q_weights())
+source_vals = cl.array.to_device(
+    queue, Eval(dim, source_expr, [x, y])(queue, q_points))
+```
+
+The far field will see those nodes as weighted particles. The near field cannot
+simply do the same thing: in the target box the kernel is singular, and in the
+neighboring boxes it is near-singular.
+
+## 3. Build the tree and decide what is near
+
+The nodes go into `boxtree`, which builds the adaptive level-restricted tree and
+its FMM traversal:
+
+```python
+particles = obj_array_1d([actx.from_numpy(q_points[i]) for i in range(dim)])
+tree, _ = TreeBuilder(actx)(
+    actx,
+    particles=particles,
+    targets=None,
+    max_particles_in_box=q_order**dim * 4 - 1,
+    kind="adaptive-level-restricted",
+)
+trav, _ = FMMTraversalBuilder(actx)(actx, tree)
+```
+
+```{figure} ../images/near-far.svg
+:alt: The target box and its List 1 neighbors use precomputed near-field tables, while well-separated boxes are handled by the particle FMM.
+:align: center
+
+This is the key Volumential idea. **Near** means the target's own box plus its
+List 1 neighbors. Those interactions use precomputed integrals. **Far** means
+well-separated boxes, and those use an ordinary particle FMM.
+```
+
+## 4. Build or load the near-field table
+
+```python
+tm = NearFieldInteractionTableManager(
+    "nft_laplace2d.sqlite", root_extent=2, queue=queue)
+nftable, _ = tm.get_table(dim, "Laplace", q_order, queue=queue)
+```
+
+On a cache miss, this is the expensive one-time step: singular and
+near-singular box interactions are integrated with desingularizing quadrature.
+The result is written to SQLite and reused on later runs.
+
+The table depends on the kernel, dimension, quadrature order and source-box
+scale. It does **not** depend on this particular Gaussian source or on the
+topology of this particular tree. See
+{doc}`../user-guide/table-build-routing` for routing and provenance, and
+{doc}`../user-guide/nearfield_symmetry` for why the stored table is much
+smaller than the set of interactions it serves.
+
+## 5. Give one wrangler both jobs
+
+The wrangler combines sumpy expansions for the far field with the table for
+the near field:
+
+```python
+knl = LaplaceKernel(dim)
+factory = DefaultExpansionFactory()
+tree_indep = FPNDTreeIndependentDataForWrangler(
+    ctx,
+    partial(factory.get_multipole_expansion_class(knl), knl),
+    partial(factory.get_local_expansion_class(knl), knl),
+    [knl],
+    exclude_self=True,
+)
+wrangler = FPNDExpansionWrangler(
+    tree_indep=tree_indep,
+    queue=queue,
+    traversal=trav,
+    near_field_table=nftable,
+    dtype=np.float64,
+    fmm_level_to_order=lambda *args: m_order,
+    quad_order=q_order,
+    self_extra_kwargs={
+        "target_to_source": np.arange(tree.ntargets, dtype=np.int32),
+    },
+)
+```
+
+The name `fpnd` is literal: **f**ar field by **p**article approximation,
+**n**ear field **d**irect.
+
+## 6. Evaluate and check the answer
+
+```python
+(pot,) = drive_volume_fmm(
+    trav, wrangler, source_vals * q_weights, source_vals)
+
+exact = np.exp(-alpha * (q_points[0] ** 2 + q_points[1] ** 2))
+print("max error =", np.max(np.abs(exact - pot.get())))
+```
+
+Notice the two source arrays passed to `drive_volume_fmm`:
+
+- `source_vals * q_weights` is what the particle far field integrates;
+- `source_vals` is the bare density contracted against the near-field table.
+
+Passing the same array for both is a quiet but important mistake.
+
+:::{dropdown} Complete minimal driver
 
 ```python
 import numpy as np
@@ -46,19 +193,16 @@ ctx = cl.create_some_context()
 queue = cl.CommandQueue(ctx)
 actx = PyOpenCLArrayContext(queue)
 
-# 1. The source density, as a symbolic expression evaluated on device.
 x, y, exp = pmbl.var("x"), pmbl.var("y"), pmbl.var("exp")
 norm2 = x**2 + y**2
 source_expr = -(4 * alpha**2 * norm2 - 4 * alpha) * exp(-alpha * norm2)
 
-# 2. A box mesh over [-1/2, 1/2]^2 and its volume quadrature nodes.
 mesh = mg.MeshGen2D(q_order, n_levels, -0.5, 0.5, queue=queue)
 q_points = np.ascontiguousarray(mesh.get_q_points().T)
 q_weights = cl.array.to_device(queue, mesh.get_q_weights())
 source_vals = cl.array.to_device(
     queue, Eval(dim, source_expr, [x, y])(queue, q_points))
 
-# 3. A boxtree over those nodes, plus the FMM traversal.
 particles = obj_array_1d([actx.from_numpy(q_points[i]) for i in range(dim)])
 tree, _ = TreeBuilder(actx)(
     actx, particles=particles, targets=None,
@@ -66,12 +210,10 @@ tree, _ = TreeBuilder(actx)(
     kind="adaptive-level-restricted")
 trav, _ = FMMTraversalBuilder(actx)(actx, tree)
 
-# 4. The near-field interaction table, built once and cached in SQLite.
-tm = NearFieldInteractionTableManager("nft_laplace2d.sqlite",
-                                      root_extent=2, queue=queue)
+tm = NearFieldInteractionTableManager(
+    "nft_laplace2d.sqlite", root_extent=2, queue=queue)
 nftable, _ = tm.get_table(dim, "Laplace", q_order, queue=queue)
 
-# 5. The wrangler: sumpy expansions for the far field, the table for the near.
 knl = LaplaceKernel(dim)
 factory = DefaultExpansionFactory()
 tree_indep = FPNDTreeIndependentDataForWrangler(
@@ -87,65 +229,30 @@ wrangler = FPNDExpansionWrangler(
     self_extra_kwargs={
         "target_to_source": np.arange(tree.ntargets, dtype=np.int32)})
 
-# 6. Evaluate.
-(pot,) = drive_volume_fmm(trav, wrangler, source_vals * q_weights, source_vals)
+(pot,) = drive_volume_fmm(
+    trav, wrangler, source_vals * q_weights, source_vals)
 
 exact = np.exp(-alpha * (q_points[0] ** 2 + q_points[1] ** 2))
 print("max error =", np.max(np.abs(exact - pot.get())))
 ```
 
-Run the maintained version, which also carries the plotting and direct-P2P
-branches this excerpt drops, and pins an explicit `DuffyBuildConfig` (the
-`tanh-sinh-fast` radial rule at regular/radial quadrature orders 50/100) where
-the excerpt takes the defaults — that is a tighter near-field table, and the
-reason the example's error is smaller than this one's:
+:::
+
+## The maintained example
+
+`examples/laplace2d.py` is the version to copy. It carries the extra
+diagnostic branches omitted above and pins an explicit `DuffyBuildConfig`
+(the `tanh-sinh-fast` radial rule at regular/radial quadrature orders
+50/100), giving a tighter near-field table than the minimal excerpt's defaults.
 
 ```bash
 uv run python examples/laplace2d.py
 ```
 
-## What just happened
-
-Step 2 is the only part that is specific to volume potentials: the source
-density is discretized at tensor-product Gauss-Legendre nodes inside each leaf
-box, and the particle weights handed to the FMM are `source_vals * q_weights`.
-Steps 3 and 5 are an ordinary `boxtree`/`sumpy` FMM, with one substitution —
-`FPNDExpansionWrangler` replaces the point-to-point near-field stage with a
-table lookup. The reason is the integrand: over the box containing the target
-it is genuinely singular and point quadrature does not converge at all, and
-over the neighbouring boxes it is finite but near-singular and converges far
-too slowly to be useful at `q_order = 9`.
-
-Step 4 is where the cost is. The first run builds the near-field table by
-Duffy-transformed quadrature and writes it to `nft_laplace2d.sqlite`; later
-runs load it in milliseconds. The table depends on the kernel, the dimension,
-`q_order` and the *scale* of the source box — the manager's `root_extent` and
-the request's `source_box_level`, from which `source_box_extent` is derived —
-but not on the source density, the tree's topology or the target points. So the
-cache file is worth keeping and reusing across runs of this example, and is
-**not** reusable at a different root extent. See {doc}`../user-guide/table-build-routing` for how a
-build is routed and how to tell a cached table's provenance, and
-{doc}`../user-guide/nearfield_symmetry` for why the stored table is much
-smaller than the number of interactions it serves.
-
-## Faster, for a first look
-
-The example honours `VOLUMENTIAL_EXAMPLE_SMOKE=1`, which drops to
-`q_order = 3`, two levels and multipole order 8 and uses a separate cache file.
-That is what CI runs; it finishes in seconds and is accurate to about a
-percent.
-
-```bash
-VOLUMENTIAL_EXAMPLE_SMOKE=1 uv run python examples/laplace2d.py
-```
-
 ## Next
 
-- Other maintained examples: `examples/laplace3d.py`,
-  `examples/helmholtz2d.py`, `examples/helmholtz3d.py`,
-  `examples/poisson3d.py` and `examples/branched_flow_helmholtz2d.py`. The
-  Helmholtz ones pick their own device instead of reading `PYOPENCL_CTX` — see
-  {doc}`device-selection`.
-- Choosing the device the run lands on: {doc}`device-selection`.
-- The whole pipeline, stage by stage:
+- See the problems by output and application: {doc}`../examples/gallery`.
+- Choose the OpenCL device deliberately: {doc}`device-selection`.
+- Read the full pipeline, including interpolation and alternative wranglers:
   {doc}`../user-guide/volume-fmm-workflow`.
+- For 3-D spatial diagnostics, continue to `examples/poisson3d.py`.
