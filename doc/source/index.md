@@ -22,8 +22,7 @@ source density with a known exact potential, runs the volume FMM, and finishes
 by measuring the numerical error.
 
 ```{figure} _static/gallery/laplace2d-reference.svg
-:alt: The manufactured source density and exact Gaussian potential used by the
-      first two-dimensional Laplace tutorial.
+:alt: The manufactured source density and exact Gaussian potential used by the first two-dimensional Laplace tutorial.
 :width: 100%
 
 The maintained `laplace2d.py` example computes the potential on the right
