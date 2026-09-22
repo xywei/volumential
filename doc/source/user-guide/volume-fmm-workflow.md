@@ -23,7 +23,15 @@ tree* rather than by quadrature rule.
   node, interaction case): singular ones for the self box, near-singular ones
   for the neighbours, all built once by desingularizing quadrature.
 
-```{figure} ../images/near-far.svg\n:alt: The target box and List 1 neighbors use near-field tables, while well-separated boxes use the particle FMM.\n:align: center\n\nThe split is geometric: the difficult local interactions are replaced by table\nlookup, while the scalable far-field machinery stays an ordinary FMM.\n```\n\nThe code calls this `fpnd`: **f**ar field by **p**article approximation,
+```{figure} ../images/near-far.svg
+:alt: The target box and List 1 neighbors use near-field tables, while well-separated boxes use the particle FMM.
+:align: center
+
+The split is geometric: the difficult local interactions are replaced by table
+lookup, while the scalable far-field machinery stays an ordinary FMM.
+```
+
+The code calls this `fpnd`: **f**ar field by **p**article approximation,
 **n**ear field **d**irect. Every wrangler in
 {mod}`volumential.wranglers` implements it; the two backends differ only in who
 produces the far field.
