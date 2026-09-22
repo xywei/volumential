@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -20,11 +21,7 @@ DEFAULT_OUTPUT = REPO_ROOT / "doc" / "source" / "images" / "generated"
 EXAMPLES = {
     "laplace2d": {
         "command": [
-            "uv",
-            "run",
-            "--with",
-            "matplotlib",
-            "python",
+            sys.executable,
             "examples/laplace2d.py",
         ],
         "env": {
@@ -38,11 +35,7 @@ EXAMPLES = {
     },
     "poisson3d": {
         "command": [
-            "uv",
-            "run",
-            "--with",
-            "matplotlib",
-            "python",
+            sys.executable,
             "examples/poisson3d.py",
         ],
         "env": {
@@ -56,11 +49,7 @@ EXAMPLES = {
     },
     "branched-flow": {
         "command": [
-            "uv",
-            "run",
-            "--with",
-            "matplotlib",
-            "python",
+            sys.executable,
             "examples/branched_flow_helmholtz2d.py",
             "--smoke",
             "--output-dir",
