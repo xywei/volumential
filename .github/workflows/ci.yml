@@ -289,10 +289,22 @@ jobs:
 
           python -m pip install --upgrade pip
           python -m pip install uv
-          uv pip install --system --editable ".[test]"
+          uv pip install --system --editable ".[test]" matplotlib
 
-          python examples/laplace2d.py
+          python doc/tools/render_gallery.py \
+            --only laplace2d \
+            --output-dir build/gallery \
+            --pyopencl-ctx "$PYOPENCL_CTX"
           python examples/helmholtz2d.py
           python examples/helmholtz3d.py
+
+      - name: Upload Laplace gallery preview
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gallery-laplace2d-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build/gallery/
+          if-no-files-found: error
+          retention-days: 14
 
 # vim: sw=2
