@@ -1,17 +1,29 @@
 # A first volume potential
 
-The script below is `examples/laplace2d.py` reduced to its load-bearing
-twenty-odd lines. It evaluates
+Start with the thing the program computes, not with the wrangler classes.
+
+```{figure} ../_static/gallery/laplace2d-reference.svg
+:alt: The manufactured source density and exact Gaussian potential used by the
+      two-dimensional Laplace example.
+:width: 100%
+
+The source on the left is chosen so that the exact potential is the Gaussian on
+the right. The example computes $u_h$ and ends by measuring $|u-u_h|$.
+```
+
+The integral is
 
 $$
 u(\boldsymbol{x}) = \int_{[-1/2,\,1/2]^2}
-\frac{-1}{2\pi} \log \lVert \boldsymbol{x} - \boldsymbol{y} \rVert \,
-f(\boldsymbol{y}) \, \mathrm{d}\boldsymbol{y}
+\frac{-1}{2\pi} \log \lVert \boldsymbol{x} - \boldsymbol{y} \rVert \, 
+f(\boldsymbol{y}) \, \mathrm{d}\boldsymbol{y},
 $$
 
-for a source $f$ manufactured so that the answer is the Gaussian
-$u(\boldsymbol{x}) = e^{-\alpha \lVert \boldsymbol{x} \rVert^2}$, which is what
-the error print at the end compares against.
+with $u(\boldsymbol{x}) = e^{-\alpha \lVert \boldsymbol{x} \rVert^2}$ as the
+manufactured answer. That gives us something unusually useful for a first run:
+a real error check rather than a picture that merely looks plausible.
+
+## 1. Run it once
 
 Set `PYOPENCL_CTX` before running it. Otherwise `cl.create_some_context()`
 stops and asks which device to use at a terminal, and picks one in an
@@ -20,6 +32,90 @@ implementation-defined manner anywhere else:
 ```bash
 export PYOPENCL_CTX=portable:0
 ```
+
+For the quickest first look, use the reduced configuration:
+
+```bash
+VOLUMENTIAL_EXAMPLE_SMOKE=1 uv run python examples/laplace2d.py
+```
+
+The full maintained example uses a tighter near-field table and takes longer on
+the first run because that table has to be built.
+
+## 2. Read it in six stages
+
+The complete minimal program is below, but the useful mental model is just six
+steps.
+
+### 1. Describe the source
+
+```python
+x, y, exp = pmbl.var("x"), pmbl.var("y"), pmbl.var("exp")
+norm2 = x**2 + y**2
+source_expr = -(4 * alpha**2 * norm2 - 4 * alpha) * exp(-alpha * norm2)
+```
+
+This is the left panel above. It is evaluated on the volume quadrature nodes.
+
+### 2. Put quadrature nodes in boxes
+
+```python
+mesh = mg.MeshGen2D(q_order, n_levels, -0.5, 0.5, queue=queue)
+q_points = np.ascontiguousarray(mesh.get_q_points().T)
+q_weights = cl.array.to_device(queue, mesh.get_q_weights())
+```
+
+Each leaf box carries tensor-product Gauss--Legendre nodes and weights.
+
+### 3. Build the FMM tree
+
+```python
+tree, _ = TreeBuilder(actx)(
+    actx, particles=particles, targets=None,
+    max_particles_in_box=q_order**dim * 4 - 1,
+    kind="adaptive-level-restricted")
+trav, _ = FMMTraversalBuilder(actx)(actx, tree)
+```
+
+At this point the computation knows which boxes are local to a target and which
+are well separated.
+
+### 4. Get the singular-aware near-field table
+
+```python
+tm = NearFieldInteractionTableManager(
+    "nft_laplace2d.sqlite", root_extent=2, queue=queue)
+nftable, _ = tm.get_table(dim, "Laplace", q_order, queue=queue)
+```
+
+The first run builds the table; later runs reuse the SQLite cache.
+
+### 5. Give the FMM a different local rule
+
+The wrangler uses ordinary `sumpy` multipole/local expansions for the far
+field, but substitutes the table for the point-to-point near-field stage. That
+is the part specific to Volumential.
+
+```{figure} ../_static/gallery/near-far-anatomy.svg
+:alt: A target box with neighboring boxes handled by a near-field interaction
+      table and more distant boxes handled by the FMM.
+:width: 100%
+```
+
+### 6. Drive the FMM and check the answer
+
+```python
+(pot,) = drive_volume_fmm(
+    trav, wrangler, source_vals * q_weights, source_vals)
+
+exact = np.exp(-alpha * (q_points[0] ** 2 + q_points[1] ** 2))
+print("max error =", np.max(np.abs(exact - pot.get())))
+```
+
+That is the whole algorithmic story. The remaining code constructs the concrete
+wrangler objects and moves arrays between host and device.
+
+:::{dropdown} Complete minimal program
 
 ```python
 import numpy as np
@@ -94,6 +190,9 @@ exact = np.exp(-alpha * (q_points[0] ** 2 + q_points[1] ** 2))
 print("max error =", np.max(np.abs(exact - pot.get())))
 ```
 
+:::
+
+
 Run the maintained version, which also carries the plotting and direct-P2P
 branches this excerpt drops, and pins an explicit `DuffyBuildConfig` (the
 `tanh-sinh-fast` radial rule at regular/radial quadrature orders 50/100) where
@@ -104,7 +203,18 @@ reason the example's error is smaller than this one's:
 uv run python examples/laplace2d.py
 ```
 
-## What just happened
+To also write the four-panel source/computed/exact/error figure and the tree
+figure from that same run:
+
+```bash
+VOLUMENTIAL_GALLERY_OUTPUT_DIR=build/gallery/laplace2d \
+uv run --with matplotlib python examples/laplace2d.py
+```
+
+The plotting switch does not change the numerical problem; it only writes SVGs
+from the data and tree the example already computed.
+
+## 3. What just happened
 
 Step 2 is the only part that is specific to volume potentials: the source
 density is discretized at tensor-product Gauss-Legendre nodes inside each leaf
@@ -128,7 +238,7 @@ build is routed and how to tell a cached table's provenance, and
 {doc}`../user-guide/nearfield_symmetry` for why the stored table is much
 smaller than the number of interactions it serves.
 
-## Faster, for a first look
+## 4. Faster, for a first look
 
 The example honours `VOLUMENTIAL_EXAMPLE_SMOKE=1`, which drops to
 `q_order = 3`, two levels and multipole order 8 and uses a separate cache file.
@@ -139,7 +249,7 @@ percent.
 VOLUMENTIAL_EXAMPLE_SMOKE=1 uv run python examples/laplace2d.py
 ```
 
-## Next
+## 5. Next
 
 - Other maintained examples: `examples/laplace3d.py`,
   `examples/helmholtz2d.py`, `examples/helmholtz3d.py`,
