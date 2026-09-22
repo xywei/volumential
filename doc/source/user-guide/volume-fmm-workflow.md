@@ -8,9 +8,7 @@ f(\boldsymbol{y})\,\mathrm{d}\boldsymbol{y}
 $
 
 ```{figure} ../_static/gallery/volume-fmm-workflow.svg
-:alt: The source density is sampled on volume quadrature nodes, organized
-      into a tree, split into near-field table and far-field FMM paths,
-      and accumulated into the output potential.
+:alt: The source density is sampled on volume quadrature nodes, organized into a tree, split into near-field table and far-field FMM paths, and accumulated into the output potential.
 :width: 100%
 
 The complete computation in one picture. The rest of this page names the
