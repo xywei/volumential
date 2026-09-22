@@ -6,6 +6,7 @@ How the volume FMM is put together, and what each part of it costs you.
 :maxdepth: 1
 
 volume-fmm-workflow
+near-field-anatomy
 choosing-a-wrangler
 nearfield_symmetry
 table-build-routing
@@ -16,7 +17,9 @@ validation_matrix
 ```
 
 {doc}`volume-fmm-workflow` is the one to read first: it walks the pipeline from
-a box mesh to a potential and says which module owns each stage. The remaining
+a box mesh to a potential and says which module owns each stage.
+{doc}`near-field-anatomy` is the visual bridge for a newcomer: one target box,
+the table-driven neighborhood, and the far-field FMM path. The remaining
 pages go deep on the parts that are not obvious from the source —
 {doc}`nearfield_symmetry` on why the stored table is far smaller than the
 number of interactions it serves and what the SQLite cache actually holds;
