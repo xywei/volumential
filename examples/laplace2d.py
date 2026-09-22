@@ -1,4 +1,9 @@
-"""This example evaluates the volume potential over\n[-0.5, 0.5]^2 with the Laplace kernel.\n\nSet ``VOLUMENTIAL_LAPLACE2D_OUTPUT_DIR`` to write non-interactive gallery\nfigures after the solve.\n"""
+"""This example evaluates the volume potential over
+[-0.5, 0.5]^2 with the Laplace kernel.
+
+Set ``VOLUMENTIAL_LAPLACE2D_OUTPUT_DIR`` to write non-interactive gallery
+figures after the solve.
+"""
 
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
@@ -435,7 +440,7 @@ def main():
 
         from boxtree.visualization import TreePlotter
 
-        plotter = TreePlotter(tree.get(queue=queue))
+        plotter = TreePlotter(actx.to_numpy(tree))
         plotter.draw_tree(fill=False, edgecolor="black")
         # plotter.draw_box_numbers()
         plotter.set_bounding_box()
