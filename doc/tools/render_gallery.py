@@ -101,10 +101,13 @@ def _run_example(name: str, output_dir: Path, pyopencl_ctx: str) -> dict:
         }
     )
 
+    outputs = [output_dir / relpath for relpath in spec["outputs"]]
+    for output in outputs:
+        output.unlink(missing_ok=True)
+
     print("+", " ".join(command))
     subprocess.run(command, cwd=REPO_ROOT, env=env, check=True)
 
-    outputs = [output_dir / relpath for relpath in spec["outputs"]]
     missing = [path for path in outputs if not path.is_file()]
     if missing:
         missing_text = ", ".join(str(path) for path in missing)
