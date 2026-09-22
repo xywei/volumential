@@ -42,7 +42,7 @@ from volumential.tools import ScalarFieldExpressionEvaluation as Eval
 
 
 def _write_gallery_figures(
-    queue, tree, q_points_host, source_host, approx, exact, output_dir
+    queue, actx, tree, q_points_host, source_host, approx, exact, output_dir
 ):
     """Write non-interactive diagnostics for documentation and review."""
     try:
@@ -96,7 +96,7 @@ def _write_gallery_figures(
 
     fig, axis = plt.subplots(figsize=(7.0, 7.0), constrained_layout=True)
     plt.sca(axis)
-    plotter = TreePlotter(tree.get(queue=queue))
+    plotter = TreePlotter(actx.to_numpy(tree))
     plotter.draw_tree(fill=False, edgecolor="black")
     plotter.set_bounding_box()
     axis.set_aspect("equal")
@@ -382,6 +382,7 @@ def main():
     if gallery_output_dir:
         written = _write_gallery_figures(
             queue,
+            actx,
             tree,
             q_points_host,
             source_vals.get(),
