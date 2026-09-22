@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 420" role="img" aria-labelledby="title desc">
+<title id="title">Volumential at a glance</title>
+<desc id="desc">A source field is discretized on a box tree. Nearby boxes use precomputed interaction tables while far boxes use the fast multipole method, producing a volume potential that is checked against an exact manufactured solution.</desc>
+<defs>
+  <linearGradient id="bg" x1="0" x2="1"><stop offset="0" stop-color="#0b1220"/><stop offset="1" stop-color="#172033"/></linearGradient>
+  <radialGradient id="hot"><stop offset="0" stop-color="#ffe06a"/><stop offset=".36" stop-color="#ff8a5c"/><stop offset=".72" stop-color="#8b5cf6"/><stop offset="1" stop-color="#172033"/></radialGradient>
+  <linearGradient id="pot" x1="0" y1="1" x2="1" y2="0"><stop stop-color="#111827"/><stop offset=".38" stop-color="#2563eb"/><stop offset=".7" stop-color="#22c55e"/><stop offset="1" stop-color="#fde047"/></linearGradient>
+  <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#94a3b8"/></marker>
+  <filter id="shadow"><feDropShadow dx="0" dy="8" stdDeviation="12" flood-opacity=".28"/></filter>
+</defs>
+<rect width="1200" height="420" rx="28" fill="url(#bg)"/>
+<g font-family="system-ui,-apple-system,Segoe UI,sans-serif" fill="#e5e7eb">
+  <text x="70" y="55" font-size="22" font-weight="700">1 · source density</text>
+  <rect x="65" y="78" width="260" height="260" rx="22" fill="#101827" stroke="#334155" filter="url(#shadow)"/>
+  <rect x="92" y="105" width="206" height="206" rx="12" fill="url(#hot)"/>
+  <g fill="none" stroke="#f8fafc" opacity=".28">
+    <ellipse cx="195" cy="208" rx="75" ry="42"/><ellipse cx="195" cy="208" rx="51" ry="28"/><ellipse cx="195" cy="208" rx="28" ry="15"/>
+  </g>
+  <text x="135" y="365" font-size="16" fill="#cbd5e1">sample f(y) on volume nodes</text>
+
+  <path d="M340 208 H402" stroke="#94a3b8" stroke-width="4" marker-end="url(#arrow)"/>
+
+  <text x="430" y="55" font-size="22" font-weight="700">2 · split by tree distance</text>
+  <rect x="425" y="78" width="350" height="260" rx="22" fill="#101827" stroke="#334155" filter="url(#shadow)"/>
+  <g transform="translate(462 105)" stroke="#64748b" stroke-width="2">
+    <rect width="224" height="224" fill="#0f172a"/>
+    <path d="M56 0V224M112 0V224M168 0V224M0 56H224M0 112H224M0 168H224"/>
+    <rect x="56" y="56" width="168" height="168" fill="#14532d" opacity=".28" stroke="none"/>
+    <rect x="112" y="112" width="56" height="56" fill="#f59e0b" opacity=".95" stroke="#fde68a" stroke-width="3"/>
+    <rect x="56" y="56" width="168" height="168" fill="none" stroke="#22c55e" stroke-width="4"/>
+    <circle cx="140" cy="140" r="6" fill="#fff" stroke="none"/>
+  </g>
+  <g font-size="15">
+    <circle cx="712" cy="135" r="7" fill="#22c55e"/><text x="728" y="141">near: table</text>
+    <circle cx="712" cy="168" r="7" fill="#60a5fa"/><text x="728" y="174">far: FMM</text>
+  </g>
+  <path d="M454 102 C430 82 440 66 468 70" fill="none" stroke="#60a5fa" stroke-width="3" opacity=".8"/>
+  <path d="M462 318 C424 333 421 289 455 276" fill="none" stroke="#60a5fa" stroke-width="3" opacity=".8"/>
+  <text x="485" y="365" font-size="16" fill="#cbd5e1">singular nearby · scalable far away</text>
+
+  <path d="M790 208 H852" stroke="#94a3b8" stroke-width="4" marker-end="url(#arrow)"/>
+
+  <text x="880" y="55" font-size="22" font-weight="700">3 · potential + error check</text>
+  <rect x="875" y="78" width="260" height="260" rx="22" fill="#101827" stroke="#334155" filter="url(#shadow)"/>
+  <rect x="902" y="105" width="206" height="206" rx="12" fill="url(#pot)"/>
+  <g fill="none" stroke="#f8fafc" opacity=".45" stroke-width="2">
+    <path d="M915 260 C950 210 978 235 1010 195 S1070 145 1097 170"/>
+    <path d="M915 280 C950 230 982 255 1018 215 S1071 169 1097 190"/>
+    <path d="M915 240 C948 192 978 215 1006 177 S1066 128 1097 153"/>
+  </g>
+  <text x="914" y="365" font-size="16" fill="#cbd5e1">compare uₕ with manufactured u</text>
+</g>
+</svg>
