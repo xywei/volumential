@@ -96,7 +96,7 @@ On a configured OpenCL host:
 
 ```bash
 export PYOPENCL_CTX=portable:0
-python doc/tools/render_gallery.py
+uv run --with matplotlib python doc/tools/render_gallery.py
 ```
 
 The renderer delegates to the maintained examples rather than reimplementing
