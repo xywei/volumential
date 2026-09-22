@@ -3,8 +3,7 @@
 Start with the thing the program computes, not with the wrangler classes.
 
 ```{figure} ../_static/gallery/laplace2d-reference.svg
-:alt: The manufactured source density and exact Gaussian potential used by the
-      two-dimensional Laplace example.
+:alt: The manufactured source density and exact Gaussian potential used by the two-dimensional Laplace example.
 :width: 100%
 
 The source on the left is chosen so that the exact potential is the Gaussian on
@@ -97,8 +96,7 @@ field, but substitutes the table for the point-to-point near-field stage. That
 is the part specific to Volumential.
 
 ```{figure} ../_static/gallery/near-far-anatomy.svg
-:alt: A target box with neighboring boxes handled by a near-field interaction
-      table and more distant boxes handled by the FMM.
+:alt: A target box with neighboring boxes handled by a near-field interaction table and more distant boxes handled by the FMM.
 :width: 100%
 ```
 
