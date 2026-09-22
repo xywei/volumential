@@ -126,6 +126,31 @@ publishes no `objects.inv` at all (`mpmath`, `pyfmmlib`), or it publishes one
 that does not document the referenced object (`boxtree` no longer documents
 `boxtree.tools.DeviceDataRecord`, though its inventory is otherwise fine).
 
+### Computed gallery assets
+
+The gallery's numerical figures are generated from the maintained examples,
+but **not during a Sphinx build**. They need OpenCL, may build near-field
+tables on a cache miss, and belong on a machine whose device choice is explicit.
+
+Use the small renderer under `doc/tools`:
+
+```bash
+export PYOPENCL_CTX=portable:0
+python doc/tools/render_gallery.py
+```
+
+It runs the smoke configurations of `laplace2d.py`, `poisson3d.py` and
+`branched_flow_helmholtz2d.py`, asks those examples to write their own
+diagnostics, and places the results under
+`doc/source/images/generated/`. Use `--only laplace2d` (repeat
+`--only` for more than one) while iterating.
+
+The renderer refuses to choose a PyOpenCL context implicitly and writes
+`manifest.json` beside the images with the Git revision, command lines,
+relevant environment variables and output paths. Review the plots and manifest
+together before committing regenerated assets. The Sphinx build only consumes
+committed files; it never calls the renderer.
+
 ### Example notebooks
 
 The notebooks are maintained in `examples/`, beside the scripts they
