@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 520" role="img" aria-labelledby="title desc">
+  <title id="title">Laplace 2D manufactured problem used by the first Volumential tutorial</title>
+  <desc id="desc">The left panel shows the compact Gaussian-derived source density with a positive center and negative annulus. The right panel shows the exact Gaussian potential used to measure numerical error.</desc>
+  <defs>
+    <radialGradient id="source" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ffcf6e"/>
+      <stop offset="21%" stop-color="#f89b4a"/>
+      <stop offset="38%" stop-color="#f4f6fa"/>
+      <stop offset="56%" stop-color="#84a9e8"/>
+      <stop offset="76%" stop-color="#dce6f6"/>
+      <stop offset="100%" stop-color="#f7f9fc"/>
+    </radialGradient>
+    <radialGradient id="potential" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#fff6a0"/>
+      <stop offset="18%" stop-color="#8ad5be"/>
+      <stop offset="40%" stop-color="#3d8cc7"/>
+      <stop offset="68%" stop-color="#355194"/>
+      <stop offset="100%" stop-color="#232f5e"/>
+    </radialGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#202a44" flood-opacity="0.12"/>
+    </filter>
+  </defs>
+  <rect width="1120" height="520" rx="28" fill="#ffffff"/>
+  <text x="48" y="56" font-family="system-ui, sans-serif" font-size="30" font-weight="700" fill="#172033">A first volume potential: a problem you can see</text>
+  <text x="48" y="88" font-family="system-ui, sans-serif" font-size="17" fill="#556070">The maintained 2-D Laplace example knows the answer in advance, so every run ends with a real error check.</text>
+
+  <g transform="translate(62 126)" filter="url(#shadow)">
+    <rect width="450" height="318" rx="22" fill="#fbfcfe" stroke="#d9e0e8"/>
+    <text x="26" y="38" font-family="system-ui, sans-serif" font-size="18" font-weight="700" fill="#2c3545">1 · source density</text>
+    <text x="26" y="64" font-family="system-ui, sans-serif" font-size="14" fill="#667284">f = -Δu</text>
+    <rect x="96" y="82" width="260" height="210" rx="14" fill="url(#source)" stroke="#cdd6e2"/>
+    <g fill="none" stroke="#ffffff" stroke-opacity="0.62" stroke-width="1.6">
+      <ellipse cx="226" cy="187" rx="26" ry="22"/>
+      <ellipse cx="226" cy="187" rx="51" ry="43"/>
+      <ellipse cx="226" cy="187" rx="80" ry="67"/>
+      <ellipse cx="226" cy="187" rx="111" ry="92"/>
+    </g>
+    <text x="225" y="310" text-anchor="middle" font-family="system-ui, sans-serif" font-size="13" fill="#6d7786">quadrature samples live inside leaf boxes</text>
+  </g>
+
+  <g transform="translate(608 126)" filter="url(#shadow)">
+    <rect width="450" height="318" rx="22" fill="#fbfcfe" stroke="#d9e0e8"/>
+    <text x="26" y="38" font-family="system-ui, sans-serif" font-size="18" font-weight="700" fill="#2c3545">2 · reference potential</text>
+    <text x="26" y="64" font-family="system-ui, sans-serif" font-size="14" fill="#667284">u(x) = exp(-160‖x‖²)</text>
+    <rect x="96" y="82" width="260" height="210" rx="14" fill="url(#potential)" stroke="#cdd6e2"/>
+    <g fill="none" stroke="#ffffff" stroke-opacity="0.7" stroke-width="1.6">
+      <ellipse cx="226" cy="187" rx="28" ry="23"/>
+      <ellipse cx="226" cy="187" rx="53" ry="44"/>
+      <ellipse cx="226" cy="187" rx="81" ry="68"/>
+      <ellipse cx="226" cy="187" rx="112" ry="93"/>
+    </g>
+    <text x="225" y="310" text-anchor="middle" font-family="system-ui, sans-serif" font-size="13" fill="#6d7786">Volumential computes uₕ and compares it with u</text>
+  </g>
+
+  <g font-family="system-ui, sans-serif">
+    <path d="M516 286h84" stroke="#7a8696" stroke-width="4"/>
+    <polygon points="600,286 584,276 584,296" fill="#7a8696"/>
+    <text x="558" y="267" text-anchor="middle" font-size="14" font-weight="700" fill="#566170">volume FMM</text>
+  </g>
+
+  <rect x="222" y="468" width="676" height="34" rx="17" fill="#eef5ff"/>
+  <text x="560" y="490" text-anchor="middle" font-family="system-ui, sans-serif" font-size="14" fill="#405777">Near interactions use singular-aware tables; far interactions use the ordinary FMM.</text>
+</svg>
