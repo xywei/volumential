@@ -75,6 +75,11 @@ VOLUMENTIAL_EXAMPLE_SMOKE=1 uv run python examples/laplace2d.py   # seconds
 uv run python examples/laplace2d.py                               # full settings
 ```
 
+Set `VOLUMENTIAL_LAPLACE2D_OUTPUT_DIR` to write a non-interactive
+four-panel source/FMM/exact/error figure plus a tree plot. This is the same
+output mode the documentation gallery renderer and Examples smoke CI exercise.
+
+
 ### `laplace3d.py`
 
 The same problem over $[-\tfrac12, \tfrac12]^3$, reporting the maximum
