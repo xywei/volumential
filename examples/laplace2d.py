@@ -1,6 +1,4 @@
-"""This example evaluates the volume potential over
-[-0.5, 0.5]^2 with the Laplace kernel.
-"""
+"""This example evaluates the volume potential over\n[-0.5, 0.5]^2 with the Laplace kernel.\n\nSet ``VOLUMENTIAL_LAPLACE2D_OUTPUT_DIR`` to write non-interactive gallery\nfigures after the solve.\n"""
 
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
 
@@ -73,7 +71,7 @@ def _write_gallery_figures(
     ]
 
     fig, axes = plt.subplots(2, 2, figsize=(10.5, 9.0), constrained_layout=True)
-    for axis, (values, title, cmap) in zip(axes.flat, panels):
+    for axis, (values, title, cmap) in zip(axes.flat, panels, strict=True):
         artist = axis.scatter(
             xx[pick],
             yy[pick],
