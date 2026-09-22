@@ -190,7 +190,6 @@ print("max error =", np.max(np.abs(exact - pot.get())))
 
 :::
 
-
 Run the maintained version, which also carries the plotting and direct-P2P
 branches this excerpt drops, and pins an explicit `DuffyBuildConfig` (the
 `tanh-sinh-fast` radial rule at regular/radial quadrature orders 50/100) where
