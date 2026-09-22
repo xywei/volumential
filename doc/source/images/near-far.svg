@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 430" role="img" aria-labelledby="title desc">
+<title id="title">Near field versus far field in Volumential</title>
+<desc id="desc">The target box and its neighboring List 1 boxes are evaluated using precomputed near-field tables. Well-separated boxes are handled by an ordinary particle fast multipole method.</desc>
+<defs>
+  <linearGradient id="bg2" x1="0" x2="1"><stop stop-color="#0f172a"/><stop offset="1" stop-color="#111827"/></linearGradient>
+  <marker id="arr2" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0 0L0 6L8 3z" fill="#60a5fa"/></marker>
+</defs>
+<rect width="980" height="430" rx="26" fill="url(#bg2)"/>
+<g font-family="system-ui,-apple-system,Segoe UI,sans-serif">
+  <text x="52" y="55" fill="#f8fafc" font-size="24" font-weight="700">One target box, two numerical regimes</text>
+  <g transform="translate(65 90)">
+    <rect width="330" height="280" rx="18" fill="#0b1220" stroke="#334155"/>
+    <g transform="translate(36 24)" stroke="#475569" stroke-width="2">
+      <rect width="224" height="224" fill="#0f172a"/>
+      <path d="M56 0V224M112 0V224M168 0V224M0 56H224M0 112H224M0 168H224"/>
+      <rect x="56" y="56" width="168" height="168" fill="#16a34a" opacity=".2" stroke="#22c55e" stroke-width="4"/>
+      <rect x="112" y="112" width="56" height="56" rx="2" fill="#f59e0b" stroke="#fde68a" stroke-width="3"/>
+      <circle cx="140" cy="140" r="7" fill="#fff" stroke="none"/>
+    </g>
+    <text x="63" y="268" fill="#bbf7d0" font-size="15">List 1 neighborhood → table lookup</text>
+  </g>
+
+  <g transform="translate(435 88)" fill="none" stroke="#60a5fa" stroke-width="3" opacity=".9">
+    <path d="M0 58 C70 25 115 44 164 98" marker-end="url(#arr2)"/>
+    <path d="M0 145 C70 145 112 145 164 145" marker-end="url(#arr2)"/>
+    <path d="M0 235 C70 263 116 246 164 193" marker-end="url(#arr2)"/>
+  </g>
+
+  <g transform="translate(620 90)">
+    <rect width="295" height="280" rx="18" fill="#0b1220" stroke="#334155"/>
+    <text x="28" y="42" fill="#dbeafe" font-size="18" font-weight="700">well-separated boxes</text>
+    <g fill="#1d4ed8" stroke="#93c5fd" stroke-width="2">
+      <rect x="34" y="72" width="48" height="48" rx="8"/><rect x="112" y="62" width="36" height="36" rx="7"/>
+      <rect x="188" y="82" width="58" height="58" rx="9"/><rect x="62" y="160" width="56" height="56" rx="9"/>
+      <rect x="154" y="166" width="42" height="42" rx="8"/><rect x="218" y="177" width="34" height="34" rx="7"/>
+    </g>
+    <g fill="#bfdbfe">
+      <circle cx="58" cy="96" r="4"/><circle cx="130" cy="80" r="4"/><circle cx="217" cy="111" r="4"/>
+      <circle cx="90" cy="188" r="4"/><circle cx="175" cy="187" r="4"/><circle cx="235" cy="194" r="4"/>
+    </g>
+    <text x="55" y="251" fill="#bfdbfe" font-size="15">particle FMM → multipoles / locals</text>
+  </g>
+
+  <g fill="#cbd5e1" font-size="16">
+    <text x="430" y="395">near: accuracy where point quadrature struggles</text>
+    <text x="430" y="417">far: ordinary scalable FMM machinery</text>
+  </g>
+</g>
+</svg>
