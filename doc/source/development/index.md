@@ -136,7 +136,7 @@ Use the small renderer under `doc/tools`:
 
 ```bash
 export PYOPENCL_CTX=portable:0
-python doc/tools/render_gallery.py
+uv run --with matplotlib python doc/tools/render_gallery.py
 ```
 
 It runs the smoke configurations of `laplace2d.py`, `poisson3d.py` and
