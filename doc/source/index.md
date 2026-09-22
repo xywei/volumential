@@ -18,18 +18,46 @@ myst:
 
 # Volumential
 
-**Volumential** (VOLUME poteNTIAL) evaluates volume potentials
+**Fast volume potentials with FMM scalability where it helps, and accurate
+precomputed quadrature where the kernel is too close for point quadrature.**
+
+```{image} images/volumential-overview.svg
+:alt: A source density is discretized on a box tree; nearby interactions use tables, far interactions use the FMM, and the resulting potential is checked against a manufactured exact solution.
+:align: center
+```
+
+::::{grid} 1 2 2 2
+:gutter: 3
+
+:::{grid-item-card} {octicon}`rocket` Run the first example
+:link: getting-started/first-volume-potential
+:link-type: doc
+
+Start with a 2-D manufactured Laplace problem, see the near/far split, then
+open the implementation details only when you need them.
+:::
+
+:::{grid-item-card} {octicon}`image` Explore the visual gallery
+:link: examples/gallery
+:link-type: doc
+
+Pick an example by the result you want to see: Laplace, 3-D Poisson,
+Helmholtz branched flow, or the near-field machinery itself.
+:::
+::::
+
+Volumential (VOLUME poteNTIAL) evaluates
 
 $$
-u(\boldsymbol{x}) = \int_{\Omega} G(\boldsymbol{x}, \boldsymbol{y})\,
-f(\boldsymbol{y}) \, \mathrm{d}\boldsymbol{y}
+\\nu(\\boldsymbol{x}) = \\int_{\\Omega} G(\\boldsymbol{x}, \\boldsymbol{y})\\,
+f(\\boldsymbol{y}) \\, \\mathrm{d}\\boldsymbol{y}
 $$
 
-over box-shaped domains with the Fast Multipole Method. The far field is an
-ordinary particle FMM over the volume quadrature nodes; the near field is read
-from precomputed, symmetry-reduced interaction tables. That split — *far field
-by particle approximation, near field direct* — is what the code calls the
-`fpnd` strategy, and it is the thing most of this documentation is about.
+over box-shaped domains. The far field is an ordinary particle FMM over the
+volume quadrature nodes; the near field is read from precomputed,
+symmetry-reduced interaction tables. That split — *far field by particle
+approximation, near field direct* — is what the code calls the `fpnd`
+strategy.
 
 Supported kernels are Laplace, Helmholtz and Yukawa (modified Helmholtz) in
 two and three dimensions, with potential and target-gradient outputs, on
@@ -50,8 +78,8 @@ device you meant to use.
 :link: examples/index
 :link-type: doc
 
-The six programs under `examples/`, what each one costs to run and which
-device it lands on, plus the notebooks rendered as pages.
+A visual gallery plus the maintained programs and notebooks, including their
+runtime class, cache behavior, and device selection.
 :::
 
 :::{grid-item-card} {octicon}`book` User guide
@@ -102,6 +130,8 @@ release and versioning.
 
 - Never run Volumential before: {doc}`getting-started/installation`, then
   {doc}`getting-started/first-volume-potential`.
+- Want to see what the examples produce before reading implementation details:
+  {doc}`examples/gallery`.
 - Looking for a program close to your problem: {doc}`examples/index`.
 - Want to understand the machinery: {doc}`user-guide/volume-fmm-workflow`.
 - Chasing a slow or wrong table: {doc}`user-guide/table-build-routing` and
