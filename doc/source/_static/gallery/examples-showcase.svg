@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 510" role="img" aria-labelledby="title desc">
+  <title id="title">Volumential examples showcase</title>
+  <desc id="desc">Three illustrated example families: two-dimensional Poisson on a starfish domain with local refinement, three-dimensional Poisson visualized by slices, and Helmholtz branched flow through a random medium.</desc>
+  <defs>
+    <linearGradient id="heat" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0%" stop-color="#29366f"/><stop offset="45%" stop-color="#3f9ec6"/><stop offset="72%" stop-color="#93d6ae"/><stop offset="100%" stop-color="#ffe07a"/>
+    </linearGradient>
+    <linearGradient id="beam" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#263b72"/><stop offset="42%" stop-color="#3a8db8"/><stop offset="72%" stop-color="#ffd66f"/><stop offset="100%" stop-color="#f36f5d"/>
+    </linearGradient>
+  </defs>
+  <rect width="1180" height="510" rx="28" fill="#ffffff"/>
+  <text x="48" y="58" font-family="system-ui, sans-serif" font-size="30" font-weight="700" fill="#172033">From first run to full applications</text>
+  <text x="48" y="90" font-family="system-ui, sans-serif" font-size="17" fill="#556070">The gallery points to maintained programs and notebooks; these panels are navigation illustrations, not benchmark plots.</text>
+
+  <g transform="translate(48 132)">
+    <rect width="330" height="310" rx="22" fill="#fbfcfe" stroke="#dbe2ea"/>
+    <text x="24" y="36" font-family="system-ui, sans-serif" font-size="18" font-weight="700" fill="#273243">Poisson 2-D + AMR</text>
+    <text x="24" y="60" font-family="system-ui, sans-serif" font-size="14" fill="#677384">nontrivial domain · boundary refinement</text>
+    <g transform="translate(42 82)" stroke="#c7d0dc" fill="none">
+      <path d="M0 0v190M40 0v190M80 0v190M120 0v190M160 0v190M200 0v190M240 0v190M0 0h240M0 38h240M0 76h240M0 114h240M0 152h240M0 190h240"/>
+    </g>
+    <path d="M169 97 C190 105 196 125 215 132 C202 150 211 170 195 181 C177 176 162 191 146 181 C144 161 122 151 128 132 C146 123 147 102 169 97Z"
+          fill="#eaf5ff" stroke="#4f7faf" stroke-width="4"/>
+    <g stroke="#d98d28" stroke-width="3" fill="none">
+      <rect x="122" y="118" width="38" height="38"/><rect x="160" y="118" width="38" height="38"/><rect x="198" y="118" width="38" height="38"/>
+      <rect x="122" y="156" width="38" height="38"/><rect x="160" y="156" width="38" height="38"/><rect x="198" y="156" width="38" height="38"/>
+    </g>
+    <text x="165" y="288" text-anchor="middle" font-family="system-ui, sans-serif" font-size="13" fill="#6b7582">geometry + volume mesh + boundary correction</text>
+  </g>
+
+  <g transform="translate(425 132)">
+    <rect width="330" height="310" rx="22" fill="#fbfcfe" stroke="#dbe2ea"/>
+    <text x="24" y="36" font-family="system-ui, sans-serif" font-size="18" font-weight="700" fill="#273243">Poisson 3-D</text>
+    <text x="24" y="60" font-family="system-ui, sans-serif" font-size="14" fill="#677384">orthogonal slices · error hot spots</text>
+    <g transform="translate(60 93)">
+      <polygon points="0,52 120,0 210,46 90,100" fill="url(#heat)" opacity="0.9" stroke="#53657d"/>
+      <polygon points="0,52 0,164 90,212 90,100" fill="url(#heat)" opacity="0.65" stroke="#53657d"/>
+      <polygon points="90,100 210,46 210,158 90,212" fill="url(#heat)" opacity="0.78" stroke="#53657d"/>
+      <g fill="none" stroke="#ffffff" stroke-opacity="0.6">
+        <ellipse cx="119" cy="70" rx="30" ry="13"/><ellipse cx="119" cy="70" rx="52" ry="22"/>
+        <ellipse cx="53" cy="135" rx="18" ry="32"/><ellipse cx="53" cy="135" rx="31" ry="52"/>
+      </g>
+    </g>
+    <text x="165" y="288" text-anchor="middle" font-family="system-ui, sans-serif" font-size="13" fill="#6b7582">slice plots + 3-D diagnostics + isosurfaces</text>
+  </g>
+
+  <g transform="translate(802 132)">
+    <rect width="330" height="310" rx="22" fill="#fbfcfe" stroke="#dbe2ea"/>
+    <text x="24" y="36" font-family="system-ui, sans-serif" font-size="18" font-weight="700" fill="#273243">Helmholtz branched flow</text>
+    <text x="24" y="60" font-family="system-ui, sans-serif" font-size="14" fill="#677384">Lippmann–Schwinger · random medium</text>
+    <rect x="38" y="88" width="254" height="166" rx="14" fill="#17284b"/>
+    <g fill="none" stroke="url(#beam)" stroke-width="5" stroke-linecap="round" opacity="0.96">
+      <path d="M50 132 C95 126 107 152 142 148 C184 144 188 111 236 117 C258 120 268 139 285 145"/>
+      <path d="M50 170 C93 166 105 140 146 145 C188 151 194 188 235 183 C258 180 271 160 285 155"/>
+      <path d="M50 206 C92 202 112 191 145 184 C188 176 208 206 242 207 C261 207 275 196 285 188"/>
+    </g>
+    <g fill="#9bc3db" opacity="0.45">
+      <circle cx="86" cy="114" r="8"/><circle cx="126" cy="215" r="6"/><circle cx="177" cy="123" r="7"/><circle cx="223" cy="152" r="9"/><circle cx="265" cy="222" r="6"/>
+    </g>
+    <text x="165" y="288" text-anchor="middle" font-family="system-ui, sans-serif" font-size="13" fill="#6b7582">field structure + intensity + medium perturbation</text>
+  </g>
+</svg>
