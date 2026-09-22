@@ -1,5 +1,12 @@
 # Examples
 
+## Start with the pictures
+
+If this is your first visit, {doc}`gallery` is the shorter path: it maps the
+maintained examples to the problems and visual diagnostics they produce.
+Come back here when you need cache names, device behavior, smoke modes and
+the cost warnings for a specific program.
+
 `examples/` holds six self-contained programs and three notebooks. Each one
 solves a whole problem — build a mesh, build or load a near-field table, run
 the volume FMM, report an error — rather than demonstrating a single call, so
@@ -135,6 +142,8 @@ Helmholtz notebook below imports, so the two stay in step.
 VOLUMENTIAL_EXAMPLE_SMOKE=1 uv run python examples/helmholtz3d.py
 ```
 
+(branched-flow-example)=
+
 ### `branched_flow_helmholtz2d.py`
 
 :::{warning}
@@ -192,6 +201,7 @@ is not; add `--with plotly` for those.
 :maxdepth: 1
 :glob:
 
+gallery
 notebooks/*
 ```
 
