@@ -115,7 +115,8 @@ release and versioning.
 
 - Never run Volumential before: {doc}`getting-started/installation`, then
   {doc}`getting-started/first-volume-potential`.
-- Looking for a program close to your problem: {doc}`examples/index`.
+- Looking for a program close to your problem: {doc}`examples/gallery`, then
+  {doc}`examples/index` for run/cost/cache details.
 - Want to understand the machinery: {doc}`user-guide/volume-fmm-workflow`.
 - Chasing a slow or wrong table: {doc}`user-guide/table-build-routing` and
   {doc}`user-guide/nearfield_symmetry`.
