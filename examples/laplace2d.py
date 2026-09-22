@@ -26,6 +26,7 @@ THE SOFTWARE.
 
 import logging
 import os
+from pathlib import Path
 
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,73 @@ import pyopencl as cl
 import pyopencl.array  # noqa: F401
 
 from volumential.tools import ScalarFieldExpressionEvaluation as Eval
+
+
+def _write_gallery_figures(output_dir, points, source, exact, approx, tree):
+    """Write deterministic figures from an already-computed Laplace run."""
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        logger.info("matplotlib is unavailable; skipping gallery figures")
+        return []
+
+    from boxtree.visualization import TreePlotter
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    x_coord, y_coord = points
+    abs_err = np.abs(exact - approx)
+    log_err = np.log10(abs_err + np.finfo(abs_err.dtype).tiny)
+
+    figure, axes = plt.subplots(
+        2, 2, figsize=(10.0, 8.5), constrained_layout=True
+    )
+    panels = (
+        (source, "Source density", "coolwarm"),
+        (approx, "Computed potential", "viridis"),
+        (exact, "Exact potential", "viridis"),
+        (log_err, r"$\\log_{10}|u-u_h|$", "magma"),
+    )
+    for axis, (values, title, color_map) in zip(axes.flat, panels):
+        artist = axis.scatter(
+            x_coord,
+            y_coord,
+            c=values,
+            s=10,
+            cmap=color_map,
+            linewidths=0,
+        )
+        axis.set_title(title)
+        axis.set_xlabel("x")
+        axis.set_ylabel("y")
+        axis.set_aspect("equal", adjustable="box")
+        figure.colorbar(artist, ax=axis, shrink=0.82)
+
+    figure.suptitle("Laplace 2D manufactured solution")
+    overview_path = output_dir / "laplace2d_overview.svg"
+    figure.savefig(overview_path, bbox_inches="tight")
+    plt.close(figure)
+
+    tree_figure, tree_axis = plt.subplots(
+        1, 1, figsize=(7.0, 7.0), constrained_layout=True
+    )
+    plt.sca(tree_axis)
+    plotter = TreePlotter(tree)
+    plotter.draw_tree(fill=False, edgecolor="black")
+    plotter.set_bounding_box()
+    tree_axis.set_aspect("equal", adjustable="box")
+    tree_axis.set_title("Boxtree used by the volume FMM")
+    tree_axis.set_xlabel("x")
+    tree_axis.set_ylabel("y")
+    tree_path = output_dir / "laplace2d_tree.svg"
+    tree_figure.savefig(tree_path, bbox_inches="tight")
+    plt.close(tree_figure)
+
+    return [overview_path, tree_path]
 
 
 def main():
@@ -311,6 +379,19 @@ def main():
     if print_error:
         err = np.max(np.abs(ze - zs))
         print("Error =", err)
+
+    gallery_output_dir = os.environ.get("VOLUMENTIAL_GALLERY_OUTPUT_DIR")
+    if gallery_output_dir:
+        written = _write_gallery_figures(
+            Path(gallery_output_dir),
+            q_points_host,
+            source_vals.get(),
+            ze,
+            zs,
+            tree.get(queue=queue),
+        )
+        for output_path in written:
+            print(f"Wrote {output_path}")
 
     # Interpolated surface
     if 0:
