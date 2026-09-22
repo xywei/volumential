@@ -207,6 +207,7 @@ To also write the four-panel source/computed/exact/error figure and the tree
 figure from that same run:
 
 ```bash
+VOLUMENTIAL_EXAMPLE_SMOKE=1 \
 VOLUMENTIAL_GALLERY_OUTPUT_DIR=build/gallery/laplace2d \
 uv run --with matplotlib python examples/laplace2d.py
 ```
@@ -251,6 +252,8 @@ VOLUMENTIAL_EXAMPLE_SMOKE=1 uv run python examples/laplace2d.py
 
 ## 5. Next
 
+- Browse the visual map of the maintained examples: {doc}`../examples/gallery`.
+- See the near/far split without API details: {doc}`../user-guide/near-field-anatomy`.
 - Other maintained examples: `examples/laplace3d.py`,
   `examples/helmholtz2d.py`, `examples/helmholtz3d.py`,
   `examples/poisson3d.py` and `examples/branched_flow_helmholtz2d.py`. The
