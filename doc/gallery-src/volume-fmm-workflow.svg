@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 390" role="img" aria-labelledby="title desc">
+  <title id="title">Volumential volume FMM workflow</title>
+  <desc id="desc">Source density is sampled on volume quadrature nodes, organized into a tree, split into a near-field table path and far-field FMM path, then accumulated into the output potential.</desc>
+  <rect width="1120" height="390" rx="24" fill="#ffffff"/>
+  <text x="48" y="54" font-family="system-ui, sans-serif" font-size="30" font-weight="700" fill="#172033">From a source density to a volume potential</text>
+  <text x="48" y="84" font-family="system-ui, sans-serif" font-size="17" fill="#556070">The special part is local: only near interactions leave the ordinary particle FMM path.</text>
+  <g font-family="system-ui, sans-serif">
+    <rect x="50" y="132" width="180" height="112" rx="18" fill="#eef4ff" stroke="#8ba8e8" stroke-width="2"/>
+    <text x="140" y="168" text-anchor="middle" font-size="18" font-weight="700" fill="#27457f">Source density</text>
+    <text x="140" y="194" text-anchor="middle" font-size="15" fill="#52698f">f(y)</text>
+    <text x="140" y="218" text-anchor="middle" font-size="14" fill="#52698f">box quadrature nodes</text>
+    <rect x="300" y="132" width="180" height="112" rx="18" fill="#f3f1ff" stroke="#a399df" stroke-width="2"/>
+    <text x="390" y="168" text-anchor="middle" font-size="18" font-weight="700" fill="#4c438c">Tree + traversal</text>
+    <text x="390" y="194" text-anchor="middle" font-size="14" fill="#625a90">adaptive 2:1 boxes</text>
+    <text x="390" y="218" text-anchor="middle" font-size="14" fill="#625a90">interaction lists</text>
+    <rect x="565" y="112" width="206" height="92" rx="18" fill="#fff7df" stroke="#e3b547" stroke-width="2"/>
+    <text x="668" y="148" text-anchor="middle" font-size="18" font-weight="700" fill="#7a5407">Near field</text>
+    <text x="668" y="174" text-anchor="middle" font-size="14" fill="#7a650e">precomputed table lookup</text>
+    <rect x="565" y="226" width="206" height="92" rx="18" fill="#f1f4f7" stroke="#b5bec8" stroke-width="2"/>
+    <text x="668" y="262" text-anchor="middle" font-size="18" font-weight="700" fill="#35404b">Far field</text>
+    <text x="668" y="288" text-anchor="middle" font-size="14" fill="#556070">ordinary FMM expansions</text>
+    <rect x="850" y="160" width="220" height="112" rx="18" fill="#eaf8f1" stroke="#72bd96" stroke-width="2"/>
+    <text x="960" y="196" text-anchor="middle" font-size="18" font-weight="700" fill="#216b48">Potential</text>
+    <text x="960" y="222" text-anchor="middle" font-size="15" fill="#3e765e">near + far contributions</text>
+    <text x="960" y="246" text-anchor="middle" font-size="14" fill="#3e765e">at quadrature / target points</text>
+    <g fill="none" stroke="#7b8794" stroke-width="4">
+      <path d="M230 188h56"/><path d="M480 188h54"/><path d="M480 188 C520 188 520 158 550 158"/>
+      <path d="M480 188 C520 188 520 272 550 272"/>
+      <path d="M771 158 C814 158 814 205 837 205"/>
+      <path d="M771 272 C814 272 814 227 837 227"/>
+    </g>
+    <g fill="#7b8794">
+      <polygon points="286,188 273,180 273,196"/><polygon points="550,158 537,150 537,166"/>
+      <polygon points="550,272 537,264 537,280"/><polygon points="837,205 824,197 824,213"/>
+      <polygon points="837,227 824,219 824,235"/>
+    </g>
+  </g>
+  <rect x="300" y="338" width="470" height="34" rx="17" fill="#f8fafc"/>
+  <text x="535" y="360" text-anchor="middle" font-family="system-ui, sans-serif" font-size="14" fill="#556070">Near-field tables depend on geometry/kernel/order — not on the source density.</text>
+</svg>
