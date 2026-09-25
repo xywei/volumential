@@ -417,6 +417,22 @@ def main():
     # figures on Matplotlib's defaults plus what the examples set.
     matplotlib_config = work_dir / "matplotlib-config"
     matplotlib_config.mkdir(parents=True, exist_ok=True)
+    # Matplotlib also reads a matplotlibrc from the working directory, and the
+    # scratch directories are reused between runs: refuse to render over one.
+    mode = "full" if arguments.full else "smoke"
+    stray_rc = [
+        path
+        for path in (
+            matplotlib_config / "matplotlibrc",
+            *(work_dir / mode / target / "matplotlibrc" for target in targets),
+        )
+        if path.is_file()
+    ]
+    if stray_rc:
+        raise SystemExit(
+            "remove matplotlibrc from the renderer's work directories, where it "
+            "would restyle the figures: " + ", ".join(map(str, stray_rc))
+        )
     environment = {
         "PYOPENCL_CTX": arguments.pyopencl_ctx,
         # pyopencl.create_some_context prefers PYOPENCL_TEST when it is set.
@@ -446,7 +462,7 @@ def main():
                 else placeholder,
             ]
     context = {
-        "mode": "full" if arguments.full else "smoke",
+        "mode": mode,
         "pyopencl_ctx": arguments.pyopencl_ctx,
         "environment": environment,
         "shown_environment": shown_environment,

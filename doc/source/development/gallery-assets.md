@@ -66,8 +66,9 @@ it
 2. runs the example with `PYOPENCL_CTX`, `PYTHONHASHSEED=0`, `MPLBACKEND=Agg`,
    an empty Matplotlib configuration directory of its own (`MPLCONFIGDIR`
    under the work directory, `MATPLOTLIBRC` removed, so a personal
-   `matplotlibrc` cannot restyle a figure) and the smoke setting in its
-   environment, and with
+   `matplotlibrc` cannot restyle a figure; the renderer refuses to run if a
+   `matplotlibrc` has appeared in its work directories) and the smoke setting
+   in its environment, and with
    `build/gallery-work/<mode>/<target>/` as its working and output directory.
    Git ignores that directory. Everything the example writes lands there: data
    files, interactive HTML, figures the gallery does not use, and the
