@@ -91,6 +91,10 @@ multipole order 20. The run printed, for the uniform tree, 256 leaves and
 20736 nodes, a maximum of $|u_h - u|$ over the nodes of `4.880e-03` and a
 relative $L^2$ error of `3.960e-03`; for the adaptive tree, after 16
 refinement passes, 226 leaves and 18306 nodes, `1.949e-09` and `6.325e-10`.
+It then printed the same for finer uniform trees: `6.970e-06` and `1.589e-06`
+with 1024 leaves and 82944 nodes, `6.442e-09` and `9.729e-10` with 4096 leaves
+and 331776 nodes. Only at $64 \times 64$ leaves does the uniform tree come
+close to the adaptive tree's accuracy, and it still falls short of it.
 
 :::
 
