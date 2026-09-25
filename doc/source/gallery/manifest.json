@@ -124,19 +124,19 @@
         "portable:0",
         "--full"
       ],
-      "revision": "8cdbcd4b890ec927f891462703e249550d270b8d",
+      "revision": "f9f232346f3750074b734356a28eae1c6ef793a7",
       "versions": {
-        "boxtree": "2024.10",
-        "loopy": "2025.2",
+        "boxtree": "2024.10 (git f278ab8232bafbb8b2d8399e47fd826fb18bbee9)",
+        "loopy": "2025.2 (git b0b45ad42440c98e7f7d2a5efe9b239c57e1d73a)",
         "matplotlib": "3.11.2",
-        "modepy": "2026.1",
+        "modepy": "2026.1 (git 7b6bc1541c2369b88716ca4ace04bd905a6fd90c)",
         "numpy": "2.5.1",
         "pyfmmlib": "2024.1.1",
-        "pymbolic": "2025.1",
+        "pymbolic": "2025.1 (git 7d73bd5f40f8a292f56cca5324c5f48b66d14e6a)",
         "pyopencl": "2026.1.2",
-        "pytential": "2024.0",
+        "pytential": "2024.0 (git 8198a050cefa37669ba67fd99471ea60f834f69d)",
         "python": "3.14.7",
-        "sumpy": "2024.0",
+        "sumpy": "2024.0 (git 451e374ffac1b8bfc582dff6f383ac0ff3087d9d)",
         "volumential": "2017.1a0"
       },
       "working_directory": "build/gallery-work/full/laplace2d-adaptive"
