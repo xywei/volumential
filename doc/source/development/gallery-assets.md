@@ -33,15 +33,27 @@ It also removes `PYOPENCL_TEST` from the examples' environment, because
 runs the examples with standard input closed, so PyOpenCL cannot prompt for a
 choice either.
 
-Smoke/reduced settings are the default. Use `all` to run every target, and pass
-`--full` only when an intentionally full-resolution result is being curated; it
-may turn the branched-flow example into a publication-scale run and can require
-the `fmmlib` extra.
+Smoke settings are the default. They run in seconds and show that the figure
+path works, but they do not resolve the problems: the smoke runs of `laplace2d`
+and `poisson3d` have errors of order one, and the `branched-flow` smoke domain is
+little more than a wavelength across, too short for branches to form. `--full`
+switches every numerical target to its example's full settings, and `all` runs
+every target. The figures committed under `doc/source/_static/gallery/` are
+full-settings renders from one command:
+
+```bash
+uv run --with matplotlib python doc/tools/render_gallery.py all --full --pyopencl-ctx portable:0
+```
+
+At full settings `branched-flow` is the example's publication-pilot
+configuration, about a million unknowns with the `fmmlib` far-field backend, so
+it needs `pyfmmlib` as {ref}`branched-flow-example` describes, and it dominates
+the run. `poisson3d` builds a 3-D near-field table the first time it runs.
 
 | Target | Producer | Figures copied into the gallery |
 | --- | --- | --- |
 | `laplace2d` | `examples/laplace2d.py` via `VOLUMENTIAL_GALLERY_OUTPUT_DIR` | `laplace2d_overview.svg`, `laplace2d_tree.svg` |
-| `poisson3d` | `examples/poisson3d.py` via `VOLUMENTIAL_POISSON3D_OUTPUT_DIR` | `poisson3d_slices.png`, `poisson3d_error_point_cloud.png` |
+| `poisson3d` | `examples/poisson3d.py` via `VOLUMENTIAL_POISSON3D_OUTPUT_DIR` | `poisson3d_slices.png` |
 | `branched-flow` | `examples/branched_flow_helmholtz2d.py --output-dir ...` | `branched_flow.png` |
 
 For each numerical target the renderer
@@ -51,7 +63,10 @@ For each numerical target the renderer
 2. runs the example from the repository root, with `PYOPENCL_CTX`,
    `PYTHONHASHSEED=0`, `MPLBACKEND=Agg` and the smoke setting in its
    environment. The example writes its full output (data files, table caches,
-   interactive HTML) under `build/gallery-work/<target>/`, which Git ignores;
+   interactive HTML, figures the gallery does not use) under
+   `build/gallery-work/<mode>/<target>/`, which Git ignores. Smoke and full runs
+   get separate directories because `branched_flow_helmholtz2d.py` keeps its
+   near-field table there, and a smoke table does not fit a full run;
 3. fails if any expected figure is missing, and otherwise copies only the
    figures into `doc/source/_static/gallery/<target>/`;
 4. records the run in `doc/source/_static/gallery/manifest.json`.
@@ -95,7 +110,7 @@ the same environment does not churn its bytes:
 
 - the Laplace figures have a fixed size, a fixed DPI of 150 for their rasterized
   shaded layers, a fixed SVG hash salt, and no date or creator metadata;
-- the PNG figures of `poisson3d` and `branched-flow` are saved at a fixed 220 DPI
+- the PNG figures of `poisson3d` and `branched-flow` are saved at a fixed 150 DPI
   without the Matplotlib version tag;
 - `branched-flow` draws its random medium from a fixed seed, and the renderer
   fixes `PYTHONHASHSEED`.
