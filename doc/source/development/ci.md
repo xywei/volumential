@@ -21,7 +21,7 @@ gets **none** of these checks. See
 | Ruff | `ruff check --select E9,F63,F7,F82` — the error-level smoke subset, not the full `ruff.toml` rule set |
 | Type checking | `basedpyright -p pyproject.toml --level error` |
 | Testing (Linux) | the default pytest suite under a micromamba environment, installing `.[test]` plus the `pyfmmlib` commit that `uv.lock` pins (the `fmmlib` extra's content, passed as a pinned requirement so uv sees one Git URL), with a wrapper timeout and a diagnostics artifact (`linux-pytest.log`, `pytest.xml`) uploaded on every outcome |
-| Examples (Smoke) | three examples under `VOLUMENTIAL_EXAMPLE_SMOKE=1` — `laplace2d.py`, `helmholtz2d.py`, `helmholtz3d.py` — under `set -euo pipefail`; `laplace2d.py` runs through `doc/tools/render_gallery.py`, and its figures and manifest are uploaded as a `gallery-laplace2d-*` artifact on every outcome (see {doc}`gallery-assets`) |
+| Examples (Smoke) | three examples under `VOLUMENTIAL_EXAMPLE_SMOKE=1` — `laplace2d.py`, `helmholtz2d.py`, `helmholtz3d.py` — under `set -euo pipefail`; `laplace2d.py` runs through `doc/tools/render_gallery.py`, and the upload of its figures and manifest as a `gallery-laplace2d-*` artifact is attempted on every outcome, so the artifact exists whenever the renderer wrote files, even if a later example fails (see {doc}`gallery-assets`) |
 | Documentation | this site: `sphinx-build -W --keep-going -n -b html`, then the two coverage reports (`-b coverage` and `interrogate`), then `-b linkcheck` last. The built HTML is uploaded as a `docs-html-*` artifact and the reports as `docs-coverage-*`; the job installs `.[test,doc]` |
 
 `PYOPENCL_CTX` and `PYOPENCL_TEST` are pinned to `portable:0` at the workflow

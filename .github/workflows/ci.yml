@@ -306,7 +306,9 @@ jobs:
         with:
           name: gallery-laplace2d-${{ github.run_id }}-${{ github.run_attempt }}
           path: build/gallery/
-          if-no-files-found: error
+          # A failure before the renderer wrote anything leaves nothing to
+          # upload; that is reported by the failing step, not a second error.
+          if-no-files-found: warn
           retention-days: 14
 
 # vim: sw=2
