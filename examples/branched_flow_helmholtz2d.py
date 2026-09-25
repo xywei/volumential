@@ -21,6 +21,9 @@ Use ``--smoke`` for a small local validation.  The default configuration is a
 large publication-pilot workload and should be run on approved remote
 compute resources.  It uses the optional ``pyfmmlib`` backend; install the
 ``fmmlib`` project extra before running it.
+
+``PYOPENCL_CTX`` selects the OpenCL device when it is set.  Without it the
+script picks the first fp64-capable GPU, else an fp64-capable CPU.
 """
 
 from __future__ import annotations
@@ -52,6 +55,7 @@ import csv
 import hashlib
 import json
 import logging
+import os
 from dataclasses import asdict, dataclass
 from functools import partial
 from pathlib import Path
@@ -137,6 +141,29 @@ def _select_opencl_device(cl_module):
                 return dev
 
     raise RuntimeError("No OpenCL GPU/CPU device with fp64 support found")
+
+
+def _create_opencl_context(cl_module):
+    """Honor ``PYOPENCL_CTX`` when it is set; otherwise pick a device.
+
+    Without the variable, :func:`_select_opencl_device` prefers the first
+    fp64-capable GPU and falls back to an fp64-capable CPU.
+    """
+    if not os.environ.get("PYOPENCL_CTX"):
+        return cl_module.Context([_select_opencl_device(cl_module)])
+
+    context = cl_module.create_some_context(interactive=False)
+    lacking = [
+        device.name
+        for device in context.devices
+        if not _device_supports_fp64(device)
+    ]
+    if lacking:
+        raise RuntimeError(
+            "PYOPENCL_CTX selects a device without fp64 support: "
+            + ", ".join(lacking)
+        )
+    return context
 
 
 def _smooth_ramp(values):
@@ -910,8 +937,7 @@ def run(config, output_dir):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    device = _select_opencl_device(cl)
-    context = cl.Context([device])
+    context = _create_opencl_context(cl)
     queue = cl.CommandQueue(context)
 
     root_min = -config.root_half_extent

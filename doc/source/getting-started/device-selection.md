@@ -64,12 +64,14 @@ asked for; see {doc}`../benchmarks/index`.
 
 ## Examples that select their own device
 
-`PYOPENCL_CTX` does not reach every example. `helmholtz2d.py`,
-`helmholtz3d.py` and `branched_flow_helmholtz2d.py` each carry a
-`_select_opencl_device` that enumerates the platforms and builds a
-`cl.Context` directly, so the variable is ignored. All three take the `auto`
-path: first fp64-capable GPU, else first fp64-capable CPU. On a host with both
-a CUDA GPU and PoCL they run on the GPU, whatever `PYOPENCL_CTX` says.
+`PYOPENCL_CTX` does not reach every example. `helmholtz2d.py` and
+`helmholtz3d.py` each carry a `_select_opencl_device` that enumerates the
+platforms and builds a `cl.Context` directly, so the variable is ignored. Both
+take the `auto` path: first fp64-capable GPU, else first fp64-capable CPU. On a
+host with both a CUDA GPU and PoCL they run on the GPU, whatever `PYOPENCL_CTX`
+says. `branched_flow_helmholtz2d.py` carries the same selector but uses it only
+when `PYOPENCL_CTX` is unset; with the variable set it builds the context from
+it, and stops if the selected device lacks fp64.
 
 So the variable is not a device policy for the whole tree. Read the device off
 the run rather than inferring it from the environment.
