@@ -872,8 +872,10 @@ def _write_plot(output_dir, arrays):
         grid[y_indices, x_indices] = field
         return grid
 
+    # Three square panels stacked vertically: a wider figure only leaves blank
+    # space, because each colorbar anchors its panel to the right.
     figure, axes = plt.subplots(
-        3, 1, figsize=(9.0, 15.0), sharex=True, sharey=True
+        3, 1, figsize=(6.2, 15.0), sharex=True, sharey=True
     )
     fields = [perturbation, intensity, field_real]
     titles = ["refractive-index perturbation", "normalized intensity", "Re(u)"]
@@ -906,8 +908,10 @@ def _write_plot(output_dir, arrays):
     axes[-1].set_xlabel("x")
     figure.tight_layout()
     # Keep the Matplotlib version out of the file metadata (gallery assets).
+    # At 150 DPI a panel is about as many pixels wide as a full-settings field
+    # has samples across.
     figure.savefig(
-        output_dir / "branched_flow.png", dpi=220, metadata={"Software": None}
+        output_dir / "branched_flow.png", dpi=150, metadata={"Software": None}
     )
     plt.close(figure)
 
