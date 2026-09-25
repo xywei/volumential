@@ -94,6 +94,53 @@
       },
       "working_directory": "build/gallery-work/full/laplace2d"
     },
+    "laplace2d-adaptive": {
+      "command": [
+        "python",
+        "examples/laplace2d_adaptive.py"
+      ],
+      "device_type": "CPU",
+      "dirty": false,
+      "environment": {
+        "MATPLOTLIBRC": null,
+        "MPLBACKEND": "Agg",
+        "MPLCONFIGDIR": "build/gallery-work/matplotlib-config",
+        "PYOPENCL_CTX": "portable:0",
+        "PYOPENCL_TEST": null,
+        "PYTHONHASHSEED": "0",
+        "VOLUMENTIAL_EXAMPLE_SMOKE": null,
+        "VOLUMENTIAL_GALLERY_OUTPUT_DIR": "build/gallery-work/full/laplace2d-adaptive"
+      },
+      "mode": "full",
+      "outputs": [
+        "laplace2d-adaptive/laplace2d_adaptive.svg"
+      ],
+      "pyopencl_ctx": "portable:0",
+      "regenerate": [
+        "python",
+        "doc/tools/render_gallery.py",
+        "laplace2d-adaptive",
+        "--pyopencl-ctx",
+        "portable:0",
+        "--full"
+      ],
+      "revision": "8cdbcd4b890ec927f891462703e249550d270b8d",
+      "versions": {
+        "boxtree": "2024.10",
+        "loopy": "2025.2",
+        "matplotlib": "3.11.2",
+        "modepy": "2026.1",
+        "numpy": "2.5.1",
+        "pyfmmlib": "2024.1.1",
+        "pymbolic": "2025.1",
+        "pyopencl": "2026.1.2",
+        "pytential": "2024.0",
+        "python": "3.14.7",
+        "sumpy": "2024.0",
+        "volumential": "2017.1a0"
+      },
+      "working_directory": "build/gallery-work/full/laplace2d-adaptive"
+    },
     "poisson3d": {
       "command": [
         "python",
