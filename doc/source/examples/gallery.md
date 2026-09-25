@@ -70,8 +70,8 @@ step, with the tree the FMM used.
 :columns: 12 12 7 7
 
 **What an adaptive tree buys.** The source $f = -\Delta u$ for
-$u = e^{-400 \lVert \boldsymbol{x} - \boldsymbol{c}_1 \rVert^2}
-+ 0.5\, e^{-6400 \lVert \boldsymbol{x} - \boldsymbol{c}_2 \rVert^2}$, a broad
+$u = e^{-400 \lVert \boldsymbol{x} - \boldsymbol{c}_1 \rVert^2} +
+0.5\, e^{-6400 \lVert \boldsymbol{x} - \boldsymbol{c}_2 \rVert^2}$, a broad
 Gaussian at $\boldsymbol{c}_1 = (-0.15, -0.1)$ and a narrow one at
 $\boldsymbol{c}_2 = (0.22, 0.2)$ in $[-1/2, 1/2]^2$, computed twice with the
 same quadrature order, near-field table and multipole order: on a uniform

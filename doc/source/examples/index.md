@@ -85,8 +85,8 @@ uv run python examples/laplace2d.py                               # full setting
 
 The same kind of run on an adaptive tree, next to the uniform tree it
 replaces. The source is manufactured from two Gaussians of different widths,
-$u = e^{-400 \lVert \boldsymbol{x} - \boldsymbol{c}_1 \rVert^2}
-+ 0.5\, e^{-6400 \lVert \boldsymbol{x} - \boldsymbol{c}_2 \rVert^2}$ over
+$u = e^{-400 \lVert \boldsymbol{x} - \boldsymbol{c}_1 \rVert^2} +
+0.5\, e^{-6400 \lVert \boldsymbol{x} - \boldsymbol{c}_2 \rVert^2}$ over
 $[-\tfrac12, \tfrac12]^2$, and the example evaluates its volume potential twice:
 on a uniform tree of $16 \times 16$ leaves, and on an adaptive tree allowed
 at most as many leaves. At full settings both use quadrature order 9, the
