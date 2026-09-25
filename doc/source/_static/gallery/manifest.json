@@ -42,8 +42,6 @@
     "concepts": {
       "dirty": false,
       "outputs": [
-        "examples-showcase.svg",
-        "laplace2d-reference.svg",
         "near-far-anatomy.svg",
         "volume-fmm-workflow.svg"
       ],
@@ -52,7 +50,7 @@
         "doc/tools/render_gallery.py",
         "concepts"
       ],
-      "revision": "96e80e63679975ff63206e12476deab51f1a2d99",
+      "revision": "316cc79fbb2e49cd577722903ac17ff39cfd74da",
       "sources": "doc/gallery-src"
     },
     "laplace2d": {
