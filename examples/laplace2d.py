@@ -71,8 +71,9 @@ def _write_gallery_figures(
 ):
     """Write the gallery figures from an already-computed Laplace run.
 
-    The figures only display data the example has computed: the source and the
-    potentials are the values at the quadrature nodes, one marker per node.
+    The figures only display data the example has computed: the values at the
+    quadrature nodes, shaded by linear interpolation over a Delaunay
+    triangulation of the nodes, and the tree the FMM traversed.
     """
     try:
         import matplotlib
@@ -80,6 +81,7 @@ def _write_gallery_figures(
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         from matplotlib.colors import LogNorm
+        from matplotlib.tri import Triangulation
     except ImportError as exc:
         raise RuntimeError(
             "VOLUMENTIAL_GALLERY_OUTPUT_DIR is set, but matplotlib cannot be "
@@ -93,21 +95,18 @@ def _write_gallery_figures(
 
     x_coord, y_coord = points
     n_nodes = x_coord.size
+    triangulation = Triangulation(x_coord, y_coord)
     abs_err = np.abs(approx - reference)
-    # A log scale cannot show an exact zero; draw any such node at the
-    # smallest nonzero error instead.
-    nonzero_err = abs_err[abs_err > 0]
-    err_floor = (
-        nonzero_err.min() if nonzero_err.size else np.finfo(abs_err.dtype).eps
-    )
+    # Differences below double-precision rounding of u carry no information,
+    # and a log scale cannot show zero: draw them at eps * max|u|.
+    err_floor = np.finfo(abs_err.dtype).eps * np.abs(reference).max()
     err_norm = LogNorm(vmin=err_floor, vmax=max(abs_err.max(), 10 * err_floor))
     source_scale = np.abs(source).max()
     potential_range = (
         min(approx.min(), reference.min()),
         max(approx.max(), reference.max()),
     )
-    # Size the markers so that the nodes roughly tile a panel at any resolution.
-    marker_area = (220.0 / np.sqrt(n_nodes)) ** 2
+    node_dot_area = float(np.clip(6000.0 / n_nodes, 0.1, 4.0))
 
     panels = (
         (
@@ -133,7 +132,7 @@ def _write_gallery_figures(
         (
             np.maximum(abs_err, err_floor),
             r"Pointwise error $|u_h - u|$",
-            r"$|u_h - u|$ (log scale)",
+            r"$|u_h - u|$ (log scale, floor $\epsilon \max|u|$)",
             {"cmap": "magma", "norm": err_norm},
         ),
     )
@@ -145,18 +144,18 @@ def _write_gallery_figures(
         for axis, (values, title, label, color_kwargs) in zip(
             axes.flat, panels, strict=True
         ):
-            artist = axis.scatter(
-                x_coord,
-                y_coord,
-                c=values,
-                s=marker_area,
-                linewidths=0,
+            artist = axis.tripcolor(
+                triangulation,
+                values,
+                shading="gouraud",
                 rasterized=True,
                 **color_kwargs,
             )
             axis.set_title(title)
             axis.set_xlabel("x")
             axis.set_ylabel("y")
+            axis.set_xlim(*settings["domain"])
+            axis.set_ylim(*settings["domain"])
             axis.set_aspect("equal", adjustable="box")
             figure.colorbar(artist, ax=axis, shrink=0.82, label=label)
 
@@ -182,7 +181,7 @@ def _write_gallery_figures(
         tree_axis.scatter(
             x_coord,
             y_coord,
-            s=float(np.clip(marker_area / 9, 0.1, 4.0)),
+            s=node_dot_area,
             color="tab:blue",
             linewidths=0,
             rasterized=True,
@@ -475,6 +474,7 @@ def main():
                 "q_order": q_order,
                 "n_levels": n_levels,
                 "m_order": m_order,
+                "domain": (a, b),
             },
         )
         for output_path in written:
