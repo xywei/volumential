@@ -3,8 +3,8 @@
 The central numerical idea in Volumential is easier to understand as a picture
 than as a wrangler class name.
 
-```{figure} ../_static/gallery/near-far-anatomy.svg
-:alt: Schematic. A five by five block of boxes with the target box in the middle. Its eight neighbors are marked as table lookups; the outer ring of boxes is marked as handled by the FMM with multipole and local expansions.
+```{figure} ../gallery/near-far-anatomy.svg
+:alt: Schematic. A five by five block of boxes. The target box and its eight neighbors are table lookups, the target box's own interaction included; the outer ring is handled by the FMM with multipole and local expansions.
 :width: 100%
 
 Schematic, not computed output: a uniform neighborhood. Adaptive traversals
@@ -48,7 +48,7 @@ Well-separated boxes use the volume quadrature nodes as weighted particles.
 Multipole and local expansions are ordinary `sumpy`/FMM machinery. The two
 paths are accumulated into the same target potential.
 
-```{figure} ../_static/gallery/volume-fmm-workflow.svg
+```{figure} ../gallery/volume-fmm-workflow.svg
 :alt: Schematic flow chart. The source density at the box quadrature nodes goes into a tree with its traversal, then splits into a near-field path, a precomputed table lookup, and a far-field path, ordinary FMM expansions; the two paths add up to the potential.
 :width: 100%
 

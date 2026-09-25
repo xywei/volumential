@@ -21,8 +21,8 @@ Volumential evaluates volume potentials, integrals of a kernel against a
 source density over a box, with the Fast Multipole Method. This is what the
 first example computes.
 
-```{figure} _static/gallery/laplace2d/laplace2d_overview.svg
-:alt: Four panels over the square from -0.5 to 0.5. Top left, the source density: a positive peak at the origin inside a faint negative ring. Top right, the computed volume potential: a Gaussian bump. Bottom left, the Gaussian reference, which looks identical. Bottom right, the pointwise error on a logarithmic scale, at most about 8e-11, arranged in nested squares that follow the FMM boxes.
+```{figure} gallery/laplace2d/laplace2d_overview.svg
+:alt: Four panels over the square: the source, the computed potential, the Gaussian reference, which looks identical, and the pointwise error on a logarithmic scale, at most about 8e-11.
 :width: 100%
 
 Computed by `examples/laplace2d.py` at full settings (quadrature order 9,
@@ -88,8 +88,8 @@ device you meant to use.
 :link: examples/index
 :link-type: doc
 
-A visual map of the maintained programs and notebooks, followed by the
-device, cache and cost details needed to reproduce them.
+Run commands, smoke modes, cost classes, caches and device behavior for
+every maintained program and notebook; the gallery above is the visual map.
 :::
 
 :::{grid-item-card} {octicon}`book` User guide

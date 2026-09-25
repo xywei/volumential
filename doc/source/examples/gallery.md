@@ -17,8 +17,8 @@ build runs none of these examples.
 :::{grid-item}
 :columns: 12 12 5 5
 
-```{image} ../_static/gallery/laplace2d/laplace2d_overview.svg
-:alt: Four panels over the square from -0.5 to 0.5: the source density, a positive peak inside a faint negative ring; the computed potential and the Gaussian reference, which look identical; and the pointwise error on a logarithmic scale, at most about 8e-11, in nested squares that follow the FMM boxes.
+```{image} ../gallery/laplace2d/laplace2d_overview.svg
+:alt: Four panels over the square: the source, the computed potential, the Gaussian reference, and the pointwise error on a logarithmic scale, at most about 8e-11.
 :class: gallery-thumb
 :width: 100%
 ```
@@ -58,8 +58,8 @@ step, with the tree the FMM used.
 :::{grid-item}
 :columns: 12 12 5 5
 
-```{image} ../_static/gallery/poisson3d/poisson3d_slices.png
-:alt: A three by three grid of slices through the cube from -0.5 to 0.5, on the planes z = 0, y = 0 and x = 0. The manufactured solution, a positive and a negative Gaussian, and the FMM result look identical; the log10 error panels show errors up to about 1e-6 in a box-shaped region around the positive Gaussian and about 1e-7 elsewhere.
+```{image} ../gallery/poisson3d/poisson3d_slices.png
+:alt: A three by three grid of slices through the cube on the planes z = 0, y = 0 and x = 0. The exact and FMM columns look identical; the log10 error is largest, about 1e-5, around the two Gaussians and falls to 1e-12 and below away from them, in blocks that follow the boxes of the tree.
 :class: gallery-thumb
 :width: 100%
 ```
@@ -69,19 +69,22 @@ step, with the tree the FMM used.
 :::{grid-item}
 :columns: 12 12 7 7
 
-Two Gaussians of opposite sign on $[-1/2, 1/2]^3$, cut by the planes $z = 0$,
-$y = 0$ and $x = 0$. The columns are the manufactured solution (titled
-"Exact"), the FMM potential interpolated to 180 × 180 points per plane, and
-$\log_{10}$ of their difference, which is largest, about $10^{-6}$, around the
-positive Gaussian, in stripes that trace the leaf cells. "Exact" is the
-whole-space solution of $-\Delta u = f$; the example integrates over the cube
-only, and its Gaussians are effectively zero at the cube's boundary.
+Two Gaussians of opposite sign, each $e^{-240 r^2}$, on $[-1/2, 1/2]^3$, cut
+by the planes $z = 0$, $y = 0$ and $x = 0$. The columns are the manufactured
+solution (titled "Exact"), the FMM potential interpolated to 180 × 180 points
+per plane, and $\log_{10}$ of their difference. "Exact" is the whole-space
+solution of $-\Delta u = f$, while the example integrates over the cube only;
+both Gaussians are below $e^{-40}$ on the cube's boundary, so the source left
+out is far below the errors shown. The error is largest around the two
+Gaussians and falls by several orders of magnitude away from them, in blocks
+that follow the boxes of the tree.
 
 `examples/poisson3d.py`, full settings: quadrature order 7, 5 mesh levels
 (16³ leaf cells), multipole order 16, near-field table quadrature orders 16
 (regular) and 80 (radial). At the quadrature nodes the run printed a maximum
-absolute error of `5.498458e-07` and a relative L2 error of `2.340261e-06`;
-the slices add interpolation to points between the nodes.
+absolute error of `5.768837e-07` and a relative L2 error of `1.190132e-07`.
+The slices reach about $10^{-5}$ because they add interpolation from the nodes
+to the points between them.
 
 :::
 
@@ -106,9 +109,9 @@ when Plotly is installed.
 :::{grid-item}
 :columns: 12 12 5 5
 
-```{image} ../_static/gallery/branched-flow/branched_flow.png
-:alt: Three stacked panels over the square from -8 to 8. Top, the refractive-index perturbation, smooth random blobs confined to a rectangle. Middle, the normalized intensity of a plane wave entering from the left, which breaks into bright branching filaments separated by dark regions. Bottom, the real part of the total field, straight wavefronts on the left that bend and break up where the intensity branches.
-:class: gallery-thumb
+```{image} ../gallery/branched-flow/branched_flow.png
+:alt: The normalized intensity of a plane wave entering from the left, which breaks into bright branching filaments separated by dark regions. The full figure also shows the refractive-index perturbation and the real part of the field.
+:class: gallery-thumb gallery-thumb-middle-panel
 :width: 100%
 ```
 
@@ -121,17 +124,17 @@ A plane wave with $k = 12$, incident along $+x$, through a smooth random
 medium, solved as a free-space Lippmann–Schwinger equation on $[-8, 8]^2$
 with no artificial boundary or PML. The figure stacks the refractive-index
 perturbation $n - 1$, the intensity $|u|^2$ normalized by the mean incident
-intensity, and $\operatorname{Re} u$. The thumbnail is centered on the
-intensity, where the wave breaks into branching filaments that keep spreading
-past the medium.
+intensity, and $\operatorname{Re} u$; each color scale is clipped at the 99.5th
+percentile of the plotted magnitude. The thumbnail shows the intensity, where the wave
+breaks into branching filaments that keep spreading past the medium.
 
 `examples/branched_flow_helmholtz2d.py`, default (full) configuration:
 quadrature order 4, 9 levels, 1048576 points, the `fmmlib` far field, GMRES
-to a tolerance of $10^{-8}$ without a preconditioner. The medium is 2048
-Gaussian bumps (refractive-index RMS 0.05, correlation length 0.55, seed 17)
-on $[-6.4, 3] \times [-5, 5]$, faded out over a layer of width 0.5. The run
-printed 34 GMRES iterations and a relative true residual of
-`9.567252072103188e-09`. It needs `pyfmmlib`.
+to a tolerance of $10^{-8}$ without a preconditioner. The medium is a sum of
+2048 Gaussian bumps of width 0.55 (the example's `correlation_length`
+parameter; refractive-index RMS 0.05, seed 17) on $[-6.4, 3] \times [-5, 5]$,
+faded out over a layer of width 0.5. The run printed 34 GMRES iterations and a
+relative true residual of `9.567252072103188e-09`. It needs `pyfmmlib`.
 
 :::
 
@@ -154,8 +157,8 @@ Run command, smoke mode and cost warning: {ref}`branched-flow-example`.
 :::{grid-item}
 :columns: 12 12 5 5
 
-```{image} ../_static/gallery/near-far-anatomy.svg
-:alt: Schematic. A five by five block of boxes with the target box in the middle. Its eight neighbors are marked as table lookups; the outer ring of boxes is marked as handled by the FMM with multipole and local expansions.
+```{image} ../gallery/near-far-anatomy.svg
+:alt: Schematic. A five by five block of boxes. The target box and its eight neighbors are table lookups, the target box's own interaction included; the outer ring is handled by the FMM with multipole and local expansions.
 :class: gallery-thumb gallery-thumb-whole
 :width: 100%
 ```
@@ -170,8 +173,8 @@ box leaves the ordinary particle FMM path, what is tabulated, and what can be
 reused when the source density changes. Read it before the detailed
 implementation pages.
 
-The diagram is drawn by hand; its source is
-`doc/gallery-src/near-far-anatomy.svg`.
+The diagram is drawn by hand and edited directly in
+`doc/source/gallery/near-far-anatomy.svg`.
 
 :::
 
@@ -189,7 +192,8 @@ correction, and compares uniform refinement with boundary-focused adaptive
 refinement. Its figures exist only when the notebook runs: it is committed
 without outputs, the documentation does not execute notebooks, and no
 maintained script produces them, so there is no computed figure to show here.
-Run the notebook to see them.
+Run the notebook to see them. A gallery figure of an adaptive calculation is
+tracked in [#171](https://github.com/xywei/volumential/issues/171).
 
 +++
 {doc}`notebooks/poisson2d_pytential_volumential`
@@ -211,9 +215,9 @@ Use the convergence studies for numerical behavior, and read
 ## Regenerate the figures
 
 The documentation build deliberately runs no scientific workload; it only
-shows the files committed under `doc/source/_static/gallery/`. All of the
-computed figures above come from one command, run in the Volumential
-environment with matplotlib (and `pyfmmlib` for branched flow) installed:
+shows the files committed under `doc/source/gallery/`. All of the computed
+figures above come from one command, run in the Volumential environment with
+matplotlib (and `pyfmmlib` for branched flow) installed:
 
 ```bash
 python doc/tools/render_gallery.py all --full --pyopencl-ctx portable:0
@@ -222,10 +226,10 @@ python doc/tools/render_gallery.py all --full --pyopencl-ctx portable:0
 The command on each card regenerates that figure alone. Without `--full` the
 renderer uses the examples' smoke settings, which run in seconds and show that
 the figure path works but do not resolve the problems, so their figures are
-not results. `doc/source/_static/gallery/manifest.json` records the revision,
-command, environment and package versions behind each committed figure, and
-{doc}`../development/gallery-assets` describes the renderer and the rules for
-changing a figure.
+not results. `doc/source/gallery/manifest.json` records the revision, command,
+environment, device type and package versions behind each computed figure,
+and {doc}`../development/gallery-assets` describes the renderer and the rules
+for changing a figure.
 
 ## Need the operational details?
 

@@ -1,4 +1,4 @@
-/* Figures from doc/source/_static/gallery/.
+/* Figures from doc/source/gallery/.
  *
  * Every committed figure carries its own white ground: Matplotlib's figure
  * face for the computed ones, a white card for the schematics.  In light mode
@@ -17,7 +17,18 @@ img.gallery-thumb {
   border-radius: 0.25rem;
 }
 
-/* The same frame without cropping, for a wide schematic. */
+/* The same frame without cropping, at the image's own aspect ratio, for a
+ * wide schematic. */
 img.gallery-thumb.gallery-thumb-whole {
+  aspect-ratio: auto;
   object-fit: contain;
+}
+
+/* The middle of three stacked panels (branched_flow.png, 930 x 2250 px): a
+ * window 720 px tall whose top edge sits 730 px down the image, which holds
+ * the intensity panel and its title and nothing of the other two panels.
+ * Re-check the numbers if the example's figure layout changes. */
+img.gallery-thumb.gallery-thumb-middle-panel {
+  aspect-ratio: 930 / 720;
+  object-position: 50% 47.7%;
 }
