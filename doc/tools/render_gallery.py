@@ -111,9 +111,21 @@ import matplotlib, numpy, pyopencl, volumential
 
 def distribution_version(name):
     try:
-        return metadata.version(name)
+        distribution = metadata.distribution(name)
     except metadata.PackageNotFoundError:
         return None
+    # An install from a version-control URL records the commit it was built
+    # from (PEP 610), which the version string alone does not identify. Only
+    # the commit is kept: the recorded URL can be a local path.
+    try:
+        direct_url = json.loads(distribution.read_text("direct_url.json") or "{}")
+    except ValueError:
+        direct_url = {}
+    vcs_info = direct_url.get("vcs_info") or {}
+    if vcs_info.get("commit_id"):
+        vcs = vcs_info.get("vcs", "vcs")
+        return f"{distribution.version} ({vcs} {vcs_info['commit_id']})"
+    return distribution.version
 
 def device_kind(device):
     kinds = [

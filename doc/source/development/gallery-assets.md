@@ -112,7 +112,7 @@ target leaves the records of the others in place. An entry holds
 | `working_directory` | where the example ran |
 | `environment` | the variables the renderer set for the example; `null` means it removed the variable |
 | `outputs` | the copied figures, relative to the manifest |
-| `versions` | as imported by the examples' interpreter: `volumential`, `pyopencl`, `numpy`, `matplotlib` and Python, and the distributions that decide the computed digits, `boxtree`, `sumpy`, `loopy`, `pymbolic`, `modepy`, `pytential` and `pyfmmlib` (`null` when not installed) |
+| `versions` | as imported by the examples' interpreter: `volumential`, `pyopencl`, `numpy`, `matplotlib` and Python, and the distributions that decide the computed digits, `boxtree`, `sumpy`, `loopy`, `pymbolic`, `modepy`, `pytential` and `pyfmmlib` (`null` when not installed); a distribution installed from a Git repository also records the commit it was built from, as in `2024.10 (git <commit>)`, since the version string of such a build does not identify it |
 
 The manifest, not `uv.lock`, describes the environment a figure was rendered
 in; the two need not agree.
