@@ -9,6 +9,7 @@
         "--output-dir",
         "build/gallery-work/full/branched-flow"
       ],
+      "device_type": "CPU",
       "dirty": false,
       "environment": {
         "MPLBACKEND": "Agg",
@@ -30,34 +31,29 @@
         "portable:0",
         "--full"
       ],
-      "revision": "96e80e63679975ff63206e12476deab51f1a2d99",
+      "revision": "e1ed1ce57901f7fceff262531a65899cd325c61e",
       "versions": {
+        "boxtree": "2024.10",
+        "loopy": "2025.2",
         "matplotlib": "3.11.2",
+        "modepy": "2026.1",
         "numpy": "2.5.1",
+        "pyfmmlib": "2024.1.1",
+        "pymbolic": "2025.1",
         "pyopencl": "2026.1.2",
+        "pytential": "2024.0",
         "python": "3.14.7",
+        "sumpy": "2024.0",
         "volumential": "2017.1a0"
-      }
-    },
-    "concepts": {
-      "dirty": false,
-      "outputs": [
-        "near-far-anatomy.svg",
-        "volume-fmm-workflow.svg"
-      ],
-      "regenerate": [
-        "python",
-        "doc/tools/render_gallery.py",
-        "concepts"
-      ],
-      "revision": "316cc79fbb2e49cd577722903ac17ff39cfd74da",
-      "sources": "doc/gallery-src"
+      },
+      "working_directory": "build/gallery-work/full/branched-flow"
     },
     "laplace2d": {
       "command": [
         "python",
         "examples/laplace2d.py"
       ],
+      "device_type": "CPU",
       "dirty": false,
       "environment": {
         "MPLBACKEND": "Agg",
@@ -81,20 +77,29 @@
         "portable:0",
         "--full"
       ],
-      "revision": "96e80e63679975ff63206e12476deab51f1a2d99",
+      "revision": "e1ed1ce57901f7fceff262531a65899cd325c61e",
       "versions": {
+        "boxtree": "2024.10",
+        "loopy": "2025.2",
         "matplotlib": "3.11.2",
+        "modepy": "2026.1",
         "numpy": "2.5.1",
+        "pyfmmlib": "2024.1.1",
+        "pymbolic": "2025.1",
         "pyopencl": "2026.1.2",
+        "pytential": "2024.0",
         "python": "3.14.7",
+        "sumpy": "2024.0",
         "volumential": "2017.1a0"
-      }
+      },
+      "working_directory": "build/gallery-work/full/laplace2d"
     },
     "poisson3d": {
       "command": [
         "python",
         "examples/poisson3d.py"
       ],
+      "device_type": "CPU",
       "dirty": false,
       "environment": {
         "MPLBACKEND": "Agg",
@@ -117,14 +122,22 @@
         "portable:0",
         "--full"
       ],
-      "revision": "96e80e63679975ff63206e12476deab51f1a2d99",
+      "revision": "e1ed1ce57901f7fceff262531a65899cd325c61e",
       "versions": {
+        "boxtree": "2024.10",
+        "loopy": "2025.2",
         "matplotlib": "3.11.2",
+        "modepy": "2026.1",
         "numpy": "2.5.1",
+        "pyfmmlib": "2024.1.1",
+        "pymbolic": "2025.1",
         "pyopencl": "2026.1.2",
+        "pytential": "2024.0",
         "python": "3.14.7",
+        "sumpy": "2024.0",
         "volumential": "2017.1a0"
-      }
+      },
+      "working_directory": "build/gallery-work/full/poisson3d"
     }
   }
 }
