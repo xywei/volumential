@@ -5,15 +5,7 @@ A volume potential
 $$
 u(\boldsymbol{x}) = \int_{\Omega} G(\boldsymbol{x}, \boldsymbol{y})\,
 f(\boldsymbol{y})\,\mathrm{d}\boldsymbol{y}
-$
-
-```{figure} ../_static/gallery/volume-fmm-workflow.svg
-:alt: The source density is sampled on volume quadrature nodes, organized into a tree, split into near-field table and far-field FMM paths, and accumulated into the output potential.
-:width: 100%
-
-The complete computation in one picture. The rest of this page names the
-objects and modules behind each box.
-```
+$$
 
 is not a particle sum. Where the target lies **inside** the source box the
 integrand is genuinely singular and the tensor-product point quadrature used
@@ -35,6 +27,14 @@ The code calls this `fpnd`: **f**ar field by **p**article approximation,
 **n**ear field **d**irect. Every wrangler in
 {mod}`volumential.wranglers` implements it; the two backends differ only in who
 produces the far field.
+
+```{figure} ../_static/gallery/volume-fmm-workflow.svg
+:alt: Schematic flow chart. The source density at the box quadrature nodes goes into a tree with its traversal, then splits into a near-field path, a precomputed table lookup, and a far-field path, ordinary FMM expansions; the two paths add up to the potential.
+:width: 100%
+
+Schematic, not computed output: the whole computation in one picture. The
+stages below name the objects and modules behind each box.
+```
 
 ## Stages
 
