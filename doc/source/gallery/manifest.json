@@ -1,0 +1,143 @@
+{
+  "format": 1,
+  "generator": "doc/tools/render_gallery.py",
+  "targets": {
+    "branched-flow": {
+      "command": [
+        "python",
+        "examples/branched_flow_helmholtz2d.py",
+        "--output-dir",
+        "build/gallery-work/full/branched-flow"
+      ],
+      "device_type": "CPU",
+      "dirty": false,
+      "environment": {
+        "MPLBACKEND": "Agg",
+        "PYOPENCL_CTX": "portable:0",
+        "PYOPENCL_TEST": null,
+        "PYTHONHASHSEED": "0",
+        "VOLUMENTIAL_EXAMPLE_SMOKE": null
+      },
+      "mode": "full",
+      "outputs": [
+        "branched-flow/branched_flow.png"
+      ],
+      "pyopencl_ctx": "portable:0",
+      "regenerate": [
+        "python",
+        "doc/tools/render_gallery.py",
+        "branched-flow",
+        "--pyopencl-ctx",
+        "portable:0",
+        "--full"
+      ],
+      "revision": "e1ed1ce57901f7fceff262531a65899cd325c61e",
+      "versions": {
+        "boxtree": "2024.10",
+        "loopy": "2025.2",
+        "matplotlib": "3.11.2",
+        "modepy": "2026.1",
+        "numpy": "2.5.1",
+        "pyfmmlib": "2024.1.1",
+        "pymbolic": "2025.1",
+        "pyopencl": "2026.1.2",
+        "pytential": "2024.0",
+        "python": "3.14.7",
+        "sumpy": "2024.0",
+        "volumential": "2017.1a0"
+      },
+      "working_directory": "build/gallery-work/full/branched-flow"
+    },
+    "laplace2d": {
+      "command": [
+        "python",
+        "examples/laplace2d.py"
+      ],
+      "device_type": "CPU",
+      "dirty": false,
+      "environment": {
+        "MPLBACKEND": "Agg",
+        "PYOPENCL_CTX": "portable:0",
+        "PYOPENCL_TEST": null,
+        "PYTHONHASHSEED": "0",
+        "VOLUMENTIAL_EXAMPLE_SMOKE": null,
+        "VOLUMENTIAL_GALLERY_OUTPUT_DIR": "build/gallery-work/full/laplace2d"
+      },
+      "mode": "full",
+      "outputs": [
+        "laplace2d/laplace2d_overview.svg",
+        "laplace2d/laplace2d_tree.svg"
+      ],
+      "pyopencl_ctx": "portable:0",
+      "regenerate": [
+        "python",
+        "doc/tools/render_gallery.py",
+        "laplace2d",
+        "--pyopencl-ctx",
+        "portable:0",
+        "--full"
+      ],
+      "revision": "e1ed1ce57901f7fceff262531a65899cd325c61e",
+      "versions": {
+        "boxtree": "2024.10",
+        "loopy": "2025.2",
+        "matplotlib": "3.11.2",
+        "modepy": "2026.1",
+        "numpy": "2.5.1",
+        "pyfmmlib": "2024.1.1",
+        "pymbolic": "2025.1",
+        "pyopencl": "2026.1.2",
+        "pytential": "2024.0",
+        "python": "3.14.7",
+        "sumpy": "2024.0",
+        "volumential": "2017.1a0"
+      },
+      "working_directory": "build/gallery-work/full/laplace2d"
+    },
+    "poisson3d": {
+      "command": [
+        "python",
+        "examples/poisson3d.py"
+      ],
+      "device_type": "CPU",
+      "dirty": false,
+      "environment": {
+        "MPLBACKEND": "Agg",
+        "PYOPENCL_CTX": "portable:0",
+        "PYOPENCL_TEST": null,
+        "PYTHONHASHSEED": "0",
+        "VOLUMENTIAL_EXAMPLE_SMOKE": null,
+        "VOLUMENTIAL_POISSON3D_OUTPUT_DIR": "build/gallery-work/full/poisson3d"
+      },
+      "mode": "full",
+      "outputs": [
+        "poisson3d/poisson3d_slices.png"
+      ],
+      "pyopencl_ctx": "portable:0",
+      "regenerate": [
+        "python",
+        "doc/tools/render_gallery.py",
+        "poisson3d",
+        "--pyopencl-ctx",
+        "portable:0",
+        "--full"
+      ],
+      "revision": "e1ed1ce57901f7fceff262531a65899cd325c61e",
+      "versions": {
+        "boxtree": "2024.10",
+        "loopy": "2025.2",
+        "matplotlib": "3.11.2",
+        "modepy": "2026.1",
+        "numpy": "2.5.1",
+        "pyfmmlib": "2024.1.1",
+        "pymbolic": "2025.1",
+        "pyopencl": "2026.1.2",
+        "pytential": "2024.0",
+        "python": "3.14.7",
+        "sumpy": "2024.0",
+        "volumential": "2017.1a0"
+      },
+      "working_directory": "build/gallery-work/full/poisson3d"
+    }
+  }
+}

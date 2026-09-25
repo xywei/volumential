@@ -1,48 +1,41 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 560" role="img" aria-labelledby="title desc">
-  <title id="title">Near-field and far-field split in Volumential</title>
-  <desc id="desc">A target box and its neighboring boxes are evaluated from a near-field interaction table, while more distant boxes are handled by the fast multipole method.</desc>
-  <rect width="960" height="560" rx="24" fill="#ffffff"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 630" role="img" aria-labelledby="title desc">
+  <title id="title">Near-field and far-field split in Volumential (schematic)</title>
+  <desc id="desc">Schematic. A five by five block of boxes. The target box in the middle and its eight neighbors are evaluated from a near-field interaction table, including the target box's own, singular interaction; the outer ring of well-separated boxes is handled by the fast multipole method.</desc>
+  <rect width="960" height="630" rx="24" fill="#ffffff"/>
   <text x="48" y="58" font-family="system-ui, sans-serif" font-size="30" font-weight="700" fill="#172033">One target, two numerical paths</text>
-  <text x="48" y="90" font-family="system-ui, sans-serif" font-size="17" fill="#556070">The singular neighborhood is tabulated; everything farther away stays in the ordinary FMM.</text>
-  <g transform="translate(68 130)" stroke="#c7ced8" stroke-width="2">
-    <rect x="0" y="0" width="420" height="420" rx="14" fill="#f7f8fa" stroke="none"/>
-    <g fill="#edf1f5">
-      <rect x="0" y="0" width="84" height="84"/><rect x="84" y="0" width="84" height="84"/><rect x="168" y="0" width="84" height="84"/><rect x="252" y="0" width="84" height="84"/><rect x="336" y="0" width="84" height="84"/>
-      <rect x="0" y="84" width="84" height="84"/><rect x="336" y="84" width="84" height="84"/>
-      <rect x="0" y="168" width="84" height="84"/><rect x="336" y="168" width="84" height="84"/>
-      <rect x="0" y="252" width="84" height="84"/><rect x="336" y="252" width="84" height="84"/>
-      <rect x="0" y="336" width="84" height="84"/><rect x="84" y="336" width="84" height="84"/><rect x="168" y="336" width="84" height="84"/><rect x="252" y="336" width="84" height="84"/><rect x="336" y="336" width="84" height="84"/>
-    </g>
-    <g fill="#fff1cc">
-      <rect x="84" y="84" width="84" height="84"/><rect x="168" y="84" width="84" height="84"/><rect x="252" y="84" width="84" height="84"/>
-      <rect x="84" y="168" width="84" height="84"/><rect x="252" y="168" width="84" height="84"/>
-      <rect x="84" y="252" width="84" height="84"/><rect x="168" y="252" width="84" height="84"/><rect x="252" y="252" width="84" height="84"/>
-    </g>
-    <rect x="168" y="168" width="84" height="84" rx="8" fill="#5a67d8" stroke="#3944aa" stroke-width="3"/>
-    <g fill="none">
-      <path d="M84 0v420M168 0v420M252 0v420M336 0v420M0 84h420M0 168h420M0 252h420M0 336h420"/>
-    </g>
-    <text x="210" y="205" text-anchor="middle" font-family="system-ui, sans-serif" font-size="16" font-weight="700" fill="#ffffff">target</text>
-    <text x="210" y="227" text-anchor="middle" font-family="system-ui, sans-serif" font-size="13" fill="#eef0ff">box</text>
+  <text x="48" y="92" font-family="system-ui, sans-serif" font-size="18" fill="#556070">Schematic: nearby boxes are tabulated, farther boxes stay in the FMM.</text>
+  <g transform="translate(60 125)">
+    <rect x="0" y="0" width="380" height="380" fill="#edf1f5"/>
+    <rect x="76" y="76" width="228" height="228" fill="#fff1cc"/>
+    <rect x="152" y="152" width="76" height="76" fill="#5a67d8"/>
+    <path d="M76 0v380M152 0v380M228 0v380M304 0v380M0 76h380M0 152h380M0 228h380M0 304h380" fill="none" stroke="#c7ced8" stroke-width="2"/>
+    <rect x="1" y="1" width="378" height="378" fill="none" stroke="#c7ced8" stroke-width="2"/>
+    <rect x="155" y="155" width="70" height="70" fill="none" stroke="#e3b547" stroke-width="5"/>
+    <text x="190" y="187" text-anchor="middle" font-family="system-ui, sans-serif" font-size="18" font-weight="700" fill="#ffffff">target</text>
+    <text x="190" y="208" text-anchor="middle" font-family="system-ui, sans-serif" font-size="15" fill="#eef0ff">box</text>
   </g>
   <g font-family="system-ui, sans-serif">
-    <path d="M470 235 C555 220 575 184 630 170" fill="none" stroke="#d89b18" stroke-width="4"/>
-    <polygon points="630,170 614,162 617,181" fill="#d89b18"/>
-    <text x="650" y="155" font-size="22" font-weight="700" fill="#9a6b08">Near field</text>
-    <text x="650" y="184" font-size="16" fill="#556070">same / neighboring leaf boxes</text>
-    <rect x="650" y="204" width="246" height="74" rx="14" fill="#fff7df" stroke="#e3b547" stroke-width="2"/>
-    <text x="773" y="235" text-anchor="middle" font-size="17" font-weight="700" fill="#6c4a05">interaction table</text>
-    <text x="773" y="258" text-anchor="middle" font-size="14" fill="#6c4a05">singular-aware quadrature, reused</text>
-    <path d="M470 388 C555 405 575 427 630 438" fill="none" stroke="#778391" stroke-width="4"/>
-    <polygon points="630,438 615,428 613,447" fill="#778391"/>
-    <text x="650" y="388" font-size="22" font-weight="700" fill="#3b4652">Far field</text>
-    <text x="650" y="417" font-size="16" fill="#556070">well-separated boxes</text>
-    <rect x="650" y="454" width="246" height="62" rx="14" fill="#f1f4f7" stroke="#b5bec8" stroke-width="2"/>
-    <text x="773" y="492" text-anchor="middle" font-size="17" font-weight="700" fill="#35404b">multipole / local expansions</text>
+    <path d="M448 280 C488 280 500 262 526 262" fill="none" stroke="#d89b18" stroke-width="4"/>
+    <polygon points="540,262 524,253 524,271" fill="#d89b18"/>
+    <text x="550" y="162" font-size="24" font-weight="700" fill="#9a6b08">Near field</text>
+    <text x="550" y="192" font-size="18" fill="#556070">target box and neighbors</text>
+    <rect x="550" y="208" width="370" height="112" rx="14" fill="#fff7df" stroke="#e3b547" stroke-width="2"/>
+    <text x="735" y="242" text-anchor="middle" font-size="20" font-weight="700" fill="#6c4a05">interaction table</text>
+    <text x="735" y="270" text-anchor="middle" font-size="18" fill="#6c4a05">singular-aware quadrature,</text>
+    <text x="735" y="296" text-anchor="middle" font-size="18" fill="#6c4a05">reused for every density</text>
+    <path d="M448 468 C488 468 500 480 526 480" fill="none" stroke="#778391" stroke-width="4"/>
+    <polygon points="540,480 524,471 524,489" fill="#778391"/>
+    <text x="550" y="398" font-size="24" font-weight="700" fill="#3b4652">Far field</text>
+    <text x="550" y="428" font-size="18" fill="#556070">well-separated boxes</text>
+    <rect x="550" y="444" width="370" height="72" rx="14" fill="#f1f4f7" stroke="#b5bec8" stroke-width="2"/>
+    <text x="735" y="487" text-anchor="middle" font-size="20" font-weight="700" fill="#35404b">multipole / local expansions</text>
   </g>
-  <g font-family="system-ui, sans-serif" font-size="14">
-    <rect x="68" y="520" width="18" height="18" rx="3" fill="#5a67d8"/><text x="94" y="534" fill="#556070">target</text>
-    <rect x="158" y="520" width="18" height="18" rx="3" fill="#fff1cc" stroke="#e3b547"/><text x="184" y="534" fill="#556070">table lookup</text>
-    <rect x="286" y="520" width="18" height="18" rx="3" fill="#edf1f5" stroke="#c7ced8"/><text x="312" y="534" fill="#556070">FMM</text>
+  <g font-family="system-ui, sans-serif" font-size="18" fill="#556070">
+    <rect x="60" y="545" width="22" height="22" rx="3" fill="#5a67d8" stroke="#e3b547" stroke-width="3"/>
+    <text x="94" y="562">target box; its own interaction is tabulated too</text>
+    <rect x="60" y="584" width="22" height="22" rx="3" fill="#fff1cc" stroke="#e3b547"/>
+    <text x="94" y="601">table lookup</text>
+    <rect x="260" y="584" width="22" height="22" rx="3" fill="#edf1f5" stroke="#c7ced8"/>
+    <text x="294" y="601">FMM (multipole and local expansions)</text>
   </g>
 </svg>

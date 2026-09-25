@@ -1,9 +1,8 @@
 ---
-# Two consumers, two keys.  ``sphinxext.opengraph`` derives ``og:description``
-# by walking the doctree, which on this page starts with display math and comes
-# out as raw LaTeX; a top-level ``og:description`` overrides it.  The
-# ``html_meta`` one below is the ordinary ``<meta name="description">`` a search
-# engine shows, and setting it also stops the extension from adding its own.
+# Two consumers, two keys. Keep the landing-page summary explicit rather than
+# deriving it from whichever visual/prose block happens to lead the doctree.
+# ``html_meta`` is the ordinary search-engine description; the top-level key
+# supplies the OpenGraph description used by link unfurls.
 "og:description": >-
   Volumential evaluates volume potentials over box-shaped domains with the
   Fast Multipole Method, for the Laplace, Helmholtz and Yukawa kernels in
@@ -18,18 +17,57 @@ myst:
 
 # Volumential
 
-**Volumential** (VOLUME poteNTIAL) evaluates volume potentials
+Volumential evaluates volume potentials, integrals of a kernel against a
+source density over a box, with the Fast Multipole Method. This is what the
+first example computes.
+
+```{figure} gallery/laplace2d/laplace2d_overview.svg
+:alt: Four panels over the square: the source, the computed potential, the Gaussian reference, which looks identical, and the pointwise error on a logarithmic scale, at most about 8e-11.
+:width: 100%
+
+Computed by `examples/laplace2d.py` at full settings (quadrature order 9,
+6 mesh levels, multipole order 20, 82944 quadrature nodes): the source
+$f = -\Delta u$, the computed potential $u_h$, the whole-space reference
+$u = e^{-160 \lVert \boldsymbol{x} \rVert^2}$, and $|u_h - u|$, whose maximum
+over the nodes the example printed as `Error = 8.410442587858608e-11`.
+Regenerate with
+`python doc/tools/render_gallery.py laplace2d --pyopencl-ctx portable:0 --full`.
+```
+
+::::{grid} 1 1 2 2
+:gutter: 3
+
+:::{grid-item-card} {octicon}`rocket` Run the first example
+:link: getting-started/first-volume-potential
+:link-type: doc
+
+Reproduce the figure above, then read the program behind it in six short
+steps: source, quadrature nodes, tree, near-field table, FMM, error.
+:::
+
+:::{grid-item-card} {octicon}`image` Browse the gallery
+:link: examples/gallery
+:link-type: doc
+
+Computed figures from the maintained examples, in two and three dimensions,
+each with the settings and the command that produced it.
+:::
+
+::::
+
+The name is short for VOLUME poteNTIAL. For a kernel $G$ and a source density
+$f$ on a box-shaped domain $\Omega$, Volumential evaluates
 
 $$
 u(\boldsymbol{x}) = \int_{\Omega} G(\boldsymbol{x}, \boldsymbol{y})\,
-f(\boldsymbol{y}) \, \mathrm{d}\boldsymbol{y}
+f(\boldsymbol{y}) \, \mathrm{d}\boldsymbol{y}.
 $$
 
-over box-shaped domains with the Fast Multipole Method. The far field is an
-ordinary particle FMM over the volume quadrature nodes; the near field is read
-from precomputed, symmetry-reduced interaction tables. That split — *far field
-by particle approximation, near field direct* — is what the code calls the
-`fpnd` strategy, and it is the thing most of this documentation is about.
+The far field is an ordinary particle FMM over the volume quadrature nodes;
+the near field is read from precomputed, symmetry-reduced interaction tables.
+That split — *far field by particle approximation, near field direct* — is
+what the code calls the `fpnd` strategy, and it is the thing most of this
+documentation is about.
 
 Supported kernels are Laplace, Helmholtz and Yukawa (modified Helmholtz) in
 two and three dimensions, with potential and target-gradient outputs, on
@@ -50,8 +88,8 @@ device you meant to use.
 :link: examples/index
 :link-type: doc
 
-The six programs under `examples/`, what each one costs to run and which
-device it lands on, plus the notebooks rendered as pages.
+Run commands, smoke modes, cost classes, caches and device behavior for
+every maintained program and notebook; the gallery above is the visual map.
 :::
 
 :::{grid-item-card} {octicon}`book` User guide
@@ -102,7 +140,8 @@ release and versioning.
 
 - Never run Volumential before: {doc}`getting-started/installation`, then
   {doc}`getting-started/first-volume-potential`.
-- Looking for a program close to your problem: {doc}`examples/index`.
+- Looking for a program close to your problem: {doc}`examples/gallery`, then
+  {doc}`examples/index` for run/cost/cache details.
 - Want to understand the machinery: {doc}`user-guide/volume-fmm-workflow`.
 - Chasing a slow or wrong table: {doc}`user-guide/table-build-routing` and
   {doc}`user-guide/nearfield_symmetry`.
