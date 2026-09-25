@@ -1,0 +1,23 @@
+/* Figures from doc/source/_static/gallery/.
+ *
+ * Every committed figure carries its own white ground: Matplotlib's figure
+ * face for the computed ones, a white card for the schematics.  In light mode
+ * that ground is the page; in dark mode the theme paints white behind images
+ * and dims them slightly, so both read as light cards.  The rules below only
+ * frame the gallery thumbnails and crop them to one shape.
+ */
+
+/* A square crop of a committed figure.  The image still links to the full
+ * file (Sphinx's html_scaled_image_link), so the crop is only a preview. */
+img.gallery-thumb {
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+  background-color: #fff;
+  border: 1px solid var(--pst-color-border);
+  border-radius: 0.25rem;
+}
+
+/* The same frame without cropping, for a wide schematic. */
+img.gallery-thumb.gallery-thumb-whole {
+  object-fit: contain;
+}
