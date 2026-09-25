@@ -7,10 +7,10 @@ files already present under doc/source/_static/gallery.
 The numerical targets run OpenCL examples. They need an explicit PyOpenCL
 context selector (--pyopencl-ctx or PYOPENCL_CTX); the tool does not let
 PyOpenCL pick a device on its own. Each example writes into a scratch directory
-(build/gallery-work by default), and only the curated figures are copied into
-<output-dir>/<target>/. Outputs from a previous run are deleted first, a missing
-figure is an error, and manifest.json beside the assets records how every target
-was produced.
+(build/gallery-work/<mode>/<target>/ by default), and only the curated figures
+are copied into <output-dir>/<target>/. Outputs from a previous run are deleted
+first, a missing figure is an error, and manifest.json beside the assets records
+how every target was produced.
 """
 
 from __future__ import annotations
@@ -57,7 +57,10 @@ _EXAMPLES = {
     ),
     "poisson3d": _Example(
         script="examples/poisson3d.py",
-        figures=("poisson3d_slices.png", "poisson3d_error_point_cloud.png"),
+        # The example also writes poisson3d_error_point_cloud.png. At full
+        # settings it is a large, low-contrast cloud of dots that adds little
+        # to the slices, so it stays in the work directory.
+        figures=("poisson3d_slices.png",),
         output_env="VOLUMENTIAL_POISSON3D_OUTPUT_DIR",
     ),
     "branched-flow": _Example(
@@ -223,7 +226,10 @@ def _render_example(name, *, output_dir, work_dir, previous, context):
     example = _EXAMPLES[name]
     paths = context["paths"]
     smoke = context["mode"] == "smoke"
-    example_work = work_dir / name
+    # One scratch directory per mode: branched_flow_helmholtz2d.py keeps its
+    # table cache in its output directory, and a smoke table cannot serve a
+    # full run (the root box differs).
+    example_work = work_dir / context["mode"] / name
     gallery_dir = output_dir / name
 
     _delete_previous(output_dir, previous.get("outputs", ()))
@@ -308,8 +314,8 @@ def main():
         "--work-dir",
         type=Path,
         default=_DEFAULT_WORK,
-        help="scratch directory for the examples' full output "
-        "(default: build/gallery-work)",
+        help="scratch directory for the examples' full output, one "
+        "subdirectory per mode (default: build/gallery-work)",
     )
     parser.add_argument(
         "--full",
