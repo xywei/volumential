@@ -28,7 +28,9 @@ Both trees use the same quadrature order, near-field table and multipole
 order. For each tree the example prints the number of leaves and nodes, the
 maximum of ``|u_h - u|`` over the tree's quadrature nodes, and the relative
 L2 error ``sqrt(sum w (u_h - u)^2 / sum w u^2)`` with the tree's quadrature
-weights ``w``.
+weights ``w``. It then prints the same for uniform trees with two and four
+times as many leaves per side, which shows how many uniform nodes it takes to
+reach the adaptive tree's accuracy.
 
 Set ``VOLUMENTIAL_EXAMPLE_SMOKE=1`` for a small configuration, and
 ``VOLUMENTIAL_GALLERY_OUTPUT_DIR`` to write the documentation gallery figure
@@ -231,6 +233,16 @@ def _leaf_sides(run):
     return f"1/{coarsest}" if coarsest == finest else f"1/{coarsest} to 1/{finest}"
 
 
+def _report(label, run):
+    """Print the tree size and the errors of *run*."""
+    print(
+        f"{label}: {run['n_leaves']} leaves with sides {_leaf_sides(run)}, "
+        f"{run['n_boxes']} boxes, {run['nodes'].shape[1]} nodes"
+    )
+    print(f"  max |u_h - u| over the nodes = {run['max_error']:.3e}")
+    print(f"  relative L2 error            = {run['rel_l2_error']:.3e}")
+
+
 def _write_gallery_figure(output_dir, results, settings):
     """Write the gallery figure from the two computed runs.
 
@@ -424,23 +436,26 @@ def main():
         queue, q_order, uniform_mesh.n_active_cells(), source_eval
     )
 
+    solve_on = partial(
+        solve, ctx, queue,
+        q_order=q_order, m_order=m_order, nftable=nftable,
+        tree_indep=tree_indep, source_eval=source_eval,
+        solution_eval=solution_eval,
+    )
+
     results = {}
     for label, mesh in (("uniform", uniform_mesh), ("adaptive", adaptive_mesh)):
-        run = solve(
-            ctx, queue, mesh,
-            q_order=q_order, m_order=m_order, nftable=nftable,
-            tree_indep=tree_indep, source_eval=source_eval,
-            solution_eval=solution_eval,
-        )
-        results[label] = run
-        print(
-            f"{label} tree: {run['n_leaves']} leaves with sides "
-            f"{_leaf_sides(run)}, {run['n_boxes']} boxes, "
-            f"{run['nodes'].shape[1]} nodes"
-        )
-        print(f"  max |u_h - u| over the nodes = {run['max_error']:.3e}")
-        print(f"  relative L2 error            = {run['rel_l2_error']:.3e}")
+        results[label] = solve_on(mesh)
+        _report(f"{label} tree", results[label])
     print(f"adaptive refinement passes: {npasses}")
+
+    # How far the uniform tree has to be refined to reach the adaptive tree's
+    # accuracy: the same solve with two and four times as many leaves per side.
+    for extra_levels in (1, 2):
+        finer_mesh = mg.MeshGen2D(
+            q_order, n_levels + extra_levels, LOWER, UPPER, queue=queue
+        )
+        _report("finer uniform tree", solve_on(finer_mesh))
 
     gallery_output_dir = os.environ.get("VOLUMENTIAL_GALLERY_OUTPUT_DIR")
     if gallery_output_dir:

@@ -110,7 +110,10 @@ For each tree the example prints the number of leaves and nodes, the
 **maximum absolute** error over that tree's quadrature nodes, and the relative
 $L^2$ error $\bigl(\sum_i w_i (u_h - u)_i^2 / \sum_i w_i u_i^2\bigr)^{1/2}$
 with the tree's quadrature weights $w_i$, against the whole-space solution
-(outside the box both Gaussians are below $e^{-40}$).
+(outside the box both Gaussians are below $e^{-40}$). It then prints the same
+for uniform trees with two and four times as many leaves per side,
+$32 \times 32$ and $64 \times 64$ at full settings, which shows how far the
+uniform tree has to be refined to reach the adaptive tree's accuracy.
 {doc}`gallery` shows the two trees and their errors from a full-settings run.
 `VOLUMENTIAL_GALLERY_OUTPUT_DIR` writes that figure, as it does for
 `laplace2d.py`.
