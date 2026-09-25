@@ -35,12 +35,13 @@ again. Which build path runs, and how long it takes, is the subject of
 | [`poisson3d.py`][poisson3d] | `VOLUMENTIAL_EXAMPLE_SMOKE=1` | `nft_poisson3d[_smoke].sqlite` | `PYOPENCL_CTX` |
 | [`helmholtz2d.py`][helmholtz2d] | `VOLUMENTIAL_EXAMPLE_SMOKE=1` | `nft_laplace2d_for_helmholtz[_smoke].sqlite` | picks its own |
 | [`helmholtz3d.py`][helmholtz3d] | `VOLUMENTIAL_EXAMPLE_SMOKE=1` | `nft_laplace3d_for_helmholtz[_smoke].sqlite` | picks its own |
-| [`branched_flow_helmholtz2d.py`][branched] | `--smoke` | under `--output-dir` | picks its own |
+| [`branched_flow_helmholtz2d.py`][branched] | `--smoke` | under `--output-dir` | `PYOPENCL_CTX` if set, else picks its own |
 
 "Picks its own" means the script builds an OpenCL context directly and
 **ignores `PYOPENCL_CTX`**, preferring the first fp64-capable GPU it finds and
 falling back to a CPU device. On a host with a GPU that silently changes the
-cost class of a run. {doc}`../getting-started/device-selection` lists which
+cost class of a run. `branched_flow_helmholtz2d.py` falls back to that choice
+only when `PYOPENCL_CTX` is unset. {doc}`../getting-started/device-selection` lists which
 script does what, and how to pin the device you meant.
 
 Only `laplace2d.py`, `helmholtz2d.py` and `helmholtz3d.py` run on pull
@@ -134,6 +135,8 @@ Helmholtz notebook below imports, so the two stay in step.
 ```bash
 VOLUMENTIAL_EXAMPLE_SMOKE=1 uv run python examples/helmholtz3d.py
 ```
+
+(branched-flow-example)=
 
 ### `branched_flow_helmholtz2d.py`
 

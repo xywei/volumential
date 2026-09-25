@@ -21,6 +21,9 @@ Use ``--smoke`` for a small local validation.  The default configuration is a
 large publication-pilot workload and should be run on approved remote
 compute resources.  It uses the optional ``pyfmmlib`` backend; install the
 ``fmmlib`` project extra before running it.
+
+``PYOPENCL_CTX`` selects the OpenCL device when it is set.  Without it the
+script picks the first fp64-capable GPU, else an fp64-capable CPU.
 """
 
 from __future__ import annotations
@@ -52,6 +55,7 @@ import csv
 import hashlib
 import json
 import logging
+import os
 from dataclasses import asdict, dataclass
 from functools import partial
 from pathlib import Path
@@ -137,6 +141,33 @@ def _select_opencl_device(cl_module):
                 return dev
 
     raise RuntimeError("No OpenCL GPU/CPU device with fp64 support found")
+
+
+def _create_opencl_context(cl_module):
+    """Honor ``PYOPENCL_CTX`` when it is set; otherwise pick a device.
+
+    Without the variable, :func:`_select_opencl_device` prefers the first
+    fp64-capable GPU and falls back to an fp64-capable CPU.
+    """
+    if not os.environ.get("PYOPENCL_CTX"):
+        return cl_module.Context([_select_opencl_device(cl_module)])
+
+    # Pass the selector as answers: with the environment alone,
+    # create_some_context would prefer PYOPENCL_TEST when it is also set.
+    context = cl_module.create_some_context(
+        interactive=False, answers=os.environ["PYOPENCL_CTX"].split(":")
+    )
+    lacking = [
+        device.name
+        for device in context.devices
+        if not _device_supports_fp64(device)
+    ]
+    if lacking:
+        raise RuntimeError(
+            "PYOPENCL_CTX selects a device without fp64 support: "
+            + ", ".join(lacking)
+        )
+    return context
 
 
 def _smooth_ramp(values):
@@ -845,8 +876,10 @@ def _write_plot(output_dir, arrays):
         grid[y_indices, x_indices] = field
         return grid
 
+    # Three square panels stacked vertically: a wider figure only leaves blank
+    # space, because each colorbar anchors its panel to the right.
     figure, axes = plt.subplots(
-        3, 1, figsize=(9.0, 15.0), sharex=True, sharey=True
+        3, 1, figsize=(6.2, 15.0), sharex=True, sharey=True
     )
     fields = [perturbation, intensity, field_real]
     titles = ["refractive-index perturbation", "normalized intensity", "Re(u)"]
@@ -878,7 +911,12 @@ def _write_plot(output_dir, arrays):
 
     axes[-1].set_xlabel("x")
     figure.tight_layout()
-    figure.savefig(output_dir / "branched_flow.png", dpi=220)
+    # Keep the Matplotlib version out of the file metadata (gallery assets).
+    # At 150 DPI a panel is about as many pixels wide as a full-settings field
+    # has samples across.
+    figure.savefig(
+        output_dir / "branched_flow.png", dpi=150, metadata={"Software": None}
+    )
     plt.close(figure)
 
 
@@ -907,8 +945,7 @@ def run(config, output_dir):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    device = _select_opencl_device(cl)
-    context = cl.Context([device])
+    context = _create_opencl_context(cl)
     queue = cl.CommandQueue(context)
 
     root_min = -config.root_half_extent

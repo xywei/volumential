@@ -81,11 +81,16 @@ def _build_manufactured_problem(dim):
     z = pmbl.var("z")
     expp = pmbl.var("exp")
 
-    # Keep the manufactured field effectively zero at the box boundary so
-    # refinement tracks discretization/FMM convergence instead of boundary
-    # truncation error.
-    alpha_1 = 120.0
-    alpha_2 = 90.0
+    # The reference is the whole-space solution, while the volume potential
+    # integrates f over the box only; the two differ by the potential of the
+    # source outside the box. Keep that negligible: each center is at least
+    # 0.41 from the nearest face, so alpha = 240 puts both Gaussians below
+    # exp(-40) on the boundary, and the error measures discretization and FMM
+    # rather than truncation. (With the earlier alpha_2 = 90 the negative
+    # Gaussian was about 2e-7 at the nearest faces, and the truncation set the
+    # printed node errors.)
+    alpha_1 = 240.0
+    alpha_2 = 240.0
     coeff_2 = -0.65
 
     dx1 = x + 0.08
@@ -239,7 +244,8 @@ def _write_slice_figure(plane_data, output_file):
         fig.colorbar(im_err, ax=axes[irow, 2], shrink=0.8)
 
     fig.suptitle("Poisson 3D slices: exact vs FMM", fontsize=14)
-    fig.savefig(output_file, dpi=220)
+    # Keep the Matplotlib version out of the file metadata (gallery assets).
+    fig.savefig(output_file, dpi=150, metadata={"Software": None})
     plt.close(fig)
     return True
 
@@ -285,7 +291,8 @@ def _write_point_cloud_figure(points, values, exact_values, output_file):
     ax.set_ylabel("y")
     ax.set_zlabel("z")
     fig.colorbar(sc, ax=ax, shrink=0.7)
-    fig.savefig(output_file, dpi=220)
+    # Keep the Matplotlib version out of the file metadata (gallery assets).
+    fig.savefig(output_file, dpi=150, metadata={"Software": None})
     plt.close(fig)
     return True
 

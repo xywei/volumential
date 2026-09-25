@@ -291,8 +291,24 @@ jobs:
           python -m pip install uv
           uv pip install --system --editable ".[test]"
 
-          python examples/laplace2d.py
+          # laplace2d.py runs through the gallery renderer, so the smoke job
+          # also exercises its figure output; matplotlib comes from the conda
+          # environment file.
+          python doc/tools/render_gallery.py laplace2d \
+            --output-dir build/gallery \
+            --pyopencl-ctx "$PYOPENCL_CTX"
           python examples/helmholtz2d.py
           python examples/helmholtz3d.py
+
+      - name: Upload Laplace gallery preview
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gallery-laplace2d-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build/gallery/
+          # A failure before the renderer wrote anything leaves nothing to
+          # upload; that is reported by the failing step, not a second error.
+          if-no-files-found: warn
+          retention-days: 14
 
 # vim: sw=2
