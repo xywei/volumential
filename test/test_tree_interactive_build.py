@@ -145,6 +145,34 @@ def test_box_tree_refine_and_quadrature(ctx_factory):
     assert cell_measures.size == tree.n_active_boxes
 
 
+def test_box_tree_refinement_stays_local(ctx_factory):
+    """Refining one leaf must not refine the rest of its level.
+
+    The balancer once also required every colleague of a non-leaf box to be
+    non-leaf. That rule propagates from colleague to colleague across the whole
+    level, so refining any leaf made the tree uniform one level deeper.
+    """
+    ctx = ctx_factory()
+    queue = cl.CommandQueue(ctx)
+
+    tree = BoxTree()
+    tree.generate_uniform_boxtree(
+        queue, root_vertex=np.array([-1.0, -1.0]), root_extent=2.0, nlevels=3
+    )
+    assert tree.n_active_boxes == 16
+
+    refine_flags = np.zeros(tree.nboxes, dtype=bool)
+    refine_flags[int(tree.active_boxes.get()[0])] = True
+    tree.refine_and_coarsen(
+        refine_flags, np.zeros_like(refine_flags), error_on_ignored_flags=False
+    )
+
+    # The refined leaf becomes four leaves one level deeper; its neighbours
+    # are one level coarser than those, which the 2:1 condition allows.
+    leaf_levels = tree.box_levels.get()[tree.active_boxes.get()]
+    assert np.bincount(leaf_levels, minlength=4).tolist() == [0, 0, 15, 4]
+
+
 def test_box_tree_coarsen_leaf_flags_reduce_uniform_tree(ctx_factory):
     ctx = ctx_factory()
     queue = cl.CommandQueue(ctx)
@@ -641,6 +669,10 @@ def test_enforce_level_restriction_balances_adjacent_leaf_levels():
         assert np.all(np.abs(neighbor_levels - level_i) <= 1)
 
     assert int(np.max(levels)) <= initial_max_level
+    # Balancing grades the tree away from the refined corner; it does not
+    # refine the whole domain to the corner's level.
+    assert np.unique(leaf_levels).size > 1
+    assert leaf_ids.size < 4**initial_max_level
 
 
 def test_enforce_level_restriction_nboxes_guard_is_fail_fast(monkeypatch):

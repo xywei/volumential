@@ -7508,8 +7508,7 @@ def test_meshgen_boxtree_gmsh_export_rejects_mixed_levels(ctx_factory, tmp_path)
             bottom_fraction_of_cells=0.0,
         )
 
-    if len(np.unique(mesh._leaf_levels())) == 1:
-        pytest.skip("could not create mixed-level mesh on this backend")
+    assert len(np.unique(mesh._leaf_levels())) > 1
 
     mesh_file = tmp_path / "box_grid_adaptive.msh"
     with pytest.raises(NotImplementedError, match="uniform-level box meshes"):
