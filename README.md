@@ -43,8 +43,9 @@ uv run python examples/laplace2d.py
 
 That evaluates a 2D Laplace volume potential against a manufactured Gaussian
 solution and prints the error. `VOLUMENTIAL_EXAMPLE_SMOKE=1` runs the same
-thing in seconds at reduced order. The
-[annotated twenty-line version][docs-first] explains what each stage does.
+thing in seconds at reduced order, as a setup check rather than an accuracy
+result. The [first tutorial][docs-first] shows the computed result and explains
+each stage of the program.
 
 ## Documentation
 

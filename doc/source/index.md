@@ -17,31 +17,58 @@ myst:
 
 # Volumential
 
-**See the problem before the machinery.** The first tutorial starts from a
-source density with a known exact potential, runs the volume FMM, and finishes
-by measuring the numerical error.
+Volumential evaluates volume potentials, integrals of a kernel against a
+source density over a box, with the Fast Multipole Method. This is what the
+first example computes.
 
-```{figure} _static/gallery/laplace2d-reference.svg
-:alt: The manufactured source density and exact Gaussian potential used by the first two-dimensional Laplace tutorial.
+```{figure} _static/gallery/laplace2d/laplace2d_overview.svg
+:alt: Four panels over the square from -0.5 to 0.5. Top left, the source density: a positive peak at the origin inside a faint negative ring. Top right, the computed volume potential: a Gaussian bump. Bottom left, the Gaussian reference, which looks identical. Bottom right, the pointwise error on a logarithmic scale, at most about 8e-11, arranged in nested squares that follow the FMM boxes.
 :width: 100%
 
-The maintained `laplace2d.py` example computes the potential on the right
-from the source on the left. {doc}`getting-started/first-volume-potential`
-walks through the run; {doc}`examples/gallery` shows where to go next.
+Computed by `examples/laplace2d.py` at full settings (quadrature order 9,
+6 mesh levels, multipole order 20, 82944 quadrature nodes). The source
+$f = -\Delta u$ is chosen so that $u = e^{-160 \lVert \boldsymbol{x} \rVert^2}$
+solves $-\Delta u = f$ in the whole plane; the example integrates $f$ over the
+box only, which leaves out source mass at rounding level. The example prints
+the largest difference between its computed potential $u_h$ and $u$ over the
+nodes; for this run, `Error = 8.410442587858608e-11`. Regenerate with
+`python doc/tools/render_gallery.py laplace2d --pyopencl-ctx portable:0 --full`.
 ```
 
-**Volumential** (VOLUME poteNTIAL) evaluates volume potentials
+::::{grid} 1 1 2 2
+:gutter: 3
+
+:::{grid-item-card} {octicon}`rocket` Run the first example
+:link: getting-started/first-volume-potential
+:link-type: doc
+
+Reproduce the figure above, then read the program behind it in six short
+steps: source, quadrature nodes, tree, near-field table, FMM, error.
+:::
+
+:::{grid-item-card} {octicon}`image` Browse the gallery
+:link: examples/gallery
+:link-type: doc
+
+Computed figures from the maintained examples, in two and three dimensions,
+each with the settings and the command that produced it.
+:::
+
+::::
+
+The name is short for VOLUME poteNTIAL. For a kernel $G$ and a source density
+$f$ on a box-shaped domain $\Omega$, Volumential evaluates
 
 $$
 u(\boldsymbol{x}) = \int_{\Omega} G(\boldsymbol{x}, \boldsymbol{y})\,
-f(\boldsymbol{y}) \, \mathrm{d}\boldsymbol{y}
+f(\boldsymbol{y}) \, \mathrm{d}\boldsymbol{y}.
 $$
 
-over box-shaped domains with the Fast Multipole Method. The far field is an
-ordinary particle FMM over the volume quadrature nodes; the near field is read
-from precomputed, symmetry-reduced interaction tables. That split — *far field
-by particle approximation, near field direct* — is what the code calls the
-`fpnd` strategy, and it is the thing most of this documentation is about.
+The far field is an ordinary particle FMM over the volume quadrature nodes;
+the near field is read from precomputed, symmetry-reduced interaction tables.
+That split — *far field by particle approximation, near field direct* — is
+what the code calls the `fpnd` strategy, and it is the thing most of this
+documentation is about.
 
 Supported kernels are Laplace, Helmholtz and Yukawa (modified Helmholtz) in
 two and three dimensions, with potential and target-gradient outputs, on
