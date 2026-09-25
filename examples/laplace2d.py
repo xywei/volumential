@@ -1,5 +1,14 @@
 """This example evaluates the volume potential over
 [-0.5, 0.5]^2 with the Laplace kernel.
+
+The source is ``f = -Laplacian(u)`` for the Gaussian ``u = exp(-alpha |x|^2)``,
+so ``u`` is the whole-space solution that the computed potential is compared
+against. The integral itself runs over the box only; outside the box the
+Gaussian factor is at most ``exp(-40)`` for ``alpha = 160``, so the source mass
+the box leaves out is at rounding level.
+
+Set ``VOLUMENTIAL_GALLERY_OUTPUT_DIR`` to write the documentation gallery figures
+(SVG, requires matplotlib) from the computed data after the solve.
 """
 
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
@@ -43,16 +52,41 @@ import pyopencl.array  # noqa: F401
 from volumential.tools import ScalarFieldExpressionEvaluation as Eval
 
 
-def _write_gallery_figures(output_dir, points, source, exact, approx, tree):
-    """Write deterministic figures from an already-computed Laplace run."""
+#: Fixed rendering settings for the gallery figures. Together with omitting the
+#: date and software metadata they make a rerun in the same environment
+#: reproduce the SVG files byte for byte.
+_GALLERY_DPI = 150
+_GALLERY_RC = {
+    "svg.hashsalt": "volumential-laplace2d",
+    "svg.fonttype": "path",
+}
+_GALLERY_SAVE_KWARGS = {
+    "dpi": _GALLERY_DPI,
+    "metadata": {"Date": None, "Creator": None},
+}
+
+
+def _write_gallery_figures(
+    output_dir, *, points, source, reference, approx, tree, settings
+):
+    """Write the gallery figures from an already-computed Laplace run.
+
+    The figures only display data the example has computed: the values at the
+    quadrature nodes, shaded by linear interpolation over a Delaunay
+    triangulation of the nodes, and the tree the FMM traversed.
+    """
     try:
         import matplotlib
 
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-    except ImportError:
-        logger.info("matplotlib is unavailable; skipping gallery figures")
-        return []
+        from matplotlib.colors import LogNorm
+        from matplotlib.tri import Triangulation
+    except ImportError as exc:
+        raise RuntimeError(
+            "VOLUMENTIAL_GALLERY_OUTPUT_DIR is set, but matplotlib cannot be "
+            "imported; install matplotlib to write the gallery figures"
+        ) from exc
 
     from boxtree.visualization import TreePlotter
 
@@ -60,52 +94,109 @@ def _write_gallery_figures(output_dir, points, source, exact, approx, tree):
     output_dir.mkdir(parents=True, exist_ok=True)
 
     x_coord, y_coord = points
-    abs_err = np.abs(exact - approx)
-    log_err = np.log10(abs_err + np.finfo(abs_err.dtype).tiny)
+    n_nodes = x_coord.size
+    triangulation = Triangulation(x_coord, y_coord)
+    abs_err = np.abs(approx - reference)
+    # Differences below double-precision rounding of u carry no information,
+    # and a log scale cannot show zero: draw them at eps * max|u|.
+    err_floor = np.finfo(abs_err.dtype).eps * np.abs(reference).max()
+    err_norm = LogNorm(vmin=err_floor, vmax=max(abs_err.max(), 10 * err_floor))
+    source_scale = np.abs(source).max()
+    potential_range = (
+        min(approx.min(), reference.min()),
+        max(approx.max(), reference.max()),
+    )
+    node_dot_area = float(np.clip(6000.0 / n_nodes, 0.1, 4.0))
 
-    figure, axes = plt.subplots(
-        2, 2, figsize=(10.0, 8.5), constrained_layout=True
-    )
     panels = (
-        (source, "Source density", "coolwarm"),
-        (approx, "Computed potential", "viridis"),
-        (exact, "Exact potential", "viridis"),
-        (log_err, r"$\\log_{10}|u-u_h|$", "magma"),
+        (
+            source,
+            r"Source $f = -\Delta u$",
+            r"$f$",
+            {"cmap": "RdBu_r", "vmin": -source_scale, "vmax": source_scale},
+        ),
+        (
+            approx,
+            r"Computed volume potential $u_h$",
+            r"$u_h$",
+            {"cmap": "viridis", "vmin": potential_range[0],
+             "vmax": potential_range[1]},
+        ),
+        (
+            reference,
+            r"Reference $u = e^{-\alpha |x|^2}$ (whole space)",
+            r"$u$",
+            {"cmap": "viridis", "vmin": potential_range[0],
+             "vmax": potential_range[1]},
+        ),
+        (
+            np.maximum(abs_err, err_floor),
+            r"Pointwise error $|u_h - u|$",
+            r"$|u_h - u|$ (log scale, floor $\epsilon \max|u|$)",
+            {"cmap": "magma", "norm": err_norm},
+        ),
     )
-    for axis, (values, title, color_map) in zip(axes.flat, panels):
-        artist = axis.scatter(
+
+    with plt.rc_context(_GALLERY_RC):
+        figure, axes = plt.subplots(
+            2, 2, figsize=(10.0, 9.0), constrained_layout=True
+        )
+        for axis, (values, title, label, color_kwargs) in zip(
+            axes.flat, panels, strict=True
+        ):
+            artist = axis.tripcolor(
+                triangulation,
+                values,
+                shading="gouraud",
+                rasterized=True,
+                **color_kwargs,
+            )
+            axis.set_title(title)
+            axis.set_xlabel("x")
+            axis.set_ylabel("y")
+            axis.set_xlim(*settings["domain"])
+            axis.set_ylim(*settings["domain"])
+            axis.set_aspect("equal", adjustable="box")
+            figure.colorbar(artist, ax=axis, shrink=0.82, label=label)
+
+        figure.suptitle(
+            "examples/laplace2d.py, {mode} settings: "
+            "q = {q_order}, {n_levels} mesh levels, multipole order {m_order}, "
+            "{n_nodes} nodes\n"
+            r"$\alpha$ = {alpha}; max $|u_h - u|$ = {max_err:.1e}".format(
+                n_nodes=n_nodes, max_err=abs_err.max(), **settings
+            )
+        )
+        overview_path = output_dir / "laplace2d_overview.svg"
+        figure.savefig(overview_path, **_GALLERY_SAVE_KWARGS)
+        plt.close(figure)
+
+        tree_figure, tree_axis = plt.subplots(
+            1, 1, figsize=(7.0, 7.4), constrained_layout=True
+        )
+        plt.sca(tree_axis)
+        plotter = TreePlotter(tree)
+        plotter.draw_tree(fill=False, edgecolor="black", linewidth=0.6)
+        plotter.set_bounding_box()
+        tree_axis.scatter(
             x_coord,
             y_coord,
-            c=values,
-            s=10,
-            cmap=color_map,
+            s=node_dot_area,
+            color="tab:blue",
             linewidths=0,
+            rasterized=True,
         )
-        axis.set_title(title)
-        axis.set_xlabel("x")
-        axis.set_ylabel("y")
-        axis.set_aspect("equal", adjustable="box")
-        figure.colorbar(artist, ax=axis, shrink=0.82)
-
-    figure.suptitle("Laplace 2D manufactured solution")
-    overview_path = output_dir / "laplace2d_overview.svg"
-    figure.savefig(overview_path, bbox_inches="tight")
-    plt.close(figure)
-
-    tree_figure, tree_axis = plt.subplots(
-        1, 1, figsize=(7.0, 7.0), constrained_layout=True
-    )
-    plt.sca(tree_axis)
-    plotter = TreePlotter(tree)
-    plotter.draw_tree(fill=False, edgecolor="black")
-    plotter.set_bounding_box()
-    tree_axis.set_aspect("equal", adjustable="box")
-    tree_axis.set_title("Boxtree used by the volume FMM")
-    tree_axis.set_xlabel("x")
-    tree_axis.set_ylabel("y")
-    tree_path = output_dir / "laplace2d_tree.svg"
-    tree_figure.savefig(tree_path, bbox_inches="tight")
-    plt.close(tree_figure)
+        tree_axis.set_aspect("equal", adjustable="box")
+        tree_axis.set_title(
+            f"Tree used by the volume FMM: {tree.nboxes} boxes, "
+            f"{tree.nlevels} levels\n"
+            f"(dots: the {n_nodes} quadrature nodes, {settings['mode']} settings)"
+        )
+        tree_axis.set_xlabel("x")
+        tree_axis.set_ylabel("y")
+        tree_path = output_dir / "laplace2d_tree.svg"
+        tree_figure.savefig(tree_path, **_GALLERY_SAVE_KWARGS)
+        plt.close(tree_figure)
 
     return [overview_path, tree_path]
 
@@ -208,30 +299,18 @@ def main():
 
     # {{{ build tree and traversals
 
-    # tune max_particles_in_box to reconstruct the mesh
-    # TODO: use points from FieldPlotter are used as target points for better
-    # visuals
-    from boxtree import TreeBuilder
+    # Build the particle tree from the mesh's own box tree, so that every leaf
+    # box is a mesh cell holding its q_order**2 Gauss nodes, which is the
+    # geometry the near-field table assumes. A tree built from the particles
+    # alone takes their extent, not [a, b]^2, as its root box, and its leaves
+    # then do not coincide with the mesh cells.
     from boxtree.array_context import PyOpenCLArrayContext
 
     actx = PyOpenCLArrayContext(queue)
-    tree_particles = obj_array_1d(
-        [actx.from_numpy(q_points_host[i]) for i in range(dim)]
+    _, _, tree, trav = mg.build_geometry_info(
+        ctx, queue, dim, q_order, mesh,
+        bbox=np.array([[a, b]] * dim, dtype=np.float64),
     )
-
-    tb = TreeBuilder(actx)
-    tree, _ = tb(
-        actx,
-        particles=tree_particles,
-        targets=None,
-        max_particles_in_box=q_order**2 * 4 - 1,
-        kind="adaptive-level-restricted",
-    )
-
-    from boxtree.traversal import FMMTraversalBuilder
-
-    tg = FMMTraversalBuilder(actx)
-    trav, _ = tg(actx, tree)
 
     # }}} End build tree and traversals
 
@@ -384,11 +463,19 @@ def main():
     if gallery_output_dir:
         written = _write_gallery_figures(
             Path(gallery_output_dir),
-            q_points_host,
-            source_vals.get(),
-            ze,
-            zs,
-            tree.get(queue=queue),
+            points=q_points_host,
+            source=source_vals.get(),
+            reference=ze,
+            approx=zs,
+            tree=actx.to_numpy(tree),
+            settings={
+                "mode": "smoke" if smoke_mode else "full",
+                "alpha": alpha,
+                "q_order": q_order,
+                "n_levels": n_levels,
+                "m_order": m_order,
+                "domain": (a, b),
+            },
         )
         for output_path in written:
             print(f"Wrote {output_path}")
@@ -435,7 +522,7 @@ def main():
 
         from boxtree.visualization import TreePlotter
 
-        plotter = TreePlotter(tree.get(queue=queue))
+        plotter = TreePlotter(actx.to_numpy(tree))
         plotter.draw_tree(fill=False, edgecolor="black")
         # plotter.draw_box_numbers()
         plotter.set_bounding_box()

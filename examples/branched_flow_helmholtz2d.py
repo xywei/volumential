@@ -878,7 +878,10 @@ def _write_plot(output_dir, arrays):
 
     axes[-1].set_xlabel("x")
     figure.tight_layout()
-    figure.savefig(output_dir / "branched_flow.png", dpi=220)
+    # Keep the Matplotlib version out of the file metadata (gallery assets).
+    figure.savefig(
+        output_dir / "branched_flow.png", dpi=220, metadata={"Software": None}
+    )
     plt.close(figure)
 
 
