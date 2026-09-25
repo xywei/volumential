@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
-"""Regenerate the static gallery assets from maintained Volumential examples.
+"""Regenerate the computed gallery figures from maintained Volumential examples.
 
 Sphinx never imports or runs this tool; documentation builds only consume the
-files already present under doc/source/_static/gallery.
+files already present under doc/source/gallery.
 
-The numerical targets run OpenCL examples. They need an explicit PyOpenCL
-context selector (--pyopencl-ctx or PYOPENCL_CTX); the tool does not let
-PyOpenCL pick a device on its own. Each example writes into a scratch directory
-(build/gallery-work/<mode>/<target>/ by default), and only the curated figures
-are copied into <output-dir>/<target>/. Outputs from a previous run are deleted
-first, a missing figure is an error, and manifest.json beside the assets records
-how every target was produced.
+Every target runs an OpenCL example. The tool needs an explicit PyOpenCL
+context selector (--pyopencl-ctx or PYOPENCL_CTX); it does not let PyOpenCL pick
+a device on its own. Each example runs in, and writes into, a scratch directory
+(build/gallery-work/<mode>/<target>/ by default), so its table caches and data
+files stay there, and only the curated figures are copied into
+<output-dir>/<target>/. Outputs from a previous run are deleted first, a
+missing figure is an error, and manifest.json beside the figures records how
+every target was produced.
+
+The hand-drawn schematics in doc/source/gallery/ are not generated; they are
+edited in place.
 """
 
 from __future__ import annotations
@@ -26,12 +30,16 @@ from pathlib import Path
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_DEFAULT_OUTPUT = _REPO_ROOT / "doc" / "source" / "_static" / "gallery"
+_DEFAULT_OUTPUT = _REPO_ROOT / "doc" / "source" / "gallery"
 _DEFAULT_WORK = _REPO_ROOT / "build" / "gallery-work"
-_CONCEPT_SOURCE = _REPO_ROOT / "doc" / "gallery-src"
 _RENDERER = "doc/tools/render_gallery.py"
 _MANIFEST_NAME = "manifest.json"
 _MANIFEST_FORMAT = 1
+#: Inherited variables with this prefix are removed from the examples'
+#: environment. Several of them change a computation (poisson3d.py reads its
+#: resolution from VOLUMENTIAL_POISSON3D_*, the library reads cache and
+#: build switches), and a render must be defined by the renderer alone.
+_EXAMPLE_ENV_PREFIX = "VOLUMENTIAL_"
 
 
 @dataclass(frozen=True)
@@ -70,19 +78,53 @@ _EXAMPLES = {
         smoke_flag="--smoke",
     ),
 }
-_TARGETS = ("concepts", *_EXAMPLES)
+
+#: Distributions whose versions the manifest records. Besides the plotting
+#: stack they are the packages that decide the computed digits: the tree and
+#: the expansions (boxtree, sumpy), the generated kernels (loopy, pymbolic),
+#: quadrature (modepy), and the far-field backend of branched-flow (pyfmmlib).
+_RECORDED_DISTRIBUTIONS = (
+    "boxtree",
+    "loopy",
+    "modepy",
+    "pyfmmlib",
+    "pymbolic",
+    "pytential",
+    "sumpy",
+)
 
 # Run in the examples' interpreter and environment. ``-P`` keeps the working
 # directory off sys.path, so this reports the volumential the examples import.
+# The context is built the way the examples build theirs, from PYOPENCL_CTX;
+# only the device type is reported, never its name.
 _VERSION_PROBE = """\
-import json, platform
+import json, platform, sys
+from importlib import metadata
+from pathlib import Path
+
 import matplotlib, numpy, pyopencl, volumential
+
+def distribution_version(name):
+    try:
+        return metadata.version(name)
+    except metadata.PackageNotFoundError:
+        return None
+
+context = pyopencl.create_some_context(interactive=False)
 print(json.dumps({
-    "matplotlib": matplotlib.__version__,
-    "numpy": numpy.__version__,
-    "pyopencl": pyopencl.VERSION_TEXT,
-    "python": platform.python_version(),
-    "volumential": volumential.volumential_version,
+    "volumential_file": str(Path(volumential.__file__).resolve()),
+    "device_types": sorted({
+        pyopencl.device_type.to_string(device.type)
+        for device in context.devices
+    }),
+    "versions": {
+        "matplotlib": matplotlib.__version__,
+        "numpy": numpy.__version__,
+        "pyopencl": pyopencl.VERSION_TEXT,
+        "python": platform.python_version(),
+        "volumential": volumential.volumential_version,
+        **{name: distribution_version(name) for name in sys.argv[1:]},
+    },
 }))
 """
 
@@ -142,7 +184,13 @@ def _source_state(output_dir):
 
 
 def _child_environment(settings):
-    env = os.environ.copy()
+    """Return the inherited environment without ``VOLUMENTIAL_*``, plus
+    *settings*, where a value of ``None`` removes the variable."""
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith(_EXAMPLE_ENV_PREFIX)
+    }
     for key, value in settings.items():
         if value is None:
             env.pop(key, None)
@@ -151,9 +199,14 @@ def _child_environment(settings):
     return env
 
 
-def _probe_versions(env):
+def _probe_environment(env):
+    """Return the package versions and the device type the examples will see.
+
+    Fails unless the examples import volumential from this checkout: the
+    manifest's revision would not describe the code that ran otherwise.
+    """
     result = subprocess.run(
-        [sys.executable, "-P", "-c", _VERSION_PROBE],
+        [sys.executable, "-P", "-c", _VERSION_PROBE, *_RECORDED_DISTRIBUTIONS],
         cwd=_REPO_ROOT,
         env=env,
         stdin=subprocess.DEVNULL,
@@ -163,10 +216,21 @@ def _probe_versions(env):
     )
     if result.returncode != 0:
         raise SystemExit(
-            "cannot import the packages the numerical gallery needs "
-            "(volumential, pyopencl, numpy, matplotlib):\n" + result.stderr
+            "cannot import the packages the gallery needs (volumential, "
+            "pyopencl, numpy, matplotlib) or create the selected OpenCL "
+            "context:\n" + result.stderr
         )
-    return json.loads(result.stdout)
+    probe = json.loads(result.stdout)
+    if not Path(probe["volumential_file"]).is_relative_to(_REPO_ROOT):
+        raise SystemExit(
+            "the examples would import volumential from outside this checkout, "
+            "so the manifest's revision would not describe the code that ran; "
+            "install the checkout in editable mode or put it on PYTHONPATH"
+        )
+    return {
+        "device_type": ",".join(probe["device_types"]),
+        "versions": probe["versions"],
+    }
 
 
 def _load_manifest(output_dir):
@@ -183,7 +247,12 @@ def _load_manifest(output_dir):
         manifest = {}
     manifest["format"] = _MANIFEST_FORMAT
     manifest["generator"] = _RENDERER
-    manifest.setdefault("targets", {})
+    # Keep the records of the other current targets; drop retired ones.
+    manifest["targets"] = {
+        name: record
+        for name, record in manifest.get("targets", {}).items()
+        if name in _EXAMPLES
+    }
     return manifest
 
 
@@ -204,31 +273,14 @@ def _delete_previous(output_dir, relpaths):
             path.unlink(missing_ok=True)
 
 
-def _render_concepts(output_dir, previous, source_state):
-    _delete_previous(output_dir, previous.get("outputs", ()))
-    output_dir.mkdir(parents=True, exist_ok=True)
-    outputs = []
-    for source in sorted(_CONCEPT_SOURCE.glob("*.svg")):
-        shutil.copyfile(source, output_dir / source.name)
-        print(f"Wrote {output_dir / source.name}")
-        outputs.append(source.name)
-    if not outputs:
-        raise SystemExit(f"no concept sources found in {_CONCEPT_SOURCE}")
-    return {
-        **source_state,
-        "regenerate": ["python", _RENDERER, "concepts"],
-        "sources": _CONCEPT_SOURCE.relative_to(_REPO_ROOT).as_posix(),
-        "outputs": outputs,
-    }
-
-
 def _render_example(name, *, output_dir, work_dir, previous, context):
     example = _EXAMPLES[name]
     paths = context["paths"]
     smoke = context["mode"] == "smoke"
-    # One scratch directory per mode: branched_flow_helmholtz2d.py keeps its
-    # table cache in its output directory, and a smoke table cannot serve a
-    # full run (the root box differs).
+    # One scratch directory per mode and target. The example runs there, so
+    # the near-field tables it caches in its working directory (laplace2d,
+    # poisson3d) or output directory (branched-flow) stay out of the
+    # repository root, and a smoke table never meets a full run.
     example_work = work_dir / context["mode"] / name
     gallery_dir = output_dir / name
 
@@ -258,7 +310,7 @@ def _render_example(name, *, output_dir, work_dir, previous, context):
     print("+", " ".join(command), flush=True)
     result = subprocess.run(
         command,
-        cwd=_REPO_ROOT,
+        cwd=example_work,
         env=_child_environment(settings),
         stdin=subprocess.DEVNULL,
         check=False,
@@ -286,8 +338,10 @@ def _render_example(name, *, output_dir, work_dir, previous, context):
         **context["source_state"],
         "mode": context["mode"],
         "pyopencl_ctx": context["pyopencl_ctx"],
+        "device_type": context["device_type"],
         "regenerate": regenerate,
         "command": ["python", example.script, *shown_args],
+        "working_directory": paths.show(example_work),
         "environment": shown_settings,
         "outputs": [f"{name}/{figure}" for figure in example.figures],
         "versions": context["versions"],
@@ -301,21 +355,21 @@ def main():
     )
     parser.add_argument(
         "target",
-        choices=(*_TARGETS, "all"),
-        help="asset group to regenerate",
+        choices=(*_EXAMPLES, "all"),
+        help="figure group to regenerate",
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
         default=_DEFAULT_OUTPUT,
-        help="gallery root (default: doc/source/_static/gallery)",
+        help="gallery root (default: doc/source/gallery)",
     )
     parser.add_argument(
         "--work-dir",
         type=Path,
         default=_DEFAULT_WORK,
-        help="scratch directory for the examples' full output, one "
-        "subdirectory per mode (default: build/gallery-work)",
+        help="scratch directory the examples run in, one subdirectory per mode "
+        "and target (default: build/gallery-work)",
     )
     parser.add_argument(
         "--full",
@@ -330,51 +384,44 @@ def main():
     )
     arguments = parser.parse_args()
 
-    targets = _TARGETS if arguments.target == "all" else (arguments.target,)
+    if not arguments.pyopencl_ctx:
+        parser.error(
+            "set PYOPENCL_CTX or pass --pyopencl-ctx (for example "
+            "portable:0); the gallery renderer does not choose an OpenCL "
+            "device implicitly"
+        )
+
+    targets = tuple(_EXAMPLES) if arguments.target == "all" else (arguments.target,)
     output_dir = arguments.output_dir.resolve()
     work_dir = arguments.work_dir.resolve()
-    source_state = _source_state(output_dir)
-    numerical = [target for target in targets if target in _EXAMPLES]
-
-    context = None
-    if numerical:
-        if not arguments.pyopencl_ctx:
-            parser.error(
-                "set PYOPENCL_CTX or pass --pyopencl-ctx (for example "
-                "portable:0); the gallery renderer does not choose an OpenCL "
-                "device implicitly"
-            )
-        environment = {
-            "PYOPENCL_CTX": arguments.pyopencl_ctx,
-            # pyopencl.create_some_context prefers PYOPENCL_TEST when it is set.
-            "PYOPENCL_TEST": None,
-            "PYTHONHASHSEED": "0",
-            "MPLBACKEND": "Agg",
-        }
-        context = {
-            "mode": "full" if arguments.full else "smoke",
-            "pyopencl_ctx": arguments.pyopencl_ctx,
-            "environment": environment,
-            "paths": _Paths(output_dir, work_dir),
-            "source_state": source_state,
-            "versions": _probe_versions(_child_environment(environment)),
-        }
+    environment = {
+        "PYOPENCL_CTX": arguments.pyopencl_ctx,
+        # pyopencl.create_some_context prefers PYOPENCL_TEST when it is set.
+        "PYOPENCL_TEST": None,
+        "PYTHONHASHSEED": "0",
+        "MPLBACKEND": "Agg",
+    }
+    probe = _probe_environment(_child_environment(environment))
+    context = {
+        "mode": "full" if arguments.full else "smoke",
+        "pyopencl_ctx": arguments.pyopencl_ctx,
+        "environment": environment,
+        "paths": _Paths(output_dir, work_dir),
+        "source_state": _source_state(output_dir),
+        **probe,
+    }
 
     manifest = _load_manifest(output_dir)
     try:
         for target in targets:
             previous = manifest["targets"].pop(target, {})
-            if target == "concepts":
-                record = _render_concepts(output_dir, previous, source_state)
-            else:
-                record = _render_example(
-                    target,
-                    output_dir=output_dir,
-                    work_dir=work_dir,
-                    previous=previous,
-                    context=context,
-                )
-            manifest["targets"][target] = record
+            manifest["targets"][target] = _render_example(
+                target,
+                output_dir=output_dir,
+                work_dir=work_dir,
+                previous=previous,
+                context=context,
+            )
     finally:
         _write_manifest(output_dir, manifest)
 
