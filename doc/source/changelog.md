@@ -52,6 +52,17 @@ Evidence and benchmarks
   sweep with a resolved FMM-order rule.
 
 Tables and numerics
+: [#175](https://github.com/xywei/volumential/pull/175) — keep box-tree
+  refinement local. `BoxTree.refine_and_coarsen`, and with it
+  `update_mesh`, used to refine every leaf of a level whenever it refined one,
+  so a refined mesh was always uniform; now it refines the marked leaves and
+  keeps adjacent leaves within one level of each other, so refined meshes are
+  adaptive and node counts and errors change for existing callers. A regression
+  test checks the volume FMM against the exact solution on a graded tree, and
+  `examples/laplace2d_adaptive.py` with its gallery card shows an adaptive
+  volume calculation next to the uniform one ({doc}`examples/gallery`). The
+  gallery manifest now also records the commit of each recorded package
+  installed from Git ({doc}`development/gallery-assets`).
 : [#139](https://github.com/xywei/volumential/pull/139) — emit `cos`/`sin`
   instead of `cdouble_exp` in the fused Duffy program, about a tenfold speedup
   on complex kernels ({doc}`user-guide/table-build-routing`).

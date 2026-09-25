@@ -59,7 +59,7 @@ step, with the tree the FMM used.
 :columns: 12 12 5 5
 
 ```{image} ../gallery/laplace2d-adaptive/laplace2d_adaptive.svg
-:alt: Four panels. Top, the same source, a broad and a narrow Gaussian, under two trees: a uniform grid of 16 by 16 leaves, and an adaptive tree with large leaves where the source is flat and leaves down to 1/128 of the square around the narrow Gaussian. Bottom, the pointwise error on a logarithmic scale, between about 1e-4 and 5e-3 across the whole square for the uniform tree and at most about 2e-9 for the adaptive one.
+:alt: Four panels. Top, the same source, a broad and a narrow Gaussian, under two trees: a uniform grid of 16 by 16 leaves, and an adaptive tree with large leaves where the source is flat and leaves down to 1/128 of the square around the narrow Gaussian. Bottom, the pointwise error on one logarithmic scale: for the uniform tree an error spread over the whole square, at most 4.9e-3; for the adaptive tree at most 1.9e-9.
 :class: gallery-thumb
 :width: 100%
 ```
@@ -83,8 +83,8 @@ the errors shown.
 
 The uniform leaves, 1/16 of the square across, are too coarse for the narrow
 Gaussian, and what they miss of it is felt across the whole square through the
-potential. The adaptive tree keeps leaves 1/4 across where the source is flat
-and goes down to 1/128 around the narrow Gaussian.
+potential. The adaptive tree keeps leaves 1/8 and 1/4 across where the source
+is flat and goes down to 1/128 around the narrow Gaussian.
 
 `examples/laplace2d_adaptive.py`, full settings: quadrature order 9,
 multipole order 20. The run printed, for the uniform tree, 256 leaves and
