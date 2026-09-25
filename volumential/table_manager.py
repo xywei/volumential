@@ -973,11 +973,9 @@ class NearFieldInteractionTableManager:
                     ]
                     return
                 raise RuntimeError(
-                    "The table cache file "
-                    + self.filename
-                    + " appears to be in the legacy HDF5 format. "
-                    "SQLite is now required. Remove this file to rebuild "
-                    "the cache."
+                    f"The table cache file {self.filename} appears to be in "
+                    "the legacy HDF5 format. SQLite is now required. Remove "
+                    "this file to rebuild the cache."
                 ) from exc
             raise
 
@@ -1087,12 +1085,9 @@ class NearFieldInteractionTableManager:
         }
         if "payload" not in columns or self._has_legacy_blob_columns(columns):
             raise RuntimeError(
-                "The table cache file "
-                + self.filename
-                + " uses an unsupported legacy schema. "
-                + "Rebuild the cache with schema "
-                + TABLE_CACHE_SCHEMA_VERSION
-                + "."
+                f"The table cache file {self.filename} uses an unsupported "
+                "legacy schema. Rebuild the cache with schema "
+                f"{TABLE_CACHE_SCHEMA_VERSION}."
             )
 
         self._initialize_schema_version(columns)
@@ -1207,20 +1202,15 @@ class NearFieldInteractionTableManager:
                 return
 
             raise RuntimeError(
-                "The table cache file "
-                + self.filename
-                + " is missing schema_version metadata and is unsupported. "
-                + "Rebuild the cache with schema "
-                + TABLE_CACHE_SCHEMA_VERSION
-                + "."
+                f"The table cache file {self.filename} is missing "
+                "schema_version metadata and is unsupported. Rebuild the "
+                f"cache with schema {TABLE_CACHE_SCHEMA_VERSION}."
             )
 
         if not isinstance(stored_schema_version, str):
             raise RuntimeError(
-                "The table cache file "
-                + self.filename
-                + " has invalid schema_version metadata type "
-                + str(type(stored_schema_version))
+                f"The table cache file {self.filename} has invalid "
+                f"schema_version metadata type {type(stored_schema_version)}"
             )
         schema_version = stored_schema_version
 
@@ -1231,34 +1221,23 @@ class NearFieldInteractionTableManager:
             )
         except ValueError as exc:
             raise RuntimeError(
-                "The table cache file "
-                + self.filename
-                + " has invalid schema_version metadata: "
-                + str(exc)
+                f"The table cache file {self.filename} has invalid "
+                f"schema_version metadata: {exc}"
             ) from exc
 
         if schema_version_tuple[0] > current_version_tuple[0]:
             raise RuntimeError(
-                "The table cache file "
-                + self.filename
-                + " uses incompatible schema version "
-                + schema_version
-                + ". This build supports "
-                + TABLE_CACHE_MIN_READABLE_SCHEMA_VERSION
-                + " through "
-                + TABLE_CACHE_SCHEMA_VERSION
-                + "."
+                f"The table cache file {self.filename} uses incompatible "
+                f"schema version {schema_version}. This build supports "
+                f"{TABLE_CACHE_MIN_READABLE_SCHEMA_VERSION} through "
+                f"{TABLE_CACHE_SCHEMA_VERSION}."
             )
 
         if schema_version_tuple < min_readable_version_tuple:
             raise RuntimeError(
-                "The table cache file "
-                + self.filename
-                + " uses unsupported legacy schema version "
-                + schema_version
-                + ". Rebuild with schema "
-                + TABLE_CACHE_SCHEMA_VERSION
-                + "."
+                f"The table cache file {self.filename} uses unsupported "
+                f"legacy schema version {schema_version}. Rebuild with "
+                f"schema {TABLE_CACHE_SCHEMA_VERSION}."
             )
 
         self.cache_schema_version = schema_version
@@ -1276,12 +1255,9 @@ class NearFieldInteractionTableManager:
         stored_root_extent = float(stored_root_extent)
         if abs(stored_root_extent - float(self.root_extent)) >= 1e-15:
             raise RuntimeError(
-                "The table cache file "
-                + self.filename
-                + " was built with root_extent = "
-                + str(stored_root_extent)
-                + ", which is different from the requested value "
-                + str(self.root_extent)
+                f"The table cache file {self.filename} was built with "
+                f"root_extent = {stored_root_extent}, which is different "
+                f"from the requested value {self.root_extent}"
             )
 
     def _store_root_extent(self, root_extent):

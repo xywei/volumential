@@ -873,6 +873,89 @@ def test_unversioned_cache_rows_rejected_in_read_only_mode(tmp_path):
         pass
 
 
+def _write_cache_with_root_extent_2(filename):
+    with NFTable(filename, root_extent=2.0, progress_bar=False):
+        pass
+
+
+def _write_cache_with_future_schema_version(filename):
+    with NFTable(filename, progress_bar=False):
+        pass
+
+    with sqlite3.connect(filename) as db:
+        db.execute(
+            "UPDATE nearfield_cache_meta SET value_type='str', value_text='999.0.0' "
+            "WHERE key='schema_version'"
+        )
+        db.commit()
+
+
+def _write_cache_with_unversioned_rows(filename):
+    with NFTable(filename, progress_bar=False):
+        pass
+
+    with sqlite3.connect(filename) as db:
+        _insert_dummy_cache_row(db, payload_blob=None)
+        db.execute("DELETE FROM nearfield_cache_meta WHERE key='schema_version'")
+        db.commit()
+
+
+def _write_legacy_hdf5_file(filename):
+    filename.write_bytes(b"\x89HDF\r\n\x1a\nlegacy")
+
+
+@pytest.mark.parametrize(
+    ("write_cache", "manager_kwargs", "message"),
+    [
+        (
+            _write_cache_with_root_extent_2,
+            {"root_extent": 1.0},
+            "was built with root_extent",
+        ),
+        (
+            _write_cache_with_future_schema_version,
+            {},
+            "incompatible schema version",
+        ),
+        (
+            _write_cache_with_unversioned_rows,
+            {"read_only": True},
+            "missing schema_version",
+        ),
+        (_write_legacy_hdf5_file, {"read_only": True}, "legacy HDF5 format"),
+    ],
+    ids=["root-extent", "future-schema", "unversioned-rows", "legacy-hdf5"],
+)
+def test_cache_errors_name_a_path_filename(
+    tmp_path, write_cache, manager_kwargs, message
+):
+    # A pathlib.Path filename must reach the message, not raise TypeError
+    # while the message is built and hide the RuntimeError.
+    filename = tmp_path / "cache.sqlite"
+    write_cache(filename)
+
+    with (
+        pytest.raises(RuntimeError, match=message) as excinfo,
+        NFTable(filename, progress_bar=False, **manager_kwargs),
+    ):
+        pass
+
+    assert str(filename) in str(excinfo.value)
+
+
+def test_unversioned_cache_rows_rebuilt_for_a_path_filename(tmp_path):
+    # The rebuild is chosen from the RuntimeError message, so it too depends
+    # on building that message for a pathlib.Path filename.
+    filename = tmp_path / "cache.sqlite"
+    _write_cache_with_unversioned_rows(filename)
+
+    with NFTable(filename, progress_bar=False):
+        pass
+
+    assert filename.exists()
+    assert (tmp_path / "cache.sqlite.bak").exists()
+
+
 def test_get_table_loads_using_stored_build_method_when_unspecified(tmp_path):
     from volumential.nearfield_potential_table import (
         NearFieldInteractionTable,
