@@ -240,7 +240,7 @@ def _write_slice_figure(plane_data, output_file):
 
     fig.suptitle("Poisson 3D slices: exact vs FMM", fontsize=14)
     # Keep the Matplotlib version out of the file metadata (gallery assets).
-    fig.savefig(output_file, dpi=220, metadata={"Software": None})
+    fig.savefig(output_file, dpi=150, metadata={"Software": None})
     plt.close(fig)
     return True
 
@@ -287,7 +287,7 @@ def _write_point_cloud_figure(points, values, exact_values, output_file):
     ax.set_zlabel("z")
     fig.colorbar(sc, ax=ax, shrink=0.7)
     # Keep the Matplotlib version out of the file metadata (gallery assets).
-    fig.savefig(output_file, dpi=220, metadata={"Software": None})
+    fig.savefig(output_file, dpi=150, metadata={"Software": None})
     plt.close(fig)
     return True
 
