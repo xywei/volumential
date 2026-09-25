@@ -294,6 +294,9 @@ serves.
 
 - Computed figures from the other maintained examples, and the command behind
   each: {doc}`../examples/gallery`.
+- The same kind of run on an adaptive tree, which puts its leaves where the
+  source needs them, next to the uniform tree it replaces:
+  `examples/laplace2d_adaptive.py`, and its card in {doc}`../examples/gallery`.
 - The near/far split without the API: {doc}`../user-guide/near-field-anatomy`.
 - Other maintained examples: `examples/laplace3d.py`,
   `examples/helmholtz2d.py`, `examples/helmholtz3d.py`,

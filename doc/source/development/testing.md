@@ -71,9 +71,10 @@ needs it, and end-of-session cleanup of stray table caches.
 
 ## Examples as tests
 
-Three examples run in a reduced configuration on a pull request **targeting
-`main`** — `laplace2d.py`, `helmholtz2d.py` and `helmholtz3d.py`. On a stacked
-pull request nothing runs at all; see {doc}`ci`.
+Four examples run in a reduced configuration on a pull request **targeting
+`main`** — `laplace2d.py`, `laplace2d_adaptive.py`, `helmholtz2d.py` and
+`helmholtz3d.py`. On a stacked pull request nothing runs at all; see
+{doc}`ci`.
 
 ```bash
 VOLUMENTIAL_EXAMPLE_SMOKE=1 python examples/laplace2d.py
