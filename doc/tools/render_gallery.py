@@ -110,13 +110,18 @@ def distribution_version(name):
     except metadata.PackageNotFoundError:
         return None
 
+def device_kind(device):
+    kinds = [
+        name
+        for name in ("CPU", "GPU", "ACCELERATOR")
+        if device.type & getattr(pyopencl.device_type, name)
+    ]
+    return "+".join(kinds) or "OTHER"
+
 context = pyopencl.create_some_context(interactive=False)
 print(json.dumps({
     "volumential_file": str(Path(volumential.__file__).resolve()),
-    "device_types": sorted({
-        pyopencl.device_type.to_string(device.type)
-        for device in context.devices
-    }),
+    "device_types": sorted({device_kind(device) for device in context.devices}),
     "versions": {
         "matplotlib": matplotlib.__version__,
         "numpy": numpy.__version__,
