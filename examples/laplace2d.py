@@ -300,30 +300,18 @@ def main():
 
     # {{{ build tree and traversals
 
-    # tune max_particles_in_box to reconstruct the mesh
-    # TODO: use points from FieldPlotter are used as target points for better
-    # visuals
-    from boxtree import TreeBuilder
+    # Build the particle tree from the mesh's own box tree, so that every leaf
+    # box is a mesh cell holding its q_order**2 Gauss nodes, which is the
+    # geometry the near-field table assumes. A tree built from the particles
+    # alone takes their extent, not [a, b]^2, as its root box, and its leaves
+    # then do not coincide with the mesh cells.
     from boxtree.array_context import PyOpenCLArrayContext
 
     actx = PyOpenCLArrayContext(queue)
-    tree_particles = obj_array_1d(
-        [actx.from_numpy(q_points_host[i]) for i in range(dim)]
+    _, _, tree, trav = mg.build_geometry_info(
+        ctx, queue, dim, q_order, mesh,
+        bbox=np.array([[a, b]] * dim, dtype=np.float64),
     )
-
-    tb = TreeBuilder(actx)
-    tree, _ = tb(
-        actx,
-        particles=tree_particles,
-        targets=None,
-        max_particles_in_box=q_order**2 * 4 - 1,
-        kind="adaptive-level-restricted",
-    )
-
-    from boxtree.traversal import FMMTraversalBuilder
-
-    tg = FMMTraversalBuilder(actx)
-    trav, _ = tg(actx, tree)
 
     # }}} End build tree and traversals
 
