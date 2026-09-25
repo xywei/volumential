@@ -63,6 +63,11 @@ _EXAMPLES = {
         figures=("laplace2d_overview.svg", "laplace2d_tree.svg"),
         output_env="VOLUMENTIAL_GALLERY_OUTPUT_DIR",
     ),
+    "laplace2d-adaptive": _Example(
+        script="examples/laplace2d_adaptive.py",
+        figures=("laplace2d_adaptive.svg",),
+        output_env="VOLUMENTIAL_GALLERY_OUTPUT_DIR",
+    ),
     "poisson3d": _Example(
         script="examples/poisson3d.py",
         # The example also writes poisson3d_error_point_cloud.png. At full
