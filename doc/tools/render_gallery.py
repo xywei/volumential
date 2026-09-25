@@ -339,6 +339,7 @@ def _render_example(name, *, output_dir, work_dir, previous, context):
     ]
     if not smoke:
         regenerate.append("--full")
+    regenerate += context["directory_options"]
     return {
         **context["source_state"],
         "mode": context["mode"],
@@ -407,12 +408,27 @@ def main():
         "MPLBACKEND": "Agg",
     }
     probe = _probe_environment(_child_environment(environment))
+    # A non-default directory belongs in the recorded regeneration command;
+    # one outside the repository is spelled as a placeholder, not a path.
+    directory_options = []
+    for option, directory, default, placeholder in (
+        ("--output-dir", output_dir, _DEFAULT_OUTPUT, "<output-dir>"),
+        ("--work-dir", work_dir, _DEFAULT_WORK, "<work-dir>"),
+    ):
+        if directory != default.resolve():
+            directory_options += [
+                option,
+                directory.relative_to(_REPO_ROOT).as_posix()
+                if directory.is_relative_to(_REPO_ROOT)
+                else placeholder,
+            ]
     context = {
         "mode": "full" if arguments.full else "smoke",
         "pyopencl_ctx": arguments.pyopencl_ctx,
         "environment": environment,
         "paths": _Paths(output_dir, work_dir),
         "source_state": _source_state(output_dir),
+        "directory_options": directory_options,
         **probe,
     }
 

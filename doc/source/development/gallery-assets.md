@@ -100,7 +100,7 @@ target leaves the records of the others in place. An entry holds
 | `mode` | `smoke` or `full` |
 | `pyopencl_ctx` | the context selector string passed to the example |
 | `device_type` | the type of device that selector resolved to in the examples' environment (`CPU` or `GPU`), not its name |
-| `regenerate` | the renderer invocation that reproduces the entry |
+| `regenerate` | the renderer invocation that reproduces the entry, including `--output-dir` and `--work-dir` when they differ from the defaults (a directory outside the repository appears as `<output-dir>` or `<work-dir>`) |
 | `command` | the example invocation, with the script path relative to the repository root |
 | `working_directory` | where the example ran |
 | `environment` | the variables the renderer set for the example; `null` means it removed the variable |
