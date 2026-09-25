@@ -1,5 +1,11 @@
 # Examples
 
+:::{tip}
+First visit? {doc}`gallery` shows what the maintained examples compute, with
+figures from full-settings runs. Come back here when you need cache names,
+device behavior, smoke modes and the cost warnings for a specific program.
+:::
+
 `examples/` holds six self-contained programs and three notebooks. Each one
 solves a whole problem — build a mesh, build or load a near-field table, run
 the volume FMM, report an error — rather than demonstrating a single call, so
@@ -57,13 +63,15 @@ expensive end. See {doc}`../development/ci`.
 
 The reference example, and the one {doc}`../getting-started/first-volume-potential`
 walks through line by line. It evaluates the volume potential of a manufactured
-density over $[-\tfrac12, \tfrac12]^2$ with the Laplace kernel, compares it
-against the exact potential at the quadrature nodes, and prints the **maximum
-absolute** error — `max |exact - computed|`, not a relative one, so do not
-compare it against a relative tolerance from elsewhere. It also carries the
-plotting and direct-particle-to-particle branches the walkthrough leaves out,
-and pins an explicit `DuffyBuildConfig`, which is why its error is smaller than
-the excerpt's.
+density over $[-\tfrac12, \tfrac12]^2$ with the Laplace kernel, compares it at
+the quadrature nodes against the whole-space Gaussian the density was
+manufactured from (the box leaves out source mass at rounding level), and
+prints the **maximum absolute** error — `max |reference - computed|`, not a
+relative one, so do not compare it against a relative tolerance from
+elsewhere. The walkthrough's program computes the same potential with the same
+table configuration; the example adds the gallery figures
+(`VOLUMENTIAL_GALLERY_OUTPUT_DIR`), and carries a multilevel-table variant and
+a direct particle-to-particle check, both switched off.
 
 ```bash
 VOLUMENTIAL_EXAMPLE_SMOKE=1 uv run python examples/laplace2d.py   # seconds
@@ -93,13 +101,16 @@ Either way the first run builds a 3D near-field table, which is the expensive
 part — `CI Full` caches `nft_laplace3d.sqlite` between runs for exactly that
 reason, and both configurations above share that one cache file. Keep it.
 
+(poisson3d-example)=
+
 ### `poisson3d.py`
 
 A manufactured 3D Poisson solve over $[-\tfrac12, \tfrac12]^3$ — two shifted
 Gaussian bumps and the forcing $f = -\Delta u$ — that also produces pictures:
 orthogonal slice plots and a point-cloud error plot, written as PNGs into
 `poisson3d_output/` (override with `VOLUMENTIAL_POISSON3D_OUTPUT_DIR`). Use it
-when you want to *see* where the error lives rather than read one number.
+when you want to *see* where the error lives rather than read one number;
+{doc}`gallery` shows the slice figure of a full-settings run.
 
 The pictures need matplotlib, which nothing in the project declares: both
 plotting helpers catch the `ImportError` and skip, so without it the run
@@ -195,6 +206,7 @@ is not; add `--with plotly` for those.
 :maxdepth: 1
 :glob:
 
+gallery
 notebooks/*
 ```
 

@@ -43,8 +43,9 @@ uv run python examples/laplace2d.py
 
 That evaluates a 2D Laplace volume potential against a manufactured Gaussian
 solution and prints the error. `VOLUMENTIAL_EXAMPLE_SMOKE=1` runs the same
-thing in seconds at reduced order. The
-[annotated twenty-line version][docs-first] explains what each stage does.
+thing in seconds at reduced order, as a setup check rather than an accuracy
+result. The [first tutorial][docs-first] shows the computed result and explains
+each stage of the program.
 
 ## Documentation
 
@@ -56,6 +57,7 @@ mirror at xiaoyu-wei.com is superseded by this site.
 
 - [Getting started][docs-getting-started] — install, a first volume potential,
   device selection
+- [Examples][docs-examples] — visual gallery first, then run/cost/cache details
 - [User guide][docs-user-guide] — the volume-FMM workflow, near-field tables
   and their symmetry reduction, table build routing, derivatives, the Helmholtz
   split, what is validated
@@ -118,6 +120,7 @@ The project's name `volumential` [courtesy of Andreas Klöckner][volumential-nam
 [docs-install]: https://xywei.github.io/volumential/getting-started/installation.html
 [docs-first]: https://xywei.github.io/volumential/getting-started/first-volume-potential.html
 [docs-getting-started]: https://xywei.github.io/volumential/getting-started/
+[docs-examples]: https://xywei.github.io/volumential/examples/gallery.html
 [docs-user-guide]: https://xywei.github.io/volumential/user-guide/
 [docs-design-notes]: https://xywei.github.io/volumential/design-notes/
 [docs-benchmarks]: https://xywei.github.io/volumential/benchmarks/

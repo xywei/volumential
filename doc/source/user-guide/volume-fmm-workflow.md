@@ -28,6 +28,14 @@ The code calls this `fpnd`: **f**ar field by **p**article approximation,
 {mod}`volumential.wranglers` implements it; the two backends differ only in who
 produces the far field.
 
+```{figure} ../gallery/volume-fmm-workflow.svg
+:alt: Schematic flow chart. The source density at the box quadrature nodes goes into a tree with its traversal, then splits into a near-field path, a precomputed table lookup, and a far-field path, ordinary FMM expansions; the two paths add up to the potential.
+:width: 100%
+
+Schematic, not computed output: the whole computation in one picture. The
+stages below name the objects and modules behind each box.
+```
+
 ## Stages
 
 ### 1. A box mesh and its quadrature nodes
