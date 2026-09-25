@@ -59,6 +59,8 @@ _GALLERY_DPI = 150
 _GALLERY_RC = {
     "svg.hashsalt": "volumential-laplace2d",
     "svg.fonttype": "path",
+    # The figures are shown about 600 px wide; keep their labels readable.
+    "font.size": 12,
 }
 _GALLERY_SAVE_KWARGS = {
     "dpi": _GALLERY_DPI,
@@ -175,9 +177,6 @@ def _write_gallery_figures(
             1, 1, figsize=(7.0, 7.4), constrained_layout=True
         )
         plt.sca(tree_axis)
-        plotter = TreePlotter(tree)
-        plotter.draw_tree(fill=False, edgecolor="black", linewidth=0.6)
-        plotter.set_bounding_box()
         tree_axis.scatter(
             x_coord,
             y_coord,
@@ -185,12 +184,33 @@ def _write_gallery_figures(
             color="tab:blue",
             linewidths=0,
             rasterized=True,
+            zorder=1,
         )
+        # Coarser levels get thicker, darker outlines, so the hierarchy reads
+        # as nested boxes rather than as one flat grid. The finest level is
+        # drawn first and the root last, on top.
+        plotter = TreePlotter(tree)
+        box_levels = np.asarray(tree.box_levels)
+        level_widths = np.linspace(2.2, 0.4, max(tree.nlevels, 2))
+        level_greys = np.linspace(0.0, 0.55, max(tree.nlevels, 2))
+        for ibox in sorted(
+            range(tree.nboxes), key=lambda ibox: -int(box_levels[ibox])
+        ):
+            level = int(box_levels[ibox])
+            plotter.draw_box(
+                ibox,
+                fill=False,
+                edgecolor=str(level_greys[level]),
+                linewidth=level_widths[level],
+                zorder=2,
+            )
+        plotter.set_bounding_box()
         tree_axis.set_aspect("equal", adjustable="box")
         tree_axis.set_title(
             f"Tree used by the volume FMM: {tree.nboxes} boxes, "
             f"{tree.nlevels} levels\n"
-            f"(dots: the {n_nodes} quadrature nodes, {settings['mode']} settings)"
+            "heavier outlines: coarser levels\n"
+            f"dots: the {n_nodes} quadrature nodes ({settings['mode']} settings)"
         )
         tree_axis.set_xlabel("x")
         tree_axis.set_ylabel("y")
@@ -236,6 +256,8 @@ def main():
 
     dtype = np.float64
     force_direct_evaluation = False
+    # Also evaluate by direct particle-to-particle summation and compare.
+    compare_with_direct_p2p = False
 
     print("Multipole order =", m_order)
 
@@ -480,112 +502,20 @@ def main():
         for output_path in written:
             print(f"Wrote {output_path}")
 
-    # Interpolated surface
-    if 0:
-        h = 0.005
-        out_x = np.arange(a, b + h, h)
-        out_y = np.arange(a, b + h, h)
-        oxx, oyy = np.meshgrid(out_x, out_y)
-        out_targets = obj_array_1d(
-            [
-                cl.array.to_device(queue, oxx.flatten()),
-                cl.array.to_device(queue, oyy.flatten()),
-            ]
-        )
-
-        from volumential.volume_fmm import interpolate_volume_potential
-
-        # src = source_field([q.get() for q in q_points])
-        # src = cl.array.to_device(queue, src)
-        interp_pot = interpolate_volume_potential(out_targets, trav, wrangler, pot)
-        opot = interp_pot.get()
-
-        import matplotlib.pyplot as plt
-        from mpl_toolkits.mplot3d import Axes3D
-
-        plt3d = plt.figure()
-        ax = Axes3D(plt3d)
-        surf = ax.plot_surface(oxx, oyy, opot.reshape(oxx.shape))  # noqa: F841
-        # ax.scatter(x, y, src.get())
-        # ax.set_zlim(-0.25, 0.25)
-
-        plt.draw()
-        plt.show()
-
-    # Boxtree
-    if 0:
-        import matplotlib.pyplot as plt
-
-        if dim == 2:
-            # plt.plot(q_points[0].get(), q_points[1].get(), ".")
-            pass
-
-        from boxtree.visualization import TreePlotter
-
-        plotter = TreePlotter(actx.to_numpy(tree))
-        plotter.draw_tree(fill=False, edgecolor="black")
-        # plotter.draw_box_numbers()
-        plotter.set_bounding_box()
-        plt.gca().set_aspect("equal")
-
-        plt.draw()
-        # plt.show()
-        plt.savefig("tree.png")
-
-    # Direct p2p
-    if 0:
+    if compare_with_direct_p2p:
         print("Performing P2P")
         (pot_direct,) = drive_volume_fmm(
-            trav, wrangler, source_vals * q_weights, source_vals, direct_evaluation=True
+            trav,
+            wrangler,
+            source_vals * q_weights,
+            source_vals,
+            direct_evaluation=True,
         )
         zds = pot_direct.get()
-        zs = pot.get()
 
         print("P2P-FMM diff =", np.max(np.abs(zs - zds)))
 
         print("P2P Error =", np.max(np.abs(ze - zds)))
-
-        """
-        import matplotlib.pyplot as plt
-        import matplotlib.cm as cm
-        x = q_points[0].get()
-        y = q_points[1].get()
-        plt.scatter(x, y, c=np.log(abs(zs-zds)) / np.log(10), cmap=cm.jet)
-        plt.colorbar()
-
-        plt.xlabel("Multipole order = " + str(m_order))
-
-        plt.draw()
-        plt.show()
-        """
-
-    # Scatter plot
-    if 0:
-        import matplotlib.pyplot as plt
-        from mpl_toolkits.mplot3d import Axes3D
-
-        x = q_points[0].get()
-        y = q_points[1].get()
-        ze = solu_eval(queue, np.array([x, y]))
-        zs = pot.get()
-
-        plt3d = plt.figure()
-        ax = Axes3D(plt3d)
-        ax.scatter(x, y, zs, s=1)
-        # ax.scatter(x, y, source_field([q.get() for q in q_points]), s=1)
-        # import matplotlib.cm as cm
-
-        # ax.scatter(x, y, zs, c=np.log(abs(zs-zds)), cmap=cm.jet)
-        # plt.gca().set_aspect("equal")
-
-        # ax.set_xlim3d([-1, 1])
-        # ax.set_ylim3d([-1, 1])
-        # ax.set_zlim3d([np.min(z), np.max(z)])
-        # ax.set_zlim3d([-0.002, 0.00])
-
-        plt.draw()
-        plt.show()
-        # plt.savefig("exact.png")
 
     # }}} End postprocess and plot
 

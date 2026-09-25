@@ -4,21 +4,19 @@ The documentation treats figures as reproducible evidence rather than as
 decorative screenshots. Numerical gallery images come from maintained examples
 through `doc/tools/render_gallery.py`; Sphinx never executes those examples and
 never calls the renderer. A documentation build only consumes the files
-committed under `doc/source/_static/gallery/`.
+committed under `doc/source/gallery/`.
+
+That directory holds two kinds of file. The computed figures and their
+`manifest.json` are written by the renderer, one subdirectory per target. The
+schematics (`near-far-anatomy.svg`, `volume-fmm-workflow.svg`) are drawn by
+hand and edited in place; nothing generates them, and every page that shows
+one says it is a schematic.
 
 ## Regenerating
 
-The concept diagrams are schematics, not computed results. Their sources live in
-`doc/gallery-src/`, and the renderer copies them into the gallery; this needs no
-compute device:
-
-```bash
-python doc/tools/render_gallery.py concepts
-```
-
-Numerical assets need the normal Volumential/OpenCL environment plus
-matplotlib, and an explicit PyOpenCL context selector, given either as
-`PYOPENCL_CTX` or as `--pyopencl-ctx`:
+The renderer needs the normal Volumential/OpenCL environment plus matplotlib,
+and an explicit PyOpenCL context selector, given either as `PYOPENCL_CTX` or as
+`--pyopencl-ctx`:
 
 ```bash
 export PYOPENCL_CTX=portable:0
@@ -31,15 +29,17 @@ Without a selector the renderer stops instead of letting PyOpenCL pick a device.
 It also removes `PYOPENCL_TEST` from the examples' environment, because
 `pyopencl.create_some_context` prefers that variable over `PYOPENCL_CTX`, and it
 runs the examples with standard input closed, so PyOpenCL cannot prompt for a
-choice either.
+choice either. Every inherited `VOLUMENTIAL_*` variable is removed as well:
+some of them change a computation (`poisson3d.py` reads its resolution from
+`VOLUMENTIAL_POISSON3D_*`, the library reads cache and build switches), and a
+render is defined by the renderer's own settings alone.
 
 Smoke settings are the default. They run in seconds and show that the figure
 path works, but they do not resolve the problems: the smoke runs of `laplace2d`
 and `poisson3d` have errors of order one, and the `branched-flow` smoke domain is
 little more than a wavelength across, too short for branches to form. `--full`
-switches every numerical target to its example's full settings, and `all` runs
-every target. The figures committed under `doc/source/_static/gallery/` are
-full-settings renders from one command:
+switches every target to its example's full settings, and `all` runs every
+target. Committed figures are full-settings renders from one command:
 
 ```bash
 uv run --with matplotlib python doc/tools/render_gallery.py all --full --pyopencl-ctx portable:0
@@ -56,30 +56,42 @@ the run. `poisson3d` builds a 3-D near-field table the first time it runs.
 | `poisson3d` | `examples/poisson3d.py` via `VOLUMENTIAL_POISSON3D_OUTPUT_DIR` | `poisson3d_slices.png` |
 | `branched-flow` | `examples/branched_flow_helmholtz2d.py --output-dir ...` | `branched_flow.png` |
 
-For each numerical target the renderer
+Before any example runs, the renderer imports the packages the examples import,
+in the examples' interpreter, to record their versions, and it stops if
+`volumential` would come from anywhere but this checkout. Then, for each target,
+it
 
 1. deletes the files that the previous run recorded for the target in the
    manifest, together with the figures it is about to write;
-2. runs the example from the repository root, with `PYOPENCL_CTX`,
-   `PYTHONHASHSEED=0`, `MPLBACKEND=Agg` and the smoke setting in its
-   environment. The example writes its full output (data files, table caches,
-   interactive HTML, figures the gallery does not use) under
-   `build/gallery-work/<mode>/<target>/`, which Git ignores. Smoke and full runs
-   get separate directories because `branched_flow_helmholtz2d.py` keeps its
-   near-field table there, and a smoke table does not fit a full run;
+2. runs the example with `PYOPENCL_CTX`, `PYTHONHASHSEED=0`, `MPLBACKEND=Agg`
+   and the smoke setting in its environment, and with
+   `build/gallery-work/<mode>/<target>/` as its working and output directory.
+   Git ignores that directory. Everything the example writes lands there: data
+   files, interactive HTML, figures the gallery does not use, and the
+   near-field tables it caches, so each mode and target keeps its own tables
+   and none of them is read from or written to the repository root;
 3. fails if any expected figure is missing, and otherwise copies only the
-   figures into `doc/source/_static/gallery/<target>/`;
-4. records the run in `doc/source/_static/gallery/manifest.json`.
+   figures into `doc/source/gallery/<target>/`;
+4. records the run in `doc/source/gallery/manifest.json`.
+
+A table cached under `build/gallery-work/` is reused by later renders in the
+same mode. Delete the directory to rebuild the tables; a fresh clone, which is
+where committed figures come from, always builds them.
 
 `--output-dir` and `--work-dir` move the gallery root and the scratch
 directory, for example to render a preview outside the documentation tree.
-`*.png` is ignored repository-wide; the gallery directory is exempt, so the
+`*.png` is ignored repository-wide; `doc/source/gallery/` is exempt, so the
 PNG figures of `poisson3d` and `branched-flow` can be committed there.
+
+The gallery sits outside `html_static_path` on purpose. Sphinx copies every
+image a page shows into `_images/`, so a gallery under `_static/` would be
+published twice. `manifest.json` is therefore not part of the built site; read
+it in the repository.
 
 ## The manifest
 
 `manifest.json` has one entry per target under `targets`, so regenerating one
-target leaves the records of the others in place. A numerical entry holds
+target leaves the records of the others in place. An entry holds
 
 | Field | Meaning |
 | --- | --- |
@@ -87,37 +99,39 @@ target leaves the records of the others in place. A numerical entry holds
 | `dirty` | whether tracked files differed from that commit; untracked files and the gallery directory itself are not counted |
 | `mode` | `smoke` or `full` |
 | `pyopencl_ctx` | the context selector string passed to the example |
+| `device_type` | the type of device that selector resolved to in the examples' environment (`CPU` or `GPU`), not its name |
 | `regenerate` | the renderer invocation that reproduces the entry |
-| `command` | the example invocation, run from the repository root |
+| `command` | the example invocation, with the script path relative to the repository root |
+| `working_directory` | where the example ran |
 | `environment` | the variables the renderer set for the example; `null` means it removed the variable |
 | `outputs` | the copied figures, relative to the manifest |
-| `versions` | `volumential`, `pyopencl`, `numpy`, `matplotlib` and Python, as imported by the examples' interpreter |
+| `versions` | as imported by the examples' interpreter: `volumential`, `pyopencl`, `numpy`, `matplotlib` and Python, and the distributions that decide the computed digits, `boxtree`, `sumpy`, `loopy`, `pymbolic`, `modepy`, `pytential` and `pyfmmlib` (`null` when not installed) |
 
-The `concepts` entry records the revision, the source directory and the copied
-files.
+The manifest, not `uv.lock`, describes the environment a figure was rendered
+in; the two need not agree.
 
 Paths are repository-relative. A directory outside the repository appears as
 `<output-dir>/...` or `<work-dir>/...`, never as an absolute path. The manifest
 deliberately carries nothing that identifies a machine: no host or user name, no
-absolute path, and no device or CPU name. It records the selector string, not
-the device that string resolves to. The examples' own console output does name
-the device, so logs of a gallery run do not belong in the repository.
+absolute path, and no device or CPU name. The examples' own console output does
+name the device, so logs of a gallery run do not belong in the repository.
 
 ## Determinism
 
 Rendering is kept free of incidental variation so that regenerating a figure in
 the same environment does not churn its bytes:
 
-- the Laplace figures have a fixed size, a fixed DPI of 150 for their rasterized
-  shaded layers, a fixed SVG hash salt, and no date or creator metadata;
+- the Laplace figures have a fixed size, font size and DPI of 150 for their
+  rasterized shaded layers, a fixed SVG hash salt, and no date or creator
+  metadata;
 - the PNG figures of `poisson3d` and `branched-flow` are saved at a fixed 150 DPI
   without the Matplotlib version tag;
 - `branched-flow` draws its random medium from a fixed seed, and the renderer
   fixes `PYTHONHASHSEED`.
 
 A different device, driver or library version can still change the computed
-numbers and therefore the pixels; the manifest's selector and versions say which
-environment produced a committed figure.
+numbers and therefore the pixels; the manifest's selector, device type and
+versions say which environment produced a committed figure.
 
 ## CI preview
 
@@ -128,10 +142,12 @@ python doc/tools/render_gallery.py laplace2d --output-dir build/gallery --pyopen
 ```
 
 and uploads `build/gallery/` (the two Laplace figures and their manifest) as the
-`gallery-laplace2d-*` artifact, kept for 14 days. On a pull request the recorded
-revision is the merge commit GitHub builds for the branch, not the branch head.
-The smoke settings are chosen to run quickly, not to resolve the problem, so the
-preview shows that the figure path works, not how accurate the method is.
+`gallery-laplace2d-*` artifact, kept for 14 days. The upload is attempted on
+every outcome, so the artifact exists whenever the renderer wrote files. On a
+pull request the recorded revision is the merge commit GitHub builds for the
+branch, not the branch head. The smoke settings are chosen to run quickly, not
+to resolve the problem, so the preview shows that the figure path works, not how
+accurate the method is.
 
 ## Policy
 
@@ -147,6 +163,9 @@ preview shows that the figure path works, not how accurate the method is.
 - A figure caption names the example, whether smoke or full settings produced
   it, and the `regenerate` command. Anything not computed by an example is
   labeled a schematic.
+- A computed figure compared against a reference says what the reference is. A
+  whole-space solution is a reference for a box integral only where the source
+  outside the box is negligible at the error level shown.
 - Smoke output is appropriate for explaining a mechanism. Do not quote its
   accuracy or timing as a result; {doc}`../benchmarks/index` defines the
   evidence needed for performance claims.
@@ -170,6 +189,7 @@ over the box $[-0.5, 0.5]^2$ only. Outside the box the Gaussian factor is at mos
 $e^{-40}$ for $\alpha = 160$, so the difference between the two is at rounding
 level, but the reference is not the exact value of the box integral.
 `laplace2d_tree.svg` shows the tree the FMM traversed, with the quadrature nodes
-as dots; the example builds it from the mesh, so its leaves are the mesh cells.
-The figure titles carry the settings (smoke or full, quadrature order, mesh
-levels, multipole order, node count) and the maximum error of the run.
+as dots and heavier outlines for coarser levels; the example builds it from the
+mesh, so its leaves are the mesh cells. The figure titles carry the settings
+(smoke or full, quadrature order, mesh levels, multipole order, node count) and
+the maximum error of the run.

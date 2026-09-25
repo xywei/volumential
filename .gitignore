@@ -43,7 +43,7 @@ a.out
 # Experiment/mesh/plot artifacts
 *.png
 # ...except the curated figures doc/tools/render_gallery.py copies into the docs
-!doc/source/_static/gallery/**/*.png
+!doc/source/gallery/**/*.png
 *.hdf5
 *.vtu
 *.vts
