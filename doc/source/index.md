@@ -26,12 +26,11 @@ first example computes.
 :width: 100%
 
 Computed by `examples/laplace2d.py` at full settings (quadrature order 9,
-6 mesh levels, multipole order 20, 82944 quadrature nodes). The source
-$f = -\Delta u$ is chosen so that $u = e^{-160 \lVert \boldsymbol{x} \rVert^2}$
-solves $-\Delta u = f$ in the whole plane; the example integrates $f$ over the
-box only, which leaves out source mass at rounding level. The example prints
-the largest difference between its computed potential $u_h$ and $u$ over the
-nodes; for this run, `Error = 8.410442587858608e-11`. Regenerate with
+6 mesh levels, multipole order 20, 82944 quadrature nodes): the source
+$f = -\Delta u$, the computed potential $u_h$, the whole-space reference
+$u = e^{-160 \lVert \boldsymbol{x} \rVert^2}$, and $|u_h - u|$, whose maximum
+over the nodes the example printed as `Error = 8.410442587858608e-11`.
+Regenerate with
 `python doc/tools/render_gallery.py laplace2d --pyopencl-ctx portable:0 --full`.
 ```
 

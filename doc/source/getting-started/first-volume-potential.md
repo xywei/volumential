@@ -141,7 +141,8 @@ command.
 tm = NearFieldInteractionTableManager(
     "nft_laplace2d.sqlite", root_extent=2, queue=queue)
 build_config = DuffyBuildConfig(
-    radial_rule="tanh-sinh-fast", regular_quad_order=50, radial_quad_order=100)
+    radial_rule="tanh-sinh-fast",
+    regular_quad_order=50, radial_quad_order=100)
 nftable, _ = tm.get_table(
     dim, "Laplace", q_order, queue=queue, build_config=build_config)
 ```
@@ -170,7 +171,8 @@ by the near-field interaction table and the well-separated boxes by the FMM.
 ### 6. Drive the FMM and check the answer
 
 ```python
-(pot,) = drive_volume_fmm(trav, wrangler, source_vals * q_weights, source_vals)
+(pot,) = drive_volume_fmm(
+    trav, wrangler, source_vals * q_weights, source_vals)
 
 reference = np.exp(-alpha * (nodes[0] ** 2 + nodes[1] ** 2))
 print("max error =", np.max(np.abs(pot.get() - reference)))
@@ -229,7 +231,8 @@ _, q_weights, tree, trav = mg.build_geometry_info(
 tm = NearFieldInteractionTableManager(
     "nft_laplace2d.sqlite", root_extent=2, queue=queue)
 build_config = DuffyBuildConfig(
-    radial_rule="tanh-sinh-fast", regular_quad_order=50, radial_quad_order=100)
+    radial_rule="tanh-sinh-fast",
+    regular_quad_order=50, radial_quad_order=100)
 nftable, _ = tm.get_table(
     dim, "Laplace", q_order, queue=queue, build_config=build_config)
 
@@ -250,7 +253,8 @@ wrangler = FPNDExpansionWrangler(
         "target_to_source": np.arange(tree.ntargets, dtype=np.int32)})
 
 # 6. Evaluate, and compare with the whole-space Gaussian.
-(pot,) = drive_volume_fmm(trav, wrangler, source_vals * q_weights, source_vals)
+(pot,) = drive_volume_fmm(
+    trav, wrangler, source_vals * q_weights, source_vals)
 
 reference = np.exp(-alpha * (nodes[0] ** 2 + nodes[1] ** 2))
 print("max error =", np.max(np.abs(pot.get() - reference)))
