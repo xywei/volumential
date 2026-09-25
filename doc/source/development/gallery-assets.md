@@ -94,7 +94,7 @@ Rendering is kept free of incidental variation so that regenerating a figure in
 the same environment does not churn its bytes:
 
 - the Laplace figures have a fixed size, a fixed DPI of 150 for their rasterized
-  marker layers, a fixed SVG hash salt, and no date or creator metadata;
+  shaded layers, a fixed SVG hash salt, and no date or creator metadata;
 - the PNG figures of `poisson3d` and `branched-flow` are saved at a fixed 220 DPI
   without the Matplotlib version tag;
 - `branched-flow` draws its random medium from a fixed seed, and the renderer
@@ -142,14 +142,19 @@ preview shows that the figure path works, not how accurate the method is.
 `examples/laplace2d.py` is the reference pattern: setting
 `VOLUMENTIAL_GALLERY_OUTPUT_DIR` does not change the computation. After the
 solve, the example writes two SVG files from the data and tree it has already
-produced. `laplace2d_overview.svg` has four panels, one marker per quadrature
-node: the source $f = -\Delta u$, the computed volume potential $u_h$, the
-reference $u = e^{-\alpha |x|^2}$, and the pointwise error $|u_h - u|$ on a
-logarithmic color scale; $u_h$ and $u$ share one color scale. The reference is
+produced. `laplace2d_overview.svg` has four panels: the source
+$f = -\Delta u$, the computed volume potential $u_h$, the reference
+$u = e^{-\alpha |x|^2}$, and the pointwise error $|u_h - u|$. Each shows the
+values at the quadrature nodes, shaded by linear interpolation over a Delaunay
+triangulation of the nodes. $u_h$ and $u$ share one color scale; the error uses
+a logarithmic scale whose floor is $\epsilon \max|u|$, with $\epsilon$ the
+double-precision machine epsilon, so differences below the rounding of $u$ are
+drawn at the floor. The reference is
 the whole-space solution of $-\Delta u = f$, while the example integrates $f$
 over the box $[-0.5, 0.5]^2$ only. Outside the box the Gaussian factor is at most
 $e^{-40}$ for $\alpha = 160$, so the difference between the two is at rounding
 level, but the reference is not the exact value of the box integral.
 `laplace2d_tree.svg` shows the tree the FMM traversed, with the quadrature nodes
-as dots. The figure titles carry the settings (smoke or full, quadrature order,
-mesh levels, multipole order, node count) and the maximum error of the run.
+as dots; the example builds it from the mesh, so its leaves are the mesh cells.
+The figure titles carry the settings (smoke or full, quadrature order, mesh
+levels, multipole order, node count) and the maximum error of the run.
