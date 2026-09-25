@@ -152,7 +152,11 @@ def _create_opencl_context(cl_module):
     if not os.environ.get("PYOPENCL_CTX"):
         return cl_module.Context([_select_opencl_device(cl_module)])
 
-    context = cl_module.create_some_context(interactive=False)
+    # Pass the selector as answers: with the environment alone,
+    # create_some_context would prefer PYOPENCL_TEST when it is also set.
+    context = cl_module.create_some_context(
+        interactive=False, answers=os.environ["PYOPENCL_CTX"].split(":")
+    )
     lacking = [
         device.name
         for device in context.devices
