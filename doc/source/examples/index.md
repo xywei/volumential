@@ -136,6 +136,8 @@ Helmholtz notebook below imports, so the two stay in step.
 VOLUMENTIAL_EXAMPLE_SMOKE=1 uv run python examples/helmholtz3d.py
 ```
 
+(branched-flow-example)=
+
 ### `branched_flow_helmholtz2d.py`
 
 :::{warning}
