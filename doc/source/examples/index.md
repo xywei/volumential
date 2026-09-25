@@ -6,7 +6,7 @@ figures from full-settings runs. Come back here when you need cache names,
 device behavior, smoke modes and the cost warnings for a specific program.
 :::
 
-`examples/` holds six self-contained programs and three notebooks. Each one
+`examples/` holds seven self-contained programs and three notebooks. Each one
 solves a whole problem — build a mesh, build or load a near-field table, run
 the volume FMM, report an error — rather than demonstrating a single call, so
 the shortest path from {doc}`../getting-started/first-volume-potential` to your
@@ -14,7 +14,7 @@ own driver is usually to copy the closest example and change it.
 
 Two things decide what a run costs, and neither is visible in the file name.
 
-**Small runs.** Four of the six scripts drop to a small configuration when
+**Small runs.** Five of the seven scripts drop to a small configuration when
 `VOLUMENTIAL_EXAMPLE_SMOKE=1` is set; `branched_flow_helmholtz2d.py` uses its
 own `--smoke` flag instead, and `laplace3d.py` has no preset at all — only
 three environment overrides for its quadrature order, level count and
@@ -37,6 +37,7 @@ again. Which build path runs, and how long it takes, is the subject of
 | Script | Small run | Table cache | Device |
 | --- | --- | --- | --- |
 | [`laplace2d.py`][laplace2d] | `VOLUMENTIAL_EXAMPLE_SMOKE=1` | `nft_laplace2d[_smoke].sqlite` | `PYOPENCL_CTX` |
+| {ref}`laplace2d_adaptive.py <laplace2d-adaptive-example>` | `VOLUMENTIAL_EXAMPLE_SMOKE=1` | `nft_laplace2d[_smoke].sqlite`, shared with `laplace2d.py` | `PYOPENCL_CTX` |
 | [`laplace3d.py`][laplace3d] | **no preset**, three size overrides | `nft_laplace3d.sqlite` | `PYOPENCL_CTX` |
 | [`poisson3d.py`][poisson3d] | `VOLUMENTIAL_EXAMPLE_SMOKE=1` | `nft_poisson3d[_smoke].sqlite` | `PYOPENCL_CTX` |
 | [`helmholtz2d.py`][helmholtz2d] | `VOLUMENTIAL_EXAMPLE_SMOKE=1` | `nft_laplace2d_for_helmholtz[_smoke].sqlite` | picks its own |
@@ -50,10 +51,10 @@ cost class of a run. `branched_flow_helmholtz2d.py` falls back to that choice
 only when `PYOPENCL_CTX` is unset. {doc}`../getting-started/device-selection` lists which
 script does what, and how to pin the device you meant.
 
-Only `laplace2d.py`, `helmholtz2d.py` and `helmholtz3d.py` run on pull
-requests, under `VOLUMENTIAL_EXAMPLE_SMOKE=1`, in a 30-minute job that holds
-nothing else. The rest run only in the `Examples` job of `CI Full`, at
-full settings, in a 240-minute budget shared by all six — so treat "full
+Only `laplace2d.py`, `laplace2d_adaptive.py`, `helmholtz2d.py` and
+`helmholtz3d.py` run on pull requests, under `VOLUMENTIAL_EXAMPLE_SMOKE=1`, in
+a 30-minute job that holds nothing else. The rest run only in the `Examples`
+job of `CI Full`, at full settings, in a 240-minute budget shared by all seven — so treat "full
 settings" as *tens of minutes each*, and expect the 3D ones to sit at the
 expensive end. See {doc}`../development/ci`.
 
@@ -76,6 +77,50 @@ a direct particle-to-particle check, both switched off.
 ```bash
 VOLUMENTIAL_EXAMPLE_SMOKE=1 uv run python examples/laplace2d.py   # seconds
 uv run python examples/laplace2d.py                               # full settings
+```
+
+(laplace2d-adaptive-example)=
+
+### `laplace2d_adaptive.py`
+
+The same kind of run on an adaptive tree, next to the uniform tree it
+replaces. The source is manufactured from two Gaussians of different widths,
+$u = e^{-400 \lVert \boldsymbol{x} - \boldsymbol{c}_1 \rVert^2} +
+0.5\, e^{-6400 \lVert \boldsymbol{x} - \boldsymbol{c}_2 \rVert^2}$ over
+$[-\tfrac12, \tfrac12]^2$, and the example evaluates its volume potential twice:
+on a uniform tree of $16 \times 16$ leaves, and on an adaptive tree allowed
+at most as many leaves. At full settings both use quadrature order 9, the
+near-field table of `laplace2d.py` from the same cache file, and multipole
+order 20. `VOLUMENTIAL_EXAMPLE_SMOKE=1` drops to quadrature order 3, a
+$4 \times 4$ uniform tree and multipole order 8, with the smoke table of
+`laplace2d.py`; that checks that the run works and resolves nothing.
+
+The adaptive tree starts from the square and is refined in passes. For every
+leaf, a pass takes the Legendre coefficients of the polynomial that
+interpolates $f$ at the leaf's Gauss nodes — the polynomial the volume FMM
+integrates on that leaf — and adds up the magnitudes of those of the highest
+degree in either variable; times the leaf's area, that is the leaf's
+indicator. Every leaf whose indicator is at least half of the largest is
+refined, `MeshGen2D` keeps adjacent leaves within one level of each other, and
+refinement stops before the pass that would give the adaptive tree more leaves
+than the uniform one. The criterion lives in the example, in
+`resolution_indicator`; swap in your own and keep the rest.
+
+For each tree the example prints the number of leaves and nodes, the
+**maximum absolute** error over that tree's quadrature nodes, and the relative
+$L^2$ error $\bigl(\sum_i w_i (u_h - u)_i^2 / \sum_i w_i u_i^2\bigr)^{1/2}$
+with the tree's quadrature weights $w_i$, against the whole-space solution
+(outside the box both Gaussians are below $e^{-40}$). It then prints the same
+for uniform trees with two and four times as many leaves per side,
+$32 \times 32$ and $64 \times 64$ at full settings, which shows how far the
+uniform tree has to be refined to reach the adaptive tree's accuracy.
+{doc}`gallery` shows the two trees and their errors from a full-settings run.
+`VOLUMENTIAL_GALLERY_OUTPUT_DIR` writes that figure, as it does for
+`laplace2d.py`.
+
+```bash
+VOLUMENTIAL_EXAMPLE_SMOKE=1 uv run python examples/laplace2d_adaptive.py   # seconds
+uv run python examples/laplace2d_adaptive.py                               # full settings
 ```
 
 ### `laplace3d.py`

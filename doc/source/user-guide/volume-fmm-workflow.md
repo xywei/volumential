@@ -50,6 +50,9 @@ the 2:1 level restriction that keeps List 1 bounded, live in
 {mod}`volumential.tree_interactive_build`. Refinement is driven by a
 user-supplied per-leaf criterion, so a source that is tight in one corner of
 the domain does not force a uniform tree everywhere.
+`examples/laplace2d_adaptive.py` refines by a resolution criterion on the
+source and compares the result with a uniform tree with at least as many
+leaves ({ref}`laplace2d-adaptive-example`).
 
 {mod}`volumential.geometry` assembles the objects the wranglers actually
 consume: `BoundingBoxFactory` for the root box,

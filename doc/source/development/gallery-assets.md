@@ -21,6 +21,7 @@ and an explicit PyOpenCL context selector, given either as `PYOPENCL_CTX` or as
 ```bash
 export PYOPENCL_CTX=portable:0
 uv run --with matplotlib python doc/tools/render_gallery.py laplace2d
+uv run --with matplotlib python doc/tools/render_gallery.py laplace2d-adaptive
 uv run --with matplotlib python doc/tools/render_gallery.py poisson3d
 uv run --with matplotlib python doc/tools/render_gallery.py branched-flow
 ```
@@ -35,9 +36,10 @@ some of them change a computation (`poisson3d.py` reads its resolution from
 render is defined by the renderer's own settings alone.
 
 Smoke settings are the default. They run in seconds and show that the figure
-path works, but they do not resolve the problems: the smoke runs of `laplace2d`
-and `poisson3d` have errors of order one, and the `branched-flow` smoke domain is
-little more than a wavelength across, too short for branches to form. `--full`
+path works, but they do not resolve the problems: the smoke runs of
+`laplace2d`, `laplace2d-adaptive` and `poisson3d` have errors of order one, and
+the `branched-flow` smoke domain is little more than a wavelength across, too
+short for branches to form. `--full`
 switches every target to its example's full settings, and `all` runs every
 target. Committed figures are full-settings renders from one command:
 
@@ -53,6 +55,7 @@ the run. `poisson3d` builds a 3-D near-field table the first time it runs.
 | Target | Producer | Figures copied into the gallery |
 | --- | --- | --- |
 | `laplace2d` | `examples/laplace2d.py` via `VOLUMENTIAL_GALLERY_OUTPUT_DIR` | `laplace2d_overview.svg`, `laplace2d_tree.svg` |
+| `laplace2d-adaptive` | `examples/laplace2d_adaptive.py` via `VOLUMENTIAL_GALLERY_OUTPUT_DIR` | `laplace2d_adaptive.svg` |
 | `poisson3d` | `examples/poisson3d.py` via `VOLUMENTIAL_POISSON3D_OUTPUT_DIR` | `poisson3d_slices.png` |
 | `branched-flow` | `examples/branched_flow_helmholtz2d.py --output-dir ...` | `branched_flow.png` |
 
@@ -109,7 +112,7 @@ target leaves the records of the others in place. An entry holds
 | `working_directory` | where the example ran |
 | `environment` | the variables the renderer set for the example; `null` means it removed the variable |
 | `outputs` | the copied figures, relative to the manifest |
-| `versions` | as imported by the examples' interpreter: `volumential`, `pyopencl`, `numpy`, `matplotlib` and Python, and the distributions that decide the computed digits, `boxtree`, `sumpy`, `loopy`, `pymbolic`, `modepy`, `pytential` and `pyfmmlib` (`null` when not installed) |
+| `versions` | as imported by the examples' interpreter: `volumential`, `pyopencl`, `numpy`, `matplotlib` and Python, and the distributions that decide the computed digits, `boxtree`, `sumpy`, `loopy`, `pymbolic`, `modepy`, `pytential` and `pyfmmlib` (`null` when not installed); a distribution installed from a Git repository also records the commit it was built from, as in `2024.10 (git <commit>)`, since the version string of such a build does not identify it |
 
 The manifest, not `uv.lock`, describes the environment a figure was rendered
 in; the two need not agree.
@@ -125,9 +128,9 @@ name the device, so logs of a gallery run do not belong in the repository.
 Rendering is kept free of incidental variation so that regenerating a figure in
 the same environment does not churn its bytes:
 
-- the Laplace figures have a fixed size, font size and DPI of 150 for their
-  rasterized shaded layers, a fixed SVG hash salt, and no date or creator
-  metadata;
+- the SVG figures of `laplace2d` and `laplace2d-adaptive` have a fixed size,
+  font size and DPI of 150 for their rasterized shaded layers, a fixed SVG hash
+  salt, and no date or creator metadata;
 - the PNG figures of `poisson3d` and `branched-flow` are saved at a fixed 150 DPI
   without the Matplotlib version tag;
 - `branched-flow` draws its random medium from a fixed seed, and the renderer
@@ -143,10 +146,11 @@ The `Examples (Smoke)` job of {doc}`ci` runs
 
 ```bash
 python doc/tools/render_gallery.py laplace2d --output-dir build/gallery --pyopencl-ctx "$PYOPENCL_CTX"
+python doc/tools/render_gallery.py laplace2d-adaptive --output-dir build/gallery --pyopencl-ctx "$PYOPENCL_CTX"
 ```
 
-and uploads `build/gallery/` (the two Laplace figures and their manifest) as the
-`gallery-laplace2d-*` artifact, kept for 14 days. The upload is attempted on
+and uploads `build/gallery/` (the three Laplace figures and their manifest) as
+the `gallery-laplace2d-*` artifact, kept for 14 days. The upload is attempted on
 every outcome, so the artifact exists whenever the renderer wrote files. On a
 pull request the recorded revision is the merge commit GitHub builds for the
 branch, not the branch head. The smoke settings are chosen to run quickly, not
@@ -198,3 +202,15 @@ as dots and heavier outlines for coarser levels; the example builds it from the
 mesh, so its leaves are the mesh cells. The figure titles carry the settings
 (smoke or full, quadrature order, mesh levels, multipole order, node count) and
 the maximum error of the run.
+
+`examples/laplace2d_adaptive.py` follows the same pattern with one figure,
+written after both of its solves. `laplace2d_adaptive.svg` has a column for the
+uniform tree and one for the adaptive tree. The top panels draw the tree's
+leaf boxes over the source at that tree's nodes, on one symmetric logarithmic
+color scale, which shows both Gaussian terms of $f$ and the rings where it is
+negative; the bottom panels show $|u_h - u|$ at the nodes on one logarithmic
+scale with the floor described above, so the two trees' errors can be compared
+by color. The reference is again the whole-space solution, and outside the box
+both Gaussian factors are below $e^{-40}$. The titles carry the settings, each
+tree's leaf and node counts and leaf sizes, and both of its errors to two
+digits.

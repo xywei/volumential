@@ -247,7 +247,16 @@ def _tree_of_boxes_from_leaf_keys(template_tob, leaf_keys):
 
 
 def _enforce_level_restriction(tob):
-    """Enforce bounded 2:1 balancing plus same-level colleague refinement."""
+    """Refine leaves until adjacent leaves differ by at most one level (2:1).
+
+    Only leaves that violate the 2:1 condition are split, so a refinement stays
+    local. The near-field tables cover neighbours of half, equal and twice the
+    size of a box, which is exactly what this condition leaves in List 1.
+
+    The condition is not strengthened to "every colleague of a non-leaf box is
+    non-leaf": splitting a box would then force its colleagues to split, theirs
+    in turn, and so on across the whole level, which makes every tree uniform.
+    """
     tob = _rebuild_tob_from_geometry(tob)
 
     debug = _env_flag("VOLUMENTIAL_LEVEL_RESTRICTION_DEBUG")
@@ -286,9 +295,6 @@ def _enforce_level_restriction(tob):
     leaf_keys = _leaf_keys_from_tob(tob)
     if not leaf_keys:
         return tob
-
-    all_box_keys = set(_box_keys_from_geometry(tob))
-    nonleaf_keys = all_box_keys - set(leaf_keys)
 
     original_leaf_keys = set(leaf_keys)
     max_initial_leaf_level = max(level for level, _ in leaf_keys)
@@ -338,17 +344,6 @@ def _enforce_level_restriction(tob):
                 leaf_index[iaxis] + offset[iaxis] for iaxis in range(dim)
             )
             add_requirement(leaf_level, neighbor_index, min_neighbor_level)
-
-    for box_level, box_index in nonleaf_keys:
-        min_neighbor_level = box_level + 1
-        if min_neighbor_level <= 0:
-            continue
-
-        for offset in neighbor_offsets:
-            neighbor_index = tuple(
-                box_index[iaxis] + offset[iaxis] for iaxis in range(dim)
-            )
-            add_requirement(box_level, neighbor_index, min_neighbor_level)
 
     while worklist:
         work_items += 1
@@ -404,13 +399,6 @@ def _enforce_level_restriction(tob):
                 )
 
         worklist.append((cell_level, cell_index))
-
-        min_colleague_level = leaf_level + 1
-        for offset in neighbor_offsets:
-            neighbor_index = tuple(
-                leaf_index[iaxis] + offset[iaxis] for iaxis in range(dim)
-            )
-            add_requirement(leaf_level, neighbor_index, min_colleague_level)
 
         for new_level, new_index in new_children:
             min_neighbor_level = new_level - 1

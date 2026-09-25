@@ -291,10 +291,13 @@ jobs:
           python -m pip install uv
           uv pip install --system --editable ".[test]"
 
-          # laplace2d.py runs through the gallery renderer, so the smoke job
-          # also exercises its figure output; matplotlib comes from the conda
-          # environment file.
+          # laplace2d.py and laplace2d_adaptive.py run through the gallery
+          # renderer, so the smoke job also exercises their figure output;
+          # matplotlib comes from the conda environment file.
           python doc/tools/render_gallery.py laplace2d \
+            --output-dir build/gallery \
+            --pyopencl-ctx "$PYOPENCL_CTX"
+          python doc/tools/render_gallery.py laplace2d-adaptive \
             --output-dir build/gallery \
             --pyopencl-ctx "$PYOPENCL_CTX"
           python examples/helmholtz2d.py

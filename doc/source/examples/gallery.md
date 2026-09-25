@@ -1,7 +1,7 @@
 # Visual gallery
 
 If you are deciding whether Volumential fits a problem, start here rather than
-with the API reference. The first three cards show the committed output of a
+with the API reference. The first four cards show the committed output of a
 maintained example, rendered at the example's full settings by
 `doc/tools/render_gallery.py`, with the settings, the numbers the run printed,
 and the command that regenerates the figure. The near/far card is a
@@ -48,6 +48,65 @@ python doc/tools/render_gallery.py laplace2d \
 +++
 {doc}`../getting-started/first-volume-potential` builds this run step by
 step, with the tree the FMM used.
+:::::
+
+:::::{card} Adaptive refinement: nodes where the source needs them
+
+::::{grid} 1 1 2 2
+:gutter: 3
+
+:::{grid-item}
+:columns: 12 12 5 5
+
+```{image} ../gallery/laplace2d-adaptive/laplace2d_adaptive.svg
+:alt: Four panels. Top, the same source, a broad and a narrow Gaussian, under two trees: a uniform grid of 16 by 16 leaves, and an adaptive tree with large leaves where the source is flat and leaves down to 1/128 of the square around the narrow Gaussian. Bottom, the pointwise error on one logarithmic scale: for the uniform tree an error spread over the whole square, at most 4.9e-3; for the adaptive tree at most 1.9e-9.
+:class: gallery-thumb
+:width: 100%
+```
+
+:::
+
+:::{grid-item}
+:columns: 12 12 7 7
+
+**What an adaptive tree buys.** The source $f = -\Delta u$ for
+$u = e^{-400 \lVert \boldsymbol{x} - \boldsymbol{c}_1 \rVert^2} +
+0.5\, e^{-6400 \lVert \boldsymbol{x} - \boldsymbol{c}_2 \rVert^2}$, a broad
+Gaussian at $\boldsymbol{c}_1 = (-0.15, -0.1)$ and a narrow one at
+$\boldsymbol{c}_2 = (0.22, 0.2)$ in $[-1/2, 1/2]^2$, computed twice with the
+same quadrature order, near-field table and multipole order: on a uniform
+tree, and on an adaptive tree allowed at most as many leaves. The top row shows
+each tree over the source at its nodes, the bottom row $|u_h - u|$ at those
+nodes. The reference $u$ is the whole-space solution; both Gaussians are below
+$e^{-40}$ outside the square, so the source the square leaves out is far below
+the errors shown.
+
+The uniform leaves, 1/16 of the square across, are too coarse for the narrow
+Gaussian, and what they miss of it is felt across the whole square through the
+potential. The adaptive tree keeps leaves 1/8 and 1/4 across where the source
+is flat and goes down to 1/128 around the narrow Gaussian.
+
+`examples/laplace2d_adaptive.py`, full settings: quadrature order 9,
+multipole order 20. The run printed, for the uniform tree, 256 leaves and
+20736 nodes, a maximum of $|u_h - u|$ over the nodes of `4.880e-03` and a
+relative $L^2$ error of `3.960e-03`; for the adaptive tree, after 16
+refinement passes, 226 leaves and 18306 nodes, `1.949e-09` and `6.325e-10`.
+It then printed the same for finer uniform trees: `6.970e-06` and `1.589e-06`
+with 1024 leaves and 82944 nodes, `6.442e-09` and `9.729e-10` with 4096 leaves
+and 331776 nodes. Only at $64 \times 64$ leaves does the uniform tree come
+close to the adaptive tree's accuracy, and it still falls short of it.
+
+:::
+
+::::
+
+```bash
+python doc/tools/render_gallery.py laplace2d-adaptive \
+    --pyopencl-ctx portable:0 --full
+```
+
++++
+The example and its refinement rule: {ref}`laplace2d-adaptive-example`.
 :::::
 
 :::::{card} Poisson 3-D: where the error lives
@@ -192,8 +251,9 @@ correction, and compares uniform refinement with boundary-focused adaptive
 refinement. Its figures exist only when the notebook runs: it is committed
 without outputs, the documentation does not execute notebooks, and no
 maintained script produces them, so there is no computed figure to show here.
-Run the notebook to see them. A gallery figure of an adaptive calculation is
-tracked in [#171](https://github.com/xywei/volumential/issues/171).
+Run the notebook to see them. For an adaptive tree and what it buys over a
+uniform one, see the adaptive refinement card above, a smaller problem: a
+source in the square, with no boundary to fit.
 
 +++
 {doc}`notebooks/poisson2d_pytential_volumential`
@@ -202,6 +262,8 @@ tracked in [#171](https://github.com/xywei/volumential/issues/171).
 ## Which example should I copy?
 
 - **New to the library:** {doc}`../getting-started/first-volume-potential`.
+- **A source with local features, on an adaptive tree:**
+  `laplace2d_adaptive.py`.
 - **A 3-D manufactured solve with spatial error diagnostics:** `poisson3d.py`.
 - **Volume and boundary integral machinery together, on a curved domain:** the
   2-D Poisson notebook.

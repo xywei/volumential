@@ -7508,8 +7508,7 @@ def test_meshgen_boxtree_gmsh_export_rejects_mixed_levels(ctx_factory, tmp_path)
             bottom_fraction_of_cells=0.0,
         )
 
-    if len(np.unique(mesh._leaf_levels())) == 1:
-        pytest.skip("could not create mixed-level mesh on this backend")
+    assert len(np.unique(mesh._leaf_levels())) > 1
 
     mesh_file = tmp_path / "box_grid_adaptive.msh"
     with pytest.raises(NotImplementedError, match="uniform-level box meshes"):
@@ -7724,6 +7723,146 @@ def test_volume_fmm_laplace(laplace_problem):
     max_err = np.nanmax(np.abs(exact_host - fmm_host))
     assert np.isfinite(max_err)
     assert float(max_err) < 5e-2
+
+
+@pytest.mark.skipif(
+    mg.provider != "meshgen_boxtree",
+    reason="Adaptive mesh module is not available",
+)
+def test_volume_fmm_laplace_graded_tree_matches_exact_solution(
+    ctx_factory, tmp_path
+):
+    """The volume FMM keeps its accuracy on a graded tree.
+
+    A uniform tree has empty lists 3 and 4 and only equal-size boxes in list 1,
+    so it cannot catch a mistake in the interactions between boxes of
+    different sizes. This tree is refined around a narrow Gaussian that sits
+    on the flank of a broad one, so leaves of three levels meet where the
+    source is large, and the potential is compared with the exact solution.
+    On a CPU device, leaving out the list 3, the list 4 or the cross-level
+    list 1 interactions raises the relative L2 error from about 1e-7 to above
+    0.1.
+    """
+    from sumpy.expansion import DefaultExpansionFactory
+    from sumpy.kernel import LaplaceKernel
+
+    from volumential.expansion_wrangler_fpnd import (
+        FPNDExpansionWrangler,
+        FPNDTreeIndependentDataForWrangler,
+    )
+    from volumential.volume_fmm import drive_volume_fmm
+
+    ctx = ctx_factory()
+    queue = cl.CommandQueue(ctx)
+
+    dim = 2
+    q_order = 6
+    fmm_order = 15
+    lower, upper = -0.5, 0.5
+    # (amplitude, alpha, center) of the Gaussian terms of the exact solution
+    # u; outside the box both are below exp(-30).
+    gaussians = (
+        (1.0, 160.0, np.array([-0.05, -0.03])),
+        (0.5, 1600.0, np.array([0.1, 0.07])),
+    )
+
+    def exact_solution(x):
+        return sum(
+            amplitude * np.exp(-alpha * np.sum((x - center[:, None]) ** 2, axis=0))
+            for amplitude, alpha, center in gaussians
+        )
+
+    def source_density(x):
+        # f = -Laplacian(u)
+        density = np.zeros(x.shape[1])
+        for amplitude, alpha, center in gaussians:
+            r2 = np.sum((x - center[:, None]) ** 2, axis=0)
+            bump = amplitude * np.exp(-alpha * r2)
+            density -= (4 * alpha**2 * r2 - 4 * alpha) * bump
+        return density
+
+    # 16 x 16 leaves, then two passes that refine every leaf closer than 0.12
+    # to the center of the narrow Gaussian; keeping the tree 2:1 balanced
+    # grades the transition.
+    narrow_center = gaussians[1][2]
+    mesh = mg.MeshGen2D(q_order, 5, lower, upper, queue=queue)
+    for _ in range(2):
+        half_sides = 0.5 * np.sqrt(mesh.get_cell_measures())
+        gaps = np.maximum(
+            np.abs(mesh.get_cell_centers() - narrow_center) - half_sides[:, None], 0
+        )
+        refine_flags = np.zeros(mesh.boxtree.nboxes, dtype=bool)
+        marked = np.hypot(gaps[:, 0], gaps[:, 1]) < 0.12
+        refine_flags[mesh.boxtree.active_boxes.get()[marked]] = True
+        mesh.boxtree.refine_and_coarsen(
+            refine_flags=refine_flags,
+            coarsen_flags=np.zeros_like(refine_flags),
+        )
+    assert set(np.unique(mesh._leaf_levels()).tolist()) == {4, 5, 6}
+
+    nodes = np.ascontiguousarray(mesh.get_q_points().T)
+    _, q_weights, tree, trav = mg.build_geometry_info(
+        ctx,
+        queue,
+        dim,
+        q_order,
+        mesh,
+        bbox=np.array([[lower, upper]] * dim),
+    )
+
+    def to_host(ary):
+        return ary.get(queue) if isinstance(ary, cl.array.Array) else np.asarray(ary)
+
+    # The traversal must exercise what a uniform tree cannot.
+    box_levels = to_host(tree.box_levels)
+    list1_starts = to_host(trav.neighbor_source_boxes_starts)
+    list1_sources = to_host(trav.neighbor_source_boxes_lists)
+    list1_target_levels = np.repeat(
+        box_levels[to_host(trav.target_boxes)], np.diff(list1_starts)
+    )
+    assert np.any(box_levels[list1_sources] != list1_target_levels)
+    assert sum(len(to_host(lev.lists)) for lev in trav.from_sep_smaller_by_level) > 0
+    assert len(to_host(trav.from_sep_bigger_lists)) > 0
+
+    knl = LaplaceKernel(dim)
+    expn_factory = DefaultExpansionFactory()
+    tree_indep = FPNDTreeIndependentDataForWrangler(
+        ctx,
+        partial(expn_factory.get_multipole_expansion_class(knl), knl),
+        partial(expn_factory.get_local_expansion_class(knl), knl),
+        [knl],
+        exclude_self=True,
+    )
+    wrangler = FPNDExpansionWrangler(
+        tree_indep=tree_indep,
+        queue=queue,
+        traversal=trav,
+        near_field_table=_get_laplace_2d_table(
+            queue, tmp_path / "nft-laplace2d-graded-q6.sqlite", q_order
+        ),
+        dtype=np.float64,
+        fmm_level_to_order=lambda kernel, kernel_args, tree, lev: fmm_order,
+        quad_order=q_order,
+        self_extra_kwargs={
+            "target_to_source": np.arange(tree.ntargets, dtype=np.int32)
+        },
+    )
+
+    source_vals = cl.array.to_device(queue, source_density(nodes))
+    (pot,) = drive_volume_fmm(trav, wrangler, source_vals * q_weights, source_vals)
+
+    reference = exact_solution(nodes)
+    weights = q_weights.get(queue)
+    error = pot.get(queue) - reference
+    max_error = float(np.max(np.abs(error)))
+    rel_l2_error = float(
+        np.sqrt(np.sum(weights * error**2) / np.sum(weights * reference**2))
+    )
+    # About 3.1e-7 and 1.1e-7 on a CPU device.
+    assert max_error < 3e-6, f"max error {max_error:.3e} on a graded tree"
+    assert rel_l2_error < 1e-6, (
+        f"relative L2 error {rel_l2_error:.3e} on a graded tree"
+    )
 
 
 @pytest.mark.skipif(
