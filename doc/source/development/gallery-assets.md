@@ -63,8 +63,11 @@ it
 
 1. deletes the files that the previous run recorded for the target in the
    manifest, together with the figures it is about to write;
-2. runs the example with `PYOPENCL_CTX`, `PYTHONHASHSEED=0`, `MPLBACKEND=Agg`
-   and the smoke setting in its environment, and with
+2. runs the example with `PYOPENCL_CTX`, `PYTHONHASHSEED=0`, `MPLBACKEND=Agg`,
+   an empty Matplotlib configuration directory of its own (`MPLCONFIGDIR`
+   under the work directory, `MATPLOTLIBRC` removed, so a personal
+   `matplotlibrc` cannot restyle a figure) and the smoke setting in its
+   environment, and with
    `build/gallery-work/<mode>/<target>/` as its working and output directory.
    Git ignores that directory. Everything the example writes lands there: data
    files, interactive HTML, figures the gallery does not use, and the
@@ -96,7 +99,7 @@ target leaves the records of the others in place. An entry holds
 | Field | Meaning |
 | --- | --- |
 | `revision` | the commit checked out when the renderer ran |
-| `dirty` | whether tracked files differed from that commit; untracked files and the gallery directory itself are not counted |
+| `dirty` | whether tracked files differed from that commit; untracked files and the files the renderer writes (every target's figures and the manifest) are not counted, but a changed schematic is |
 | `mode` | `smoke` or `full` |
 | `pyopencl_ctx` | the context selector string passed to the example |
 | `device_type` | the type of device that selector resolved to in the examples' environment (`CPU` or `GPU`), not its name |
@@ -159,7 +162,8 @@ accurate the method is.
 - Commit the curated static image that a page uses together with the updated
   `manifest.json`. Regenerate committed assets from a clean checkout of a pushed
   commit, so that `dirty` is `false` and the recorded revision can be checked
-  out.
+  out, and merge the pull request that carries them with a merge commit, not a
+  squash or rebase, so that the revision stays reachable from `main`.
 - A figure caption names the example, whether smoke or full settings produced
   it, and the `regenerate` command. Anything not computed by an example is
   labeled a schematic.

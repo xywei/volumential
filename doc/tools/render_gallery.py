@@ -167,14 +167,21 @@ def _git(*args):
 def _source_state(output_dir):
     """Return the checked-out revision and whether tracked files differ from it.
 
-    Untracked files are ignored, as ``git describe --dirty`` does, and so is the
-    output directory: regenerated assets do not make their own source dirty.
+    Untracked files are ignored, as ``git describe --dirty`` does, and so are
+    the files the renderer itself writes (every target's figures and the
+    manifest), so regenerated figures do not make their own source dirty. Any
+    other file in the output directory, such as a schematic, still counts.
     """
-    pathspec = ["."]
-    if output_dir.is_relative_to(_REPO_ROOT) and output_dir != _REPO_ROOT:
-        pathspec.append(
-            f":(exclude){output_dir.relative_to(_REPO_ROOT).as_posix()}"
-        )
+    generated = [output_dir / _MANIFEST_NAME] + [
+        output_dir / name / figure
+        for name, example in _EXAMPLES.items()
+        for figure in example.figures
+    ]
+    pathspec = ["."] + [
+        f":(exclude,literal){path.relative_to(_REPO_ROOT).as_posix()}"
+        for path in generated
+        if path.is_relative_to(_REPO_ROOT)
+    ]
     try:
         revision = _git("rev-parse", "HEAD").strip()
         status = _git(
@@ -295,11 +302,15 @@ def _render_example(name, *, output_dir, work_dir, previous, context):
         (example_work / figure).unlink(missing_ok=True)
     example_work.mkdir(parents=True, exist_ok=True)
 
-    settings = dict(context["environment"])
-    settings["VOLUMENTIAL_EXAMPLE_SMOKE"] = (
-        "1" if smoke and example.smoke_flag is None else None
-    )
-    shown_settings = dict(settings)
+    smoke_setting = "1" if smoke and example.smoke_flag is None else None
+    settings = {
+        **context["environment"],
+        "VOLUMENTIAL_EXAMPLE_SMOKE": smoke_setting,
+    }
+    shown_settings = {
+        **context["shown_environment"],
+        "VOLUMENTIAL_EXAMPLE_SMOKE": smoke_setting,
+    }
     args, shown_args = [], []
     if example.output_env is not None:
         settings[example.output_env] = str(example_work)
@@ -400,12 +411,24 @@ def main():
     targets = tuple(_EXAMPLES) if arguments.target == "all" else (arguments.target,)
     output_dir = arguments.output_dir.resolve()
     work_dir = arguments.work_dir.resolve()
+    paths = _Paths(output_dir, work_dir)
+    # Matplotlib reads a user matplotlibrc from MATPLOTLIBRC or the config
+    # directory; an empty config directory of the renderer's own keeps the
+    # figures on Matplotlib's defaults plus what the examples set.
+    matplotlib_config = work_dir / "matplotlib-config"
+    matplotlib_config.mkdir(parents=True, exist_ok=True)
     environment = {
         "PYOPENCL_CTX": arguments.pyopencl_ctx,
         # pyopencl.create_some_context prefers PYOPENCL_TEST when it is set.
         "PYOPENCL_TEST": None,
         "PYTHONHASHSEED": "0",
         "MPLBACKEND": "Agg",
+        "MATPLOTLIBRC": None,
+        "MPLCONFIGDIR": str(matplotlib_config),
+    }
+    shown_environment = {
+        **environment,
+        "MPLCONFIGDIR": paths.show(matplotlib_config),
     }
     probe = _probe_environment(_child_environment(environment))
     # A non-default directory belongs in the recorded regeneration command;
@@ -426,7 +449,8 @@ def main():
         "mode": "full" if arguments.full else "smoke",
         "pyopencl_ctx": arguments.pyopencl_ctx,
         "environment": environment,
-        "paths": _Paths(output_dir, work_dir),
+        "shown_environment": shown_environment,
+        "paths": paths,
         "source_state": _source_state(output_dir),
         "directory_options": directory_options,
         **probe,
