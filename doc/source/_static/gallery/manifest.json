@@ -1,0 +1,132 @@
+{
+  "format": 1,
+  "generator": "doc/tools/render_gallery.py",
+  "targets": {
+    "branched-flow": {
+      "command": [
+        "python",
+        "examples/branched_flow_helmholtz2d.py",
+        "--output-dir",
+        "build/gallery-work/full/branched-flow"
+      ],
+      "dirty": false,
+      "environment": {
+        "MPLBACKEND": "Agg",
+        "PYOPENCL_CTX": "portable:0",
+        "PYOPENCL_TEST": null,
+        "PYTHONHASHSEED": "0",
+        "VOLUMENTIAL_EXAMPLE_SMOKE": null
+      },
+      "mode": "full",
+      "outputs": [
+        "branched-flow/branched_flow.png"
+      ],
+      "pyopencl_ctx": "portable:0",
+      "regenerate": [
+        "python",
+        "doc/tools/render_gallery.py",
+        "branched-flow",
+        "--pyopencl-ctx",
+        "portable:0",
+        "--full"
+      ],
+      "revision": "96e80e63679975ff63206e12476deab51f1a2d99",
+      "versions": {
+        "matplotlib": "3.11.2",
+        "numpy": "2.5.1",
+        "pyopencl": "2026.1.2",
+        "python": "3.14.7",
+        "volumential": "2017.1a0"
+      }
+    },
+    "concepts": {
+      "dirty": false,
+      "outputs": [
+        "examples-showcase.svg",
+        "laplace2d-reference.svg",
+        "near-far-anatomy.svg",
+        "volume-fmm-workflow.svg"
+      ],
+      "regenerate": [
+        "python",
+        "doc/tools/render_gallery.py",
+        "concepts"
+      ],
+      "revision": "96e80e63679975ff63206e12476deab51f1a2d99",
+      "sources": "doc/gallery-src"
+    },
+    "laplace2d": {
+      "command": [
+        "python",
+        "examples/laplace2d.py"
+      ],
+      "dirty": false,
+      "environment": {
+        "MPLBACKEND": "Agg",
+        "PYOPENCL_CTX": "portable:0",
+        "PYOPENCL_TEST": null,
+        "PYTHONHASHSEED": "0",
+        "VOLUMENTIAL_EXAMPLE_SMOKE": null,
+        "VOLUMENTIAL_GALLERY_OUTPUT_DIR": "build/gallery-work/full/laplace2d"
+      },
+      "mode": "full",
+      "outputs": [
+        "laplace2d/laplace2d_overview.svg",
+        "laplace2d/laplace2d_tree.svg"
+      ],
+      "pyopencl_ctx": "portable:0",
+      "regenerate": [
+        "python",
+        "doc/tools/render_gallery.py",
+        "laplace2d",
+        "--pyopencl-ctx",
+        "portable:0",
+        "--full"
+      ],
+      "revision": "96e80e63679975ff63206e12476deab51f1a2d99",
+      "versions": {
+        "matplotlib": "3.11.2",
+        "numpy": "2.5.1",
+        "pyopencl": "2026.1.2",
+        "python": "3.14.7",
+        "volumential": "2017.1a0"
+      }
+    },
+    "poisson3d": {
+      "command": [
+        "python",
+        "examples/poisson3d.py"
+      ],
+      "dirty": false,
+      "environment": {
+        "MPLBACKEND": "Agg",
+        "PYOPENCL_CTX": "portable:0",
+        "PYOPENCL_TEST": null,
+        "PYTHONHASHSEED": "0",
+        "VOLUMENTIAL_EXAMPLE_SMOKE": null,
+        "VOLUMENTIAL_POISSON3D_OUTPUT_DIR": "build/gallery-work/full/poisson3d"
+      },
+      "mode": "full",
+      "outputs": [
+        "poisson3d/poisson3d_slices.png"
+      ],
+      "pyopencl_ctx": "portable:0",
+      "regenerate": [
+        "python",
+        "doc/tools/render_gallery.py",
+        "poisson3d",
+        "--pyopencl-ctx",
+        "portable:0",
+        "--full"
+      ],
+      "revision": "96e80e63679975ff63206e12476deab51f1a2d99",
+      "versions": {
+        "matplotlib": "3.11.2",
+        "numpy": "2.5.1",
+        "pyopencl": "2026.1.2",
+        "python": "3.14.7",
+        "volumential": "2017.1a0"
+      }
+    }
+  }
+}
