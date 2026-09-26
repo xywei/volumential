@@ -194,15 +194,13 @@ jobs:
               raise SystemExit("PYOPENCL_CTX does not select the PoCL CPU")
           PYEOF
 
-          FULL_ACCURACY_TESTS=(
-            test/test_duffy_full_accuracy.py
-            test/test_volume_fmm.py
-          )
-          pytest -vv --collect-only -m full_accuracy --full-accuracy \
-            "${FULL_ACCURACY_TESTS[@]}"
+          # Select the marker over the whole suite, not a list of files: the
+          # list this replaced named two of them, and the full_accuracy cases
+          # of test/test_windowed_rke.py never ran here.
+          pytest -vv --collect-only -m full_accuracy --full-accuracy test
 
           pytest -vv -rs -m full_accuracy --full-accuracy \
-            --junitxml=full-accuracy.xml "${FULL_ACCURACY_TESTS[@]}"
+            --junitxml=full-accuracy.xml test
 
           # A skipped accuracy test is not a validated one.
           python - <<'PYEOF'
