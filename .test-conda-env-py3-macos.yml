@@ -5,6 +5,8 @@ channels:
 dependencies:
   - attrs
   - cgen
+  # With ``llvm-openmp``, the C compiler for extensions that pip builds
+  # with ``-fopenmp`` (pytential's among them); Apple's clang rejects it.
   - clangdev
   - cmake
   - colorama
@@ -17,7 +19,16 @@ dependencies:
   - llvm-openmp
   - packaging
   - pluggy
-  - pocl
+  # PoCL >= 6 on conda-forge depends on llvm-spirv, whose library
+  # constrains ``llvmdev`` to PoCL's own LLVM (19 for PoCL 7.1), and
+  # ``clangdev`` requires ``llvmdev`` at its own version.  Unpinned, the
+  # solver kept the newest ``clangdev`` and fell back to PoCL 3.1, whose
+  # kernel link step fails on current macOS runners ("must link with
+  # libSystem.dylib"): PoCL aborted the interpreter at the first kernel
+  # launch (#158).  The floor makes the solver pick the ``clangdev`` that
+  # matches PoCL's LLVM instead, and turns any future conflict of this kind
+  # into a failed solve rather than a silent PoCL downgrade.
+  - pocl>=7
   - pyfmmlib
   - pyopencl
   - pyrsistent
