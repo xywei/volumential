@@ -7952,7 +7952,7 @@ def test_volume_fmm_far_field_matches_direct_sum_with_leaf_colleagues(
     weighted_charges = charges * q_weights.get(queue)
 
     # List 1 of a target box must hold the box itself and exactly the leaves
-    # that touch it.
+    # that touch it, each once.
     leaves = np.flatnonzero(is_leaf)
     box_centers = to_host(tree.box_centers)
     box_sizes = tree.root_extent / 2.0 ** to_host(tree.box_levels)
@@ -7970,8 +7970,7 @@ def test_volume_fmm_far_field_matches_direct_sum_with_leaf_colleagues(
         )
         near_boxes = leaves[gaps < smallest_size / 2]
         start, end = list1_starts[itarget_box : itarget_box + 2]
-        listed = set(list1_lists[start:end].tolist())
-        assert listed == set(near_boxes.tolist()), (
+        assert np.array_equal(np.sort(list1_lists[start:end]), near_boxes), (
             f"List 1 of box {target_box} is not the box and the leaves that touch it"
         )
         targets = node_box == target_box
