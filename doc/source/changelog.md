@@ -52,6 +52,14 @@ Evidence and benchmarks
   sweep with a resolved FMM-order rule.
 
 Tables and numerics
+: [#179](https://github.com/xywei/volumential/pull/179) — pin what #175
+  relies on. One test compares the far field with a direct sum on a tree whose
+  non-leaf boxes have leaf colleagues; another splits leaves of two levels in
+  one `BoxTree.refine_and_coarsen` call, which a `boxtree` older than upstream
+  13c9db9 gets wrong without an error; and `test_volume_fmm_laplace` tightens
+  from 5e-2 to 1e-3. The user guide now states what the 2:1 balancer allows in
+  List 4 and what it costs in accuracy ({ref}`graded-tree-list4`,
+  [#178](https://github.com/xywei/volumential/issues/178)).
 : [#175](https://github.com/xywei/volumential/pull/175) — keep box-tree
   refinement local. `BoxTree.refine_and_coarsen`, and with it
   `update_mesh`, used to refine every leaf of a level whenever it refined one,
