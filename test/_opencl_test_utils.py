@@ -1,18 +1,21 @@
-"""OpenCL device selection for the tests that need double precision.
+"""OpenCL device selection for the tests that build their own context.
 
-The volume FMM regressions and the full-accuracy sweeps build their own
-context instead of taking the ``ctx_factory`` fixture, because they need a
-device with fp64 whatever platform the fixture was pinned to.
-:func:`create_fp64_context_or_skip` is the one place that decides which device
-that is.
+Some tests cannot take the ``ctx_factory`` fixture. The volume FMM regressions
+and the full-accuracy sweeps need a device with fp64 whatever platform the
+fixture was pinned to, and the near-field table builds shared by a whole
+module or session need one queue before any fixture is parametrized. The
+functions here are the one place that decides which device those are, and
+both honor ``PYOPENCL_CTX``: when it is set, the context is exactly the device
+it selects, CPU or GPU, and a selector that matches nothing is an error, not a
+skip.
 
-* With ``PYOPENCL_CTX`` set, the context is exactly the device it selects, CPU
-  or GPU. The test is skipped only if that device lacks fp64; a selector that
-  matches nothing is an error, not a skip.
-* Without it, the first fp64 GPU is preferred and the first fp64 CPU is the
-  fallback, so a CPU-only host runs these tests rather than skipping them.
-  This default never picks the ``Intel(R) OpenCL`` platform, which
-  ``conftest.py`` already marks as crashing on these paths.
+Without ``PYOPENCL_CTX``, :func:`create_fp64_context_or_skip` prefers the
+first fp64 GPU and falls back to the first fp64 CPU, so a CPU-only host runs
+these tests rather than skipping them. That default never picks the
+``Intel(R) OpenCL`` platform, which ``conftest.py`` already marks as crashing
+on these paths. :func:`create_table_build_queue_or_skip` keeps the rule the
+table builds always had: the first device of the first other platform, and
+the Intel runtime only when there is nothing else.
 """
 
 import os
@@ -55,23 +58,36 @@ def _default_fp64_device():
     return None
 
 
+def create_pyopencl_ctx_context() -> cl.Context | None:
+    """Return a context on exactly the device ``PYOPENCL_CTX`` selects.
+
+    Returns *None* when the variable is unset or empty. A selector that
+    matches no platform or device raises, as it does in
+    :func:`pyopencl.create_some_context`.
+    """
+    ctx_spec = os.environ.get("PYOPENCL_CTX")
+    if not ctx_spec:
+        return None
+    # Pass the selector as answers: with the environment alone,
+    # create_some_context would prefer PYOPENCL_TEST when it is also set.
+    return cl.create_some_context(interactive=False, answers=ctx_spec.split(":"))
+
+
 def create_fp64_context_or_skip() -> cl.Context:
     """Return a context on an fp64 device, honoring ``PYOPENCL_CTX``.
 
-    See the module docstring for how the device is chosen.
+    Skips if the device ``PYOPENCL_CTX`` selects lacks fp64, rather than
+    substituting another one. See the module docstring for the default.
     """
-    ctx_spec = os.environ.get("PYOPENCL_CTX")
-    if ctx_spec:
-        # Pass the selector as answers: with the environment alone,
-        # create_some_context would prefer PYOPENCL_TEST when it is also set.
-        ctx = cl.create_some_context(interactive=False, answers=ctx_spec.split(":"))
+    ctx = create_pyopencl_ctx_context()
+    if ctx is not None:
         lacking = [
             device.name for device in ctx.devices if not device_supports_fp64(device)
         ]
         if lacking:
             pytest.skip(
-                f"PYOPENCL_CTX={ctx_spec!r} selects a device without fp64 "
-                f"support: {', '.join(lacking)}"
+                f"PYOPENCL_CTX={os.environ['PYOPENCL_CTX']!r} selects a device "
+                f"without fp64 support: {', '.join(lacking)}"
             )
         return ctx
 
@@ -82,3 +98,27 @@ def create_fp64_context_or_skip() -> cl.Context:
             "(set PYOPENCL_CTX to choose one explicitly)"
         )
     return cl.Context([device])
+
+
+def create_table_build_queue_or_skip() -> cl.CommandQueue:
+    """Return a queue for building near-field tables, honoring ``PYOPENCL_CTX``.
+
+    See the module docstring for the device it takes without the variable.
+    """
+    ctx = create_pyopencl_ctx_context()
+    if ctx is not None:
+        return cl.CommandQueue(ctx)
+
+    try:
+        platforms = cl.get_platforms()
+    except cl.LogicError as exc:
+        pytest.skip(f"OpenCL platforms unavailable: {exc}")
+
+    preferred = [p for p in platforms if p.name != INTEL_OPENCL_PLATFORM_NAME]
+    intel = [p for p in platforms if p.name == INTEL_OPENCL_PLATFORM_NAME]
+    for platform in preferred + intel:
+        devices = platform.get_devices()
+        if devices:
+            return cl.CommandQueue(cl.Context([devices[0]]))
+
+    pytest.skip("No OpenCL devices available for table builds")

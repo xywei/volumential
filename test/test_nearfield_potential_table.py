@@ -33,8 +33,6 @@ import numpy as np
 import pytest
 from numpy.polynomial.chebyshev import chebval, chebval2d, chebval3d
 
-import pyopencl as cl
-
 
 if (
     sys.platform == "darwin"
@@ -51,25 +49,10 @@ from volumential import lagrange
 from volumential.table_manager import ConstantKernel
 
 
-def _make_build_queue_or_skip():
-    try:
-        platforms = cl.get_platforms()
-    except cl.LogicError as exc:
-        pytest.skip(f"OpenCL platforms unavailable: {exc}")
-
-    for platform in platforms:
-        if platform.name == "Intel(R) OpenCL":
-            continue
-        devices = platform.get_devices()
-        if devices:
-            return cl.CommandQueue(cl.Context([devices[0]]))
-
-    for platform in platforms:
-        devices = platform.get_devices()
-        if devices:
-            return cl.CommandQueue(cl.Context([devices[0]]))
-
-    pytest.skip("No OpenCL devices available for table builds")
+try:
+    from _opencl_test_utils import create_table_build_queue_or_skip
+except ImportError:
+    from test._opencl_test_utils import create_table_build_queue_or_skip
 
 
 def _make_legendre_table_without_cl(q_order, dim):
@@ -119,7 +102,7 @@ def _check_constant_kernel_table_entries(quad_order, expected_entry_value):
     resulting entry value; they stay separate tests because the order-2 build
     is expensive enough to keep behind ``--longrun``.
     """
-    queue = _make_build_queue_or_skip()
+    queue = create_table_build_queue_or_skip()
     table = npt.NearFieldInteractionTable(
         quad_order=quad_order,
         kernel_func=npt.constant_one,
@@ -2755,7 +2738,7 @@ def _raise_batched(monkeypatch, message="synthetic batched build failure"):
 
 
 def test_scalar_fallback_warns_and_records_routing(monkeypatch):
-    queue = _make_build_queue_or_skip()
+    queue = create_table_build_queue_or_skip()
     monkeypatch.delenv(npt.DUFFY_NO_FALLBACK_ENV_VAR, raising=False)
     _raise_batched(monkeypatch)
 
@@ -2774,7 +2757,7 @@ def test_scalar_fallback_warns_and_records_routing(monkeypatch):
 
 
 def test_batched_build_records_batched_routing(monkeypatch):
-    queue = _make_build_queue_or_skip()
+    queue = create_table_build_queue_or_skip()
     monkeypatch.delenv(npt.DUFFY_NO_FALLBACK_ENV_VAR, raising=False)
 
     table = _const_table_for_fallback()
@@ -2785,7 +2768,7 @@ def test_batched_build_records_batched_routing(monkeypatch):
 
 
 def test_no_fallback_env_var_turns_the_fallback_into_an_error(monkeypatch):
-    queue = _make_build_queue_or_skip()
+    queue = create_table_build_queue_or_skip()
     monkeypatch.setenv(npt.DUFFY_NO_FALLBACK_ENV_VAR, "1")
     _raise_batched(monkeypatch)
 
@@ -2798,7 +2781,7 @@ def test_no_fallback_env_var_turns_the_fallback_into_an_error(monkeypatch):
 
 @pytest.mark.parametrize("value", ["0", "false", "off", ""])
 def test_no_fallback_env_var_off_values_keep_the_fallback(monkeypatch, value):
-    queue = _make_build_queue_or_skip()
+    queue = create_table_build_queue_or_skip()
     monkeypatch.setenv(npt.DUFFY_NO_FALLBACK_ENV_VAR, value)
     _raise_batched(monkeypatch)
 
@@ -3020,7 +3003,7 @@ def test_helmholtz_fused_duffy_code_has_no_cdouble_exp():
     """
     from sumpy.kernel import HelmholtzKernel
 
-    queue = _make_build_queue_or_skip()
+    queue = create_table_build_queue_or_skip()
     code = _fused_device_code(HelmholtzKernel(3), 3, queue)
 
     assert "cdouble_exp" not in code
@@ -3036,7 +3019,7 @@ def test_helmholtz_fused_duffy_code_has_no_cdouble_exp():
 def test_yukawa_fused_duffy_code_keeps_a_real_exp():
     from sumpy.kernel import YukawaKernel
 
-    queue = _make_build_queue_or_skip()
+    queue = create_table_build_queue_or_skip()
     code = _fused_device_code(YukawaKernel(3), 3, queue)
 
     assert "cdouble_exp" not in code
@@ -3612,7 +3595,7 @@ def test_the_opaque_cse_phase_would_have_cancelled_to_zero():
 def test_evanescent_helmholtz_fused_duffy_code_keeps_cdouble_exp():
     from sumpy.kernel import HelmholtzKernel
 
-    queue = _make_build_queue_or_skip()
+    queue = create_table_build_queue_or_skip()
     code = _fused_device_code(HelmholtzKernel(3, allow_evanescent=True), 3, queue)
 
     assert "cdouble_exp" in code

@@ -1,4 +1,4 @@
-"""Device selection of :func:`_opencl_test_utils.create_fp64_context_or_skip`.
+"""Device selection of the helpers in :mod:`_opencl_test_utils`.
 
 The platforms, devices and contexts here are stand-ins, so these tests pin the
 selection rule on any host -- including the branch that prefers a GPU, which a
@@ -61,6 +61,7 @@ def fake_cl(monkeypatch):
     monkeypatch.setattr(
         cl, "Context", lambda devices: SimpleNamespace(devices=devices)
     )
+    monkeypatch.setattr(cl, "CommandQueue", lambda ctx: SimpleNamespace(context=ctx))
     return state
 
 
@@ -132,3 +133,33 @@ def test_pyopencl_ctx_matching_nothing_is_an_error(fake_cl, monkeypatch):
 
     with pytest.raises(RuntimeError, match="did not match"):
         utils.create_fp64_context_or_skip()
+
+
+def test_table_build_queue_honors_pyopencl_ctx(fake_cl, monkeypatch):
+    cpu = _device("cpu", CPU)
+    fake_cl.platforms = [
+        _platform("NVIDIA CUDA", _device("gpu", GPU)),
+        _platform("Portable Computing Language", cpu),
+    ]
+    monkeypatch.setenv("PYOPENCL_CTX", "portable:0")
+
+    assert utils.create_table_build_queue_or_skip().context.devices == [cpu]
+
+
+def test_table_build_queue_default_skips_the_intel_cpu_runtime(fake_cl):
+    first = _device("first", GPU)
+    fake_cl.platforms = [
+        _platform(utils.INTEL_OPENCL_PLATFORM_NAME, _device("intel cpu", CPU)),
+        _platform("NVIDIA CUDA", first),
+        _platform("Portable Computing Language", _device("cpu", CPU)),
+    ]
+    assert utils.create_table_build_queue_or_skip().context.devices == [first]
+
+
+def test_table_build_queue_default_falls_back_to_the_intel_cpu_runtime(fake_cl):
+    intel_cpu = _device("intel cpu", CPU)
+    fake_cl.platforms = [
+        _platform("Portable Computing Language"),
+        _platform(utils.INTEL_OPENCL_PLATFORM_NAME, intel_cpu),
+    ]
+    assert utils.create_table_build_queue_or_skip().context.devices == [intel_cpu]
