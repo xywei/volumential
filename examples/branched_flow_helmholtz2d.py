@@ -146,8 +146,10 @@ def _select_opencl_device(cl_module):
 def _create_opencl_context(cl_module):
     """Honor ``PYOPENCL_CTX`` when it is set; otherwise pick a device.
 
-    Without the variable, :func:`_select_opencl_device` prefers the first
-    fp64-capable GPU and falls back to an fp64-capable CPU.
+    With the variable set, the context is exactly the one device it selects;
+    a selector that matches several devices, or one without fp64, is an
+    error. Without the variable, :func:`_select_opencl_device` prefers the
+    first fp64-capable GPU and falls back to an fp64-capable CPU.
     """
     if not os.environ.get("PYOPENCL_CTX"):
         return cl_module.Context([_select_opencl_device(cl_module)])
@@ -157,6 +159,14 @@ def _create_opencl_context(cl_module):
     context = cl_module.create_some_context(
         interactive=False, answers=os.environ["PYOPENCL_CTX"].split(":")
     )
+    # A selector such as portable:0,1 gives a context with several devices,
+    # and a queue built without naming one would silently use the first.
+    if len(context.devices) != 1:
+        raise RuntimeError(
+            f"PYOPENCL_CTX selects {len(context.devices)} devices: "
+            + ", ".join(device.name for device in context.devices)
+            + "; select exactly one"
+        )
     lacking = [
         device.name
         for device in context.devices
