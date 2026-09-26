@@ -107,8 +107,8 @@ surface before the long run starts.
 At full size the tier took 90 minutes on the runner, 57 of them in the two 3D
 split-versus-nonsplit tests. So the job sets
 `VOLUMENTIAL_FULL_ACCURACY_REDUCED=1`, which runs those two at a reduced size
-(see {doc}`testing`). They then took 14 minutes and the tier 38, on a runner
-with a faster CPU. The full size is for a manual run.
+(see {doc}`testing`). In two runs at that size the tier took 55 and 38
+minutes; the runners had different CPUs. The full size is for a manual run.
 
 ## Adding a documentation dependency
 

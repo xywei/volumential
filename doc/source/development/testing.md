@@ -90,11 +90,13 @@ A CPU runs the whole full-accuracy tier, but in a different cost class from a
 GPU. On the PoCL CPU of a `CI Full` runner it took 90 minutes, 57 of them in
 the two 3D split-versus-nonsplit tests of `test_volume_fmm.py`.
 `VOLUMENTIAL_FULL_ACCURACY_REDUCED=1` runs those two at multipole order 16
-instead of 24 and without their source-derivative pair; they then took 14
-minutes and the tier 38, and `CI Full` sets it. Each figure is one run, and the
-second runner had a faster CPU. The docstring of `_split_3d_full_accuracy_size`
-says why neither change loosens the comparison. Leave the variable unset for
-the full size, on a GPU or whenever a change touches the 3D split.
+instead of 24 and without their source-derivative pair, and `CI Full` sets it.
+In two runs at that size they took 21 and 14 minutes and the tier 55 and 38.
+Each of the three runs had a runner with a different CPU; the 55-minute one
+ran the rest of the tier about as fast as the 90-minute one. The docstring of
+`_split_3d_full_accuracy_size` says why neither change loosens the comparison.
+Leave the variable unset for the full size, on a GPU or whenever a change
+touches the 3D split.
 
 ```bash
 VOLUMENTIAL_FULL_ACCURACY_REDUCED=1 uv run pytest -m full_accuracy --full-accuracy
