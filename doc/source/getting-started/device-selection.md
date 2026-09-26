@@ -78,8 +78,9 @@ Each carries a `_select_opencl_device` that enumerates the platforms and takes
 the `auto` path: first fp64-capable GPU, else first fp64-capable CPU. On a host
 with both a CUDA GPU and PoCL they run on the GPU unless the variable says
 otherwise. With the variable set, they build the context from it, and stop if
-the selected device lacks fp64. `helmholtz2d.py` and `helmholtz3d.py` log the
-device they resolved. Until 2026-09 those two ignored the variable.
+it selects several devices or one without fp64. `helmholtz2d.py` and
+`helmholtz3d.py` log the device they resolved. Until 2026-09 those two ignored
+the variable.
 
 The variable still does not decide the device of the tests that take the
 `ctx_factory` fixture, which read `PYOPENCL_TEST`. Set both, and read the

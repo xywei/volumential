@@ -48,7 +48,8 @@ again. Which build path runs, and how long it takes, is the subject of
 unset: they build an OpenCL context directly, on the first fp64-capable GPU
 they find, else on an fp64-capable CPU. On a host with a GPU that silently
 changes the cost class of a run, so set the variable. With it set, they run on
-the device it selects, and stop if that device lacks fp64.
+the device it selects, and stop if it selects several devices or one without
+fp64.
 {doc}`../getting-started/device-selection` lists which script does what, and
 how to pin the device you meant.
 
