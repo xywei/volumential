@@ -166,6 +166,11 @@ jobs:
           export PYOPENCL_CTX="portable:0"
           export PYOPENCL_TEST="portable:0"
           export PYTHONFAULTHANDLER=1
+          # At full size the two 3D split-versus-nonsplit tests took 57 of
+          # the 90 minutes this run needed on the CPU; this runs them at the
+          # reduced size of _split_3d_full_accuracy_size in
+          # test/test_volume_fmm.py.  Leave it unset for the full size.
+          export VOLUMENTIAL_FULL_ACCURACY_REDUCED=1
 
           python -m pip install --upgrade pip
           python -m pip install uv
