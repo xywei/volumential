@@ -176,8 +176,8 @@ jobs:
           python -m pip install uv
           uv pip install --system --editable ".[benchmark,test]"
 
-          # Name the device in the log, and stop before the hour-long run if
-          # it is not the fp64 PoCL CPU.
+          # Name the device in the log, and stop before the long run if it
+          # is not the fp64 PoCL CPU.
           python - <<'PYEOF'
           import sys
 

@@ -1,13 +1,13 @@
 """OpenCL device selection for the tests that build their own context.
 
-Some tests cannot take the ``ctx_factory`` fixture. The volume FMM regressions
+Some tests do not take the ``ctx_factory`` fixture. The volume FMM regressions
 and the full-accuracy sweeps need a device with fp64 whatever platform the
-fixture was pinned to, and the near-field table builds shared by a whole
-module or session need one queue before any fixture is parametrized. The
-functions here are the one place that decides which device those are, and
-both honor ``PYOPENCL_CTX``: when it is set, the context is exactly the device
-it selects, CPU or GPU, and a selector that matches nothing is an error, not a
-skip.
+fixture was pinned to, and the near-field tables built by the session fixture
+in ``conftest.py`` and by ``test_nearfield_potential_table.py`` want one queue,
+not one per platform. The functions here are the one place that decides which
+device those are, and both honor ``PYOPENCL_CTX``: when it is set, the context
+is exactly the device it selects, CPU or GPU, and a selector that matches
+nothing is an error, not a skip.
 
 Without ``PYOPENCL_CTX``, :func:`create_fp64_context_or_skip` prefers the
 first fp64 GPU and falls back to the first fp64 CPU, so a CPU-only host runs
@@ -94,8 +94,9 @@ def create_fp64_context_or_skip() -> cl.Context:
     device = _default_fp64_device()
     if device is None:
         pytest.skip(
-            "No OpenCL GPU or CPU device with fp64 support available "
-            "(set PYOPENCL_CTX to choose one explicitly)"
+            "No OpenCL GPU or CPU device with fp64 support outside the "
+            f"{INTEL_OPENCL_PLATFORM_NAME} platform (set PYOPENCL_CTX to choose "
+            "one explicitly)"
         )
     return cl.Context([device])
 

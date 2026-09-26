@@ -68,10 +68,10 @@ needs it, and end-of-session cleanup of stray table caches.
 
 Some tests do not take the `ctx_factory` fixture. The volume FMM regressions
 and the full-accuracy sweeps need double precision whatever platform the
-fixture was pinned to, and the near-field tables that `test_table_manager.py`
-and `test_nearfield_potential_table.py` share are built before any fixture is
-parametrized. They get their device from `test/_opencl_test_utils.py`, which
-reads `PYOPENCL_CTX`, not `PYOPENCL_TEST`:
+fixture was pinned to, and the near-field tables built by the session-scoped
+`table_2d_order1` and by `test_nearfield_potential_table.py` want one queue,
+not one per platform. They get their device from `test/_opencl_test_utils.py`,
+which reads `PYOPENCL_CTX`, not `PYOPENCL_TEST`:
 
 - With `PYOPENCL_CTX` set, they run on exactly the device it selects, CPU or
   GPU. The fp64 tests skip only if that device lacks fp64. A selector that
