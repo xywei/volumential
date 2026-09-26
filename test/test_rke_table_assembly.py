@@ -29,14 +29,23 @@ from volumential.rke_table_assembly import (
 )
 
 
+try:
+    from _opencl_test_utils import create_fp64_context_or_skip
+except ImportError:
+    from test._opencl_test_utils import create_fp64_context_or_skip
+
+
 def _get_queue_or_skip():
+    """Return a queue on the device of :func:`create_fp64_context_or_skip`.
+
+    That is exactly the device ``PYOPENCL_CTX`` selects when it is set, as for
+    the other tests that build their own context; the two ``full_accuracy``
+    cases of :func:`test_assembled_matches_direct_batched` build their direct
+    reference on this queue.
+    """
     import pyopencl as cl
 
-    try:
-        ctx = cl.create_some_context(interactive=False)
-    except Exception as exc:
-        pytest.skip(f"no OpenCL context available: {exc}")
-    return cl.CommandQueue(ctx)
+    return cl.CommandQueue(create_fp64_context_or_skip())
 
 
 def test_truncation_order_monotone_and_certifiable():
@@ -76,13 +85,16 @@ def test_condition_guard_rejects_ill_conditioned_assembly(tmp_path):
         )
 
 
+# The two 3D cases took 190 s together on the PoCL CPU of a CI runner, a
+# quarter of the pull-request suite's time under its 900 s timeout. CI Full
+# runs them with the rest of the full-accuracy tier.
 @pytest.mark.parametrize(
     ("dim", "kernel_type", "q_order", "parameter", "level"),
     [
         (2, "Yukawa", 3, 4.0, 3),
         (2, "Helmholtz", 3, 4.0, 3),
-        (3, "Yukawa", 2, 2.0, 2),
-        (3, "Helmholtz", 2, 2.0, 2),
+        pytest.param(3, "Yukawa", 2, 2.0, 2, marks=pytest.mark.full_accuracy),
+        pytest.param(3, "Helmholtz", 2, 2.0, 2, marks=pytest.mark.full_accuracy),
     ],
 )
 def test_assembled_matches_direct_batched(
