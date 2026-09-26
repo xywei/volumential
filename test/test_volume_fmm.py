@@ -7970,9 +7970,9 @@ def test_volume_fmm_far_field_matches_direct_sum_with_leaf_colleagues(
         )
         near_boxes = leaves[gaps < smallest_size / 2]
         start, end = list1_starts[itarget_box : itarget_box + 2]
-        listed = set(list1_lists[start:end].tolist()) | {int(target_box)}
+        listed = set(list1_lists[start:end].tolist())
         assert listed == set(near_boxes.tolist()), (
-            f"List 1 of box {target_box} is not the leaves that touch it"
+            f"List 1 of box {target_box} is not the box and the leaves that touch it"
         )
         targets = node_box == target_box
         sources = ~np.isin(node_box, near_boxes)
