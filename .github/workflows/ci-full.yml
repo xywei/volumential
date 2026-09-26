@@ -30,15 +30,14 @@ jobs:
           environment-name: testing
           cache-downloads: true
           generate-run-shell: true
-      # This job has aborted with SIGABRT after the first 28 tests on every
-      # run since at least 2026-08-02, at the point where the first OpenCL
-      # program is compiled (xywei/volumential#158).  We have no macOS
-      # machine, so these two steps exist to make the next run's log say
-      # which platform and which step dies: the inventory separates "no
-      # usable platform" from "a platform that crashes on enumeration", and
-      # the one-kernel build separates a platform crash from a
-      # kernel-compilation crash.  ``continue-on-error`` keeps them
-      # diagnostic: neither may change this job's verdict.
+      # These two steps localized xywei/volumential#158 (the platform was
+      # PoCL 3.1 and the abort was the final link of the first kernel; see
+      # the comment on ``pocl`` in .test-conda-env-py3-macos.yml) and stay
+      # as a cheap preflight: the inventory names the platform and version
+      # the solve produced, and the one-kernel build separates a platform
+      # crash from a kernel-compilation or link crash before the test run
+      # can hide either.  ``continue-on-error`` keeps them diagnostic:
+      # neither may change this job's verdict.
       - name: OpenCL platform inventory (diagnostic)
         shell: micromamba-shell {0}
         continue-on-error: true
