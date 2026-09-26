@@ -47,7 +47,9 @@ weights (`get_q_weights`) on host or device.
 
 Adaptive refinement and coarsening of the underlying tree of boxes, including
 the 2:1 level restriction that keeps List 1 bounded, live in
-{mod}`volumential.tree_interactive_build`. Refinement is driven by a
+{mod}`volumential.tree_interactive_build`. What that restriction allows in
+List 4, and what it costs in accuracy, is in {ref}`graded-tree-list4`.
+Refinement is driven by a
 user-supplied per-leaf criterion, so a source that is tight in one corner of
 the domain does not force a uniform tree everywhere.
 `examples/laplace2d_adaptive.py` refines by a resolution criterion on the

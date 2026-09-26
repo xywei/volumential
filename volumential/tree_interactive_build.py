@@ -256,6 +256,18 @@ def _enforce_level_restriction(tob):
     The condition is not strengthened to "every colleague of a non-leaf box is
     non-leaf": splitting a box would then force its colleagues to split, theirs
     in turn, and so on across the whole level, which makes every tree uniform.
+
+    Lists 2, 3 and 4 need nothing more, but on such a graded tree a List 4
+    source box, a leaf colleague of the target's parent, is twice the size of
+    the target box and only half its own size away from it. List 2 and List 3
+    sources are at least their own size away. The far field integrates that
+    box by point quadrature at its nodes like any other source, and at that
+    distance the error is 7 to 2800 times the error of the far pairs one to
+    two source sizes away (2-D trees graded over two or three levels,
+    ``q_order`` 4 to 8, the gap growing with ``q_order``). On the tree graded
+    over three levels this is 21% of the max error at ``q_order`` 8 and 2% of
+    the relative L2 error. Integrating these pairs from an upsampled source is
+    https://github.com/xywei/volumential/issues/178.
     """
     tob = _rebuild_tob_from_geometry(tob)
 

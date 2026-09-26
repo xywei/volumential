@@ -56,6 +56,33 @@ Schematic, not computed output: the two paths of the computation.
 {doc}`volume-fmm-workflow` names the objects and modules behind each box.
 ```
 
+(graded-tree-list4)=
+
+## On a graded tree
+
+An adaptive tree is kept 2:1 balanced: leaves that touch differ by at most one
+level. That keeps List 1 inside the cases the table stores, neighbours of
+half, equal and twice the size of the target box, and the far field needs
+nothing more ({mod}`volumential.tree_interactive_build`).
+
+It does let one kind of far-field pair come closer than the others. A box can
+be split while a neighbour of the same size stays a leaf, and that leaf then
+reaches the children of the split box that do not touch it through List 4. It
+is twice the size of such a target box and only half its own size away from
+it; a List 2 or List 3 source is never closer than its own size. The far field
+integrates it like every other source, by point quadrature at its nodes, and
+at half a box size that quadrature is much worse. On 2-D trees graded over two
+or three levels, at `q_order` 4 to 8, the error these pairs add is 7 to 2800
+times the error of the far pairs one to two source sizes away, and the gap
+grows with `q_order`.
+
+In the total error they are a minor term so far. On a tree graded over three
+levels at `q_order` 8 they account for 21% of the max error, which is 2.9e-9,
+and 2% of the relative L2 error; at `q_order` 4 they do not show. Integrating
+them from an upsampled source is
+[#178](https://github.com/xywei/volumential/issues/178), which has the
+measurements.
+
 ## Where symmetry enters
 
 The tabulated neighborhood contains many interactions that are equivalent under
