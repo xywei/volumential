@@ -7869,6 +7869,156 @@ def test_volume_fmm_laplace_graded_tree_matches_exact_solution(
     mg.provider != "meshgen_boxtree",
     reason="Adaptive mesh module is not available",
 )
+def test_volume_fmm_far_field_matches_direct_sum_with_leaf_colleagues(
+    ctx_factory, tmp_path
+):
+    """Lists 2, 3 and 4 are complete when non-leaf boxes have leaf colleagues.
+
+    The balancer enforces only the 2:1 condition between adjacent leaves, so a
+    box can be split while a colleague of the same size stays a leaf. The
+    children of the split box that do not touch that colleague see it through
+    List 4, and it sees them through List 3; a uniform tree has neither list.
+    Everything but List 1 is compared here with a direct sum, over the same
+    quadrature nodes and weights, of every source outside the target box's
+    List 1. The charges are random, so no interaction is negligible: dropping
+    or doubling a single List 2, 3 or 4 entry of the traversal raises the
+    error by many orders of magnitude.
+    """
+    from sumpy.expansion import DefaultExpansionFactory
+    from sumpy.kernel import LaplaceKernel
+
+    from volumential.expansion_wrangler_fpnd import (
+        FPNDExpansionWrangler,
+        FPNDTreeIndependentDataForWrangler,
+    )
+    from volumential.volume_fmm import drive_volume_fmm
+
+    ctx = ctx_factory()
+    queue = cl.CommandQueue(ctx)
+
+    dim = 2
+    q_order = 4
+    fmm_order = 20
+    lower, upper = -0.5, 0.5
+
+    # 8 x 8 leaves, then split the leaf that holds `point` twice; keeping the
+    # tree 2:1 balanced splits some of its neighbours as well, and their
+    # colleagues further out stay leaves.
+    point = np.array([0.1, 0.07])
+    mesh = mg.MeshGen2D(q_order, 4, lower, upper, queue=queue)
+    for _ in range(2):
+        half_sides = 0.5 * np.sqrt(mesh.get_cell_measures())
+        offsets = np.abs(mesh.get_cell_centers() - point)
+        (ileaf,) = np.flatnonzero(np.all(offsets < half_sides[:, None], axis=1))
+        refine_flags = np.zeros(mesh.boxtree.nboxes, dtype=bool)
+        refine_flags[mesh.boxtree.active_boxes.get()[ileaf]] = True
+        mesh.boxtree.refine_and_coarsen(
+            refine_flags=refine_flags,
+            coarsen_flags=np.zeros_like(refine_flags),
+        )
+
+    nodes = np.ascontiguousarray(mesh.get_q_points().T)
+    _, q_weights, tree, trav = mg.build_geometry_info(
+        ctx,
+        queue,
+        dim,
+        q_order,
+        mesh,
+        bbox=np.array([[lower, upper]] * dim),
+    )
+
+    def to_host(ary):
+        return ary.get(queue) if isinstance(ary, cl.array.Array) else np.asarray(ary)
+
+    # The tree must have what this test is about.
+    is_leaf = np.all(to_host(tree.box_child_ids)[:, : tree.nboxes] == 0, axis=0)
+    colleague_starts = to_host(trav.same_level_non_well_sep_boxes_starts)
+    colleague_lists = to_host(trav.same_level_non_well_sep_boxes_lists)
+    assert any(
+        not is_leaf[ibox]
+        and np.any(
+            is_leaf[colleague_lists[colleague_starts[ibox] : colleague_starts[ibox + 1]]]
+        )
+        for ibox in range(tree.nboxes)
+    )
+    assert sum(len(to_host(lev.lists)) for lev in trav.from_sep_smaller_by_level) > 0
+    assert len(to_host(trav.from_sep_bigger_lists)) > 0
+
+    # Leaf box of each node, in the user order of `nodes`.
+    user_source_ids = to_host(tree.user_source_ids)
+    box_source_starts = to_host(tree.box_source_starts)
+    box_source_counts = to_host(tree.box_source_counts_nonchild)
+    node_box = np.full(nodes.shape[1], -1)
+    for ibox in np.flatnonzero(is_leaf):
+        start = box_source_starts[ibox]
+        node_box[user_source_ids[start : start + box_source_counts[ibox]]] = ibox
+    assert np.all(node_box >= 0)
+
+    charges = np.random.default_rng(seed=17).uniform(0.5, 1.5, nodes.shape[1])
+    weighted_charges = charges * q_weights.get(queue)
+
+    target_boxes = to_host(trav.target_boxes)
+    list1_starts = to_host(trav.neighbor_source_boxes_starts)
+    list1_lists = to_host(trav.neighbor_source_boxes_lists)
+    far_direct = np.full(nodes.shape[1], np.nan)
+    for itarget_box, target_box in enumerate(target_boxes):
+        near_boxes = np.append(
+            list1_lists[list1_starts[itarget_box] : list1_starts[itarget_box + 1]],
+            target_box,
+        )
+        targets = node_box == target_box
+        sources = ~np.isin(node_box, near_boxes)
+        dist = np.sqrt(
+            np.sum(
+                (nodes[:, targets, None] - nodes[:, None, sources]) ** 2, axis=0
+            )
+        )
+        green = -np.log(dist) / (2 * np.pi)
+        far_direct[targets] = green @ weighted_charges[sources]
+    assert np.all(np.isfinite(far_direct))
+
+    knl = LaplaceKernel(dim)
+    expn_factory = DefaultExpansionFactory()
+    tree_indep = FPNDTreeIndependentDataForWrangler(
+        ctx,
+        partial(expn_factory.get_multipole_expansion_class(knl), knl),
+        partial(expn_factory.get_local_expansion_class(knl), knl),
+        [knl],
+        exclude_self=True,
+    )
+    wrangler = FPNDExpansionWrangler(
+        tree_indep=tree_indep,
+        queue=queue,
+        traversal=trav,
+        near_field_table=_get_laplace_2d_table(
+            queue, tmp_path / "nft-laplace2d-q4.sqlite", q_order
+        ),
+        dtype=np.float64,
+        fmm_level_to_order=lambda kernel, kernel_args, tree, lev: fmm_order,
+        quad_order=q_order,
+        self_extra_kwargs={
+            "target_to_source": np.arange(tree.ntargets, dtype=np.int32)
+        },
+    )
+
+    (far_fmm,) = drive_volume_fmm(
+        trav,
+        wrangler,
+        cl.array.to_device(queue, weighted_charges),
+        cl.array.to_device(queue, charges),
+        exclude_list1=True,
+    )
+
+    rel_error = float(
+        np.max(np.abs(far_fmm.get(queue) - far_direct)) / np.max(np.abs(far_direct))
+    )
+    assert rel_error < 1e-9, f"far field off by {rel_error:.3e} from a direct sum"
+
+
+@pytest.mark.skipif(
+    mg.provider != "meshgen_boxtree",
+    reason="Adaptive mesh module is not available",
+)
 @pytest.mark.parametrize("bbox_radius", [1.0, 1.3])
 def test_volume_fmm_calculus_patch_matches_source_density(
     ctx_factory, tmp_path, bbox_radius
