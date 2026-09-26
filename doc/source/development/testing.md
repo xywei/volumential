@@ -40,8 +40,8 @@ uv run pytest -q test/test_duffy_tanh_sinh.py
 ## Markers and options
 
 `test/conftest.py` owns everything the whole suite relies on, and registers its
-markers in `pytest_configure` so they work regardless of which configuration
-file pytest picks up.
+markers in `pytest_configure` so they work regardless of which ini file pytest
+picks up.
 
 `full_accuracy`
 : High-cost derivative and direct-reference accuracy tests. **Skipped unless
@@ -65,10 +65,9 @@ needs it, and end-of-session cleanup of stray table caches.
 
 ## Configuration
 
-The pytest configuration is `[tool.pytest.ini_options]` in `pyproject.toml`,
-and it is the only one. Do not add a `pytest.ini`: pytest reads that file
-first, and whenever both exist it ignores the `pyproject.toml` table (the run
-header says so, as `WARNING: ignoring pytest config in pyproject.toml!`).
+`pytest.ini` currently wins over `[tool.pytest.ini_options]` in
+`pyproject.toml`. Both exist, and until the duplication is resolved, edit
+`pytest.ini`.
 
 ## Examples as tests
 

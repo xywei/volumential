@@ -337,6 +337,5 @@ publishes no inventory for it.
 ## Notes
 
 - Keep local and remote environments on the same Python minor version.
-- The pytest configuration is `[tool.pytest.ini_options]` in `pyproject.toml`.
-  Do not add a `pytest.ini`: pytest reads that file first and ignores the
-  table in `pyproject.toml` whenever both exist.
+- `pytest.ini` currently wins over `[tool.pytest.ini_options]` in
+  `pyproject.toml`; edit `pytest.ini` until the duplication is resolved.
