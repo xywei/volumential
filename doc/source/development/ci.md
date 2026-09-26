@@ -102,7 +102,9 @@ instead, found none on the runner, and all of them skipped while the job
 stayed green. So the job now names the device first and stops if it is not an
 fp64 PoCL CPU, and after the run it fails if any test was skipped. The
 collection step still runs on its own, so marker drift and import errors
-surface before the long run starts.
+surface before the long run starts. Both steps select the marker over the
+whole `test` directory. Until 2026-09 they named two files instead, and the
+five `full_accuracy` cases of `test_windowed_rke.py` ran in no CI job.
 
 At full size the tier took 90 minutes on the runner, 57 of them in the two 3D
 split-versus-nonsplit tests. So the job sets
