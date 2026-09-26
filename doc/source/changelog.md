@@ -87,6 +87,13 @@ Tables and numerics
   ({doc}`design-notes/windowed-channels`).
 
 Infrastructure
+: [#195](https://github.com/xywei/volumential/pull/195) — give the two 3D
+  split-versus-nonsplit full-accuracy tests a margin. What they measured was
+  the error of the rule that integrates the smooth split remainder at the
+  base quadrature order: 9.7e-7 for the Helmholtz potential, against a 1e-6
+  tolerance. They now integrate the remainder at order 6, where the largest
+  difference is 2.0e-10, and assert 1e-8. The one-off Yukawa failure of
+  [#190](https://github.com/xywei/volumential/issues/190) is still open.
 : [#189](https://github.com/xywei/volumential/pull/189) — run the
   full-accuracy tier. Its 32 tests built their context on the first fp64 GPU
   whatever `PYOPENCL_CTX` said, so on the GPU-less runner of `CI Full` all of
