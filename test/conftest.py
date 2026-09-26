@@ -58,7 +58,7 @@ except ImportError:
 
 
 #: Markers this suite defines, registered in :func:`pytest_configure` so that
-#: they work no matter which ini file pytest picks up.
+#: they work no matter which configuration file pytest picks up.
 SUITE_MARKERS = (
     "full_accuracy: high-cost accuracy and fp64 regression tests, skipped "
     "unless --full-accuracy",
@@ -122,8 +122,9 @@ def pytest_addoption(parser) -> None:
 def pytest_configure(config) -> None:
     """Register this suite's markers.
 
-    ``pytest.ini`` declares them as well; registering here keeps ``--strict-
-    markers`` runs working if that file is ever folded into ``pyproject.toml``.
+    ``[tool.pytest.ini_options]`` in ``pyproject.toml`` declares
+    ``full_accuracy`` as well; registering here keeps ``--strict-markers`` runs
+    working when pytest is pointed at another configuration file, or at none.
     """
     for marker in SUITE_MARKERS:
         config.addinivalue_line("markers", marker)
