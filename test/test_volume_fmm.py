@@ -7722,7 +7722,10 @@ def test_volume_fmm_laplace(laplace_problem):
         print("max abs exact", np.nanmax(np.abs(exact_host)))
     max_err = np.nanmax(np.abs(exact_host - fmm_host))
     assert np.isfinite(max_err)
-    assert float(max_err) < 5e-2
+    # About 1.1e-4 on a CPU device. The uniform 32 x 32 tree that the balancer
+    # made of this refinement while it also required every colleague of a
+    # non-leaf box to be non-leaf gives 2.7e-3.
+    assert float(max_err) < 1e-3
 
 
 @pytest.mark.skipif(
