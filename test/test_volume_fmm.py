@@ -8015,6 +8015,9 @@ def test_volume_fmm_far_field_matches_direct_sum_with_leaf_colleagues(
     rel_error = float(
         np.max(np.abs(far_fmm.get(queue) - far_direct)) / np.max(np.abs(far_direct))
     )
+    # About 1.3e-12 on a CPU device, which is rounding level: FMM order 25 gives
+    # the same. Dropping or doubling one List 2, 3 or 4 entry gives 9e-3 to
+    # 6e-2.
     assert rel_error < 1e-9, f"far field off by {rel_error:.3e} from a direct sum"
 
 
