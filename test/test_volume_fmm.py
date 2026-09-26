@@ -5771,8 +5771,8 @@ def _split_3d_full_accuracy_size():
 #: rule of this order, which defaults to the base quadrature order, 4. That
 #: rule is not exact for the remainder, and until the order is well above 4
 #: its error is nearly all of the difference between the two runs. At
-#: multipole order 8 on a PoCL CPU, the largest difference over the scalar
-#: and target x-derivative pairs of both kernels was:
+#: multipole order 8 on a PoCL CPU, the largest difference over the three
+#: pairs of both kernels was:
 #:
 #: ============  =========
 #: smooth order  rel. diff
