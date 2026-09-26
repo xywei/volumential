@@ -94,6 +94,14 @@ Infrastructure
   tolerance. They now integrate the remainder at order 6, where the largest
   difference is 2.0e-10, and assert 1e-8. The one-off Yukawa failure of
   [#190](https://github.com/xywei/volumential/issues/190) is still open.
+: [#192](https://github.com/xywei/volumential/pull/192) — run all of the
+  full-accuracy tier. `CI Full` named two files, so the five `full_accuracy`
+  cases of `test_windowed_rke.py` ran in no CI job; it now selects the marker
+  over the whole `test` directory, 79 tests. The OpenCL queue of that module
+  now comes from the same `PYOPENCL_CTX` helper as the rest of the tier. The
+  tests of that helper now fail, rather than skip, when it finds no device
+  where it should: a helper that lost its fp64 CPU fallback used to leave
+  them green.
 : [#189](https://github.com/xywei/volumential/pull/189) — run the
   full-accuracy tier. Its 32 tests built their context on the first fp64 GPU
   whatever `PYOPENCL_CTX` said, so on the GPU-less runner of `CI Full` all of
