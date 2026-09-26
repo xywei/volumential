@@ -37,6 +37,13 @@ from volumential.rke_table_assembly import (
     windowed_remainder_profile,
 )
 
+
+try:
+    from _opencl_test_utils import create_fp64_context_or_skip
+except ImportError:
+    from test._opencl_test_utils import create_fp64_context_or_skip
+
+
 WINDOW_THETA = 16.0
 ROOT_EXTENT = 2.0
 
@@ -54,13 +61,15 @@ CHAN_ORDERS_3D = {"chan_regular_order": 14, "chan_radial_order": 45}
 
 
 def _get_queue_or_skip():
+    """Return a queue on the device of :func:`create_fp64_context_or_skip`.
+
+    That is exactly the device ``PYOPENCL_CTX`` selects when it is set, as for
+    the other tests that build their own context; two of the ``full_accuracy``
+    cases here take their direct reference from this queue.
+    """
     import pyopencl as cl
 
-    try:
-        ctx = cl.create_some_context(interactive=False)
-    except Exception as exc:
-        pytest.skip(f"no OpenCL context available: {exc}")
-    return cl.CommandQueue(ctx)
+    return cl.CommandQueue(create_fp64_context_or_skip())
 
 
 def _box_extent(source_box_level):
