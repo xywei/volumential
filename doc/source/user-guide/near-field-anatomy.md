@@ -76,12 +76,12 @@ or three levels, at `q_order` 4 to 8, the error these pairs add is 7 to 2800
 times the error of the far pairs one to two source sizes away, and the gap
 grows with `q_order`.
 
-In the total error they are a minor term so far. On a tree graded over three
-levels at `q_order` 8 they account for 21% of the max error, which is 2.9e-9,
-and 2% of the relative L2 error; at `q_order` 4 they do not show. Integrating
-them from an upsampled source is
-[#178](https://github.com/xywei/volumential/issues/178), which has the
-measurements.
+In the total error they are a minor term so far. On a 16 x 16 tree refined
+twice around a narrow source (535 leaves on levels 4 to 6), at `q_order` 8 they
+account for 21% of the max error, which is 2.9e-9, and 2% of the relative L2
+error; at `q_order` 4 they do not show. Integrating them from an upsampled
+source is [#178](https://github.com/xywei/volumential/issues/178), which has
+the measurements.
 
 ## Where symmetry enters
 

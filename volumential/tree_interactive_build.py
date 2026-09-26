@@ -264,10 +264,11 @@ def _enforce_level_restriction(tob):
     box by point quadrature at its nodes like any other source, and at that
     distance the error is 7 to 2800 times the error of the far pairs one to
     two source sizes away (2-D trees graded over two or three levels,
-    ``q_order`` 4 to 8, the gap growing with ``q_order``). On the tree graded
-    over three levels this is 21% of the max error at ``q_order`` 8 and 2% of
-    the relative L2 error. Integrating these pairs from an upsampled source is
-    https://github.com/xywei/volumential/issues/178.
+    ``q_order`` 4 to 8, the gap growing with ``q_order``). On the graded tree
+    of ``test_volume_fmm_laplace_graded_tree_matches_exact_solution`` (535
+    leaves on levels 4 to 6) this is 21% of the max error at ``q_order`` 8 and
+    2% of the relative L2 error. Integrating these pairs from an upsampled
+    source is tracked in https://github.com/xywei/volumential/issues/178.
     """
     tob = _rebuild_tob_from_geometry(tob)
 
