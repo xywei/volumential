@@ -28,11 +28,12 @@ Test Tiers
        every pull request.
    * - Full-accuracy tests
      - ``pytest -m full_accuracy --full-accuracy``
-     - GPU-capable developer or dedicated runner environments
-     - High-cost direct-reference and split/non-split accuracy checks. The
-       GitHub-hosted ``CI Full`` workflow collects the marked tests on
-       scheduled/manual runs so marker drift and import errors are visible
-       without pretending that CPU-only runners exercise GPU-required cases.
+     - ``CI Full`` scheduled/manual runs, on a GitHub-hosted CPU; locally on
+       any fp64 device
+     - High-cost direct-reference and split/non-split accuracy checks, and the
+       volume FMM convergence and PDE-residual regressions. ``CI Full`` runs
+       them on the PoCL CPU, the two 3D split-versus-nonsplit tests at a
+       reduced size, and fails if any of them is skipped.
    * - Measured evidence
      - Driver code kept outside this repository, run against a pinned
        revision of it
@@ -102,13 +103,11 @@ CI Partitioning
 ---------------
 
 Pull-request CI runs smoke and regression coverage that should stay bounded in
-runtime. The scheduled/manual ``CI Full`` workflow runs the documentation and
-example jobs and now collects the ``full_accuracy`` pytest marker explicitly on
-GitHub-hosted CPU runners. Full numerical execution of the marked tests still
-requires a GPU-capable environment; the collection job is intended to catch
-marker drift, import errors, and accidental deselection without making every
-pull request wait for the full matrix or silently treating skipped GPU tests as
-validation.
+runtime. The scheduled/manual ``CI Full`` workflow runs the example jobs and
+the ``full_accuracy`` tests, on the PoCL CPU of a GitHub-hosted runner, so no
+pull request waits for the full matrix. That job collects the marker
+explicitly, to catch marker drift and import errors, and fails if any marked
+test is skipped, so a skipped test is never counted as validation.
 
 When adding a new kernel or derivative mode, update this page in the same pull
 request that adds tests. A feature should not be marked as fully covered unless

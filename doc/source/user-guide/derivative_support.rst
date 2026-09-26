@@ -110,8 +110,7 @@ for routine execution. Higher-cost checks are marker-gated:
 
    pytest -m full_accuracy --full-accuracy test/test_duffy_full_accuracy.py test/test_volume_fmm.py
 
-The scheduled/manual ``CI Full`` workflow collects these tests on GitHub-hosted
-CPU runners to detect marker drift and import errors. Numerical execution of
-GPU-required full-accuracy cases still requires a GPU-capable developer or
-dedicated runner environment; see :doc:`validation_matrix` for the broader
-validation partitioning.
+The scheduled/manual ``CI Full`` workflow runs these tests on the PoCL CPU of a
+GitHub-hosted runner. Locally they run on the fp64 device ``PYOPENCL_CTX``
+selects, CPU or GPU (see :doc:`../development/testing`); see
+:doc:`validation_matrix` for the broader validation partitioning.

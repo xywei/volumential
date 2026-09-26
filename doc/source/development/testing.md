@@ -11,7 +11,7 @@ what each tier currently covers; this page is how to run them.
 | --- | --- | --- |
 | Smoke and regression | `uv run pytest -q` | Pull-request CI and `main` |
 | Long-run | `uv run pytest --longrun` | Developer or dedicated runs |
-| Full accuracy | `uv run pytest -m full_accuracy --full-accuracy` | GPU-capable or dedicated runners |
+| Full accuracy | `uv run pytest -m full_accuracy --full-accuracy` | `CI Full` (weekly and on demand), on a CPU |
 
 There is no benchmark tier any more: the drivers that produced timing, cache
 and parameter-sweep evidence are no longer in the tree, and what a measurement
@@ -44,9 +44,10 @@ markers in `pytest_configure` so they work regardless of which configuration
 file pytest picks up.
 
 `full_accuracy`
-: High-cost derivative and direct-reference accuracy tests. **Skipped unless
-  `--full-accuracy` is passed**, so a plain `pytest` run neither pays for them
-  nor pretends to have run them.
+: High-cost derivative and direct-reference accuracy tests, and the volume FMM
+  convergence, PDE-residual and split-versus-nonsplit regressions. **Skipped
+  unless `--full-accuracy` is passed**, so a plain `pytest` run neither pays
+  for them nor pretends to have run them.
 
 `slow`
 : Labels, but does not skip, the handful of tests that dominate the wall clock.
@@ -62,6 +63,42 @@ OpenCL-using tests over the available platforms, so set `PYOPENCL_TEST` (see
 also carries the xfail policy for OpenCL platforms known to crash, a
 session-scoped `table_2d_order1` near-field table shared by every test that
 needs it, and end-of-session cleanup of stray table caches.
+
+## The device of the tests that build their own context
+
+Some tests do not take the `ctx_factory` fixture. The volume FMM regressions
+and the full-accuracy sweeps need double precision whatever platform the
+fixture was pinned to, and the near-field tables that `test_table_manager.py`
+and `test_nearfield_potential_table.py` share are built before any fixture is
+parametrized. They get their device from `test/_opencl_test_utils.py`, which
+reads `PYOPENCL_CTX`, not `PYOPENCL_TEST`:
+
+- With `PYOPENCL_CTX` set, they run on exactly the device it selects, CPU or
+  GPU. The fp64 tests skip only if that device lacks fp64. A selector that
+  matches no platform is an error, not a skip.
+- Without it, the fp64 tests take the first fp64 GPU, and the first fp64 CPU
+  when there is none. This default never picks the `Intel(R) OpenCL`
+  platform, which `conftest.py` marks as crashing on these paths; select it
+  explicitly to run there anyway. The table builds keep the rule they always
+  had: the first device of the first platform other than that one.
+
+So set both variables to the same device, as
+{doc}`../getting-started/device-selection` does, and the whole suite runs where
+you pointed it.
+
+A CPU runs the whole full-accuracy tier, but in a different cost class from a
+GPU. On the PoCL CPU of a `CI Full` runner it took 90 minutes, 57 of them in
+the two 3D split-versus-nonsplit tests of `test_volume_fmm.py`.
+`VOLUMENTIAL_FULL_ACCURACY_REDUCED=1` runs those two at multipole order 16
+instead of 24 and without their source-derivative pair; they then took 14
+minutes and the tier 38, and `CI Full` sets it. Each figure is one run, and the
+second runner had a faster CPU. The docstring of `_split_3d_full_accuracy_size`
+says why neither change loosens the comparison. Leave the variable unset for
+the full size, on a GPU or whenever a change touches the 3D split.
+
+```bash
+VOLUMENTIAL_FULL_ACCURACY_REDUCED=1 uv run pytest -m full_accuracy --full-accuracy
+```
 
 ## Configuration
 
