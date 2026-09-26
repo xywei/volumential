@@ -94,7 +94,8 @@ Infrastructure
   other tests that build their own context, and at seconds on a CPU they run in
   the default suite. `test_fmmlib_batched_stages.py` no longer always takes
   PoCL, and `helmholtz2d.py` and `helmholtz3d.py` no longer ignore the
-  variable ({doc}`getting-started/device-selection`).
+  variable. All three Helmholtz examples stop when it selects several devices
+  ({doc}`getting-started/device-selection`).
 : [#189](https://github.com/xywei/volumential/pull/189) — run the
   full-accuracy tier. Its 32 tests built their context on the first fp64 GPU
   whatever `PYOPENCL_CTX` said, so on the GPU-less runner of `CI Full` all of
