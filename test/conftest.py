@@ -56,8 +56,8 @@ from volumential.table_manager import NearFieldInteractionTableManager as NFTMan
 #: Markers this suite defines, registered in :func:`pytest_configure` so that
 #: they work no matter which ini file pytest picks up.
 SUITE_MARKERS = (
-    "full_accuracy: high-cost derivative accuracy tests, skipped unless "
-    "--full-accuracy",
+    "full_accuracy: high-cost accuracy and fp64 regression tests, skipped "
+    "unless --full-accuracy",
     "slow: tests whose aggregate runtime exceeds roughly 30 s on a CPU OpenCL "
     "backend; they still run by default, deselect them with -m 'not slow'",
 )
