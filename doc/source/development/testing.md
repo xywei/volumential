@@ -66,9 +66,10 @@ needs it, and end-of-session cleanup of stray table caches.
 
 ## The device of the tests that build their own context
 
-Some tests do not take the `ctx_factory` fixture. The volume FMM regressions
-and the full-accuracy sweeps need double precision whatever platform the
-fixture was pinned to, and the near-field tables built by the session-scoped
+Some tests do not take the `ctx_factory` fixture. The volume FMM regressions,
+the full-accuracy sweeps, the manufactured batched Duffy checks and the batched
+FMMLib stage tests need double precision whatever platform the fixture was
+pinned to, and the near-field tables built by the session-scoped
 `table_2d_order1` and by `test_nearfield_potential_table.py` want one queue,
 not one per platform. They get their device from `test/_opencl_test_utils.py`,
 which reads `PYOPENCL_CTX`, not `PYOPENCL_TEST`:
@@ -87,6 +88,11 @@ which reads `PYOPENCL_CTX`, not `PYOPENCL_TEST`:
 So set both variables to the same device, as
 {doc}`../getting-started/device-selection` does, and the whole suite runs where
 you pointed it.
+
+Until 2026-09 the eleven manufactured checks of
+`test_duffy_batched_manufactured.py` skipped on any device but a GPU, so they
+ran in no CI job. On a CPU they take seconds, so they run in the default suite
+rather than the full-accuracy tier.
 
 A CPU runs the whole full-accuracy tier, but in a different cost class from a
 GPU. On the PoCL CPU of a `CI Full` runner it took 90 minutes, 57 of them in
