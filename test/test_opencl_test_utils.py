@@ -3,6 +3,13 @@
 The platforms, devices and contexts here are stand-ins, so these tests pin the
 selection rule on any host -- including the branch that prefers a GPU, which a
 CPU-only runner could not otherwise exercise.
+
+The helpers skip when they find no device, and a skip raised inside a test
+only marks that test skipped, even inside ``pytest.raises``. So every test
+here that expects a device, or an error, calls the helper through
+:func:`_select`, which turns a skip into a failure: a helper that stopped
+falling back to the CPU, or that skipped on a ``PYOPENCL_CTX`` matching
+nothing, would otherwise leave its test skipped and the run green.
 """
 
 from types import SimpleNamespace
@@ -33,6 +40,14 @@ def _device(name, device_type, *, fp64=True):
 
 def _platform(name, *devices):
     return SimpleNamespace(name=name, get_devices=lambda: list(devices))
+
+
+def _select(helper):
+    """Return what `helper` selects, and fail the test if it skips instead."""
+    try:
+        return helper()
+    except pytest.skip.Exception as exc:
+        pytest.fail(f"{helper.__name__} skipped instead of selecting: {exc}")
 
 
 @pytest.fixture
@@ -72,7 +87,7 @@ def test_default_prefers_an_fp64_gpu(fake_cl):
         _platform("Portable Computing Language", _device("cpu", CPU)),
         _platform("NVIDIA CUDA", _device("gpu without fp64", GPU, fp64=False), gpu),
     ]
-    assert utils.create_fp64_context_or_skip().devices == [gpu]
+    assert _select(utils.create_fp64_context_or_skip).devices == [gpu]
 
 
 def test_default_falls_back_to_an_fp64_cpu(fake_cl):
@@ -81,7 +96,7 @@ def test_default_falls_back_to_an_fp64_cpu(fake_cl):
         _platform("NVIDIA CUDA", _device("gpu without fp64", GPU, fp64=False)),
         _platform("Portable Computing Language", cpu),
     ]
-    assert utils.create_fp64_context_or_skip().devices == [cpu]
+    assert _select(utils.create_fp64_context_or_skip).devices == [cpu]
 
 
 def test_default_never_picks_the_intel_cpu_runtime(fake_cl):
@@ -101,7 +116,7 @@ def test_pyopencl_ctx_selects_a_cpu_over_an_available_gpu(fake_cl, monkeypatch):
     monkeypatch.setenv("PYOPENCL_CTX", "portable:0")
     monkeypatch.setenv("PYOPENCL_TEST", "cuda:0")
 
-    assert utils.create_fp64_context_or_skip().devices == [cpu]
+    assert _select(utils.create_fp64_context_or_skip).devices == [cpu]
     assert fake_cl.answers == ["portable", "0"]
 
 
@@ -110,7 +125,7 @@ def test_pyopencl_ctx_may_select_the_intel_cpu_runtime(fake_cl, monkeypatch):
     fake_cl.platforms = [_platform(utils.INTEL_OPENCL_PLATFORM_NAME, intel_cpu)]
     monkeypatch.setenv("PYOPENCL_CTX", "intel:0")
 
-    assert utils.create_fp64_context_or_skip().devices == [intel_cpu]
+    assert _select(utils.create_fp64_context_or_skip).devices == [intel_cpu]
 
 
 def test_pyopencl_ctx_without_fp64_skips_instead_of_substituting(
@@ -133,7 +148,9 @@ def test_pyopencl_ctx_matching_nothing_is_an_error(fake_cl, monkeypatch):
     monkeypatch.setenv("PYOPENCL_CTX", "cuda:0")
 
     with pytest.raises(RuntimeError, match="did not match"):
-        utils.create_fp64_context_or_skip()
+        _select(utils.create_fp64_context_or_skip)
+    with pytest.raises(RuntimeError, match="did not match"):
+        _select(utils.create_table_build_queue_or_skip)
 
 
 def test_pyopencl_ctx_selecting_several_devices_is_an_error(fake_cl, monkeypatch):
@@ -145,9 +162,9 @@ def test_pyopencl_ctx_selecting_several_devices_is_an_error(fake_cl, monkeypatch
     monkeypatch.setenv("PYOPENCL_CTX", "portable:0,1")
 
     with pytest.raises(RuntimeError, match="selects 2 devices"):
-        utils.create_fp64_context_or_skip()
+        _select(utils.create_fp64_context_or_skip)
     with pytest.raises(RuntimeError, match="selects 2 devices"):
-        utils.create_table_build_queue_or_skip()
+        _select(utils.create_table_build_queue_or_skip)
 
 
 def test_table_build_queue_honors_pyopencl_ctx(fake_cl, monkeypatch):
@@ -158,17 +175,17 @@ def test_table_build_queue_honors_pyopencl_ctx(fake_cl, monkeypatch):
     ]
     monkeypatch.setenv("PYOPENCL_CTX", "portable:0")
 
-    assert utils.create_table_build_queue_or_skip().context.devices == [cpu]
+    assert _select(utils.create_table_build_queue_or_skip).context.devices == [cpu]
 
 
 def test_table_build_queue_default_skips_the_intel_cpu_runtime(fake_cl):
     first = _device("first", GPU)
     fake_cl.platforms = [
         _platform(utils.INTEL_OPENCL_PLATFORM_NAME, _device("intel cpu", CPU)),
-        _platform("NVIDIA CUDA", first),
+        _platform("NVIDIA CUDA", first, _device("second", GPU)),
         _platform("Portable Computing Language", _device("cpu", CPU)),
     ]
-    assert utils.create_table_build_queue_or_skip().context.devices == [first]
+    assert _select(utils.create_table_build_queue_or_skip).context.devices == [first]
 
 
 def test_table_build_queue_default_falls_back_to_the_intel_cpu_runtime(fake_cl):
@@ -177,4 +194,6 @@ def test_table_build_queue_default_falls_back_to_the_intel_cpu_runtime(fake_cl):
         _platform("Portable Computing Language"),
         _platform(utils.INTEL_OPENCL_PLATFORM_NAME, intel_cpu),
     ]
-    assert utils.create_table_build_queue_or_skip().context.devices == [intel_cpu]
+    assert _select(utils.create_table_build_queue_or_skip).context.devices == [
+        intel_cpu
+    ]

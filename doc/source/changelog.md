@@ -96,6 +96,14 @@ Infrastructure
   PoCL, and `helmholtz2d.py` and `helmholtz3d.py` no longer ignore the
   variable. All three Helmholtz examples stop when it selects several devices
   ({doc}`getting-started/device-selection`).
+: [#192](https://github.com/xywei/volumential/pull/192) — run all of the
+  full-accuracy tier. `CI Full` named two files, so the five `full_accuracy`
+  cases of `test_windowed_rke.py` ran in no CI job; it now selects the marker
+  over the whole `test` directory, 79 tests. The OpenCL queue of that module
+  now comes from the same `PYOPENCL_CTX` helper as the rest of the tier. The
+  tests of that helper now fail, rather than skip, when it finds no device
+  where it should: a helper that lost its fp64 CPU fallback used to leave
+  them green.
 : [#189](https://github.com/xywei/volumential/pull/189) — run the
   full-accuracy tier. Its 32 tests built their context on the first fp64 GPU
   whatever `PYOPENCL_CTX` said, so on the GPU-less runner of `CI Full` all of
