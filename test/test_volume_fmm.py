@@ -5755,12 +5755,44 @@ def _split_3d_full_accuracy_size():
     16 and 24. The source x-derivative of these kernels is the negated target
     x-derivative, and the source pair has reproduced the target pair's
     difference to four digits through its own table and code path. The
-    quadrature order, the split order and the 1e-6 tolerance are the same at
-    both sizes.
+    quadrature order, the split order, the smooth quadrature order and the
+    tolerance are the same at both sizes.
     """
     if os.environ.get(FULL_ACCURACY_REDUCED_ENV) == "1":
         return _Split3DFullAccuracySize(fmm_order=16, source_derivative=False)
     return _Split3DFullAccuracySize(fmm_order=24, source_derivative=True)
+
+
+#: Quadrature order of the smooth split remainder in the two 3D split tests.
+#:
+#: Both runs of a pair integrate the same near field. The non-split run reads
+#: it from a table of the full kernel. The split run reads the singular terms
+#: from tables and integrates the smooth series remainder with a tensor Gauss
+#: rule of this order, which defaults to the base quadrature order, 4. That
+#: rule is not exact for the remainder, and until the order is well above 4
+#: its error is nearly all of the difference between the two runs. At
+#: multipole order 8 on a PoCL CPU, the largest difference over the scalar
+#: and target x-derivative pairs of both kernels was:
+#:
+#: ============  =========
+#: smooth order  rel. diff
+#: ============  =========
+#: 4 (default)   9.7e-7
+#: 5             7.3e-9
+#: 6             2.0e-10
+#: 8             2.5e-11
+#: ============  =========
+#:
+#: At the default the Helmholtz potential pair sat 3% below the old 1e-6
+#: tolerance. Raising the split order does not help: at the default smooth
+#: order, split orders 5 and 6 left the Yukawa potential pair at 2.0e-6 and
+#: 3.2e-6.
+_SPLIT_3D_SMOOTH_QUAD_ORDER = 6
+
+#: Tolerance of the 3D split tests: 50 times the largest difference measured
+#: at :data:`_SPLIT_3D_SMOOTH_QUAD_ORDER`, and 100 times tighter than the 1e-6
+#: the tests used at the default smooth order.
+_SPLIT_3D_REL_TOL = 1.0e-8
 
 
 def _split_3d_rel_diff(queue, split_out, direct_out):
@@ -5790,7 +5822,14 @@ def test_volume_fmm_3d_helmholtz_split_full_accuracy_tracks_nonsplit_outputs(tmp
     axis = 0
 
     def run(table, *, split, out_kernel=None):
-        split_kwargs = {"helmholtz_split_order": split_order} if split else {}
+        split_kwargs = (
+            {
+                "helmholtz_split_order": split_order,
+                "helmholtz_split_smooth_quad_order": _SPLIT_3D_SMOOTH_QUAD_ORDER,
+            }
+            if split
+            else {}
+        )
         return _run_3d_helmholtz_pde_case(
             ctx,
             queue,
@@ -5821,7 +5860,7 @@ def test_volume_fmm_3d_helmholtz_split_full_accuracy_tracks_nonsplit_outputs(tmp
             run(split_table, split=True, out_kernel=out_kernel),
             run(direct_table(out_kernel), split=False, out_kernel=out_kernel),
         )
-        assert rel < 1.0e-6, (
+        assert rel < _SPLIT_3D_REL_TOL, (
             f"Helmholtz 3D split {label} rel_diff={rel:.3e} (fmm_order={fmm_order})"
         )
 
@@ -5872,7 +5911,14 @@ def test_volume_fmm_3d_yukawa_split_full_accuracy_tracks_nonsplit_outputs(tmp_pa
     axis = 0
 
     def run(table, *, split, out_kernel=None):
-        split_kwargs = {"helmholtz_split_order": split_order} if split else {}
+        split_kwargs = (
+            {
+                "helmholtz_split_order": split_order,
+                "helmholtz_split_smooth_quad_order": _SPLIT_3D_SMOOTH_QUAD_ORDER,
+            }
+            if split
+            else {}
+        )
         return _run_3d_yukawa_split_case(
             ctx,
             queue,
@@ -5902,7 +5948,7 @@ def test_volume_fmm_3d_yukawa_split_full_accuracy_tracks_nonsplit_outputs(tmp_pa
             run(split_table, split=True, out_kernel=out_kernel),
             run(direct_table(out_kernel), split=False, out_kernel=out_kernel),
         )
-        assert rel < 1.0e-6, (
+        assert rel < _SPLIT_3D_REL_TOL, (
             f"Yukawa 3D split {label} rel_diff={rel:.3e} (fmm_order={fmm_order})"
         )
 
