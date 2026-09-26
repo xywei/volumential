@@ -178,11 +178,14 @@ def test_box_tree_refines_leaves_of_two_levels_in_one_call(ctx_factory):
 
     Before upstream commit 13c9db9, boxtree's
     ``refine_and_coarsen_tree_of_boxes`` gave the new children the wrong
-    parent when one call refined leaves of different levels (it tiled the list
-    of refined boxes where it should have repeated it), and it did not remap
-    parent and child ids after sorting the boxes by level. A tree whose leaves
-    all share one level never shows this, but the balancer keeps trees graded
-    rather than uniform, so adaptive refinement makes such calls all the time.
+    parent whenever one call refined more than one leaf (it tiled the list of
+    refined boxes where it should have repeated it), and it did not remap
+    parent and child ids after sorting the boxes by level. A child took its
+    level from that wrong parent. While the refined leaves share a level, only
+    the parent ids are wrong, and ``BoxTree`` rebuilds them from the geometry;
+    leaves of different levels give some children the wrong level and center.
+    The balancer keeps trees graded rather than uniform, so adaptive
+    refinement makes such calls all the time.
 
     The call below splits a level-2 and a level-4 leaf. With one level-2 and
     one level-3 leaf, the tree that ``BoxTree`` rebuilds after every call

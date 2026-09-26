@@ -7872,9 +7872,11 @@ def test_volume_fmm_far_field_matches_direct_sum_with_leaf_colleagues(
     List 4, and it sees them through List 3; a uniform tree has neither list.
     Everything but List 1 is compared here with a direct sum, over the same
     quadrature nodes and weights, of every source outside the target box's
-    List 1. The charges are random, so no interaction is negligible: dropping
-    or doubling a single List 2, 3 or 4 entry of the traversal raises the
-    error by many orders of magnitude.
+    List 1. List 1 is first checked against the geometry, since a far box
+    filed there instead of in List 3 or 4 would drop out of both sides. The
+    charges are random, so no interaction is negligible: dropping or doubling
+    a single List 2, 3 or 4 entry of the traversal raises the error by many
+    orders of magnitude.
     """
     from sumpy.expansion import DefaultExpansionFactory
     from sumpy.kernel import LaplaceKernel
@@ -7949,14 +7951,27 @@ def test_volume_fmm_far_field_matches_direct_sum_with_leaf_colleagues(
     charges = np.random.default_rng(seed=17).uniform(0.5, 1.5, nodes.shape[1])
     weighted_charges = charges * q_weights.get(queue)
 
+    # List 1 of a target box must hold the box itself and exactly the leaves
+    # that touch it, each once.
+    leaves = np.flatnonzero(is_leaf)
+    box_centers = to_host(tree.box_centers)
+    box_sizes = tree.root_extent / 2.0 ** to_host(tree.box_levels)
+    smallest_size = box_sizes[leaves].min()
+
     target_boxes = to_host(trav.target_boxes)
     list1_starts = to_host(trav.neighbor_source_boxes_starts)
     list1_lists = to_host(trav.neighbor_source_boxes_lists)
     far_direct = np.full(nodes.shape[1], np.nan)
     for itarget_box, target_box in enumerate(target_boxes):
-        near_boxes = np.append(
-            list1_lists[list1_starts[itarget_box] : list1_starts[itarget_box + 1]],
-            target_box,
+        gaps = np.max(
+            np.abs(box_centers[:, leaves] - box_centers[:, target_box, None])
+            - (box_sizes[leaves] + box_sizes[target_box]) / 2,
+            axis=0,
+        )
+        near_boxes = leaves[gaps < smallest_size / 2]
+        start, end = list1_starts[itarget_box : itarget_box + 2]
+        assert np.array_equal(np.sort(list1_lists[start:end]), near_boxes), (
+            f"List 1 of box {target_box} is not the box and the leaves that touch it"
         )
         targets = node_box == target_box
         sources = ~np.isin(node_box, near_boxes)

@@ -52,6 +52,10 @@ Evidence and benchmarks
   sweep with a resolved FMM-order rule.
 
 Tables and numerics
+: [#185](https://github.com/xywei/volumential/pull/185) — the far-field
+  direct-sum test from #179 now checks List 1 against the geometry; before, a
+  far box filed in List 1 instead of List 3 or 4 dropped out of both the FMM
+  and the direct sum, and the test passed.
 : [#179](https://github.com/xywei/volumential/pull/179) — pin what #175
   relies on. One test compares the far field with a direct sum on a tree whose
   non-leaf boxes have leaf colleagues; another splits leaves of two levels in
