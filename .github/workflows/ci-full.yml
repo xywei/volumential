@@ -114,6 +114,8 @@ jobs:
           export LC_ALL=en_US.UTF-8
           export LANG=en_US.UTF-8
           export PYOPENCL_CTX="portable:0"
+          export VOLUMENTIAL_RUN_UNSTABLE_DARWIN_TESTS=1
+          export PYTHONFAULTHANDLER=1
 
           export PYTEST_FLAGS="--cov=volumential"
           export CISUPPORT_PARALLEL_PYTEST=no
@@ -132,6 +134,24 @@ jobs:
           . ./ci-support-v0
 
           test_py_project
+      - name: Run each formerly skipped module alone (temporary)
+        if: failure()
+        shell: micromamba-shell {0}
+        continue-on-error: true
+        run: |
+          export PYOPENCL_CTX="portable:0"
+          export VOLUMENTIAL_RUN_UNSTABLE_DARWIN_TESTS=1
+          export PYTHONFAULTHANDLER=1
+          cd test
+          for m in test_function_extension test_interpolation \
+                   test_nearfield_interaction_completeness \
+                   test_nearfield_potential_table test_table_manager \
+                   test_volume_fmm; do
+            echo "=== $m"
+            rc=0
+            python -m pytest -rsfE -q "$m.py" || rc=$?
+            echo "=== $m exit=$rc"
+          done
 
   # The ``Documentation`` job moved to .github/workflows/ci.yml.  It is the
   # same build plus a link check and an HTML artifact, and it runs where it is
