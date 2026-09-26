@@ -60,6 +60,12 @@ import pyopencl.array
 import volumential.meshgen as mg
 
 
+try:
+    from _opencl_test_utils import create_fp64_context_or_skip
+except ImportError:
+    from test._opencl_test_utils import create_fp64_context_or_skip
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -1090,38 +1096,6 @@ def test_treebuilder_targets_none_sets_sources_are_targets(ctx_factory):
 
     assert bool(tree_coincident.sources_are_targets)
     assert not bool(tree_split.sources_are_targets)
-
-
-def _create_non_intel_opencl_context_or_skip():
-    try:
-        platforms = cl.get_platforms()
-    except cl.LogicError as exc:
-        pytest.skip(f"OpenCL platforms unavailable: {exc}")
-
-    gpu_candidates = []
-    for platform in platforms:
-        if platform.name == "Intel(R) OpenCL":
-            continue
-        for device in platform.get_devices():
-            if not (device.type & cl.device_type.GPU):
-                continue
-
-            extensions = getattr(device, "extensions", "")
-            has_khr_fp64 = "cl_khr_fp64" in extensions.split()
-            has_double_config = bool(getattr(device, "double_fp_config", 0))
-            if not (has_khr_fp64 or has_double_config):
-                continue
-
-            gpu_candidates.append(device)
-
-    devices = gpu_candidates
-    if not devices:
-        pytest.skip(
-            "No non-Intel GPU OpenCL device with fp64 support available for "
-            "convergence regression"
-        )
-
-    return cl.Context(devices=[devices[0]])
 
 
 #: Radial rule and root extent shared by every near-field table built here.
@@ -2931,7 +2905,7 @@ def _run_3d_gaussian_case(
 
 
 def test_volume_fmm_strict_guard_rejects_split_tree_source_nodes(tmp_path, monkeypatch):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 2
@@ -2966,7 +2940,7 @@ def test_volume_fmm_split_tree_auto_interpolation_matches_manual_backends(tmp_pa
         interpolate_volume_potential,
     )
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 2
@@ -3073,7 +3047,7 @@ def test_volume_fmm_split_tree_auto_interpolation_matches_manual_backends(tmp_pa
 
 
 def test_volume_fmm_3d_gaussian_convergence_regression(tmp_path):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 3
@@ -3135,7 +3109,7 @@ def test_volume_fmm_3d_helmholtz_pde_residual_is_bounded(
     q_order,
     max_rel_pde_residual,
 ):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     wave_number = 6.0
@@ -3167,7 +3141,7 @@ def test_volume_fmm_3d_helmholtz_pde_residual_is_bounded(
 
 
 def test_volume_fmm_3d_helmholtz_q_order_improves_pde_residual(tmp_path):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     wave_number = 6.0
@@ -3219,7 +3193,7 @@ def test_volume_fmm_3d_helmholtz_calculus_patch_residual_regression(tmp_path):
 
     from volumential.volume_fmm import interpolate_volume_potential
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 3
@@ -3313,7 +3287,7 @@ def test_volume_fmm_3d_helmholtz_calculus_patch_residual_regression(tmp_path):
 
 
 def test_volume_fmm_3d_helmholtz_multilevel_matches_active_single_level(tmp_path):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 2
@@ -3363,7 +3337,7 @@ def test_volume_fmm_3d_helmholtz_multilevel_matches_active_single_level(tmp_path
 
 
 def test_volume_fmm_3d_helmholtz_single_table_level_mismatch_raises(tmp_path):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 2
@@ -3731,7 +3705,7 @@ def test_volume_fmm_3d_laplace_source_target_derivative_antisymmetry(tmp_path):
     )
     from volumential.volume_fmm import drive_volume_fmm
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 2
@@ -3867,7 +3841,7 @@ def test_volume_fmm_3d_laplace_target_derivative_list1_preserves_odd_x_symmetry(
     )
     from volumential.volume_fmm import drive_volume_fmm
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 2
@@ -3978,7 +3952,7 @@ def test_volume_fmm_3d_laplace_target_derivative_matches_scalar_fd_sign(tmp_path
     )
     from volumential.volume_fmm import drive_volume_fmm, interpolate_volume_potential
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 2
@@ -4113,7 +4087,7 @@ def test_volume_fmm_3d_helmholtz_laplace_split_pde_residual_is_bounded(
     q_order,
     max_rel_pde_residual,
 ):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     wave_number = 6.0
@@ -4142,7 +4116,7 @@ def test_volume_fmm_3d_helmholtz_laplace_split_pde_residual_is_bounded(
 
 
 def test_volume_fmm_3d_helmholtz_laplace_split_q_order_improves_pde_residual(tmp_path):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     wave_number = 6.0
@@ -4197,7 +4171,7 @@ def test_volume_fmm_2d_helmholtz_laplace_split_pde_residual_is_bounded(
     q_order,
     max_rel_pde_residual,
 ):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     wave_number = 8.0
@@ -4226,7 +4200,7 @@ def test_volume_fmm_2d_helmholtz_laplace_split_pde_residual_is_bounded(
 
 
 def test_volume_fmm_2d_helmholtz_laplace_split_q_order_improves_pde_residual(tmp_path):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     wave_number = 8.0
@@ -4270,7 +4244,7 @@ def test_volume_fmm_2d_helmholtz_laplace_split_q_order_improves_pde_residual(tmp
 
 
 def test_volume_fmm_2d_helmholtz_split_order2_runs(tmp_path):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 5
@@ -4307,7 +4281,7 @@ def test_volume_fmm_2d_helmholtz_split_order2_runs(tmp_path):
 
 
 def test_volume_fmm_2d_yukawa_split_order2_runs(tmp_path):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 5
@@ -4350,7 +4324,7 @@ def test_volume_fmm_2d_yukawa_split_order2_runs(tmp_path):
 
 
 def test_volume_fmm_2d_yukawa_split_scalar_tracks_nonsplit(tmp_path):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 4
@@ -4402,7 +4376,7 @@ def test_volume_fmm_2d_yukawa_split_scalar_tracks_nonsplit(tmp_path):
 
 
 def test_volume_fmm_2d_helmholtz_split_scalar_tracks_nonsplit(tmp_path):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 4
@@ -4459,7 +4433,7 @@ def test_volume_fmm_2d_helmholtz_split_scalar_tracks_nonsplit(tmp_path):
 def test_volume_fmm_2d_yukawa_split_axis_target_derivative_tracks_nonsplit(tmp_path):
     from sumpy.kernel import AxisTargetDerivative, YukawaKernel
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 4
@@ -4520,7 +4494,7 @@ def test_volume_fmm_2d_yukawa_split_axis_target_derivative_tracks_nonsplit(tmp_p
 def test_volume_fmm_2d_yukawa_split_axis_source_derivative_tracks_nonsplit(tmp_path):
     from sumpy.kernel import AxisSourceDerivative, YukawaKernel
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 4
@@ -4586,7 +4560,7 @@ def test_volume_fmm_2d_helmholtz_split_axis_target_derivative_tracks_nonsplit(
 ):
     from sumpy.kernel import AxisTargetDerivative, HelmholtzKernel
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 4
@@ -4653,7 +4627,7 @@ def test_volume_fmm_2d_helmholtz_split_axis_source_derivative_tracks_nonsplit(
 ):
     from sumpy.kernel import AxisSourceDerivative, HelmholtzKernel
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 4
@@ -4722,7 +4696,7 @@ def test_volume_fmm_3d_helmholtz_split_axis_target_derivative_tracks_nonsplit(
 ):
     from sumpy.kernel import AxisTargetDerivative, HelmholtzKernel
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 3
@@ -4789,7 +4763,7 @@ def test_volume_fmm_3d_helmholtz_split_axis_source_derivative_tracks_nonsplit(
 ):
     from sumpy.kernel import AxisSourceDerivative, HelmholtzKernel
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 3
@@ -4862,7 +4836,7 @@ def test_volume_fmm_2d_helmholtz_split_directional_source_derivative_tracks_dire
         LaplaceKernel,
     )
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 4
@@ -4925,7 +4899,7 @@ def test_volume_fmm_2d_helmholtz_split_directional_source_derivative_tracks_dire
 def test_volume_fmm_2d_helmholtz_split_supports_multiple_output_kernels(tmp_path):
     from sumpy.kernel import AxisTargetDerivative, HelmholtzKernel
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 4
@@ -5015,7 +4989,7 @@ def test_volume_fmm_2d_helmholtz_split_supports_multiple_output_kernels(tmp_path
 
 
 def test_volume_fmm_2d_helmholtz_split_accepts_infer_kernel_scaling(tmp_path):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 4
@@ -5064,7 +5038,7 @@ def test_volume_fmm_2d_helmholtz_split_accepts_infer_kernel_scaling(tmp_path):
 
 
 def test_volume_fmm_2d_helmholtz_split_default_auto_enabled(tmp_path):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 4
@@ -5120,7 +5094,7 @@ def test_volume_fmm_2d_split_full_accuracy_combination_sweep(tmp_path, base_kind
         YukawaKernel,
     )
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 4
@@ -5288,7 +5262,7 @@ def test_volume_fmm_2d_split_full_accuracy_combination_sweep(tmp_path, base_kind
 def test_volume_fmm_2d_yukawa_split_full_accuracy_tracks_nonsplit_outputs(tmp_path):
     from sumpy.kernel import AxisSourceDerivative, AxisTargetDerivative, YukawaKernel
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 4
@@ -5437,7 +5411,7 @@ def test_volume_fmm_2d_helmholtz_split_full_accuracy_tracks_nonsplit_outputs(tmp
         HelmholtzKernel,
     )
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 4
@@ -5598,7 +5572,7 @@ def test_volume_fmm_2d_helmholtz_split_directional_source_full_accuracy_tracks_n
         LaplaceKernel,
     )
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 4
@@ -5671,7 +5645,7 @@ def test_volume_fmm_2d_yukawa_split_directional_source_full_accuracy_tracks_nons
 ):
     from sumpy.kernel import DirectionalSourceDerivative, LaplaceKernel, YukawaKernel
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 4
@@ -5744,7 +5718,7 @@ def test_volume_fmm_3d_helmholtz_split_full_accuracy_tracks_nonsplit_outputs(tmp
         HelmholtzKernel,
     )
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 4
@@ -5899,7 +5873,7 @@ def test_volume_fmm_3d_helmholtz_split_full_accuracy_tracks_nonsplit_outputs(tmp
 def test_volume_fmm_3d_yukawa_split_full_accuracy_tracks_nonsplit_outputs(tmp_path):
     from sumpy.kernel import AxisSourceDerivative, AxisTargetDerivative, YukawaKernel
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 4
@@ -6049,7 +6023,7 @@ def test_volume_fmm_2d_yukawa_split_directional_source_derivative_tracks_direct(
 ):
     from sumpy.kernel import DirectionalSourceDerivative, LaplaceKernel, YukawaKernel
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 4
@@ -6108,7 +6082,7 @@ def test_volume_fmm_2d_yukawa_split_directional_source_derivative_tracks_direct(
 
 
 def test_volume_fmm_2d_yukawa_complex_lambda_rejected():
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 5
@@ -6129,7 +6103,7 @@ def test_volume_fmm_2d_yukawa_complex_lambda_rejected():
 
 
 def test_volume_fmm_2d_yukawa_split_auto_high_rho_runs(tmp_path):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 5
@@ -6157,7 +6131,7 @@ def test_volume_fmm_2d_yukawa_split_auto_high_rho_runs(tmp_path):
 
 
 def test_volume_fmm_2d_yukawa_split_auto_smooth_quad_policy(tmp_path):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 5
@@ -6206,7 +6180,7 @@ def test_volume_fmm_2d_yukawa_split_auto_smooth_quad_policy(tmp_path):
 
 
 def test_volume_fmm_2d_helmholtz_split_auto_real_smooth_quad_policy(tmp_path):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 5
@@ -6288,7 +6262,7 @@ def test_select_split_order_from_rho_default_boundaries():
 
 
 def test_volume_fmm_2d_helmholtz_split_order1_remainder_matches_legacy(tmp_path):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 5
@@ -6337,7 +6311,7 @@ def test_volume_fmm_2d_helmholtz_split_order1_remainder_matches_legacy(tmp_path)
 
 
 def test_volume_fmm_2d_helmholtz_split_order1_overlap_allowed_for_remainder(tmp_path):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 5
@@ -6389,7 +6363,7 @@ def test_volume_fmm_2d_helmholtz_split_order1_overlap_allowed_for_remainder(tmp_
 def test_volume_fmm_2d_helmholtz_split_power_log_single_table_matches_multilevel(
     tmp_path,
 ):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 5
@@ -6478,7 +6452,7 @@ def test_volume_fmm_2d_helmholtz_split_power_log_single_table_matches_multilevel
 def test_volume_fmm_2d_helmholtz_split_auto_builds_term_tables(
     tmp_path, split_order, q_order, cache_name, max_rel_pde_residual
 ):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     wave_number = 8.0
@@ -6505,7 +6479,7 @@ def test_volume_fmm_2d_helmholtz_split_auto_builds_term_tables(
 
 
 def test_volume_fmm_2d_helmholtz_split_rejects_term_tables_from_other_cache(tmp_path):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 5
@@ -6543,7 +6517,7 @@ def test_volume_fmm_2d_helmholtz_split_rejects_term_tables_from_other_cache(tmp_
 
 
 def test_volume_fmm_2d_helmholtz_split_order3_smooth_equals_q_runs(tmp_path):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 5
@@ -6572,7 +6546,7 @@ def test_volume_fmm_2d_helmholtz_split_order3_smooth_equals_q_runs(tmp_path):
 
 
 def test_volume_fmm_3d_helmholtz_split_order3_runs(tmp_path):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 3
@@ -6613,7 +6587,7 @@ def test_volume_fmm_3d_calculus_patch_residual_regression(tmp_path):
 
     from volumential.volume_fmm import interpolate_volume_potential
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 3
