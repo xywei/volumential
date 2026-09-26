@@ -5796,11 +5796,17 @@ _SPLIT_3D_REL_TOL = 1.0e-8
 
 
 def _split_3d_rel_diff(queue, split_out, direct_out):
+    """Return the pair's difference, and the norms of both potentials.
+
+    The norms go into the failure message: they tell which run of the pair
+    went wrong, which the difference alone does not.
+    """
     split_pot = split_out["potentials"].get(queue)
     direct_pot = direct_out["potentials"].get(queue)
-    return np.linalg.norm(split_pot - direct_pot) / max(
-        1.0, np.linalg.norm(direct_pot)
-    )
+    split_norm = np.linalg.norm(split_pot)
+    direct_norm = np.linalg.norm(direct_pot)
+    rel = np.linalg.norm(split_pot - direct_pot) / max(1.0, direct_norm)
+    return rel, split_norm, direct_norm
 
 
 @pytest.mark.full_accuracy
@@ -5855,13 +5861,14 @@ def test_volume_fmm_3d_helmholtz_split_full_accuracy_tracks_nonsplit_outputs(tmp
         )
 
     def check(label, split_table, out_kernel=None):
-        rel = _split_3d_rel_diff(
+        rel, split_norm, direct_norm = _split_3d_rel_diff(
             queue,
             run(split_table, split=True, out_kernel=out_kernel),
             run(direct_table(out_kernel), split=False, out_kernel=out_kernel),
         )
         assert rel < _SPLIT_3D_REL_TOL, (
-            f"Helmholtz 3D split {label} rel_diff={rel:.3e} (fmm_order={fmm_order})"
+            f"Helmholtz 3D split {label} rel_diff={rel:.3e} (fmm_order={fmm_order}, "
+            f"|split|={split_norm:.4e}, |nonsplit|={direct_norm:.4e})"
         )
 
     check(
@@ -5943,13 +5950,14 @@ def test_volume_fmm_3d_yukawa_split_full_accuracy_tracks_nonsplit_outputs(tmp_pa
         )
 
     def check(label, split_table, out_kernel=None):
-        rel = _split_3d_rel_diff(
+        rel, split_norm, direct_norm = _split_3d_rel_diff(
             queue,
             run(split_table, split=True, out_kernel=out_kernel),
             run(direct_table(out_kernel), split=False, out_kernel=out_kernel),
         )
         assert rel < _SPLIT_3D_REL_TOL, (
-            f"Yukawa 3D split {label} rel_diff={rel:.3e} (fmm_order={fmm_order})"
+            f"Yukawa 3D split {label} rel_diff={rel:.3e} (fmm_order={fmm_order}, "
+            f"|split|={split_norm:.4e}, |nonsplit|={direct_norm:.4e})"
         )
 
     check(
