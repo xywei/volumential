@@ -5,10 +5,11 @@ selection rule on any host -- including the branch that prefers a GPU, which a
 CPU-only runner could not otherwise exercise.
 
 The helpers skip when they find no device, and a skip raised inside a test
-only marks that test skipped. So every test here that expects a device calls
-the helper through :func:`_select`, which turns a skip into a failure: a
-helper that stopped falling back to the CPU would otherwise leave its test
-skipped and the run green.
+only marks that test skipped, even inside ``pytest.raises``. So every test
+here that expects a device, or an error, calls the helper through
+:func:`_select`, which turns a skip into a failure: a helper that stopped
+falling back to the CPU, or that skipped on a ``PYOPENCL_CTX`` matching
+nothing, would otherwise leave its test skipped and the run green.
 """
 
 from types import SimpleNamespace
@@ -147,7 +148,9 @@ def test_pyopencl_ctx_matching_nothing_is_an_error(fake_cl, monkeypatch):
     monkeypatch.setenv("PYOPENCL_CTX", "cuda:0")
 
     with pytest.raises(RuntimeError, match="did not match"):
-        utils.create_fp64_context_or_skip()
+        _select(utils.create_fp64_context_or_skip)
+    with pytest.raises(RuntimeError, match="did not match"):
+        _select(utils.create_table_build_queue_or_skip)
 
 
 def test_pyopencl_ctx_selecting_several_devices_is_an_error(fake_cl, monkeypatch):
@@ -159,9 +162,9 @@ def test_pyopencl_ctx_selecting_several_devices_is_an_error(fake_cl, monkeypatch
     monkeypatch.setenv("PYOPENCL_CTX", "portable:0,1")
 
     with pytest.raises(RuntimeError, match="selects 2 devices"):
-        utils.create_fp64_context_or_skip()
+        _select(utils.create_fp64_context_or_skip)
     with pytest.raises(RuntimeError, match="selects 2 devices"):
-        utils.create_table_build_queue_or_skip()
+        _select(utils.create_table_build_queue_or_skip)
 
 
 def test_table_build_queue_honors_pyopencl_ctx(fake_cl, monkeypatch):
