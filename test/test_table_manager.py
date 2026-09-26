@@ -28,22 +28,10 @@ THE SOFTWARE.
 import logging
 import os
 import subprocess
-import sys
 from shutil import copyfile
 
 import numpy as np
 import pytest
-
-
-if (
-    sys.platform == "darwin"
-    and os.environ.get("VOLUMENTIAL_RUN_UNSTABLE_DARWIN_TESTS") != "1"
-):
-    pytest.skip(
-        "table manager tests are unstable on macOS OpenCL CI "
-        "(set VOLUMENTIAL_RUN_UNSTABLE_DARWIN_TESTS=1 to run)",
-        allow_module_level=True,
-    )
 
 import pyopencl as cl
 
