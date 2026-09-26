@@ -80,7 +80,8 @@ which reads `PYOPENCL_CTX`, not `PYOPENCL_TEST`:
   when there is none. This default never picks the `Intel(R) OpenCL`
   platform, which `conftest.py` marks as crashing on these paths; select it
   explicitly to run there anyway. The table builds keep the rule they always
-  had: the first device of the first platform other than that one.
+  had: the first device of the first platform other than that one, and the
+  first device of that one only when no other platform has a device.
 
 So set both variables to the same device, as
 {doc}`../getting-started/device-selection` does, and the whole suite runs where
