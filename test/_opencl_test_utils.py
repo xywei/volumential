@@ -7,7 +7,7 @@ in ``conftest.py`` and by ``test_nearfield_potential_table.py`` want one queue,
 not one per platform. The functions here are the one place that decides which
 device those are, and both honor ``PYOPENCL_CTX``: when it is set, the context
 is exactly the device it selects, CPU or GPU, and a selector that matches
-nothing is an error, not a skip.
+nothing, or more than one device, is an error, not a skip.
 
 Without ``PYOPENCL_CTX``, :func:`create_fp64_context_or_skip` prefers the
 first fp64 GPU and falls back to the first fp64 CPU, so a CPU-only host runs
@@ -63,14 +63,23 @@ def create_pyopencl_ctx_context() -> cl.Context | None:
 
     Returns *None* when the variable is unset or empty. A selector that
     matches no platform or device raises, as it does in
-    :func:`pyopencl.create_some_context`.
+    :func:`pyopencl.create_some_context`. So does one that selects several
+    devices, such as ``portable:0,1``: the callers build their queues without
+    naming a device, and would silently run on the first of them.
     """
     ctx_spec = os.environ.get("PYOPENCL_CTX")
     if not ctx_spec:
         return None
     # Pass the selector as answers: with the environment alone,
     # create_some_context would prefer PYOPENCL_TEST when it is also set.
-    return cl.create_some_context(interactive=False, answers=ctx_spec.split(":"))
+    ctx = cl.create_some_context(interactive=False, answers=ctx_spec.split(":"))
+    if len(ctx.devices) != 1:
+        raise RuntimeError(
+            f"PYOPENCL_CTX={ctx_spec!r} selects {len(ctx.devices)} devices: "
+            f"{', '.join(device.name for device in ctx.devices)}; the tests "
+            "that build their own context need exactly one"
+        )
+    return ctx
 
 
 def create_fp64_context_or_skip() -> cl.Context:

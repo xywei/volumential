@@ -47,11 +47,12 @@ def fake_cl(monkeypatch):
     def create_some_context(interactive=None, answers=None):
         assert interactive is False
         state.answers = answers
-        platform_name, device_index = answers
+        platform_name, device_indices = answers
         for platform in state.platforms:
             if platform_name.lower() in platform.name.lower():
+                devices = platform.get_devices()
                 return SimpleNamespace(
-                    devices=[platform.get_devices()[int(device_index)]]
+                    devices=[devices[int(i)] for i in device_indices.split(",")]
                 )
         raise RuntimeError("input did not match any platform")
 
@@ -133,6 +134,20 @@ def test_pyopencl_ctx_matching_nothing_is_an_error(fake_cl, monkeypatch):
 
     with pytest.raises(RuntimeError, match="did not match"):
         utils.create_fp64_context_or_skip()
+
+
+def test_pyopencl_ctx_selecting_several_devices_is_an_error(fake_cl, monkeypatch):
+    fake_cl.platforms = [
+        _platform(
+            "Portable Computing Language", _device("cpu", CPU), _device("gpu", GPU)
+        ),
+    ]
+    monkeypatch.setenv("PYOPENCL_CTX", "portable:0,1")
+
+    with pytest.raises(RuntimeError, match="selects 2 devices"):
+        utils.create_fp64_context_or_skip()
+    with pytest.raises(RuntimeError, match="selects 2 devices"):
+        utils.create_table_build_queue_or_skip()
 
 
 def test_table_build_queue_honors_pyopencl_ctx(fake_cl, monkeypatch):

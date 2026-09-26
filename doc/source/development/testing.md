@@ -75,7 +75,8 @@ which reads `PYOPENCL_CTX`, not `PYOPENCL_TEST`:
 
 - With `PYOPENCL_CTX` set, they run on exactly the device it selects, CPU or
   GPU. The fp64 tests skip only if that device lacks fp64. A selector that
-  matches no platform is an error, not a skip.
+  matches no device, or several such as `portable:0,1`, is an error, not a
+  skip.
 - Without it, the fp64 tests take the first fp64 GPU, and the first fp64 CPU
   when there is none. This default never picks the `Intel(R) OpenCL`
   platform, which `conftest.py` marks as crashing on these paths; select it
