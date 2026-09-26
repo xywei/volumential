@@ -25,7 +25,7 @@ reproducible run wants: one blocks on a prompt, the other silently records a
 device nobody chose. Set it even when the host has exactly one platform today.
 
 The tests that build their own context rather than take the fixtures — the
-volume FMM regressions, the full-accuracy sweeps, the windowed RKE direct
+volume FMM regressions, the full-accuracy sweeps, the RKE table-assembly direct
 references and the shared near-field table builds — read `PYOPENCL_CTX`, not
 `PYOPENCL_TEST`, and run on exactly the device it selects. Without it the fp64
 ones prefer an fp64 GPU and fall back to an fp64 CPU; see

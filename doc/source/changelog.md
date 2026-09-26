@@ -87,6 +87,13 @@ Tables and numerics
   ({doc}`design-notes/windowed-channels`).
 
 Infrastructure
+: [#196](https://github.com/xywei/volumential/pull/196) — keep the
+  pull-request suite inside its timeout. The pytest step of `Testing (Linux)`
+  runs under a 900 s timeout and took up to 742 s of it. The two 3D cases of
+  `test_assembled_matches_direct_batched`, 190 s of that, now run in the
+  full-accuracy tier of `CI Full`, which grows to 81 tests; their direct
+  reference is built on the device `PYOPENCL_CTX` selects, like the rest of
+  the tier ([#186](https://github.com/xywei/volumential/issues/186)).
 : [#192](https://github.com/xywei/volumential/pull/192) — run all of the
   full-accuracy tier. `CI Full` named two files, so the five `full_accuracy`
   cases of `test_windowed_rke.py` ran in no CI job; it now selects the marker
