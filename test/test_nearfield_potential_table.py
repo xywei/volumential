@@ -26,7 +26,6 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
-import os
 import sys
 
 import numpy as np
@@ -34,17 +33,6 @@ import pytest
 from numpy.polynomial.chebyshev import chebval, chebval2d, chebval3d
 
 import pyopencl as cl
-
-
-if (
-    sys.platform == "darwin"
-    and os.environ.get("VOLUMENTIAL_RUN_UNSTABLE_DARWIN_TESTS") != "1"
-):
-    pytest.skip(
-        "nearfield potential table tests are unstable on macOS OpenCL CI "
-        "(set VOLUMENTIAL_RUN_UNSTABLE_DARWIN_TESTS=1 to run)",
-        allow_module_level=True,
-    )
 
 import volumential.nearfield_potential_table as npt
 from volumential import lagrange

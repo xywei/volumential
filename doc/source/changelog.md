@@ -83,6 +83,15 @@ Tables and numerics
   ({doc}`design-notes/windowed-channels`).
 
 Infrastructure
+: [#181](https://github.com/xywei/volumential/pull/181) — lift the macOS
+  skips. Six test modules skipped themselves on macOS unless
+  `VOLUMENTIAL_RUN_UNSTABLE_DARWIN_TESTS=1` was set. The aborts they avoided
+  were the PoCL 3.1 kernel-link failure that
+  [#177](https://github.com/xywei/volumential/pull/177) fixed, so the skips and
+  the variable are gone, and the macOS job in `CI Full` runs the same tests as
+  `Testing (Linux)`. The pytest configuration now lives only in
+  `pyproject.toml`, because pytest ignored it there while `pytest.ini` existed
+  ({doc}`development/testing`).
 : [#157](https://github.com/xywei/volumential/pull/157) — three CI and
   backend-portability fixes ([#151](https://github.com/xywei/volumential/issues/151)):
   `set -euo pipefail` in the `Examples (Smoke)` job, which could only fail on
