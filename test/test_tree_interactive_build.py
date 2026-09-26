@@ -173,6 +173,96 @@ def test_box_tree_refinement_stays_local(ctx_factory):
     assert np.bincount(leaf_levels, minlength=4).tolist() == [0, 0, 15, 4]
 
 
+def test_box_tree_refines_leaves_of_two_levels_in_one_call(ctx_factory):
+    """One refine call on leaves of two levels puts every child in place.
+
+    Before upstream commit 13c9db9, boxtree's
+    ``refine_and_coarsen_tree_of_boxes`` gave the new children the wrong
+    parent when one call refined leaves of different levels (it tiled the list
+    of refined boxes where it should have repeated it), and it did not remap
+    parent and child ids after sorting the boxes by level. A tree whose leaves
+    all share one level never shows this. The balancer keeps trees graded
+    rather than uniform, so adaptive refinement makes such calls all the time,
+    and a stale boxtree fails here, in the checks below or while the tree is
+    rebuilt.
+    """
+    ctx = ctx_factory()
+    queue = cl.CommandQueue(ctx)
+
+    root_min = np.array([-1.0, -1.0])
+    root_extent = 2.0
+    tree = BoxTree()
+    tree.generate_uniform_boxtree(
+        queue, root_vertex=root_min, root_extent=root_extent, nlevels=3
+    )
+
+    def refine_leaves_at(points):
+        leaves = tree.active_boxes.get()
+        levels = tree.box_levels.get()[leaves]
+        centers = tree.box_centers.get()[:, leaves]
+        half_sides = 0.5 * root_extent / 2.0**levels
+        refine_flags = np.zeros(tree.nboxes, dtype=bool)
+        for point in points:
+            offsets = np.abs(centers - np.asarray(point)[:, None])
+            (ileaf,) = np.flatnonzero(np.all(offsets < half_sides, axis=0))
+            refine_flags[leaves[ileaf]] = True
+        tree.refine_and_coarsen(
+            refine_flags, np.zeros_like(refine_flags), error_on_ignored_flags=True
+        )
+
+    # 4 x 4 leaves of level 2; split the one in the lower left corner.
+    refine_leaves_at([(-0.9, -0.9)])
+    # One call: the level-2 leaf in the upper right corner and the level-3
+    # leaf in the lower left corner. Neither split breaks the 2:1 condition,
+    # so the balancer adds nothing.
+    refine_leaves_at([(0.9, 0.9), (-0.9, -0.9)])
+
+    tob = tree._tree
+    levels = np.asarray(tob.box_levels, dtype=np.int64)
+    centers = np.asarray(tob.box_centers)
+    parents = np.asarray(tob.box_parent_ids, dtype=np.int64)
+    children = np.asarray(tob.box_child_ids, dtype=np.int64)
+    sizes = root_extent / 2.0**levels
+
+    # Every box but the root sits in one quadrant of its parent, one level
+    # deeper, and is listed among the parent's children.
+    assert tob.nboxes == 1 + 4 + 16 + 4 + 4 + 4
+    (root,) = np.flatnonzero(parents < 0)
+    assert levels[root] == 0
+    for ibox in range(tob.nboxes):
+        if ibox == root:
+            continue
+        parent = parents[ibox]
+        assert levels[ibox] == levels[parent] + 1, ibox
+        assert np.allclose(
+            np.abs(centers[:, ibox] - centers[:, parent]), sizes[parent] / 4
+        ), ibox
+        assert ibox in children[:, parent], ibox
+
+    # The leaves are the ones the two calls should have made.
+    def grid_keys(boxes):
+        return {
+            (int(levels[ibox]), *np.floor(
+                (centers[:, ibox] - root_min) / sizes[ibox]
+            ).astype(int).tolist())
+            for ibox in boxes
+        }
+
+    expected_leaves = (
+        ({(2, i, j) for i in range(4) for j in range(4)} - {(2, 0, 0), (2, 3, 3)})
+        | ({(3, i, j) for i in range(2) for j in range(2)} - {(3, 0, 0)})
+        | {(3, i, j) for i in range(6, 8) for j in range(6, 8)}
+        | {(4, i, j) for i in range(2) for j in range(2)}
+    )
+    leaves = np.flatnonzero(np.all(children == 0, axis=0))
+    assert grid_keys(leaves) == expected_leaves
+    assert grid_keys(tree.active_boxes.get()) == expected_leaves
+
+    # The device views agree with the tree they were made from.
+    assert np.array_equal(tree.box_levels.get(), levels)
+    assert np.allclose(tree.box_centers.get(), centers)
+
+
 def test_box_tree_coarsen_leaf_flags_reduce_uniform_tree(ctx_factory):
     ctx = ctx_factory()
     queue = cl.CommandQueue(ctx)
