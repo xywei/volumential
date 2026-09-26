@@ -2,9 +2,6 @@
 function extensions built on top of pytential QBX layer potentials.
 """
 
-import os
-import sys
-
 import numpy as np
 import pytest
 from arraycontext import flatten, unflatten
@@ -30,18 +27,6 @@ def _skip_unstable_backend(ctx):
     platform_names = {dev.platform.name for dev in ctx.devices}
     if any(name == "Intel(R) OpenCL" for name in platform_names):
         pytest.skip("QBX function-extension tests are unstable on Intel(R) OpenCL")
-
-
-def _skip_unstable_on_darwin(subject):
-    """Skip `subject` on macOS OpenCL CI unless it is explicitly enabled."""
-    if (
-        sys.platform == "darwin"
-        and os.environ.get("VOLUMENTIAL_RUN_UNSTABLE_DARWIN_TESTS") != "1"
-    ):
-        pytest.skip(
-            f"{subject} is unstable on macOS OpenCL CI "
-            "(set VOLUMENTIAL_RUN_UNSTABLE_DARWIN_TESTS=1 to run)"
-        )
 
 
 def _make_closed_curve_mesh_skip_orientation(curve_f, element_boundaries, order):
@@ -126,8 +111,6 @@ def test_constant_extension_geometry_collection(ctx_factory):
 
 
 def test_harmonic_extension_geometry_collection_smoke(ctx_factory):
-    _skip_unstable_on_darwin("harmonic extension test")
-
     ctx = ctx_factory()
     _skip_unstable_backend(ctx)
     queue = cl.CommandQueue(ctx)
@@ -163,8 +146,6 @@ def test_harmonic_extension_geometry_collection_smoke(ctx_factory):
 
 
 def test_harmonic_extension_to_volume_mesh_points_smoke(ctx_factory):
-    _skip_unstable_on_darwin("harmonic extension test")
-
     ctx = ctx_factory()
     _skip_unstable_backend(ctx)
     queue = cl.CommandQueue(ctx)
@@ -202,8 +183,6 @@ def test_harmonic_extension_to_volume_mesh_points_smoke(ctx_factory):
 
 
 def test_harmonic_extension_interior_linear_accuracy(ctx_factory):
-    _skip_unstable_on_darwin("harmonic extension test")
-
     ctx = ctx_factory()
     _skip_unstable_backend(ctx)
     queue = cl.CommandQueue(ctx)
@@ -240,8 +219,6 @@ def test_harmonic_extension_interior_linear_accuracy(ctx_factory):
 
 
 def test_biharmonic_extension_linear_accuracy(ctx_factory):
-    _skip_unstable_on_darwin("biharmonic extension test")
-
     ctx = ctx_factory()
     _skip_unstable_backend(ctx)
     queue = cl.CommandQueue(ctx)
@@ -312,8 +289,6 @@ def test_biharmonic_extension_linear_accuracy(ctx_factory):
 
 
 def test_biharmonic_extension_cubic_accuracy(ctx_factory):
-    _skip_unstable_on_darwin("biharmonic extension test")
-
     ctx = ctx_factory()
     _skip_unstable_backend(ctx)
     queue = cl.CommandQueue(ctx)

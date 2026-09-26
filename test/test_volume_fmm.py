@@ -43,17 +43,6 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-
-if (
-    sys.platform == "darwin"
-    and os.environ.get("VOLUMENTIAL_RUN_UNSTABLE_DARWIN_TESTS") != "1"
-):
-    pytest.skip(
-        "volume FMM tests are unstable on macOS OpenCL CI "
-        "(set VOLUMENTIAL_RUN_UNSTABLE_DARWIN_TESTS=1 to run)",
-        allow_module_level=True,
-    )
-
 import pyopencl as cl
 import pyopencl.array
 
