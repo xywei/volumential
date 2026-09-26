@@ -124,7 +124,7 @@ verbose = 1
 [tool.pytest.ini_options]
 testpaths = ["test"]
 markers = [
-  "full_accuracy: high-cost derivative accuracy tests, skipped unless --full-accuracy",
+  "full_accuracy: high-cost accuracy and fp64 regression tests, skipped unless --full-accuracy",
 ]
 
 [tool.basedpyright]

@@ -8,8 +8,12 @@ Laplace, Helmholtz and Yukawa runs -- including the Helmholtz/Laplace
 split path, whose results are compared against the corresponding
 non-split runs.
 
-The heaviest split-versus-nonsplit sweeps are marked ``full_accuracy``
-and only run under ``pytest --full-accuracy``.
+The runs that need an fp64 device build their context with
+``create_fp64_context_or_skip`` instead of taking ``ctx_factory``.  Apart from
+a few cheap guard checks they are marked ``full_accuracy`` and only run under
+``pytest --full-accuracy``: the convergence and PDE-residual regressions and
+the split-versus-nonsplit checks together take tens of minutes on a CPU
+device, which the pull-request suite cannot afford.
 """
 
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
@@ -39,6 +43,7 @@ import os
 import sys
 from functools import partial
 from types import SimpleNamespace
+from typing import NamedTuple
 
 import numpy as np
 import pytest
@@ -47,6 +52,12 @@ import pyopencl as cl
 import pyopencl.array
 
 import volumential.meshgen as mg
+
+
+try:
+    from _opencl_test_utils import create_fp64_context_or_skip
+except ImportError:
+    from test._opencl_test_utils import create_fp64_context_or_skip
 
 
 logger = logging.getLogger(__name__)
@@ -1079,38 +1090,6 @@ def test_treebuilder_targets_none_sets_sources_are_targets(ctx_factory):
 
     assert bool(tree_coincident.sources_are_targets)
     assert not bool(tree_split.sources_are_targets)
-
-
-def _create_non_intel_opencl_context_or_skip():
-    try:
-        platforms = cl.get_platforms()
-    except cl.LogicError as exc:
-        pytest.skip(f"OpenCL platforms unavailable: {exc}")
-
-    gpu_candidates = []
-    for platform in platforms:
-        if platform.name == "Intel(R) OpenCL":
-            continue
-        for device in platform.get_devices():
-            if not (device.type & cl.device_type.GPU):
-                continue
-
-            extensions = getattr(device, "extensions", "")
-            has_khr_fp64 = "cl_khr_fp64" in extensions.split()
-            has_double_config = bool(getattr(device, "double_fp_config", 0))
-            if not (has_khr_fp64 or has_double_config):
-                continue
-
-            gpu_candidates.append(device)
-
-    devices = gpu_candidates
-    if not devices:
-        pytest.skip(
-            "No non-Intel GPU OpenCL device with fp64 support available for "
-            "convergence regression"
-        )
-
-    return cl.Context(devices=[devices[0]])
 
 
 #: Radial rule and root extent shared by every near-field table built here.
@@ -2920,7 +2899,7 @@ def _run_3d_gaussian_case(
 
 
 def test_volume_fmm_strict_guard_rejects_split_tree_source_nodes(tmp_path, monkeypatch):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 2
@@ -2944,6 +2923,7 @@ def test_volume_fmm_strict_guard_rejects_split_tree_source_nodes(tmp_path, monke
         )
 
 
+@pytest.mark.full_accuracy
 def test_volume_fmm_split_tree_auto_interpolation_matches_manual_backends(tmp_path):
     from boxtree.area_query import AreaQueryBuilder
     from boxtree.array_context import PyOpenCLArrayContext
@@ -2955,7 +2935,7 @@ def test_volume_fmm_split_tree_auto_interpolation_matches_manual_backends(tmp_pa
         interpolate_volume_potential,
     )
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 2
@@ -3061,8 +3041,9 @@ def test_volume_fmm_split_tree_auto_interpolation_matches_manual_backends(tmp_pa
     assert np.allclose(auto_host, interp_default_host, rtol=1.0e-11, atol=1.0e-11)
 
 
+@pytest.mark.full_accuracy
 def test_volume_fmm_3d_gaussian_convergence_regression(tmp_path):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 3
@@ -3112,6 +3093,7 @@ def test_volume_fmm_3d_gaussian_convergence_regression(tmp_path):
     )
 
 
+@pytest.mark.full_accuracy
 @pytest.mark.parametrize(
     ("q_order", "max_rel_pde_residual"),
     [
@@ -3124,7 +3106,7 @@ def test_volume_fmm_3d_helmholtz_pde_residual_is_bounded(
     q_order,
     max_rel_pde_residual,
 ):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     wave_number = 6.0
@@ -3155,8 +3137,9 @@ def test_volume_fmm_3d_helmholtz_pde_residual_is_bounded(
     )
 
 
+@pytest.mark.full_accuracy
 def test_volume_fmm_3d_helmholtz_q_order_improves_pde_residual(tmp_path):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     wave_number = 6.0
@@ -3202,13 +3185,14 @@ def test_volume_fmm_3d_helmholtz_q_order_improves_pde_residual(tmp_path):
     )
 
 
+@pytest.mark.full_accuracy
 def test_volume_fmm_3d_helmholtz_calculus_patch_residual_regression(tmp_path):
     from pytools.obj_array import new_1d as obj_array_1d
     from sumpy.point_calculus import CalculusPatch
 
     from volumential.volume_fmm import interpolate_volume_potential
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 3
@@ -3301,8 +3285,9 @@ def test_volume_fmm_3d_helmholtz_calculus_patch_residual_regression(tmp_path):
     )
 
 
+@pytest.mark.full_accuracy
 def test_volume_fmm_3d_helmholtz_multilevel_matches_active_single_level(tmp_path):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 2
@@ -3352,7 +3337,7 @@ def test_volume_fmm_3d_helmholtz_multilevel_matches_active_single_level(tmp_path
 
 
 def test_volume_fmm_3d_helmholtz_single_table_level_mismatch_raises(tmp_path):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 2
@@ -3706,6 +3691,7 @@ def test_helmholtz_split_policy_accepts_single_source_or_target_derivative_chain
         assert supported, reason
 
 
+@pytest.mark.full_accuracy
 def test_volume_fmm_3d_laplace_source_target_derivative_antisymmetry(tmp_path):
     from sumpy.expansion import DefaultExpansionFactory
     from sumpy.kernel import (
@@ -3720,7 +3706,7 @@ def test_volume_fmm_3d_laplace_source_target_derivative_antisymmetry(tmp_path):
     )
     from volumential.volume_fmm import drive_volume_fmm
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 2
@@ -3844,6 +3830,7 @@ def test_volume_fmm_3d_laplace_source_target_derivative_antisymmetry(tmp_path):
     assert rel_far_antisym < 1.0e-5
 
 
+@pytest.mark.full_accuracy
 def test_volume_fmm_3d_laplace_target_derivative_list1_preserves_odd_x_symmetry(
     tmp_path,
 ):
@@ -3856,7 +3843,7 @@ def test_volume_fmm_3d_laplace_target_derivative_list1_preserves_odd_x_symmetry(
     )
     from volumential.volume_fmm import drive_volume_fmm
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 2
@@ -3956,6 +3943,7 @@ def test_volume_fmm_3d_laplace_target_derivative_list1_preserves_odd_x_symmetry(
     assert rel_odd_symmetry < 1.0e-10
 
 
+@pytest.mark.full_accuracy
 def test_volume_fmm_3d_laplace_target_derivative_matches_scalar_fd_sign(tmp_path):
     from sumpy.expansion import DefaultExpansionFactory
     from sumpy.kernel import AxisTargetDerivative, LaplaceKernel
@@ -3967,7 +3955,7 @@ def test_volume_fmm_3d_laplace_target_derivative_matches_scalar_fd_sign(tmp_path
     )
     from volumential.volume_fmm import drive_volume_fmm, interpolate_volume_potential
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 2
@@ -4090,6 +4078,7 @@ def test_volume_fmm_3d_laplace_target_derivative_matches_scalar_fd_sign(tmp_path
     assert rel_match < 0.5 * rel_opposite
 
 
+@pytest.mark.full_accuracy
 @pytest.mark.parametrize(
     ("q_order", "max_rel_pde_residual"),
     [
@@ -4102,7 +4091,7 @@ def test_volume_fmm_3d_helmholtz_laplace_split_pde_residual_is_bounded(
     q_order,
     max_rel_pde_residual,
 ):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     wave_number = 6.0
@@ -4130,8 +4119,9 @@ def test_volume_fmm_3d_helmholtz_laplace_split_pde_residual_is_bounded(
     )
 
 
+@pytest.mark.full_accuracy
 def test_volume_fmm_3d_helmholtz_laplace_split_q_order_improves_pde_residual(tmp_path):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     wave_number = 6.0
@@ -4174,6 +4164,7 @@ def test_volume_fmm_3d_helmholtz_laplace_split_q_order_improves_pde_residual(tmp
     )
 
 
+@pytest.mark.full_accuracy
 @pytest.mark.parametrize(
     ("q_order", "max_rel_pde_residual"),
     [
@@ -4186,7 +4177,7 @@ def test_volume_fmm_2d_helmholtz_laplace_split_pde_residual_is_bounded(
     q_order,
     max_rel_pde_residual,
 ):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     wave_number = 8.0
@@ -4214,8 +4205,9 @@ def test_volume_fmm_2d_helmholtz_laplace_split_pde_residual_is_bounded(
     )
 
 
+@pytest.mark.full_accuracy
 def test_volume_fmm_2d_helmholtz_laplace_split_q_order_improves_pde_residual(tmp_path):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     wave_number = 8.0
@@ -4258,8 +4250,9 @@ def test_volume_fmm_2d_helmholtz_laplace_split_q_order_improves_pde_residual(tmp
     )
 
 
+@pytest.mark.full_accuracy
 def test_volume_fmm_2d_helmholtz_split_order2_runs(tmp_path):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 5
@@ -4295,8 +4288,9 @@ def test_volume_fmm_2d_helmholtz_split_order2_runs(tmp_path):
     assert result["rel_pde_residual"] < 1.0
 
 
+@pytest.mark.full_accuracy
 def test_volume_fmm_2d_yukawa_split_order2_runs(tmp_path):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 5
@@ -4338,8 +4332,9 @@ def test_volume_fmm_2d_yukawa_split_order2_runs(tmp_path):
     assert split_half_lam["n_points"] > 0
 
 
+@pytest.mark.full_accuracy
 def test_volume_fmm_2d_yukawa_split_scalar_tracks_nonsplit(tmp_path):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 4
@@ -4390,8 +4385,9 @@ def test_volume_fmm_2d_yukawa_split_scalar_tracks_nonsplit(tmp_path):
     )
 
 
+@pytest.mark.full_accuracy
 def test_volume_fmm_2d_helmholtz_split_scalar_tracks_nonsplit(tmp_path):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 4
@@ -4445,10 +4441,11 @@ def test_volume_fmm_2d_helmholtz_split_scalar_tracks_nonsplit(tmp_path):
     )
 
 
+@pytest.mark.full_accuracy
 def test_volume_fmm_2d_yukawa_split_axis_target_derivative_tracks_nonsplit(tmp_path):
     from sumpy.kernel import AxisTargetDerivative, YukawaKernel
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 4
@@ -4506,10 +4503,11 @@ def test_volume_fmm_2d_yukawa_split_axis_target_derivative_tracks_nonsplit(tmp_p
     )
 
 
+@pytest.mark.full_accuracy
 def test_volume_fmm_2d_yukawa_split_axis_source_derivative_tracks_nonsplit(tmp_path):
     from sumpy.kernel import AxisSourceDerivative, YukawaKernel
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 4
@@ -4570,12 +4568,13 @@ def test_volume_fmm_2d_yukawa_split_axis_source_derivative_tracks_nonsplit(tmp_p
     )
 
 
+@pytest.mark.full_accuracy
 def test_volume_fmm_2d_helmholtz_split_axis_target_derivative_tracks_nonsplit(
     tmp_path,
 ):
     from sumpy.kernel import AxisTargetDerivative, HelmholtzKernel
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 4
@@ -4637,12 +4636,13 @@ def test_volume_fmm_2d_helmholtz_split_axis_target_derivative_tracks_nonsplit(
     )
 
 
+@pytest.mark.full_accuracy
 def test_volume_fmm_2d_helmholtz_split_axis_source_derivative_tracks_nonsplit(
     tmp_path,
 ):
     from sumpy.kernel import AxisSourceDerivative, HelmholtzKernel
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 4
@@ -4706,12 +4706,13 @@ def test_volume_fmm_2d_helmholtz_split_axis_source_derivative_tracks_nonsplit(
     )
 
 
+@pytest.mark.full_accuracy
 def test_volume_fmm_3d_helmholtz_split_axis_target_derivative_tracks_nonsplit(
     tmp_path,
 ):
     from sumpy.kernel import AxisTargetDerivative, HelmholtzKernel
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 3
@@ -4773,12 +4774,13 @@ def test_volume_fmm_3d_helmholtz_split_axis_target_derivative_tracks_nonsplit(
     )
 
 
+@pytest.mark.full_accuracy
 def test_volume_fmm_3d_helmholtz_split_axis_source_derivative_tracks_nonsplit(
     tmp_path,
 ):
     from sumpy.kernel import AxisSourceDerivative, HelmholtzKernel
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 3
@@ -4842,6 +4844,7 @@ def test_volume_fmm_3d_helmholtz_split_axis_source_derivative_tracks_nonsplit(
     )
 
 
+@pytest.mark.full_accuracy
 def test_volume_fmm_2d_helmholtz_split_directional_source_derivative_tracks_direct(
     tmp_path,
 ):
@@ -4851,7 +4854,7 @@ def test_volume_fmm_2d_helmholtz_split_directional_source_derivative_tracks_dire
         LaplaceKernel,
     )
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 4
@@ -4911,10 +4914,11 @@ def test_volume_fmm_2d_helmholtz_split_directional_source_derivative_tracks_dire
     )
 
 
+@pytest.mark.full_accuracy
 def test_volume_fmm_2d_helmholtz_split_supports_multiple_output_kernels(tmp_path):
     from sumpy.kernel import AxisTargetDerivative, HelmholtzKernel
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 4
@@ -5003,8 +5007,9 @@ def test_volume_fmm_2d_helmholtz_split_supports_multiple_output_kernels(tmp_path
     assert split["wrangler"].helmholtz_split
 
 
+@pytest.mark.full_accuracy
 def test_volume_fmm_2d_helmholtz_split_accepts_infer_kernel_scaling(tmp_path):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 4
@@ -5052,8 +5057,9 @@ def test_volume_fmm_2d_helmholtz_split_accepts_infer_kernel_scaling(tmp_path):
     assert not inferred["wrangler"].list1_extra_kwargs["infer_kernel_scaling"]
 
 
+@pytest.mark.full_accuracy
 def test_volume_fmm_2d_helmholtz_split_default_auto_enabled(tmp_path):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 4
@@ -5109,7 +5115,7 @@ def test_volume_fmm_2d_split_full_accuracy_combination_sweep(tmp_path, base_kind
         YukawaKernel,
     )
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 4
@@ -5277,7 +5283,7 @@ def test_volume_fmm_2d_split_full_accuracy_combination_sweep(tmp_path, base_kind
 def test_volume_fmm_2d_yukawa_split_full_accuracy_tracks_nonsplit_outputs(tmp_path):
     from sumpy.kernel import AxisSourceDerivative, AxisTargetDerivative, YukawaKernel
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 4
@@ -5426,7 +5432,7 @@ def test_volume_fmm_2d_helmholtz_split_full_accuracy_tracks_nonsplit_outputs(tmp
         HelmholtzKernel,
     )
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 4
@@ -5587,7 +5593,7 @@ def test_volume_fmm_2d_helmholtz_split_directional_source_full_accuracy_tracks_n
         LaplaceKernel,
     )
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 4
@@ -5660,7 +5666,7 @@ def test_volume_fmm_2d_yukawa_split_directional_source_full_accuracy_tracks_nons
 ):
     from sumpy.kernel import DirectionalSourceDerivative, LaplaceKernel, YukawaKernel
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 4
@@ -5725,6 +5731,46 @@ def test_volume_fmm_2d_yukawa_split_directional_source_full_accuracy_tracks_nons
     )
 
 
+#: Set to ``1`` to run the two 3D split-versus-nonsplit full-accuracy tests
+#: below at the reduced size of :func:`_split_3d_full_accuracy_size`.
+FULL_ACCURACY_REDUCED_ENV = "VOLUMENTIAL_FULL_ACCURACY_REDUCED"
+
+
+class _Split3DFullAccuracySize(NamedTuple):
+    fmm_order: int
+    source_derivative: bool
+
+
+def _split_3d_full_accuracy_size():
+    """Return the multipole order and the outputs of the 3D split sweeps.
+
+    At full size, the default, the two tests below run at multipole order 24
+    and compare the potential, its target x-derivative and its source
+    x-derivative. With ``VOLUMENTIAL_FULL_ACCURACY_REDUCED=1`` they run at
+    order 16 and leave the source derivative out. ``CI Full`` sets it: at full
+    size the two took 57 of the 90 minutes the tier needed on its CPU runner.
+
+    Neither change loosens the comparison. The two runs of a pair share their
+    far field, so the difference between them agrees to four digits at orders
+    16 and 24. The source x-derivative of these kernels is the negated target
+    x-derivative, and the source pair has reproduced the target pair's
+    difference to four digits through its own table and code path. The
+    quadrature order, the split order and the 1e-6 tolerance are the same at
+    both sizes.
+    """
+    if os.environ.get(FULL_ACCURACY_REDUCED_ENV) == "1":
+        return _Split3DFullAccuracySize(fmm_order=16, source_derivative=False)
+    return _Split3DFullAccuracySize(fmm_order=24, source_derivative=True)
+
+
+def _split_3d_rel_diff(queue, split_out, direct_out):
+    split_pot = split_out["potentials"].get(queue)
+    direct_pot = direct_out["potentials"].get(queue)
+    return np.linalg.norm(split_pot - direct_pot) / max(
+        1.0, np.linalg.norm(direct_pot)
+    )
+
+
 @pytest.mark.full_accuracy
 def test_volume_fmm_3d_helmholtz_split_full_accuracy_tracks_nonsplit_outputs(tmp_path):
     from sumpy.kernel import (
@@ -5733,312 +5779,172 @@ def test_volume_fmm_3d_helmholtz_split_full_accuracy_tracks_nonsplit_outputs(tmp
         HelmholtzKernel,
     )
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 4
     wave_number = 8.0
     nlevels = 3
     split_order = 4
-    fmm_order = 24
+    fmm_order, source_derivative = _split_3d_full_accuracy_size()
     axis = 0
 
-    split_scalar_table = _get_laplace_3d_table(
-        queue,
-        tmp_path / "nft-helmholtz3d-fullacc-split-scalar-laplace-q4.sqlite",
-        q_order,
-    )
-    split_target_table = _get_laplace_3d_dx_table(
-        queue,
-        tmp_path / "nft-helmholtz3d-fullacc-split-dx-laplace-q4.sqlite",
-        q_order,
-        source_box_level=nlevels,
-    )
-    split_source_table = _get_laplace_3d_axis_source_derivative_table(
-        queue,
-        tmp_path / "nft-helmholtz3d-fullacc-split-sx-laplace-q4.sqlite",
-        q_order,
-        axis,
-        source_box_level=nlevels,
-    )
-
-    target_knl = AxisTargetDerivative(axis, HelmholtzKernel(3))
-    source_knl = AxisSourceDerivative(axis, HelmholtzKernel(3))
-
-    direct_scalar_table = _build_helmholtz_3d_output_table(
-        queue,
-        q_order,
-        wave_number,
-        source_box_level=nlevels,
-    )
-    direct_target_table = _build_helmholtz_3d_output_table(
-        queue,
-        q_order,
-        wave_number,
-        source_box_level=nlevels,
-        out_kernel=target_knl,
-    )
-    direct_source_table = _build_helmholtz_3d_output_table(
-        queue,
-        q_order,
-        wave_number,
-        source_box_level=nlevels,
-        out_kernel=source_knl,
-    )
-
-    split_scalar = _run_3d_helmholtz_pde_case(
-        ctx,
-        queue,
-        split_scalar_table,
-        q_order=q_order,
-        nlevels=nlevels,
-        fmm_order=fmm_order,
-        wave_number=wave_number,
-        helmholtz_split=True,
-        helmholtz_split_order=split_order,
-        compute_pde_residual=False,
-        return_state=True,
-    )
-    direct_scalar = _run_3d_helmholtz_pde_case(
-        ctx,
-        queue,
-        direct_scalar_table,
-        q_order=q_order,
-        nlevels=nlevels,
-        fmm_order=fmm_order,
-        wave_number=wave_number,
-        helmholtz_split=False,
-        compute_pde_residual=False,
-        return_state=True,
-    )
-
-    split_target = _run_3d_helmholtz_pde_case(
-        ctx,
-        queue,
-        split_target_table,
-        q_order=q_order,
-        nlevels=nlevels,
-        fmm_order=fmm_order,
-        wave_number=wave_number,
-        helmholtz_split=True,
-        helmholtz_split_order=split_order,
-        out_kernel=target_knl,
-        compute_pde_residual=False,
-        return_state=True,
-    )
-    direct_target = _run_3d_helmholtz_pde_case(
-        ctx,
-        queue,
-        direct_target_table,
-        q_order=q_order,
-        nlevels=nlevels,
-        fmm_order=fmm_order,
-        wave_number=wave_number,
-        helmholtz_split=False,
-        out_kernel=target_knl,
-        compute_pde_residual=False,
-        return_state=True,
-    )
-
-    split_source = _run_3d_helmholtz_pde_case(
-        ctx,
-        queue,
-        split_source_table,
-        q_order=q_order,
-        nlevels=nlevels,
-        fmm_order=fmm_order,
-        wave_number=wave_number,
-        helmholtz_split=True,
-        helmholtz_split_order=split_order,
-        out_kernel=source_knl,
-        compute_pde_residual=False,
-        return_state=True,
-    )
-    direct_source = _run_3d_helmholtz_pde_case(
-        ctx,
-        queue,
-        direct_source_table,
-        q_order=q_order,
-        nlevels=nlevels,
-        fmm_order=fmm_order,
-        wave_number=wave_number,
-        helmholtz_split=False,
-        out_kernel=source_knl,
-        compute_pde_residual=False,
-        return_state=True,
-    )
-
-    def rel_diff(split_out, direct_out):
-        split_pot = split_out["potentials"].get(queue)
-        direct_pot = direct_out["potentials"].get(queue)
-        return np.linalg.norm(split_pot - direct_pot) / max(
-            1.0, np.linalg.norm(direct_pot)
+    def run(table, *, split, out_kernel=None):
+        split_kwargs = {"helmholtz_split_order": split_order} if split else {}
+        return _run_3d_helmholtz_pde_case(
+            ctx,
+            queue,
+            table,
+            q_order=q_order,
+            nlevels=nlevels,
+            fmm_order=fmm_order,
+            wave_number=wave_number,
+            helmholtz_split=split,
+            out_kernel=out_kernel,
+            compute_pde_residual=False,
+            return_state=True,
+            **split_kwargs,
         )
 
-    scalar_rel = rel_diff(split_scalar, direct_scalar)
-    target_rel = rel_diff(split_target, direct_target)
-    source_rel = rel_diff(split_source, direct_source)
+    def direct_table(out_kernel=None):
+        return _build_helmholtz_3d_output_table(
+            queue,
+            q_order,
+            wave_number,
+            source_box_level=nlevels,
+            out_kernel=out_kernel,
+        )
 
-    assert scalar_rel < 1.0e-6, f"Helmholtz 3D split scalar rel_diff={scalar_rel:.3e}"
-    assert target_rel < 1.0e-6, f"Helmholtz 3D split target rel_diff={target_rel:.3e}"
-    assert source_rel < 1.0e-6, f"Helmholtz 3D split source rel_diff={source_rel:.3e}"
+    def check(label, split_table, out_kernel=None):
+        rel = _split_3d_rel_diff(
+            queue,
+            run(split_table, split=True, out_kernel=out_kernel),
+            run(direct_table(out_kernel), split=False, out_kernel=out_kernel),
+        )
+        assert rel < 1.0e-6, (
+            f"Helmholtz 3D split {label} rel_diff={rel:.3e} (fmm_order={fmm_order})"
+        )
+
+    check(
+        "scalar",
+        _get_laplace_3d_table(
+            queue,
+            tmp_path / "nft-helmholtz3d-fullacc-split-scalar-laplace-q4.sqlite",
+            q_order,
+        ),
+    )
+    check(
+        "target",
+        _get_laplace_3d_dx_table(
+            queue,
+            tmp_path / "nft-helmholtz3d-fullacc-split-dx-laplace-q4.sqlite",
+            q_order,
+            source_box_level=nlevels,
+        ),
+        AxisTargetDerivative(axis, HelmholtzKernel(3)),
+    )
+    if source_derivative:
+        check(
+            "source",
+            _get_laplace_3d_axis_source_derivative_table(
+                queue,
+                tmp_path / "nft-helmholtz3d-fullacc-split-sx-laplace-q4.sqlite",
+                q_order,
+                axis,
+                source_box_level=nlevels,
+            ),
+            AxisSourceDerivative(axis, HelmholtzKernel(3)),
+        )
 
 
 @pytest.mark.full_accuracy
 def test_volume_fmm_3d_yukawa_split_full_accuracy_tracks_nonsplit_outputs(tmp_path):
     from sumpy.kernel import AxisSourceDerivative, AxisTargetDerivative, YukawaKernel
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 4
     lam = 8.0
     nlevels = 3
     split_order = 4
-    fmm_order = 24
+    fmm_order, source_derivative = _split_3d_full_accuracy_size()
     axis = 0
 
-    split_scalar_table = _get_laplace_3d_table(
-        queue,
-        tmp_path / "nft-yukawa3d-fullacc-split-scalar-laplace-q4.sqlite",
-        q_order,
-    )
-    split_target_table = _get_laplace_3d_dx_table(
-        queue,
-        tmp_path / "nft-yukawa3d-fullacc-split-dx-laplace-q4.sqlite",
-        q_order,
-        source_box_level=nlevels,
-    )
-    split_source_table = _get_laplace_3d_axis_source_derivative_table(
-        queue,
-        tmp_path / "nft-yukawa3d-fullacc-split-sx-laplace-q4.sqlite",
-        q_order,
-        axis,
-        source_box_level=nlevels,
-    )
-
-    target_knl = AxisTargetDerivative(axis, YukawaKernel(3))
-    source_knl = AxisSourceDerivative(axis, YukawaKernel(3))
-
-    direct_scalar_table = _build_yukawa_3d_output_table(
-        queue,
-        q_order,
-        lam,
-        source_box_level=nlevels,
-    )
-    direct_target_table = _build_yukawa_3d_output_table(
-        queue,
-        q_order,
-        lam,
-        source_box_level=nlevels,
-        out_kernel=target_knl,
-    )
-    direct_source_table = _build_yukawa_3d_output_table(
-        queue,
-        q_order,
-        lam,
-        source_box_level=nlevels,
-        out_kernel=source_knl,
-    )
-
-    split_scalar = _run_3d_yukawa_split_case(
-        ctx,
-        queue,
-        split_scalar_table,
-        q_order=q_order,
-        nlevels=nlevels,
-        fmm_order=fmm_order,
-        lam=lam,
-        helmholtz_split=True,
-        helmholtz_split_order=split_order,
-        return_state=True,
-    )
-    direct_scalar = _run_3d_yukawa_split_case(
-        ctx,
-        queue,
-        direct_scalar_table,
-        q_order=q_order,
-        nlevels=nlevels,
-        fmm_order=fmm_order,
-        lam=lam,
-        helmholtz_split=False,
-        return_state=True,
-    )
-
-    split_target = _run_3d_yukawa_split_case(
-        ctx,
-        queue,
-        split_target_table,
-        q_order=q_order,
-        nlevels=nlevels,
-        fmm_order=fmm_order,
-        lam=lam,
-        helmholtz_split=True,
-        helmholtz_split_order=split_order,
-        out_kernel=target_knl,
-        return_state=True,
-    )
-    direct_target = _run_3d_yukawa_split_case(
-        ctx,
-        queue,
-        direct_target_table,
-        q_order=q_order,
-        nlevels=nlevels,
-        fmm_order=fmm_order,
-        lam=lam,
-        helmholtz_split=False,
-        out_kernel=target_knl,
-        return_state=True,
-    )
-
-    split_source = _run_3d_yukawa_split_case(
-        ctx,
-        queue,
-        split_source_table,
-        q_order=q_order,
-        nlevels=nlevels,
-        fmm_order=fmm_order,
-        lam=lam,
-        helmholtz_split=True,
-        helmholtz_split_order=split_order,
-        out_kernel=source_knl,
-        return_state=True,
-    )
-    direct_source = _run_3d_yukawa_split_case(
-        ctx,
-        queue,
-        direct_source_table,
-        q_order=q_order,
-        nlevels=nlevels,
-        fmm_order=fmm_order,
-        lam=lam,
-        helmholtz_split=False,
-        out_kernel=source_knl,
-        return_state=True,
-    )
-
-    def rel_diff(split_out, direct_out):
-        split_pot = split_out["potentials"].get(queue)
-        direct_pot = direct_out["potentials"].get(queue)
-        return np.linalg.norm(split_pot - direct_pot) / max(
-            1.0, np.linalg.norm(direct_pot)
+    def run(table, *, split, out_kernel=None):
+        split_kwargs = {"helmholtz_split_order": split_order} if split else {}
+        return _run_3d_yukawa_split_case(
+            ctx,
+            queue,
+            table,
+            q_order=q_order,
+            nlevels=nlevels,
+            fmm_order=fmm_order,
+            lam=lam,
+            helmholtz_split=split,
+            out_kernel=out_kernel,
+            return_state=True,
+            **split_kwargs,
         )
 
-    scalar_rel = rel_diff(split_scalar, direct_scalar)
-    target_rel = rel_diff(split_target, direct_target)
-    source_rel = rel_diff(split_source, direct_source)
+    def direct_table(out_kernel=None):
+        return _build_yukawa_3d_output_table(
+            queue,
+            q_order,
+            lam,
+            source_box_level=nlevels,
+            out_kernel=out_kernel,
+        )
 
-    assert scalar_rel < 1.0e-6, f"Yukawa 3D split scalar rel_diff={scalar_rel:.3e}"
-    assert target_rel < 1.0e-6, f"Yukawa 3D split target rel_diff={target_rel:.3e}"
-    assert source_rel < 1.0e-6, f"Yukawa 3D split source rel_diff={source_rel:.3e}"
+    def check(label, split_table, out_kernel=None):
+        rel = _split_3d_rel_diff(
+            queue,
+            run(split_table, split=True, out_kernel=out_kernel),
+            run(direct_table(out_kernel), split=False, out_kernel=out_kernel),
+        )
+        assert rel < 1.0e-6, (
+            f"Yukawa 3D split {label} rel_diff={rel:.3e} (fmm_order={fmm_order})"
+        )
+
+    check(
+        "scalar",
+        _get_laplace_3d_table(
+            queue,
+            tmp_path / "nft-yukawa3d-fullacc-split-scalar-laplace-q4.sqlite",
+            q_order,
+        ),
+    )
+    check(
+        "target",
+        _get_laplace_3d_dx_table(
+            queue,
+            tmp_path / "nft-yukawa3d-fullacc-split-dx-laplace-q4.sqlite",
+            q_order,
+            source_box_level=nlevels,
+        ),
+        AxisTargetDerivative(axis, YukawaKernel(3)),
+    )
+    if source_derivative:
+        check(
+            "source",
+            _get_laplace_3d_axis_source_derivative_table(
+                queue,
+                tmp_path / "nft-yukawa3d-fullacc-split-sx-laplace-q4.sqlite",
+                q_order,
+                axis,
+                source_box_level=nlevels,
+            ),
+            AxisSourceDerivative(axis, YukawaKernel(3)),
+        )
 
 
+@pytest.mark.full_accuracy
 def test_volume_fmm_2d_yukawa_split_directional_source_derivative_tracks_direct(
     tmp_path,
 ):
     from sumpy.kernel import DirectionalSourceDerivative, LaplaceKernel, YukawaKernel
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 4
@@ -6097,7 +6003,7 @@ def test_volume_fmm_2d_yukawa_split_directional_source_derivative_tracks_direct(
 
 
 def test_volume_fmm_2d_yukawa_complex_lambda_rejected():
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 5
@@ -6117,8 +6023,9 @@ def test_volume_fmm_2d_yukawa_complex_lambda_rejected():
         )
 
 
+@pytest.mark.full_accuracy
 def test_volume_fmm_2d_yukawa_split_auto_high_rho_runs(tmp_path):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 5
@@ -6145,8 +6052,9 @@ def test_volume_fmm_2d_yukawa_split_auto_high_rho_runs(tmp_path):
     assert np.all(np.isfinite(pot))
 
 
+@pytest.mark.full_accuracy
 def test_volume_fmm_2d_yukawa_split_auto_smooth_quad_policy(tmp_path):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 5
@@ -6194,8 +6102,9 @@ def test_volume_fmm_2d_yukawa_split_auto_smooth_quad_policy(tmp_path):
         assert hard_wrangler.helmholtz_split_smooth_quad_order > hard_base_smooth
 
 
+@pytest.mark.full_accuracy
 def test_volume_fmm_2d_helmholtz_split_auto_real_smooth_quad_policy(tmp_path):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 5
@@ -6276,8 +6185,9 @@ def test_select_split_order_from_rho_default_boundaries():
     assert order == 2
 
 
+@pytest.mark.full_accuracy
 def test_volume_fmm_2d_helmholtz_split_order1_remainder_matches_legacy(tmp_path):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 5
@@ -6325,8 +6235,9 @@ def test_volume_fmm_2d_helmholtz_split_order1_remainder_matches_legacy(tmp_path)
     assert rel_diff < 1.0e-11
 
 
+@pytest.mark.full_accuracy
 def test_volume_fmm_2d_helmholtz_split_order1_overlap_allowed_for_remainder(tmp_path):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 5
@@ -6375,10 +6286,11 @@ def test_volume_fmm_2d_helmholtz_split_order1_overlap_allowed_for_remainder(tmp_
         )
 
 
+@pytest.mark.full_accuracy
 def test_volume_fmm_2d_helmholtz_split_power_log_single_table_matches_multilevel(
     tmp_path,
 ):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 5
@@ -6445,6 +6357,7 @@ def test_volume_fmm_2d_helmholtz_split_power_log_single_table_matches_multilevel
     assert rel_diff < 5.0e-11
 
 
+@pytest.mark.full_accuracy
 @pytest.mark.parametrize(
     ("split_order", "q_order", "cache_name", "max_rel_pde_residual"),
     [
@@ -6467,7 +6380,7 @@ def test_volume_fmm_2d_helmholtz_split_power_log_single_table_matches_multilevel
 def test_volume_fmm_2d_helmholtz_split_auto_builds_term_tables(
     tmp_path, split_order, q_order, cache_name, max_rel_pde_residual
 ):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     wave_number = 8.0
@@ -6494,7 +6407,7 @@ def test_volume_fmm_2d_helmholtz_split_auto_builds_term_tables(
 
 
 def test_volume_fmm_2d_helmholtz_split_rejects_term_tables_from_other_cache(tmp_path):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 5
@@ -6531,8 +6444,9 @@ def test_volume_fmm_2d_helmholtz_split_rejects_term_tables_from_other_cache(tmp_
         )
 
 
+@pytest.mark.full_accuracy
 def test_volume_fmm_2d_helmholtz_split_order3_smooth_equals_q_runs(tmp_path):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 5
@@ -6560,8 +6474,9 @@ def test_volume_fmm_2d_helmholtz_split_order3_smooth_equals_q_runs(tmp_path):
     assert result["rel_pde_residual"] < 1.0
 
 
+@pytest.mark.full_accuracy
 def test_volume_fmm_3d_helmholtz_split_order3_runs(tmp_path):
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 3
@@ -6597,12 +6512,13 @@ def test_volume_fmm_3d_helmholtz_split_order3_runs(tmp_path):
     assert result["rel_pde_residual"] < 2.0
 
 
+@pytest.mark.full_accuracy
 def test_volume_fmm_3d_calculus_patch_residual_regression(tmp_path):
     from sumpy.point_calculus import CalculusPatch
 
     from volumential.volume_fmm import interpolate_volume_potential
 
-    ctx = _create_non_intel_opencl_context_or_skip()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     q_order = 3

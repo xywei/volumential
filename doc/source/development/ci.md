@@ -92,13 +92,23 @@ move.
 | Job | What it does |
 | --- | --- |
 | Testing (macOS) | the suite on macOS |
-| Full Accuracy Tests | scheduled or manual only — collects **and** runs the `full_accuracy` marker |
+| Full Accuracy Tests | scheduled or manual only — collects **and** runs the `full_accuracy` marker on the PoCL CPU, and fails if any of it skips |
 | Examples | the maintained examples at full settings, with a cached Laplace 3D table |
 
-The full-accuracy job runs on GitHub-hosted CPU runners. Full numerical
-execution of the marked tests still wants a GPU-capable environment; the value
-of running the collection step explicitly is that marker drift, import errors
-and accidental deselection surface instead of being mistaken for validation.
+The full-accuracy job runs on a GitHub-hosted CPU runner, on the PoCL CPU that
+`PYOPENCL_CTX=portable:0` selects: the marked tests build their context from
+that variable (see {doc}`testing`). Until 2026-09 they looked for an fp64 GPU
+instead, found none on the runner, and all of them skipped while the job
+stayed green. So the job now names the device first and stops if it is not an
+fp64 PoCL CPU, and after the run it fails if any test was skipped. The
+collection step still runs on its own, so marker drift and import errors
+surface before the long run starts.
+
+At full size the tier took 90 minutes on the runner, 57 of them in the two 3D
+split-versus-nonsplit tests. So the job sets
+`VOLUMENTIAL_FULL_ACCURACY_REDUCED=1`, which runs those two at a reduced size
+(see {doc}`testing`). In two runs at that size the tier took 55 and 38
+minutes; the runners had different CPUs. The full size is for a manual run.
 
 ## Adding a documentation dependency
 

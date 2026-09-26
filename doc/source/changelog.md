@@ -87,6 +87,19 @@ Tables and numerics
   ({doc}`design-notes/windowed-channels`).
 
 Infrastructure
+: [#189](https://github.com/xywei/volumential/pull/189) — run the
+  full-accuracy tier. Its 32 tests built their context on the first fp64 GPU
+  whatever `PYOPENCL_CTX` said, so on the GPU-less runner of `CI Full` all of
+  them skipped and the job stayed green. The tests that build their own
+  context, and the shared near-field table builds, now run on the device
+  `PYOPENCL_CTX` selects, CPU or GPU; without it the fp64 ones take an fp64
+  GPU and fall back to an fp64 CPU. The 42 fp64 volume FMM regressions that
+  the same helper gated join the tier, because the pull-request suite cannot
+  afford them on a CPU. `CI Full` runs all 74 on the PoCL CPU, fails if any
+  of them skips, and runs the two 3D split-versus-nonsplit tests at the
+  reduced size that `VOLUMENTIAL_FULL_ACCURACY_REDUCED=1` selects
+  ({doc}`development/testing`). What the first runs turned up is in
+  [#190](https://github.com/xywei/volumential/issues/190).
 : [#181](https://github.com/xywei/volumential/pull/181) — lift the macOS
   skips. Six test modules skipped themselves on macOS unless
   `VOLUMENTIAL_RUN_UNSTABLE_DARWIN_TESTS=1` was set. The aborts they avoided

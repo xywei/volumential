@@ -4,6 +4,8 @@ Everything here is marked ``full_accuracy`` and therefore skipped unless
 ``pytest --full-accuracy`` is used.
 """
 
+import functools
+
 import numpy as np
 import pytest
 from numpy.polynomial.legendre import leggauss
@@ -23,51 +25,21 @@ import volumential.nearfield_potential_table as npt
 
 try:
     from _duffy_test_utils import pick_far_positive_case_id
+    from _opencl_test_utils import create_fp64_context_or_skip
 except ImportError:
     from test._duffy_test_utils import pick_far_positive_case_id
+    from test._opencl_test_utils import create_fp64_context_or_skip
 
 
-_FP64_GPU_QUEUE_CACHE = {}
+@functools.cache
+def _get_fp64_queue_or_skip():
+    """Return one fp64 queue shared by every case in this module.
 
-
-def _get_fp64_gpu_queue_or_skip(*, require_non_intel=False):
-    cache_key = bool(require_non_intel)
-    cached = _FP64_GPU_QUEUE_CACHE.get(cache_key)
-    if cached is not None:
-        return cached
-
-    try:
-        platforms = cl.get_platforms()
-    except cl.LogicError as exc:
-        pytest.skip(f"OpenCL platforms unavailable: {exc}")
-
-    for platform in platforms:
-        if require_non_intel and platform.name == "Intel(R) OpenCL":
-            continue
-
-        for dev in platform.get_devices():
-            if not (dev.type & cl.device_type.GPU):
-                continue
-
-            extensions = getattr(dev, "extensions", "")
-            has_khr_fp64 = "cl_khr_fp64" in extensions.split()
-            has_double_config = bool(getattr(dev, "double_fp_config", 0))
-            if not (has_khr_fp64 or has_double_config):
-                continue
-
-            queue = cl.CommandQueue(cl.Context([dev]))
-            _FP64_GPU_QUEUE_CACHE[cache_key] = queue
-            return queue
-
-    if require_non_intel:
-        pytest.skip("No non-Intel GPU OpenCL device with fp64 support available")
-    pytest.skip("No GPU OpenCL device with fp64 support available")
-
-
-def _get_non_intel_gpu_queue_or_skip():
-    # Helmholtz full-accuracy cases are kept off Intel OpenCL due to known
-    # complex-kernel backend instability on that driver stack.
-    return _get_fp64_gpu_queue_or_skip(require_non_intel=True)
+    :func:`create_fp64_context_or_skip` decides the device: exactly the one
+    ``PYOPENCL_CTX`` selects when it is set, otherwise an fp64 GPU with an
+    fp64 CPU as the fallback.  A skip raises, so it is never cached.
+    """
+    return cl.CommandQueue(create_fp64_context_or_skip())
 
 
 def _tensor_box_integral_real(dim, order, func, *, box_extent=1.0):
@@ -226,7 +198,7 @@ def _full_accuracy_case_setup(kernel_family, dim):
         fd_h = 5.0e-4
 
     if kernel_family == "laplace":
-        queue = _get_fp64_gpu_queue_or_skip()
+        queue = _get_fp64_queue_or_skip()
         base_knl = LaplaceKernel(dim)
         kernel_kwargs = {}
         kernel_type = "rigid"
@@ -235,7 +207,7 @@ def _full_accuracy_case_setup(kernel_family, dim):
         reference_derivative = _target_x_derivative_via_calculus_patch
         rel_tol = 1.0e-8
     elif kernel_family == "yukawa":
-        queue = _get_fp64_gpu_queue_or_skip()
+        queue = _get_fp64_queue_or_skip()
         base_knl = YukawaKernel(dim)
         kernel_kwargs = {base_knl.yukawa_lambda_name: 1.3}
         kernel_type = "rigid"
@@ -244,7 +216,7 @@ def _full_accuracy_case_setup(kernel_family, dim):
         reference_derivative = _target_x_derivative_via_calculus_patch
         rel_tol = 1.0e-8
     elif kernel_family == "helmholtz":
-        queue = _get_non_intel_gpu_queue_or_skip()
+        queue = _get_fp64_queue_or_skip()
         base_knl = HelmholtzKernel(dim)
         kernel_kwargs = {base_knl.helmholtz_k_name: 1.3}
         kernel_type = "helmholtz-rigid"

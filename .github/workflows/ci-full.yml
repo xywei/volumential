@@ -159,13 +159,40 @@ jobs:
           set -euxo pipefail
 
           export PY_EXE=python
+          # The fp64 tests build their context from PYOPENCL_CTX (see
+          # test/_opencl_test_utils.py), so this is the device they run on:
+          # the PoCL CPU.  Before they honoured it they looked for an fp64
+          # GPU, found none on this runner, and all of them skipped.
           export PYOPENCL_CTX="portable:0"
           export PYOPENCL_TEST="portable:0"
           export PYTHONFAULTHANDLER=1
+          # At full size the two 3D split-versus-nonsplit tests took 57 of
+          # the 90 minutes this run needed on the CPU; this runs them at the
+          # reduced size of _split_3d_full_accuracy_size in
+          # test/test_volume_fmm.py.  Leave it unset for the full size.
+          export VOLUMENTIAL_FULL_ACCURACY_REDUCED=1
 
           python -m pip install --upgrade pip
           python -m pip install uv
           uv pip install --system --editable ".[benchmark,test]"
+
+          # Name the device in the log, and stop before the long run if it
+          # is not the fp64 PoCL CPU.
+          python - <<'PYEOF'
+          import sys
+
+          sys.path.insert(0, "test")
+
+          import pyopencl as cl
+          from _opencl_test_utils import create_fp64_context_or_skip
+
+          (device,) = create_fp64_context_or_skip().devices
+          print(f"fp64 tests run on {device.name!r} "
+                f"on {device.platform.name!r}", flush=True)
+          if not (device.type & cl.device_type.CPU
+                  and "portable" in device.platform.name.lower()):
+              raise SystemExit("PYOPENCL_CTX does not select the PoCL CPU")
+          PYEOF
 
           FULL_ACCURACY_TESTS=(
             test/test_duffy_full_accuracy.py
@@ -174,8 +201,19 @@ jobs:
           pytest -vv --collect-only -m full_accuracy --full-accuracy \
             "${FULL_ACCURACY_TESTS[@]}"
 
-          pytest -vv -m full_accuracy --full-accuracy \
-            "${FULL_ACCURACY_TESTS[@]}"
+          pytest -vv -rs -m full_accuracy --full-accuracy \
+            --junitxml=full-accuracy.xml "${FULL_ACCURACY_TESTS[@]}"
+
+          # A skipped accuracy test is not a validated one.
+          python - <<'PYEOF'
+          import xml.etree.ElementTree as ET
+
+          root = ET.parse("full-accuracy.xml").getroot()
+          suites = [root] if root.tag == "testsuite" else root.iter("testsuite")
+          skipped = sum(int(suite.get("skipped", 0)) for suite in suites)
+          if skipped:
+              raise SystemExit(f"{skipped} full-accuracy tests were skipped")
+          PYEOF
 
   examples:
     name: Examples

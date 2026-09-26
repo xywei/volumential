@@ -43,8 +43,6 @@ from pathlib import Path
 import pytest
 from filelock import FileLock
 
-import pyopencl as cl
-
 # setup the ctx_factory fixture
 from pyopencl.tools import (  # noqa: F401
     pytest_generate_tests_for_pyopencl as pytest_generate_tests,
@@ -53,11 +51,17 @@ from pyopencl.tools import (  # noqa: F401
 from volumential.table_manager import NearFieldInteractionTableManager as NFTManager
 
 
+try:
+    from _opencl_test_utils import create_table_build_queue_or_skip
+except ImportError:
+    from test._opencl_test_utils import create_table_build_queue_or_skip
+
+
 #: Markers this suite defines, registered in :func:`pytest_configure` so that
 #: they work no matter which configuration file pytest picks up.
 SUITE_MARKERS = (
-    "full_accuracy: high-cost derivative accuracy tests, skipped unless "
-    "--full-accuracy",
+    "full_accuracy: high-cost accuracy and fp64 regression tests, skipped "
+    "unless --full-accuracy",
     "slow: tests whose aggregate runtime exceeds roughly 30 s on a CPU OpenCL "
     "backend; they still run by default, deselect them with -m 'not slow'",
 )
@@ -71,8 +75,6 @@ XFAIL_OPENCL_PLATFORMS = {
         "nearfield path"
     ),
 }
-
-INTEL_OPENCL_PLATFORM_NAME = "Intel(R) OpenCL"
 
 _CTX_FACTORY_XFAIL_REASON_CACHE = {}
 
@@ -148,28 +150,6 @@ def pytest_collection_modifyitems(config, items) -> None:
             item.add_marker(pytest.mark.xfail(reason=xfail_reason, run=False))
 
 
-def _create_table_build_queue() -> cl.CommandQueue:
-    """Return a queue for building near-field tables, preferring non-Intel."""
-    try:
-        platforms = cl.get_platforms()
-    except cl.LogicError as exc:
-        pytest.skip(f"OpenCL platforms unavailable: {exc}")
-
-    for platform in platforms:
-        if platform.name == INTEL_OPENCL_PLATFORM_NAME:
-            continue
-        devices = platform.get_devices()
-        if devices:
-            return cl.CommandQueue(cl.Context([devices[0]]))
-
-    for platform in platforms:
-        devices = platform.get_devices()
-        if devices:
-            return cl.CommandQueue(cl.Context([devices[0]]))
-
-    pytest.skip("No OpenCL devices available for table build")
-
-
 def _remove_quietly(path: Path) -> None:
     """Delete `path` if it exists, ignoring every filesystem error."""
     with contextlib.suppress(OSError):
@@ -205,7 +185,7 @@ def table_2d_order1(tmp_path_factory, request):
     if not worker_id:
         # not executing in with multiple workers, just produce the data and let
         # pytest's fixture caching do its job
-        queue = _create_table_build_queue()
+        queue = create_table_build_queue_or_skip()
         with NFTManager("nft.hdf5", progress_bar=True) as table_manager:
             table, _ = table_manager.get_table(2, "Laplace", q_order=1, queue=queue)
         _remove_quietly(Path("nft.hdf5"))
@@ -216,7 +196,7 @@ def table_2d_order1(tmp_path_factory, request):
 
     fn = root_tmp_dir / "nft.hdf5"
     with FileLock(str(fn) + ".lock"):
-        queue = _create_table_build_queue()
+        queue = create_table_build_queue_or_skip()
         with NFTManager(str(fn), progress_bar=True) as table_manager:
             table, _ = table_manager.get_table(2, "Laplace", q_order=1, queue=queue)
         return table
