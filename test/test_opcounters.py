@@ -216,6 +216,20 @@ def test_smooth_remainder_counts_match_analytic():
     # each smooth node passes through all p_star channel profiles
     assert kernel_calls.total(oc.PROFILE_NODES) == p_star * smooth_nodes
 
+def test_stable_3d_leading_residual_counts_executed_functions():
+    counters = oc.OpCounters()
+    radii = np.array([0.0, 1e-12, 0.1])
+    residual = windowed_remainder_profile(
+        3, 1.0, lambda r: np.exp(-r)/(4*np.pi*r), 1/256, 1,
+        stable_canonical_kernel=True)
+    with oc.counting(counters):
+        residual(radii)
+    assert counters.labels(oc.KERNEL_EVALS)["expm1"] == radii.size
+    assert counters.labels(oc.SPECIAL_EVALS)["erf"] == radii.size
+    # The leading channel is analytically combined, not evaluated separately.
+    assert counters.total(oc.PROFILE_NODES) == 0
+
+
 # }}}
 
 

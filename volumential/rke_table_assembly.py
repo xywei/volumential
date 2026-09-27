@@ -1130,6 +1130,8 @@ def windowed_remainder_profile(
             from scipy.special import erf
 
             if dim == 3:
+                opcounters.add(opcounters.KERNEL_EVALS, "expm1", safe_r.size)
+                opcounters.add(opcounters.SPECIAL_EVALS, "erf", safe_r.size)
                 # exp(-a*r)/r - erfc(r/(2*sqrt(t)))/r, without
                 # subtracting two numbers of size 1/r near coincidence.
                 leading = (
@@ -1654,9 +1656,11 @@ def _validate_channel_orders(
 # {{{ channel entry magnitude bounds
 
 def _channel_source_mode_sup(table: NearFieldInteractionTable) -> float:
-    """Sup norm over the source box of the tensor-product source modes,
-    ``max_i sup_y |phi_i(y)|``, bounded axis-wise (the tensor product of the
-    per-axis sups dominates the sup of the product)."""
+    """Sampled estimate of the maximum source-mode magnitude.
+
+    The tensor product uses per-axis maxima on 1024 equally spaced points.
+    This is a diagnostic estimate, not a certified supremum bound.
+    """
     # Deferred: see :func:`_channel_duffy_context`.
     from volumential.lagrange import (
         barycentric_lagrange_weights,
@@ -1693,7 +1697,7 @@ def _channel_entry_magnitude_bound(
     window_scale: float,
     safety: float = 8.0,
 ) -> float:
-    """Analytic upper bound on normalized ``|psi_m|`` table entries.
+    """Magnitude sanity threshold for normalized ``|psi_m|`` table entries.
 
     A table entry is ``int_box psi_m(|x_t - y|) phi_i(y) dy``, so
 
@@ -1706,10 +1710,10 @@ def _channel_entry_magnitude_bound(
 
     (the ``m = 0`` cases are the Ewald identities ``int E_1(r^2/4t_w)/2 =
     2 pi t_w`` and ``int erfc(r/2 sqrt(t_w))/r = 4 pi t_w``; the recurrence
-    carries the identity to every ``m``).  The bound is tight: without
-    ``safety`` a built 3D ``q = 2`` table sits within a factor of three of
-    it at every ``m``, so even the generous factor leaves a check that no
-    quadrature error can trip but a blown-up build cannot survive.
+    carries the identity to every ``m``). The channel mass is analytic,
+    but the basis supremum is sampled. The safety factor makes this a
+    practical corruption/resolution guard, not a proved entry bound or an
+    accuracy certificate for arbitrary interpolation orders.
     """
     dim = int(table.dim)
     mass_constant = 2.0 * np.pi if dim == 2 else 4.0 * np.pi
@@ -1724,7 +1728,7 @@ def _check_channel_table_values(
     window_scale: float,
 ) -> None:
     """Reject a channel table whose entries are not finite or exceed the
-    analytic bound of :func:`_channel_entry_magnitude_bound`.
+    magnitude sanity threshold of :func:`_channel_entry_magnitude_bound`.
 
     Cheap (one pass over the reduced entries) and unconditional, so no build
     path — fresh, cached, or rebuilt — can hand back a poisoned
@@ -1942,7 +1946,7 @@ def get_windowed_channel_table(
 
     Every table handed back — freshly built or loaded from cache — passes
     ``_check_channel_table_values``, so a channel that violates the
-    analytic entry bound can never reach the recombination (where a single
+    magnitude sanity threshold can never reach the recombination (where a single
     blown-up channel would dominate both the peak sum and the assembled
     maximum, leaving the reported condition number at a reassuring 1.0).
     The private ``_windowed_cache_disposition`` attribute is ``"hit"`` only
