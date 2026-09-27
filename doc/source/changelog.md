@@ -94,6 +94,13 @@ Infrastructure
   full-accuracy tier of `CI Full`, which grows to 81 tests; their direct
   reference is built on the device `PYOPENCL_CTX` selects, like the rest of
   the tier ([#186](https://github.com/xywei/volumential/issues/186)).
+: [#195](https://github.com/xywei/volumential/pull/195) — give the two 3D
+  split-versus-nonsplit full-accuracy tests a margin. What they measured was
+  the error of the rule that integrates the smooth split remainder at the
+  base quadrature order: 9.7e-7 for the Helmholtz potential, against a 1e-6
+  tolerance. They now integrate the remainder at order 6, where the largest
+  difference is 2.0e-10, and assert 1e-8. The one-off Yukawa failure of
+  [#190](https://github.com/xywei/volumential/issues/190) is still open.
 : [#192](https://github.com/xywei/volumential/pull/192) — run all of the
   full-accuracy tier. `CI Full` named two files, so the five `full_accuracy`
   cases of `test_windowed_rke.py` ran in no CI job; it now selects the marker
