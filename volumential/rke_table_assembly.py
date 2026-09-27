@@ -127,8 +127,8 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 _EULER_GAMMA = np.euler_gamma
-_WINDOWED_CHANNEL_CACHE_SCHEMA = 2
-_WINDOWED_CHANNEL_NORMALIZATION = "psi=chi/t_w**m"
+_WINDOWED_CHANNEL_CACHE_SCHEMA = 3
+_WINDOWED_CHANNEL_NORMALIZATION = "reference-psi;physical-table=h**2*reference"
 
 # Conservative near-field separation bound in source-box extents: the
 # adaptive List 1 gallery contains center offsets up to 1.5 source-box
@@ -1060,6 +1060,8 @@ def windowed_remainder_profile(
     kernel_radial: _RadialProfile,
     window_scale: float,
     p_star: int,
+    *,
+    stable_canonical_kernel: bool = False,
 ) -> _RadialProfile:
     """Radial profile of the exact windowed remainder
 
@@ -1076,6 +1078,11 @@ def windowed_remainder_profile(
     decaying Yukawa / outgoing Helmholtz branch instead of evaluating the two
     singular terms separately.  ``zeta = 0`` is rejected because this API does
     not define a zero-frequency kernel normalization or its origin limit.
+
+    With ``stable_canonical_kernel=True``, the supplied kernel must be the
+    canonical fundamental solution for ``zeta``. Its leading singularity is
+    cancelled analytically before floating-point evaluation. The default
+    preserves the subtraction contract for arbitrary supplied profiles.
 
     :returns: a vectorized callable ``R(r)`` (complex-valued).
     """
@@ -1119,10 +1126,49 @@ def windowed_remainder_profile(
         r_array = np.asarray(r)
         at_origin = r_array == 0
         safe_r = np.where(at_origin, 1.0, r_array)
-        channel_sum = coefficients[0] * profiles[0](safe_r)
+        if stable_canonical_kernel:
+            from scipy.special import erf
+
+            if dim == 3:
+                # exp(-a*r)/r - erfc(r/(2*sqrt(t)))/r, without
+                # subtracting two numbers of size 1/r near coincidence.
+                leading = (
+                    np.expm1(-decay * safe_r)
+                    + erf(safe_r / (2.0 * np.sqrt(window_scale)))
+                ) / safe_r
+            else:
+                leading = kernel_radial(safe_r) / prefactor - profiles[0](safe_r)
+                x = safe_r**2 / (4.0 * window_scale)
+                small = (np.abs(decay * safe_r) <= 0.5) & (x <= 0.25)
+                # K0(a*r) - E1(x)/2. Evaluate only in the convergent
+                # small-argument region; sum I0-1 directly, not by subtraction.
+                rr = np.where(small, safe_r, 1.0)
+                xx = np.where(small, x, 0.0)
+                zz = np.where(small, (decay * rr)**2 / 4.0, 0.0)
+                term = np.ones_like(zz, dtype=np.complex128)
+                i0_minus_one = np.zeros_like(term)
+                harmonic_sum = np.zeros_like(term)
+                e1_term = np.ones_like(xx, dtype=np.float64)
+                e1_sum = np.zeros_like(e1_term)
+                harmonic = 0.0
+                for j in range(1, 33):
+                    term *= zz / (j * j)
+                    harmonic += 1.0 / j
+                    i0_minus_one += term
+                    harmonic_sum += harmonic * term
+                    e1_term *= -xx / j
+                    e1_sum += e1_term / j
+                small_leading = (
+                    -np.log(decay * np.sqrt(window_scale)) - 0.5 * _EULER_GAMMA
+                    - (np.log(decay / 2.0) + np.log(rr) + _EULER_GAMMA)
+                    * i0_minus_one + harmonic_sum + 0.5 * e1_sum
+                )
+                leading = np.where(small, small_leading, leading)
+            result = prefactor * leading
+        else:
+            result = kernel_radial(safe_r) - prefactor * profiles[0](safe_r)
         for m in range(1, p_star):
-            channel_sum = channel_sum + coefficients[m] * profiles[m](safe_r)
-        result = kernel_radial(safe_r) - prefactor * channel_sum
+            result = result - prefactor * coefficients[m] * profiles[m](safe_r)
         result = np.where(at_origin, origin_value, result)
         if np.isscalar(r) or r_array.ndim == 0:
             return np.asarray(result).item()
@@ -1734,8 +1780,7 @@ def _windowed_channel_cache_file(
         ("normalization", _WINDOWED_CHANNEL_NORMALIZATION),
         ("dim", dim),
         ("q_order", q_order),
-        ("source_box_level", source_box_level),
-        ("root_extent", repr(float(root_extent))),
+        ("reference_extent", "1.0"),
         ("window_theta", repr(float(window_theta))),
         ("m", m),
         ("chan_regular_order", chan_regular_order),
@@ -1745,7 +1790,7 @@ def _windowed_channel_cache_file(
     digest = hashlib.sha1(repr(key).encode()).hexdigest()[:16]
     directory = Path(str(cache_path) + ".windowed")
     filename = (
-        f"channel-d{dim}-q{q_order}-l{source_box_level}"
+        f"reference-channel-d{dim}-q{q_order}"
         f"-m{m}-{digest}.npz"
     )
     return directory / filename, dict(key)
@@ -1879,8 +1924,12 @@ def get_windowed_channel_table(
     table geometry) only — never on any swept kernel parameter — and the
     cache key preserves that invariant.  Channel data is stored per channel
     in ``.npz`` files under ``str(cache_path) + ".windowed/"`` keyed by
-    ``(schema, normalization, dim, q_order, source_box_level, root_extent,
-    window_theta, m, chan_regular_order, chan_radial_order)``.  A load
+    ``(schema, normalization, dim, q_order, reference_extent=1,
+    window_theta, m, chan_regular_order, chan_radial_order)``. Neither physical
+    extent nor level belongs to the bank key. The returned physical table
+    is ``h**2`` times the reference values in both dimensions: the profile
+    contributes ``h**(2-d)`` and the volume element contributes ``h**d``.
+    A load
     validates the full key, symmetry-reduced entry IDs, and a checksum over
     the IDs and values before accepting cached data.  Any unreadable, stale,
     or corrupted file is rebuilt and atomically replaced, with the discard
@@ -1911,59 +1960,47 @@ def get_windowed_channel_table(
     )
     box_extent = float(root_extent) * 0.5**source_box_level
     _require_o1_box_extent(box_extent)
-    window_scale = (box_extent / window_theta) ** 2
+    reference_scale = window_theta**-2
+    reference = _windowed_channel_skeleton(dim, q_order, 0, 1.0, window_theta, m)
+    cache_file, key = _windowed_channel_cache_file(
+        cache_path, dim, q_order, source_box_level, root_extent,
+        window_theta, m, chan_regular_order, chan_radial_order,
+    )
+    entry_ids = np.asarray(
+        reference._get_invariant_entry_info()["entry_ids"], dtype=np.int64
+    )
+    entry_values = None
+    if not force_recompute and cache_file.is_file():
+        entry_values = _load_windowed_channel_values(
+            cache_file, key, reference, entry_ids, m, reference_scale
+        )
+    disposition = "hit" if entry_values is not None else "rebuilt"
+    if entry_values is None:
+        entry_ids, entry_values = _duffy_channel_entry_values(
+            reference,
+            _normalized_windowed_channel_profile(dim, m, reference_scale),
+            chan_regular_order, chan_radial_order,
+        )
+        opcounters.add(
+            opcounters.TABLE_ENTRIES, "windowed_channel", int(entry_values.size)
+        )
+        _check_channel_table_values(reference, entry_values, m, reference_scale)
+        _store_windowed_channel_values(cache_file, key, entry_ids, entry_values)
+
     table = _windowed_channel_skeleton(
         dim, q_order, source_box_level, root_extent, window_theta, m
     )
-    cache_file, key = _windowed_channel_cache_file(
-        cache_path,
-        dim,
-        q_order,
-        source_box_level,
-        root_extent,
-        window_theta,
-        m,
-        chan_regular_order,
-        chan_radial_order,
+    physical_values = box_extent**2 * entry_values
+    _check_channel_table_values(
+        table, physical_values, m, (box_extent / window_theta)**2
     )
-
-    expected_entry_ids = np.asarray(
-        table._get_invariant_entry_info()["entry_ids"], dtype=np.int64
-    )
-
-    if not force_recompute and cache_file.is_file():
-        stored_values = _load_windowed_channel_values(
-            cache_file, key, table, expected_entry_ids, m, window_scale
-        )
-        if stored_values is not None:
-            table.set_reduced_table_data(expected_entry_ids, stored_values)
-            table.is_built = True
-            table._windowed_cache_disposition = "hit"
-            return table
-
-    entry_ids, entry_values = _duffy_channel_entry_values(
-        table,
-        _normalized_windowed_channel_profile(dim, m, window_scale),
-        chan_regular_order,
-        chan_radial_order,
-    )
-    opcounters.add(
-        opcounters.TABLE_ENTRIES, "windowed_channel", int(entry_values.size)
-    )
-    # ``entry_ids`` comes from the same memoized invariant-entry info on the
-    # same table object as ``expected_entry_ids``, so an equality check here
-    # could never fire; the meaningful validation is the load-path one above
-    # (cached IDs against freshly computed ones).
-
-    # Refuse (and never cache) a channel table that violates the analytic
-    # entry bound: a poisoned channel is invisible to every downstream
-    # certificate field, so it has to die here.
-    _check_channel_table_values(table, entry_values, m, window_scale)
-
-    _store_windowed_channel_values(cache_file, key, entry_ids, entry_values)
-    table.set_reduced_table_data(entry_ids, entry_values)
+    table.set_reduced_table_data(entry_ids, physical_values)
     table.is_built = True
-    table._windowed_cache_disposition = "rebuilt"
+    table._windowed_cache_disposition = disposition
+    table._windowed_reference_checksum = _windowed_channel_payload_checksum(
+        entry_ids, entry_values
+    )
+    table._windowed_reference_cache_key = key
     return table
 
 # }}}
@@ -2230,7 +2267,7 @@ def _assemble_windowed_for_zeta(
     prefactor = 1.0 / (2.0 * np.pi) if dim == 2 else 1.0 / (4.0 * np.pi)
     coefficients = _windowed_coefficients(zeta * window_scale, p_star)
     remainder_radial = windowed_remainder_profile(
-        dim, zeta, kernel_radial, window_scale, p_star
+        dim, zeta, kernel_radial, window_scale, p_star, stable_canonical_kernel=True
     )
 
     remainder_values = _smooth_remainder_entry_values(

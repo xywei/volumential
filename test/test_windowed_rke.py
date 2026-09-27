@@ -1327,10 +1327,10 @@ def test_high_order_normalized_channel_cache(tmp_path, dim):
     cache_dir = Path(str(cache) + ".windowed")
     (cache_file,) = sorted(cache_dir.glob("*.npz"))
     with np.load(cache_file, allow_pickle=False) as payload:
-        assert payload["key_cache_schema"].item() == 2
-        assert payload["key_normalization"].item() == "psi=chi/t_w**m"
+        assert payload["key_cache_schema"].item() == 3
+        assert payload["key_normalization"].item() == rta._WINDOWED_CHANNEL_NORMALIZATION
         assert payload["payload_checksum"].item() == (
-            rta._windowed_channel_payload_checksum(entry_ids, values)
+            table._windowed_reference_checksum
         )
 
     reloaded = rta.get_windowed_channel_table(
