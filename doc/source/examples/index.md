@@ -40,16 +40,18 @@ again. Which build path runs, and how long it takes, is the subject of
 | {ref}`laplace2d_adaptive.py <laplace2d-adaptive-example>` | `VOLUMENTIAL_EXAMPLE_SMOKE=1` | `nft_laplace2d[_smoke].sqlite`, shared with `laplace2d.py` | `PYOPENCL_CTX` |
 | [`laplace3d.py`][laplace3d] | **no preset**, three size overrides | `nft_laplace3d.sqlite` | `PYOPENCL_CTX` |
 | [`poisson3d.py`][poisson3d] | `VOLUMENTIAL_EXAMPLE_SMOKE=1` | `nft_poisson3d[_smoke].sqlite` | `PYOPENCL_CTX` |
-| [`helmholtz2d.py`][helmholtz2d] | `VOLUMENTIAL_EXAMPLE_SMOKE=1` | `nft_laplace2d_for_helmholtz[_smoke].sqlite` | picks its own |
-| [`helmholtz3d.py`][helmholtz3d] | `VOLUMENTIAL_EXAMPLE_SMOKE=1` | `nft_laplace3d_for_helmholtz[_smoke].sqlite` | picks its own |
+| [`helmholtz2d.py`][helmholtz2d] | `VOLUMENTIAL_EXAMPLE_SMOKE=1` | `nft_laplace2d_for_helmholtz[_smoke].sqlite` | `PYOPENCL_CTX` if set, else picks its own |
+| [`helmholtz3d.py`][helmholtz3d] | `VOLUMENTIAL_EXAMPLE_SMOKE=1` | `nft_laplace3d_for_helmholtz[_smoke].sqlite` | `PYOPENCL_CTX` if set, else picks its own |
 | [`branched_flow_helmholtz2d.py`][branched] | `--smoke` | under `--output-dir` | `PYOPENCL_CTX` if set, else picks its own |
 
-"Picks its own" means the script builds an OpenCL context directly and
-**ignores `PYOPENCL_CTX`**, preferring the first fp64-capable GPU it finds and
-falling back to a CPU device. On a host with a GPU that silently changes the
-cost class of a run. `branched_flow_helmholtz2d.py` falls back to that choice
-only when `PYOPENCL_CTX` is unset. {doc}`../getting-started/device-selection` lists which
-script does what, and how to pin the device you meant.
+"Picks its own" is what the three Helmholtz scripts do when `PYOPENCL_CTX` is
+unset: they build an OpenCL context directly, on the first fp64-capable GPU
+they find, else on an fp64-capable CPU. On a host with a GPU that silently
+changes the cost class of a run, so set the variable. With it set, they run on
+the device it selects, and stop if it selects several devices or one without
+fp64.
+{doc}`../getting-started/device-selection` lists which script does what, and
+how to pin the device you meant.
 
 Only `laplace2d.py`, `laplace2d_adaptive.py`, `helmholtz2d.py` and
 `helmholtz3d.py` run on pull requests, under `VOLUMENTIAL_EXAMPLE_SMOKE=1`, in

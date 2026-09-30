@@ -1,7 +1,13 @@
-"""Manufactured-solution tests for the batched (GPU) Duffy-radial table
-builder: constant, Laplace-derivative, Helmholtz plane-wave and Yukawa
-cases whose exact box integrals are known in closed form.
+"""Manufactured-solution tests for the batched Duffy-radial table builder:
+constant, Laplace-derivative, Helmholtz plane-wave and Yukawa cases whose
+exact box integrals are known in closed form.
+
+They build their own context through :func:`create_fp64_context_or_skip`, so
+they run on exactly the device ``PYOPENCL_CTX`` selects, CPU or GPU, rather
+than on each platform of the ``ctx_factory`` fixture.
 """
+
+import functools
 
 import numpy as np
 import pytest
@@ -23,8 +29,10 @@ from volumential.table_manager import ConstantKernel
 
 try:
     from _duffy_test_utils import pick_far_positive_case_id
+    from _opencl_test_utils import create_fp64_context_or_skip
 except ImportError:
     from test._duffy_test_utils import pick_far_positive_case_id
+    from test._opencl_test_utils import create_fp64_context_or_skip
 
 
 class _Laplace1DKernel(ExpressionKernel):
@@ -65,11 +73,15 @@ class _HelmholtzPlaneWaveKernel(ExpressionKernel):
         return (self.dim, self.k)
 
 
-def _get_gpu_queue_or_skip(ctx_factory):
-    ctx = ctx_factory()
-    if not any(dev.type & cl.device_type.GPU for dev in ctx.devices):
-        pytest.skip("manufactured batched checks run on GPU contexts only")
-    return cl.CommandQueue(ctx)
+@functools.cache
+def _get_fp64_queue_or_skip():
+    """Return one fp64 queue shared by every case in this module.
+
+    :func:`create_fp64_context_or_skip` decides the device: exactly the one
+    ``PYOPENCL_CTX`` selects when it is set, otherwise an fp64 GPU with an
+    fp64 CPU as the fallback.  A skip raises, so it is never cached.
+    """
+    return cl.CommandQueue(create_fp64_context_or_skip())
 
 
 def _tensor_box_integral(dim, order, func):
@@ -131,8 +143,8 @@ def _target_x_derivative_via_calculus_patch(potential_at, target):
 
 
 @pytest.mark.parametrize("dim", [1, 2, 3])
-def test_duffy_batched_gpu_constant_kernel_matches_exact_volume(ctx_factory, dim):
-    queue = _get_gpu_queue_or_skip(ctx_factory)
+def test_duffy_batched_constant_kernel_matches_exact_volume(dim):
+    queue = _get_fp64_queue_or_skip()
 
     table = npt.NearFieldInteractionTable(
         quad_order=1,
@@ -158,10 +170,8 @@ def test_duffy_batched_gpu_constant_kernel_matches_exact_volume(ctx_factory, dim
 
 
 @pytest.mark.parametrize("dim", [1, 2, 3])
-def test_duffy_batched_gpu_laplace_derivative_matches_finite_difference(
-    ctx_factory, dim
-):
-    queue = _get_gpu_queue_or_skip(ctx_factory)
+def test_duffy_batched_laplace_derivative_matches_finite_difference(dim):
+    queue = _get_fp64_queue_or_skip()
 
     if dim == 1:
         laplace_knl = _Laplace1DKernel()
@@ -230,8 +240,8 @@ def test_duffy_batched_gpu_laplace_derivative_matches_finite_difference(
 
 
 @pytest.mark.parametrize("dim", [1, 2, 3])
-def test_duffy_batched_gpu_helmholtz_plane_wave_matches_exact_values(ctx_factory, dim):
-    queue = _get_gpu_queue_or_skip(ctx_factory)
+def test_duffy_batched_helmholtz_plane_wave_matches_exact_values(dim):
+    queue = _get_fp64_queue_or_skip()
 
     k = 1.7
     helmholtz_knl = _HelmholtzPlaneWaveKernel(dim, k)
@@ -295,10 +305,8 @@ def test_duffy_batched_gpu_helmholtz_plane_wave_matches_exact_values(ctx_factory
 
 
 @pytest.mark.parametrize("dim", [2, 3])
-def test_duffy_batched_gpu_yukawa_derivative_matches_finite_difference(
-    ctx_factory, dim
-):
-    queue = _get_gpu_queue_or_skip(ctx_factory)
+def test_duffy_batched_yukawa_derivative_matches_finite_difference(dim):
+    queue = _get_fp64_queue_or_skip()
 
     lam = 1.3
     yukawa_knl = YukawaKernel(dim)
