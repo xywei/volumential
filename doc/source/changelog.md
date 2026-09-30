@@ -101,6 +101,15 @@ Infrastructure
   tolerance. They now integrate the remainder at order 6, where the largest
   difference is 2.0e-10, and assert 1e-8. The one-off Yukawa failure of
   [#190](https://github.com/xywei/volumential/issues/190) is still open.
+: [#193](https://github.com/xywei/volumential/pull/193) — let `PYOPENCL_CTX`
+  pick the device everywhere it had a rule of its own. The eleven manufactured
+  checks of `test_duffy_batched_manufactured.py` skipped on anything but a GPU,
+  so they ran in no CI job; they now take the `PYOPENCL_CTX` device like the
+  other tests that build their own context, and at seconds on a CPU they run in
+  the default suite. `test_fmmlib_batched_stages.py` no longer always takes
+  PoCL, and `helmholtz2d.py` and `helmholtz3d.py` no longer ignore the
+  variable. All three Helmholtz examples stop when it selects several devices
+  ({doc}`getting-started/device-selection`).
 : [#192](https://github.com/xywei/volumential/pull/192) — run all of the
   full-accuracy tier. `CI Full` named two files, so the five `full_accuracy`
   cases of `test_windowed_rke.py` ran in no CI job; it now selects the marker

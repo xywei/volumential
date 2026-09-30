@@ -5,6 +5,9 @@ smooth correction for list1 interactions, and reports a manufactured-source
 PDE residual ``(-Delta - k^2)u - rho`` on an interior calculus patch.
 
 Set ``VOLUMENTIAL_EXAMPLE_SMOKE=1`` for a lighter run.
+
+``PYOPENCL_CTX`` selects the OpenCL device when it is set.  Without it the
+script picks the first fp64-capable GPU, else an fp64-capable CPU.
 """
 
 __copyright__ = "Copyright (C) 2017 - 2018 Xiaoyu Wei"
@@ -67,6 +70,43 @@ def _select_opencl_device(cl_module):
                 return dev
 
     raise RuntimeError("No OpenCL GPU/CPU device with fp64 support found")
+
+
+def _create_opencl_context(cl_module):
+    """Honor ``PYOPENCL_CTX`` when it is set; otherwise pick a device.
+
+    With the variable set, the context is exactly the one device it selects;
+    a selector that matches several devices, or one without fp64, is an
+    error. Without the variable, :func:`_select_opencl_device` prefers the
+    first fp64-capable GPU and falls back to an fp64-capable CPU.
+    """
+    if not os.environ.get("PYOPENCL_CTX"):
+        return cl_module.Context([_select_opencl_device(cl_module)])
+
+    # Pass the selector as answers: with the environment alone,
+    # create_some_context would prefer PYOPENCL_TEST when it is also set.
+    context = cl_module.create_some_context(
+        interactive=False, answers=os.environ["PYOPENCL_CTX"].split(":")
+    )
+    # A selector such as portable:0,1 gives a context with several devices,
+    # and a queue built without naming one would silently use the first.
+    if len(context.devices) != 1:
+        raise RuntimeError(
+            f"PYOPENCL_CTX selects {len(context.devices)} devices: "
+            + ", ".join(device.name for device in context.devices)
+            + "; select exactly one"
+        )
+    lacking = [
+        device.name
+        for device in context.devices
+        if not _device_supports_fp64(device)
+    ]
+    if lacking:
+        raise RuntimeError(
+            "PYOPENCL_CTX selects a device without fp64 support: "
+            + ", ".join(lacking)
+        )
+    return context
 
 
 def _is_smoke_mode():
@@ -264,9 +304,11 @@ def run_convergence_study(smoke_mode=None):
     )
     logger.info("Using table cache: %s", table_filename)
 
-    device = _select_opencl_device(cl)
-    ctx = cl.Context([device])
+    ctx = _create_opencl_context(cl)
     queue = cl.CommandQueue(ctx)
+    logger.info(
+        "OpenCL device: %s on %s", queue.device.name, queue.device.platform.name
+    )
 
     results = []
     for q_order in q_orders:

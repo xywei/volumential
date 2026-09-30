@@ -5,6 +5,10 @@ GEMM-based L2P) against the inherited per-box implementations from
 
 These stages do not touch near-field tables, so the wrangler is built with a
 minimal stand-in table object (an established pattern in this test suite).
+
+The tests that build a wrangler take their context from
+:func:`create_fp64_context_or_skip`, so they run on exactly the device
+``PYOPENCL_CTX`` selects, like the other tests that build their own context.
 """
 
 __copyright__ = "Copyright (C) 2026 Xiaoyu Wei"
@@ -42,26 +46,16 @@ from boxtree.pyfmmlib_integration import FMMLibExpansionWrangler
 import volumential.meshgen as mg
 
 
+try:
+    from _opencl_test_utils import create_fp64_context_or_skip
+except ImportError:
+    from test._opencl_test_utils import create_fp64_context_or_skip
+
+
 logger = logging.getLogger(__name__)
 
 
 # {{{ setup helpers
-
-def _make_pocl_context():
-    """Build a context on the pocl CPU platform (never the Intel GPU)."""
-    try:
-        platforms = cl.get_platforms()
-    except cl.LogicError as exc:
-        pytest.skip(f"OpenCL platforms unavailable: {exc}")
-
-    for platform in platforms:
-        if "Portable Computing Language" in platform.name:
-            devices = platform.get_devices()
-            if devices:
-                return cl.Context(devices=[devices[0]])
-
-    pytest.skip("pocl (Portable Computing Language) platform not available")
-
 
 def _build_wrangler(ctx, queue, *, dim, kernel_type, q_order, nlevels,
                     fmm_order, graded=False, helmholtz_k=2.0):
@@ -153,7 +147,7 @@ def _synthesize_local_expansions(wrangler, seed=17):
 @pytest.mark.parametrize("kernel_type", ["laplace", "helmholtz"])
 @pytest.mark.parametrize("graded", [False, True])
 def test_batched_form_multipoles_agrees_with_boxtree(dim, kernel_type, graded):
-    ctx = _make_pocl_context()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     wrangler, weights = _build_wrangler(
@@ -190,7 +184,7 @@ def test_batched_form_multipoles_agrees_with_boxtree(dim, kernel_type, graded):
 
 def test_form_multipoles_fallback_path(monkeypatch):
     """The fallback to the inherited implementation must stay exercised."""
-    ctx = _make_pocl_context()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     wrangler, weights = _build_wrangler(
@@ -217,7 +211,7 @@ def test_form_multipoles_fallback_path(monkeypatch):
 @pytest.mark.parametrize("kernel_type", ["laplace", "helmholtz"])
 @pytest.mark.parametrize("graded", [False, True])
 def test_gemm_eval_locals_agrees_with_boxtree(dim, kernel_type, graded):
-    ctx = _make_pocl_context()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     wrangler, _weights = _build_wrangler(
@@ -250,7 +244,7 @@ def test_gemm_eval_locals_agrees_with_boxtree(dim, kernel_type, graded):
 def test_eval_locals_fallback_path(monkeypatch):
     """When the GEMM path declares itself unsupported, the inherited
     implementation is used and produces the same potentials."""
-    ctx = _make_pocl_context()
+    ctx = create_fp64_context_or_skip()
     queue = cl.CommandQueue(ctx)
 
     wrangler, _weights = _build_wrangler(

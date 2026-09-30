@@ -8,14 +8,19 @@ platforms, can change it silently between runs. Select the device explicitly.
 ## `PYOPENCL_CTX`
 
 Anything that calls `pyopencl.create_some_context()` — `examples/laplace2d.py`,
-`laplace3d.py`, `poisson3d.py` and the library's own queue-less fallbacks —
-honours `PYOPENCL_CTX`. It takes a
+`laplace2d_adaptive.py`, `laplace3d.py`, `poisson3d.py` and the library's own
+queue-less fallbacks — honours `PYOPENCL_CTX`. It takes a
 platform-substring or index, optionally with a device index:
 
 ```bash
 export PYOPENCL_CTX=portable:0     # the PoCL ("Portable Computing Language") platform, device 0
 export PYOPENCL_TEST=portable:0    # the same, for the pytest fixtures
 ```
+
+Set the two to the same device. When `PYOPENCL_TEST` is set,
+`create_some_context()` called without explicit answers takes the first device
+*it* selects and ignores `PYOPENCL_CTX`, so with the two apart those callers
+run on the `PYOPENCL_TEST` device.
 
 Without it, `create_some_context()` resolves the device on its own, and which
 way it goes depends on the session: at a TTY it queries interactively, and with
@@ -25,10 +30,11 @@ reproducible run wants: one blocks on a prompt, the other silently records a
 device nobody chose. Set it even when the host has exactly one platform today.
 
 The tests that build their own context rather than take the fixtures — the
-volume FMM regressions, the full-accuracy sweeps, the RKE table-assembly direct
-references and the shared near-field table builds — read `PYOPENCL_CTX`, not
-`PYOPENCL_TEST`, and run on exactly the device it selects. Without it the fp64
-ones prefer an fp64 GPU and fall back to an fp64 CPU; see
+volume FMM regressions, the full-accuracy sweeps, the windowed RKE and RKE
+table-assembly direct references, the manufactured batched Duffy checks, the
+batched FMMLib stage tests and the shared near-field table builds — read
+`PYOPENCL_CTX`, not `PYOPENCL_TEST`, and run on exactly the device it selects.
+Without it the fp64 ones prefer an fp64 GPU and fall back to an fp64 CPU; see
 {doc}`../development/testing`.
 
 On NixOS, also point ICD discovery at a single vendor directory, otherwise
@@ -71,17 +77,24 @@ asked for; see {doc}`../benchmarks/index`.
 
 ## Examples that select their own device
 
-`PYOPENCL_CTX` does not reach every example. `helmholtz2d.py` and
-`helmholtz3d.py` each carry a `_select_opencl_device` that enumerates the
-platforms and builds a `cl.Context` directly, so the variable is ignored. Both
-take the `auto` path: first fp64-capable GPU, else first fp64-capable CPU. On a
-host with both a CUDA GPU and PoCL they run on the GPU, whatever `PYOPENCL_CTX`
-says. `branched_flow_helmholtz2d.py` carries the same selector but uses it only
-when `PYOPENCL_CTX` is unset; with the variable set it builds the context from
-it, and stops if the selected device lacks fp64.
+Every example script reads `PYOPENCL_CTX`, in one of two ways.
+`laplace2d.py`, `laplace2d_adaptive.py`, `laplace3d.py` and `poisson3d.py`
+leave it to `create_some_context()`, so a `PYOPENCL_TEST` that is also set wins
+over it, as described above. `helmholtz2d.py`, `helmholtz3d.py` and
+`branched_flow_helmholtz2d.py` pass `PYOPENCL_CTX` to `create_some_context()`
+as explicit answers, so it decides the device whatever `PYOPENCL_TEST` says,
+and they stop if it selects several devices or one without fp64.
 
-So the variable is not a device policy for the whole tree. Read the device off
-the run rather than inferring it from the environment.
+Those three also differ without the variable: they do not fall through to
+`create_some_context()`. Each carries a `_select_opencl_device` that enumerates
+the platforms and takes the `auto` path: first fp64-capable GPU, else first
+fp64-capable CPU. On a host with both a CUDA GPU and PoCL they run on the GPU
+unless the variable says otherwise. `helmholtz2d.py` and `helmholtz3d.py` log
+the device they resolved. Until 2026-09 those two ignored the variable.
+
+The variable still does not decide the device of the tests that take the
+`ctx_factory` fixture, which read `PYOPENCL_TEST`. Set both, and read the
+device off the run rather than inferring it from the environment.
 
 ## Thread caps
 
