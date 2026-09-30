@@ -8,14 +8,19 @@ platforms, can change it silently between runs. Select the device explicitly.
 ## `PYOPENCL_CTX`
 
 Anything that calls `pyopencl.create_some_context()` — `examples/laplace2d.py`,
-`laplace3d.py`, `poisson3d.py` and the library's own queue-less fallbacks —
-honours `PYOPENCL_CTX`. It takes a
+`laplace2d_adaptive.py`, `laplace3d.py`, `poisson3d.py` and the library's own
+queue-less fallbacks — honours `PYOPENCL_CTX`. It takes a
 platform-substring or index, optionally with a device index:
 
 ```bash
 export PYOPENCL_CTX=portable:0     # the PoCL ("Portable Computing Language") platform, device 0
 export PYOPENCL_TEST=portable:0    # the same, for the pytest fixtures
 ```
+
+Set the two to the same device. When `PYOPENCL_TEST` is set,
+`create_some_context()` called without explicit answers takes the first device
+*it* selects and ignores `PYOPENCL_CTX`, so with the two apart those callers
+run on the `PYOPENCL_TEST` device.
 
 Without it, `create_some_context()` resolves the device on its own, and which
 way it goes depends on the session: at a TTY it queries interactively, and with
@@ -72,16 +77,20 @@ asked for; see {doc}`../benchmarks/index`.
 
 ## Examples that select their own device
 
-Every example script honours `PYOPENCL_CTX`; they differ in what they do
-without it. `helmholtz2d.py`, `helmholtz3d.py` and
-`branched_flow_helmholtz2d.py` do not fall through to `create_some_context()`.
-Each carries a `_select_opencl_device` that enumerates the platforms and takes
-the `auto` path: first fp64-capable GPU, else first fp64-capable CPU. On a host
-with both a CUDA GPU and PoCL they run on the GPU unless the variable says
-otherwise. With the variable set, they build the context from it, and stop if
-it selects several devices or one without fp64. `helmholtz2d.py` and
-`helmholtz3d.py` log the device they resolved. Until 2026-09 those two ignored
-the variable.
+Every example script reads `PYOPENCL_CTX`, in one of two ways.
+`laplace2d.py`, `laplace2d_adaptive.py`, `laplace3d.py` and `poisson3d.py`
+leave it to `create_some_context()`, so a `PYOPENCL_TEST` that is also set wins
+over it, as described above. `helmholtz2d.py`, `helmholtz3d.py` and
+`branched_flow_helmholtz2d.py` pass `PYOPENCL_CTX` to `create_some_context()`
+as explicit answers, so it decides the device whatever `PYOPENCL_TEST` says,
+and they stop if it selects several devices or one without fp64.
+
+Those three also differ without the variable: they do not fall through to
+`create_some_context()`. Each carries a `_select_opencl_device` that enumerates
+the platforms and takes the `auto` path: first fp64-capable GPU, else first
+fp64-capable CPU. On a host with both a CUDA GPU and PoCL they run on the GPU
+unless the variable says otherwise. `helmholtz2d.py` and `helmholtz3d.py` log
+the device they resolved. Until 2026-09 those two ignored the variable.
 
 The variable still does not decide the device of the tests that take the
 `ctx_factory` fixture, which read `PYOPENCL_TEST`. Set both, and read the
