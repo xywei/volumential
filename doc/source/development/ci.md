@@ -33,10 +33,10 @@ to be importable.
 The pytest step of `Testing (Linux)` runs under `timeout 900`, and a run that
 reaches it fails, whatever pull request it belongs to. The suite runs in one
 process there ([#194](https://github.com/xywei/volumential/issues/194)). In
-2026-09 the step took from 558 to 742 s, depending on the runner. The two 3D
+2026-09 the step took from 437 to 772 s, depending on the runner. The two 3D
 cases of `test_assembled_matches_direct_batched` in
-`test_rke_table_assembly.py`, 190 s of the slowest runs, then moved to the
-full-accuracy tier, which `CI Full` runs
+`test_rke_table_assembly.py`, 190 to 231 s of the slowest runs, then moved to
+the full-accuracy tier, which `CI Full` runs
 ([#186](https://github.com/xywei/volumential/issues/186)). The
 `slowest 10 durations` near the end of the log show where the time goes.
 

@@ -89,8 +89,8 @@ Tables and numerics
 Infrastructure
 : [#196](https://github.com/xywei/volumential/pull/196) — keep the
   pull-request suite inside its timeout. The pytest step of `Testing (Linux)`
-  runs under a 900 s timeout and took up to 742 s of it. The two 3D cases of
-  `test_assembled_matches_direct_batched`, 190 s of that, now run in the
+  runs under a 900 s timeout and took up to 772 s of it. The two 3D cases of
+  `test_assembled_matches_direct_batched`, 190 to 231 s of that, now run in the
   full-accuracy tier of `CI Full`, which grows to 81 tests; their direct
   reference is built on the device `PYOPENCL_CTX` selects, like the rest of
   the tier ([#186](https://github.com/xywei/volumential/issues/186)).

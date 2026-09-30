@@ -85,9 +85,9 @@ def test_condition_guard_rejects_ill_conditioned_assembly(tmp_path):
         )
 
 
-# The two 3D cases took 190 s together on the PoCL CPU of a CI runner, a
-# quarter of the pull-request suite's time under its 900 s timeout. CI Full
-# runs them with the rest of the full-accuracy tier.
+# The two 3D cases took 190 to 231 s together on the PoCL CPU of the slower
+# CI runners, about a quarter of the pull-request suite's time under its 900 s
+# timeout. CI Full runs them with the rest of the full-accuracy tier.
 @pytest.mark.parametrize(
     ("dim", "kernel_type", "q_order", "parameter", "level"),
     [
