@@ -87,6 +87,13 @@ Tables and numerics
   ({doc}`design-notes/windowed-channels`).
 
 Infrastructure
+: [#196](https://github.com/xywei/volumential/pull/196) — keep the
+  pull-request suite inside its timeout. The pytest step of `Testing (Linux)`
+  runs under a 900 s timeout and took up to 772 s of it. The two 3D cases of
+  `test_assembled_matches_direct_batched`, 190 to 231 s of that, now run in the
+  full-accuracy tier of `CI Full`, which grows to 81 tests; their direct
+  reference is built on the device `PYOPENCL_CTX` selects, like the rest of
+  the tier ([#186](https://github.com/xywei/volumential/issues/186)).
 : [#195](https://github.com/xywei/volumential/pull/195) — give the two 3D
   split-versus-nonsplit full-accuracy tests a margin. What they measured was
   the error of the rule that integrates the smooth split remainder at the

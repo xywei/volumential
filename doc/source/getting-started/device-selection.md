@@ -30,11 +30,11 @@ reproducible run wants: one blocks on a prompt, the other silently records a
 device nobody chose. Set it even when the host has exactly one platform today.
 
 The tests that build their own context rather than take the fixtures — the
-volume FMM regressions, the full-accuracy sweeps, the windowed RKE direct
-references, the manufactured batched Duffy checks, the batched FMMLib stage
-tests and the shared near-field table builds — read `PYOPENCL_CTX`, not
-`PYOPENCL_TEST`, and run on exactly the device it selects. Without it the fp64
-ones prefer an fp64 GPU and fall back to an fp64 CPU; see
+volume FMM regressions, the full-accuracy sweeps, the windowed RKE and RKE
+table-assembly direct references, the manufactured batched Duffy checks, the
+batched FMMLib stage tests and the shared near-field table builds — read
+`PYOPENCL_CTX`, not `PYOPENCL_TEST`, and run on exactly the device it selects.
+Without it the fp64 ones prefer an fp64 GPU and fall back to an fp64 CPU; see
 {doc}`../development/testing`.
 
 On NixOS, also point ICD discovery at a single vendor directory, otherwise

@@ -30,6 +30,16 @@ The documentation job needs no device, but it does import `volumential`, so it
 uses the same micromamba environment as the rest: `pyopencl` and `loopy` have
 to be importable.
 
+The pytest step of `Testing (Linux)` runs under `timeout 900`, and a run that
+reaches it fails, whatever pull request it belongs to. The suite runs in one
+process there ([#194](https://github.com/xywei/volumential/issues/194)). In
+2026-09 the step took from 437 to 772 s, depending on the runner. The two 3D
+cases of `test_assembled_matches_direct_batched` in
+`test_rke_table_assembly.py`, 190 to 231 s of the slowest runs, then moved to
+the full-accuracy tier, which `CI Full` runs
+([#186](https://github.com/xywei/volumential/issues/186)). The
+`slowest 10 durations` near the end of the log show where the time goes.
+
 Two details of these jobs are load-bearing rather than incidental, and both
 were added in [#151](https://github.com/xywei/volumential/issues/151):
 
