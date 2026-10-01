@@ -52,6 +52,19 @@ Evidence and benchmarks
   sweep with a resolved FMM-order rule.
 
 Tables and numerics
+: [#200](https://github.com/xywei/volumential/pull/200) — keep complex values
+  on the 2D scalar DuffyRadial path. Its radial rule called `float()` on every
+  integrand value, so a 2D Helmholtz table built by the scalar builder, with no
+  queue or after a failed batched build, held the real part of the right table
+  and an imaginary part of zero; a complex table also kept its points in its
+  complex dtype. The rule now keeps complex values, as the 3D rule did, and the
+  scalar builder casts its entries to the table dtype once, through the check
+  the batched builder uses: a real table drops an imaginary part only when it
+  is within `256 eps` of the real scale, as it is for 2D Yukawa, whose zero
+  imaginary part cost 17,640 `ComplexWarning`s per run of
+  `test_table_manager.py`. A cached complex 2D table with a scalar routing is
+  worth rebuilding ({doc}`user-guide/table-build-routing`,
+  [#180](https://github.com/xywei/volumential/issues/180)).
 : [#185](https://github.com/xywei/volumential/pull/185) — the far-field
   direct-sum test from #179 now checks List 1 against the geometry; before, a
   far box filed in List 1 instead of List 3 or 4 dropped out of both the FMM
@@ -87,6 +100,15 @@ Tables and numerics
   ({doc}`design-notes/windowed-channels`).
 
 Infrastructure
+: [#200](https://github.com/xywei/volumential/pull/200) — run the
+  pull-request suite on four `pytest-xdist` workers. `Testing (Linux)` set
+  `CISUPPORT_PARALLEL_PYTEST=yes`, a value `ci-support` does not know, so the
+  suite had always run in one process; with `xdist` the step took 227 s, where
+  the serial suite took 475 and 559 s on the two pushes to `main` before it.
+  The end-of-session cleanup of table caches now runs on the controller only,
+  and the completeness tests build their tables under `tmp_path`
+  ({doc}`development/testing`,
+  [#194](https://github.com/xywei/volumential/issues/194)).
 : [#196](https://github.com/xywei/volumential/pull/196) — keep the
   pull-request suite inside its timeout. The pytest step of `Testing (Linux)`
   runs under a 900 s timeout and took up to 772 s of it. The two 3D cases of

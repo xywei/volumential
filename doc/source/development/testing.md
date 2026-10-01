@@ -111,6 +111,24 @@ touches the 3D split.
 VOLUMENTIAL_FULL_ACCURACY_REDUCED=1 uv run pytest -m full_accuracy --full-accuracy
 ```
 
+## Parallel runs
+
+Pull-request CI runs the default suite under `pytest-xdist` with four workers
+(see {doc}`ci`). `pytest-xdist` is not in the `test` extra (`ci-support`
+installs it in CI), so add it to the run locally:
+
+```bash
+uv run --with pytest-xdist pytest -q -n 4
+```
+
+The workers share one working directory, so a test that writes a table cache
+writes it under `tmp_path`, never at a fixed name in the working directory,
+where a test running at the same time on another worker can delete or rewrite
+it. The two shared pieces are made safe for this in `conftest.py`:
+`table_2d_order1` is built once under a file lock in the session's shared
+temporary directory, and the end-of-session cleanup of `*.hdf5` caches runs on
+the controller only, after every worker has finished.
+
 ## Configuration
 
 The pytest configuration is `[tool.pytest.ini_options]` in `pyproject.toml`,

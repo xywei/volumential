@@ -1931,14 +1931,14 @@ def test_duffy_radial_batched_matches_scalar_reference_entries(
 
 
 def _build_2d_duffy_table_entries(sumpy_knl, kernel_kwargs, dtype, queue):
-    """Build a q=2 2D DuffyRadial table; return it and its reduced entries.
+    """Build a q=1 2D DuffyRadial table; return it and its reduced entries.
 
     ``queue=None`` takes the scalar builder, a queue the batched one.  The
     build runs with ``ComplexWarning`` as an error, so a value cast to a real
     dtype behind numpy's back fails the build instead of passing quietly.
     """
     table = npt.NearFieldInteractionTable(
-        quad_order=2,
+        quad_order=1,
         dim=2,
         build_method="DuffyRadial",
         kernel_func=npt.sumpy_kernel_to_lambda(
@@ -1968,8 +1968,10 @@ def test_scalar_duffy_build_keeps_the_imaginary_part_of_2d_helmholtz(ctx_factory
     Its radial rule called ``float()`` on every integrand value, so a 2D
     Helmholtz table built without a queue (or by the fallback) was the real
     part of the right table, behind a ``ComplexWarning`` per node (#180).
-    The batched builder is the reference: the two rules agree to about 1e-8
-    at these orders.
+    The batched builder is the reference: the two rules agree to about 1e-11
+    at these orders.  q=1 keeps the scalar build to a fraction of a second;
+    the q=2 build takes seconds, and the geometry it adds is checked on its
+    own below.
     """
     from sumpy.kernel import HelmholtzKernel
 
@@ -1983,9 +1985,9 @@ def test_scalar_duffy_build_keeps_the_imaginary_part_of_2d_helmholtz(ctx_factory
 
     assert scalar_table.build_routing == "scalar"
     # the part that used to be dropped is not small
-    assert np.max(np.abs(batched.imag)) > 1e-2
+    assert np.max(np.abs(batched.imag)) > 1e-1
     scale = max(1.0, float(np.max(np.abs(batched))))
-    assert np.max(np.abs(scalar - batched)) <= 1e-7 * scale
+    assert np.max(np.abs(scalar - batched)) <= 1e-9 * scale
 
 
 def test_scalar_duffy_build_of_2d_yukawa_drops_a_zero_imaginary_part(ctx_factory):
@@ -2009,7 +2011,7 @@ def test_scalar_duffy_build_of_2d_yukawa_drops_a_zero_imaginary_part(ctx_factory
     assert scalar_table.build_routing == "scalar"
     assert scalar.dtype == np.float64
     scale = max(1.0, float(np.max(np.abs(batched))))
-    assert np.max(np.abs(scalar - batched)) <= 1e-7 * scale
+    assert np.max(np.abs(scalar - batched)) <= 1e-9 * scale
 
 
 def test_a_complex_table_keeps_its_geometry_real():
