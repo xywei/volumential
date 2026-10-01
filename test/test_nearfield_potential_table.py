@@ -1931,11 +1931,13 @@ def test_duffy_radial_batched_matches_scalar_reference_entries(
 
 
 def _build_2d_duffy_table_entries(sumpy_knl, kernel_kwargs, dtype, queue):
-    """Build a q=1 2D DuffyRadial table; return it and its reduced entries.
+    """Build a q=1 2D DuffyRadial table and return its reduced entries.
 
-    ``queue=None`` takes the scalar builder, a queue the batched one.  The
-    build runs with ``ComplexWarning`` as an error, so a value cast to a real
-    dtype behind numpy's back fails the build instead of passing quietly.
+    ``queue=None`` takes the scalar builder, a queue the batched one; the
+    routing is checked, so a batched build that failed and fell back to the
+    scalar builder cannot stand in for the batched reference.  The build runs
+    with ``ComplexWarning`` as an error, so a value cast to a real dtype
+    behind numpy's back fails the build instead of passing quietly.
     """
     table = npt.NearFieldInteractionTable(
         quad_order=1,
@@ -1958,8 +1960,9 @@ def _build_2d_duffy_table_entries(sumpy_knl, kernel_kwargs, dtype, queue):
             radial_quad_order=61,
             **kernel_kwargs,
         )
+    assert table.build_routing == ("scalar" if queue is None else "batched")
     entry_ids = table._get_invariant_entry_info()["entry_ids"]
-    return table, np.array([table.get_entry_data(int(i)) for i in entry_ids])
+    return np.array([table.get_entry_data(int(i)) for i in entry_ids])
 
 
 def test_scalar_duffy_build_keeps_the_imaginary_part_of_2d_helmholtz(ctx_factory):
@@ -1978,12 +1981,9 @@ def test_scalar_duffy_build_keeps_the_imaginary_part_of_2d_helmholtz(ctx_factory
     queue = _get_cpu_queue_or_skip(ctx_factory)
     knl = HelmholtzKernel(2)
 
-    scalar_table, scalar = _build_2d_duffy_table_entries(
-        knl, {"k": 1.5}, np.complex128, None
-    )
-    _, batched = _build_2d_duffy_table_entries(knl, {"k": 1.5}, np.complex128, queue)
+    scalar = _build_2d_duffy_table_entries(knl, {"k": 1.5}, np.complex128, None)
+    batched = _build_2d_duffy_table_entries(knl, {"k": 1.5}, np.complex128, queue)
 
-    assert scalar_table.build_routing == "scalar"
     # the part that used to be dropped is not small
     assert np.max(np.abs(batched.imag)) > 1e-1
     scale = max(1.0, float(np.max(np.abs(batched))))
@@ -2003,12 +2003,9 @@ def test_scalar_duffy_build_of_2d_yukawa_drops_a_zero_imaginary_part(ctx_factory
     queue = _get_cpu_queue_or_skip(ctx_factory)
     knl = YukawaKernel(2)
 
-    scalar_table, scalar = _build_2d_duffy_table_entries(
-        knl, {"lam": 3.0}, np.float64, None
-    )
-    _, batched = _build_2d_duffy_table_entries(knl, {"lam": 3.0}, np.float64, queue)
+    scalar = _build_2d_duffy_table_entries(knl, {"lam": 3.0}, np.float64, None)
+    batched = _build_2d_duffy_table_entries(knl, {"lam": 3.0}, np.float64, queue)
 
-    assert scalar_table.build_routing == "scalar"
     assert scalar.dtype == np.float64
     scale = max(1.0, float(np.max(np.abs(batched))))
     assert np.max(np.abs(scalar - batched)) <= 1e-9 * scale
