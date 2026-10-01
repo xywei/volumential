@@ -44,7 +44,8 @@ runner. The two 3D cases of `test_assembled_matches_direct_batched` in
 the full-accuracy tier, which `CI Full` runs
 ([#186](https://github.com/xywei/volumential/issues/186)), and the serial
 suite took 475 and 559 s on the next two pushes to `main`. Under xdist it took
-227 s on the pull request that turned it on. The `slowest 10 durations` near
+215 to 288 s in the first three runs of the pull request that turned it on, 288 s on
+a runner of the same CPU model as the 559 s run. The `slowest 10 durations` near
 the end of the log show where the time goes; under xdist they are the times of
 single tests, and the workers run four of them at once.
 

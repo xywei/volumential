@@ -103,8 +103,9 @@ Infrastructure
 : [#200](https://github.com/xywei/volumential/pull/200) — run the
   pull-request suite on four `pytest-xdist` workers. `Testing (Linux)` set
   `CISUPPORT_PARALLEL_PYTEST=yes`, a value `ci-support` does not know, so the
-  suite had always run in one process; with `xdist` the step took 227 s, where
-  the serial suite took 475 and 559 s on the two pushes to `main` before it.
+  suite had always run in one process; with `xdist` the suite took 215 to
+  288 s, where it took 475 and 559 s serially on the two pushes to `main`
+  before it.
   The end-of-session cleanup of table caches now runs on the controller only,
   and the completeness tests build their tables under `tmp_path`
   ({doc}`development/testing`,
