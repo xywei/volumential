@@ -144,12 +144,16 @@ def test_box_quad_keeps_the_imaginary_part():
     box = (0.0, 1.0, 0.0, 1.0)
     singular_point = (0.3, 0.4)
 
+    def real_func(x, y):
+        return _log_r(x - singular_point[0], y - singular_point[1])
+
+    def complex_func(x, y):
+        return (1.0 - 2.0j) * real_func(x, y)
+
     with warnings.catch_warnings():
         warnings.simplefilter("error", np.exceptions.ComplexWarning)
-        real_val, _ = box_quad(_log_r, *box, singular_point, vec_func=False)
-        complex_val, _ = box_quad(
-            _complex_log_r, *box, singular_point, vec_func=False
-        )
+        real_val, _ = box_quad(real_func, *box, singular_point, vec_func=False)
+        complex_val, _ = box_quad(complex_func, *box, singular_point, vec_func=False)
 
     assert np.iscomplexobj(complex_val)
     # within the rule's default tolerance, for the reason given above

@@ -1052,6 +1052,23 @@ def get_cahn_hilliard_laplacian(dim, b=0, c=0):
 # }}} End kernel function getters
 
 
+def _real_points(points, dtype):
+    """*points*, positions, as a real array of *dtype*.
+
+    Positions are real whatever the value dtype of a table.  A complex table
+    used to keep precomputed quadrature points in its own complex dtype, so a
+    cache it wrote may hold them as complex: that is accepted when the
+    imaginary part is exactly zero, which makes dropping it exact, and refused
+    otherwise.
+    """
+    points = np.asarray(points)
+    if np.iscomplexobj(points):
+        if np.any(points.imag):
+            raise ValueError("quadrature points must be real")
+        points = points.real
+    return np.asarray(points, dtype=dtype)
+
+
 def _is_sumpy_kernel_like(sknl):
     return hasattr(sknl, "get_expression") and hasattr(sknl, "get_global_scaling_const")
 
@@ -1265,7 +1282,8 @@ class NearFieldInteractionTable:
         precomputed_q_points = kwargs.pop("precomputed_q_points", None)
 
         if precomputed_q_points is not None:
-            q_points = np.asarray(precomputed_q_points, dtype=self.dtype)
+            # positions: real, whatever the value dtype
+            q_points = _real_points(precomputed_q_points, self._get_geom_dtype())
             expected_shape = (self.n_q_points, self.dim)
             if q_points.shape != expected_shape:
                 raise ValueError(
@@ -1676,8 +1694,14 @@ class NearFieldInteractionTable:
             * self.source_box_extent
         )
 
+        # A position, so in the geometry dtype: in a complex table's dtype the
+        # target, and every quadrature node mapped around it, came out
+        # complex, and each was cast back to real behind a ComplexWarning.
         new_cntr = (
-            np.ones(self.dim, dtype=self.dtype) * 0.5 * self.source_box_extent + vec
+            np.ones(self.dim, dtype=self._get_geom_dtype())
+            * 0.5
+            * self.source_box_extent
+            + vec
         )
 
         if int(max(abs(np.array(self.interaction_case_vecs[case_index])))) == 0:

@@ -2012,6 +2012,40 @@ def test_scalar_duffy_build_of_2d_yukawa_drops_a_zero_imaginary_part(ctx_factory
     assert np.max(np.abs(scalar - batched)) <= 1e-7 * scale
 
 
+def test_a_complex_table_keeps_its_geometry_real():
+    """Points are positions, real whatever the table's value dtype.
+
+    A complex table kept precomputed points, and the target points mapped
+    from them, in its complex dtype; the scalar builder then cast every
+    quadrature node back to real behind a ``ComplexWarning`` (#180).
+    """
+    from sumpy.kernel import HelmholtzKernel
+
+    q_points = _precomputed_legendre_q_points(2, 2)
+
+    def make_table(points):
+        return npt.NearFieldInteractionTable(
+            quad_order=2,
+            dim=2,
+            build_method="DuffyRadial",
+            sumpy_kernel=HelmholtzKernel(2),
+            derive_kernel_func=False,
+            dtype=np.complex128,
+            progress_bar=False,
+            precomputed_q_points=points,
+        )
+
+    # as a cache written by a complex table holds them
+    table = make_table(q_points.astype(np.complex128))
+    assert table.q_points.dtype == np.float64
+    np.testing.assert_array_equal(table.q_points, q_points)
+    for case_index in range(table.n_cases):
+        assert table.find_target_point(0, case_index).dtype == np.float64
+
+    with pytest.raises(ValueError, match="quadrature points must be real"):
+        make_table(q_points + 1.0e-3j)
+
+
 def test_a_real_table_refuses_a_complex_kernel_on_the_scalar_path():
     """A complex kernel built into a real table is an error, not a cast."""
     from sumpy.kernel import HelmholtzKernel
