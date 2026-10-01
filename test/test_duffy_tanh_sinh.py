@@ -3,10 +3,13 @@ triangle/box baselines on singular integrands.
 """
 
 import math
+import warnings
 
 import numpy as np
+import pytest
 
 from volumential.singular_integral_2d import (
+    box_quad,
     tria_quad,
     tria_quad_duffy_radial,
 )
@@ -98,3 +101,56 @@ def test_radial_duffy_3d_smoke_matches_adaptive_baseline():
     )
 
     assert abs(fast - baseline) / max(1.0, abs(baseline)) < 1e-6
+
+
+def _log_r(x, y):
+    return np.log(np.sqrt(x * x + y * y))
+
+
+def _complex_log_r(x, y):
+    return (1.0 - 2.0j) * _log_r(x, y)
+
+
+@pytest.mark.parametrize("radial_rule", ["tanh-sinh-fast", "tanh-sinh", "adaptive"])
+def test_radial_duffy_keeps_the_imaginary_part(radial_rule):
+    """A complex integrand integrates to a complex value (#180).
+
+    Every radial rule used to call ``float()`` on each integrand value, which
+    keeps the real part: a complex kernel lost its imaginary part with only a
+    ``ComplexWarning`` to show for it.
+    """
+    tria = ((0.0, 0.0), (1.0, 0.0), (0.3, 0.8))
+    rule = {
+        "radial_rule": radial_rule,
+        "deg_theta": 8,
+        "radial_quad_order": 61,
+        "mp_dps": 20,
+    }
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", np.exceptions.ComplexWarning)
+        real_val, _ = tria_quad_duffy_radial(_log_r, tria, **rule)
+        complex_val, _ = tria_quad_duffy_radial(_complex_log_r, tria, **rule)
+
+    assert not np.iscomplexobj(real_val)
+    assert np.iscomplexobj(complex_val)
+    # not bitwise: the adaptive rules may stop at another order for the
+    # complex iterate, whose absolute change is sqrt(5) times larger
+    assert abs(complex_val - (1.0 - 2.0j) * real_val) <= 1e-10 * abs(real_val)
+
+
+def test_box_quad_keeps_the_imaginary_part():
+    """:func:`box_quad` cast the integrand to ``float`` the same way."""
+    box = (0.0, 1.0, 0.0, 1.0)
+    singular_point = (0.3, 0.4)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", np.exceptions.ComplexWarning)
+        real_val, _ = box_quad(_log_r, *box, singular_point, vec_func=False)
+        complex_val, _ = box_quad(
+            _complex_log_r, *box, singular_point, vec_func=False
+        )
+
+    assert np.iscomplexobj(complex_val)
+    # within the rule's default tolerance, for the reason given above
+    assert abs(complex_val - (1.0 - 2.0j) * real_val) <= 1e-6 * abs(real_val)

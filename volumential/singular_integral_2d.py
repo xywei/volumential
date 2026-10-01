@@ -69,6 +69,14 @@ def _to_float_or_array(value):
     return arr
 
 
+def _mpmath_to_python(value):
+    """An :mod:`mpmath` number as a :class:`float`, or a :class:`complex`
+    when it is an ``mpc`` (the integrand was complex)."""
+    if isinstance(value, mpmath.mpc):
+        return complex(value)
+    return float(value)
+
+
 def _meets_tolerance(current, previous, tol, rtol):
     """Return ``(converged, err)`` for two successive quadrature iterates."""
     delta = np.asarray(current) - np.asarray(previous)
@@ -548,9 +556,9 @@ def tria_quad(
 
     :returns:
         - **val**: Gaussian quadrature approximation (within tolerance)
-            to integral.
+            to integral; complex when *func* returns complex values.
         - **err**: Difference between last two estimates of the integral.
-    :rtype: tuple[float, float]
+    :rtype: tuple[float | complex, float]
     """
 
     assert len(tria) == 3
@@ -589,7 +597,7 @@ def tria_quad(
     def transformed_func(rho, theta):
         preimage = inv_mapping(rho, theta)
         value = np.asarray(func(preimage[0], preimage[1], *args))
-        return float(value.reshape(-1)[0])
+        return _to_float_or_array(value.reshape(-1)[0])
 
     # Transformed function, when multiplied by jacobian, should have no
     # singularity (numerically special treatment still needed)
@@ -641,6 +649,8 @@ def tria_quad_duffy_radial(
         ``"tanh-sinh-fast"`` (precomputed double-precision nodes) or
         ``"adaptive"`` (Gauss order refinement).
     :returns: ``(value, error_estimate)``; the error estimate is always zero.
+        *value* is complex when *func* returns complex values, real
+        otherwise.
     """
     assert len(tria) == 3
     for p in tria:
@@ -668,7 +678,10 @@ def tria_quad_duffy_radial(
 
     def integrand(rho, theta):
         prior = np.asarray(transformed_func(rho, theta) * inv_jacobian(rho, theta))
-        prior = float(prior.reshape(-1)[0])
+        # float or complex, whichever *func* returns: a complex kernel (2D
+        # Helmholtz, or Yukawa through its Hankel form) must keep its
+        # imaginary part, and a real table decides what to do with it
+        prior = _to_float_or_array(prior.reshape(-1)[0])
         if not np.isfinite(prior):
             if rho < 1.0e-14:
                 return 0.0
@@ -688,7 +701,7 @@ def tria_quad_duffy_radial(
                 radial_val = mpmath.quadts(
                     lambda rho, theta=theta: integrand(float(rho), theta), [0, 1]
                 )
-                total += wt * float(radial_val)
+                total += wt * _mpmath_to_python(radial_val)
         finally:
             mpmath.mp.dps = old_dps
     elif radial_rule == "tanh-sinh-fast":
@@ -697,9 +710,8 @@ def tria_quad_duffy_radial(
         )
 
         for theta, wt in zip(th_nodes, th_weights, strict=True):
-            vals = np.array(
-                [integrand(rho, theta) for rho in rho_nodes], dtype=np.float64
-            )
+            # float64, or complex128 if any value is complex
+            vals = np.array([integrand(rho, theta) for rho in rho_nodes])
             total += wt * np.dot(rho_weights, vals)
     elif radial_rule == "adaptive":
         for theta, wt in zip(th_nodes, th_weights, strict=True):
@@ -713,7 +725,7 @@ def tria_quad_duffy_radial(
                 vec_func=False,
                 miniter=3,
             )
-            total += wt * float(radial_val)
+            total += wt * radial_val
     else:
         raise ValueError(f"unsupported radial_rule: {radial_rule}")
 
@@ -745,7 +757,7 @@ def quadri_quad_duffy_radial(
         (singular_point, quadrilateral[3], quadrilateral[0]),
     ]
 
-    val = np.zeros(4)
+    val = [0.0] * 4
     err = np.zeros(4)
     for i in range(4):
         val[i], err[i] = tria_quad_duffy_radial(
@@ -1132,7 +1144,7 @@ def quadri_quad(
         if not is_positive_triangle(tria):
             assert is_collinear(*tria)
 
-    val = np.zeros(4)
+    val = [0.0] * 4
     err = np.zeros(4)
 
     for i in range(4):

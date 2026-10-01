@@ -203,6 +203,16 @@ def table_2d_order1(tmp_path_factory, request):
 
 
 def pytest_sessionfinish(session, exitstatus) -> None:
-    """Remove the table caches a run may have left in the working directory."""
+    """Remove the table caches a run may have left in the working directory.
+
+    Under ``pytest-xdist`` every worker finishes a session of its own, and
+    the workers share the working directory, so a worker that ran out of
+    tests early would delete caches the others were still using.  Only the
+    controller, or a run without workers, cleans up; the controller's session
+    ends after the last worker's.
+    """
+    if hasattr(session.config, "workerinput"):
+        return
+
     for table_file in Path.cwd().glob("*.hdf5"):
         _remove_quietly(table_file)

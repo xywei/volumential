@@ -234,7 +234,11 @@ jobs:
           export PY_EXE=python
           export PYTHONFAULTHANDLER=1
           export PYTEST_FLAGS="-vv -o faulthandler_timeout=300"
-          export CISUPPORT_PARALLEL_PYTEST=yes
+          # ci-support knows two schemes: "xdist" (or empty), which passes
+          # ``-n 4`` (``-n $CISUPPORT_PYTEST_NRUNNERS`` when that is set), and
+          # "no".  Anything else -- "yes" was here until #194 -- only prints
+          # "unrecognized scheme" and runs the suite in one process.
+          export CISUPPORT_PARALLEL_PYTEST=xdist
           export VOLUMENTIAL_LEVEL_RESTRICTION_MAX_PAIR_CHECKS=20000000
           export VOLUMENTIAL_LEVEL_RESTRICTION_MAX_NBOXES=500000
           export VOLUMENTIAL_LEVEL_RESTRICTION_MAX_LEAF_PAIR_TOTAL=50000000000
