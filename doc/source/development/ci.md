@@ -20,7 +20,7 @@ gets **none** of these checks. See
 | Typos | `crate-ci/typos` over the workflows, `volumential/`, `README.md`, `DEVELOPMENT.md` and `pyproject.toml`, configured by `.typos.toml` |
 | Ruff | `ruff check --select E9,F63,F7,F82` — the error-level smoke subset, not the full `ruff.toml` rule set |
 | Type checking | `basedpyright -p pyproject.toml --level error` |
-| Testing (Linux) | the default pytest suite under a micromamba environment, installing `.[test]` plus the `pyfmmlib` commit that `uv.lock` pins (the `fmmlib` extra's content, passed as a pinned requirement so uv sees one Git URL), with a wrapper timeout and a diagnostics artifact (`linux-pytest.log`, `pytest.xml`) uploaded on every outcome |
+| Testing (Linux) | the default pytest suite, on four `pytest-xdist` workers, under a micromamba environment, installing `.[test]` plus the `pyfmmlib` commit that `uv.lock` pins (the `fmmlib` extra's content, passed as a pinned requirement so uv sees one Git URL), with a wrapper timeout and a diagnostics artifact (`linux-pytest.log`, `pytest.xml`) uploaded on every outcome |
 | Examples (Smoke) | four examples under `VOLUMENTIAL_EXAMPLE_SMOKE=1` — `laplace2d.py`, `laplace2d_adaptive.py`, `helmholtz2d.py`, `helmholtz3d.py` — under `set -euo pipefail`; the two Laplace examples run through `doc/tools/render_gallery.py`, and the upload of their figures and manifest as a `gallery-laplace2d-*` artifact is attempted on every outcome, so the artifact exists whenever the renderer wrote files, even if a later example fails (see {doc}`gallery-assets`) |
 | Documentation | this site: `sphinx-build -W --keep-going -n -b html`, then the two coverage reports (`-b coverage` and `interrogate`), then `-b linkcheck` last. The built HTML is uploaded as a `docs-html-*` artifact and the reports as `docs-coverage-*`; the job installs `.[test,doc]` |
 
@@ -31,14 +31,23 @@ uses the same micromamba environment as the rest: `pyopencl` and `loopy` have
 to be importable.
 
 The pytest step of `Testing (Linux)` runs under `timeout 900`, and a run that
-reaches it fails, whatever pull request it belongs to. The suite runs in one
-process there ([#194](https://github.com/xywei/volumential/issues/194)). In
-2026-09 the step took from 437 to 772 s, depending on the runner. The two 3D
-cases of `test_assembled_matches_direct_batched` in
+reaches it fails, whatever pull request it belongs to. The suite runs under
+`pytest-xdist` with four workers, one per core of the runner:
+`CISUPPORT_PARALLEL_PYTEST=xdist` makes `ci-support` pass `-n 4`, and the log
+shows `created: 4/4 workers` before the first test. Until
+[#194](https://github.com/xywei/volumential/issues/194) the variable read
+`yes`, which `ci-support` does not know. It printed
+`unrecognized scheme in CISUPPORT_PARALLEL_PYTEST` and ran the suite in one
+process. In 2026-09 that serial step took from 437 to 772 s, depending on the
+runner. The two 3D cases of `test_assembled_matches_direct_batched` in
 `test_rke_table_assembly.py`, 190 to 231 s of the slowest runs, then moved to
 the full-accuracy tier, which `CI Full` runs
-([#186](https://github.com/xywei/volumential/issues/186)). The
-`slowest 10 durations` near the end of the log show where the time goes.
+([#186](https://github.com/xywei/volumential/issues/186)), and the serial
+suite took 475 and 559 s on the next two pushes to `main`. Under xdist it took
+215 to 288 s in the first three runs of the pull request that turned it on, 288 s on
+a runner of the same CPU model as the 559 s run. The `slowest 10 durations` near
+the end of the log show where the time goes; under xdist they are the times of
+single tests, and the workers run four of them at once.
 
 Two details of these jobs are load-bearing rather than incidental, and both
 were added in [#151](https://github.com/xywei/volumential/issues/151):

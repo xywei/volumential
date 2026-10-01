@@ -89,6 +89,27 @@ Strictness is an environment switch rather than a `DuffyBuildConfig` field
 because the build config is hashed into the table-cache fingerprint, and an
 operational strictness policy should not invalidate cached numerical data.
 
+## Complex kernels on the scalar path
+
+The scalar builder integrates whatever the kernel function returns, real or
+complex, and casts the entries to the table's dtype once, at the end. A real
+table keeps only the real part, and only when the imaginary part is negligible:
+at most `256 eps` of the largest real magnitude, the check the batched builder
+applies to its own output. Anything larger is a `RuntimeError`, since a
+genuinely complex kernel built into a real table is the caller's mistake.
+2D Yukawa is the case that needs the check: `sumpy` writes it through a Hankel
+function of imaginary argument, so its values are complex with a zero
+imaginary part.
+
+Until [#180](https://github.com/xywei/volumential/issues/180) the 2D rule cast
+every integrand value to `float` instead. For 2D Yukawa that was right and cost
+a `ComplexWarning` per quadrature node. For 2D Helmholtz it was wrong: a table
+built by the scalar builder in 2D held the real part of the right table, with
+an imaginary part of zero. Such a table can still sit in a cache written
+before the fix. Its routing is `scalar`, `scalar-adaptive` or
+`scalar-fallback`, so rebuild any complex 2D table with one of those routings,
+with `force_recompute=True`. The 3D rule always kept complex values.
+
 ## Complex exponentials in the generated quadrature kernel
 
 The fused Duffy quadrature kernel rewrites `exp(re + i*im)` into

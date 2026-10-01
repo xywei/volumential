@@ -49,6 +49,7 @@ from volumential.nearfield_potential_table import (
     DUFFY_NO_FALLBACK_ENV_VAR,
     NearFieldInteractionTable,
     _duffy_fallback_is_disabled,
+    _real_points,
 )
 
 
@@ -1945,7 +1946,7 @@ class NearFieldInteractionTableManager:
                     f"{np.dtype(self.dtype)!s}"
                 )
 
-            table.q_points[:] = payload["q_points"]
+            table.q_points[:] = _real_points(payload["q_points"], table.q_points.dtype)
             if "data" in payload:
                 table.data[:] = payload["data"]
             elif "reduced_entry_ids" in payload and "reduced_data" in payload:

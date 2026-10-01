@@ -24,7 +24,6 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
-import subprocess
 from functools import partial
 
 import numpy as np
@@ -34,7 +33,7 @@ import pyopencl as cl
 import pyopencl.array
 
 
-def drive_test_completeness(ctx, queue, dim, q_order):
+def drive_test_completeness(ctx, queue, dim, q_order, table_dir):
 
     n_levels = 2  # 2^(n_levels-1) subintervals in 1D, must be at least 2
 
@@ -106,9 +105,13 @@ def drive_test_completeness(ctx, queue, dim, q_order):
     from volumential.nearfield_potential_table import DuffyBuildConfig
     from volumential.table_manager import NearFieldInteractionTableManager
 
-    subprocess.check_call(["rm", "-f", "nft-test-completeness.hdf5"])
+    # A fresh cache per call, under the test's tmp_path.  It used to be one
+    # file in the working directory, deleted before each build; under
+    # pytest-xdist the tests below run at once on different workers, and
+    # each would delete the table the other was building.
+    table_path = table_dir / f"nft-test-completeness-{dim}d-q{q_order}.sqlite"
     with NearFieldInteractionTableManager(
-        "nft-test-completeness.hdf5", progress_bar=False
+        str(table_path), progress_bar=False
     ) as tm:
         build_config = DuffyBuildConfig(
             radial_rule="tanh-sinh-fast",
@@ -169,16 +172,16 @@ def drive_test_completeness(ctx, queue, dim, q_order):
         assert abs(p - 2**dim) < 1.0e-8
 
 
-def test_completeness_1(ctx_factory):
+def test_completeness_1(ctx_factory, tmp_path):
 
     ctx = ctx_factory()
     queue = cl.CommandQueue(ctx)
 
-    drive_test_completeness(ctx, queue, 2, 1)
-    drive_test_completeness(ctx, queue, 3, 1)
+    drive_test_completeness(ctx, queue, 2, 1, tmp_path)
+    drive_test_completeness(ctx, queue, 3, 1, tmp_path)
 
 
-def test_completeness_q2_cpu_smoke(ctx_factory):
+def test_completeness_q2_cpu_smoke(ctx_factory, tmp_path):
 
     ctx = ctx_factory()
     if not any(dev.type & cl.device_type.CPU for dev in ctx.devices):
@@ -186,15 +189,15 @@ def test_completeness_q2_cpu_smoke(ctx_factory):
 
     queue = cl.CommandQueue(ctx)
 
-    drive_test_completeness(ctx, queue, 2, 2)
-    drive_test_completeness(ctx, queue, 3, 2)
+    drive_test_completeness(ctx, queue, 2, 2, tmp_path)
+    drive_test_completeness(ctx, queue, 3, 2, tmp_path)
 
 
-def test_completeness(longrun, ctx_factory):
+def test_completeness(longrun, ctx_factory, tmp_path):
 
     ctx = ctx_factory()
     queue = cl.CommandQueue(ctx)
 
     for q in range(2, 4):
-        drive_test_completeness(ctx, queue, 2, q)
-        drive_test_completeness(ctx, queue, 3, q)
+        drive_test_completeness(ctx, queue, 2, q, tmp_path)
+        drive_test_completeness(ctx, queue, 3, q, tmp_path)

@@ -1052,6 +1052,23 @@ def get_cahn_hilliard_laplacian(dim, b=0, c=0):
 # }}} End kernel function getters
 
 
+def _real_points(points, dtype):
+    """*points*, positions, as a real array of *dtype*.
+
+    Positions are real whatever the value dtype of a table.  A complex table
+    used to keep precomputed quadrature points in its own complex dtype, so a
+    cache it wrote may hold them as complex: that is accepted when the
+    imaginary part is exactly zero, which makes dropping it exact, and refused
+    otherwise.
+    """
+    points = np.asarray(points)
+    if np.iscomplexobj(points):
+        if np.any(points.imag):
+            raise ValueError("quadrature points must be real")
+        points = points.real
+    return np.asarray(points, dtype=dtype)
+
+
 def _is_sumpy_kernel_like(sknl):
     return hasattr(sknl, "get_expression") and hasattr(sknl, "get_global_scaling_const")
 
@@ -1265,7 +1282,8 @@ class NearFieldInteractionTable:
         precomputed_q_points = kwargs.pop("precomputed_q_points", None)
 
         if precomputed_q_points is not None:
-            q_points = np.asarray(precomputed_q_points, dtype=self.dtype)
+            # positions: real, whatever the value dtype
+            q_points = _real_points(precomputed_q_points, self._get_geom_dtype())
             expected_shape = (self.n_q_points, self.dim)
             if q_points.shape != expected_shape:
                 raise ValueError(
@@ -1676,8 +1694,14 @@ class NearFieldInteractionTable:
             * self.source_box_extent
         )
 
+        # A position, so in the geometry dtype: in a complex table's dtype the
+        # target, and every quadrature node mapped around it, came out
+        # complex, and each was cast back to real behind a ComplexWarning.
         new_cntr = (
-            np.ones(self.dim, dtype=self.dtype) * 0.5 * self.source_box_extent + vec
+            np.ones(self.dim, dtype=self._get_geom_dtype())
+            * 0.5
+            * self.source_box_extent
+            + vec
         )
 
         if int(max(abs(np.array(self.interaction_case_vecs[case_index])))) == 0:
@@ -3239,12 +3263,27 @@ class NearFieldInteractionTable:
         if hasattr(result, "get"):
             result = result.get()
 
-        result_arr = np.asarray(result)
+        return self._entry_values_in_table_dtype(
+            result, "Batched DuffyRadial kernel"
+        )
+
+    def _entry_values_in_table_dtype(self, values, producer):
+        """*values* as a contiguous array of this table's dtype.
+
+        A kernel can be evaluated in complex arithmetic and still be real:
+        2D Yukawa goes through a Hankel function of imaginary argument, and
+        its values come out complex with a zero imaginary part.  A real table
+        drops that part only when it is negligible against the real part,
+        here at most ``256 eps`` of the largest real magnitude (and of 1), and
+        refuses otherwise, naming *producer*: a genuinely complex kernel
+        built into a real table is a caller's error, not a rounding residue.
+        """
+        values = np.asarray(values)
         table_dtype = np.dtype(self.dtype)
-        if np.issubdtype(table_dtype, np.floating) and np.iscomplexobj(result_arr):
-            if result_arr.size:
-                imag_max = float(np.max(np.abs(np.imag(result_arr))))
-                real_scale = max(1.0, float(np.max(np.abs(np.real(result_arr)))))
+        if np.issubdtype(table_dtype, np.floating) and np.iscomplexobj(values):
+            if values.size:
+                imag_max = float(np.max(np.abs(np.imag(values))))
+                real_scale = max(1.0, float(np.max(np.abs(np.real(values)))))
             else:
                 imag_max = 0.0
                 real_scale = 1.0
@@ -3252,14 +3291,14 @@ class NearFieldInteractionTable:
             imag_tol = 256.0 * np.finfo(np.float64).eps * real_scale
             if imag_max > imag_tol:
                 raise RuntimeError(
-                    "Batched DuffyRadial kernel produced non-negligible "
+                    f"{producer} produced non-negligible "
                     f"imaginary component for real table dtype (max imag "
                     f"{imag_max:.3e}, tol {imag_tol:.3e})"
                 )
 
-            result_arr = np.real(result_arr)
+            values = np.real(values)
 
-        return np.ascontiguousarray(result_arr, dtype=self.dtype)
+        return np.ascontiguousarray(values, dtype=self.dtype)
 
     def _auto_tune_duffy_radial_orders(
         self,
@@ -3716,16 +3755,23 @@ class NearFieldInteractionTable:
             self._progress_step()
 
             t_quadrature_start = time.perf_counter()
-            table_values = np.empty(len(invariant_entry_ids), dtype=self.dtype)
-            for ientry, entry_id in enumerate(invariant_entry_ids):
-                _, entry_val = self.compute_table_entry_duffy_radial(
+            # Collected first and cast once: an entry is complex whenever the
+            # kernel is evaluated in complex arithmetic, and assigning it into
+            # a real array would drop the imaginary part unchecked, behind a
+            # ComplexWarning.
+            entry_values = [
+                self.compute_table_entry_duffy_radial(
                     entry_id,
                     radial_rule=radial_rule,
                     deg_theta=deg_theta,
                     radial_quad_order=radial_quad_order,
                     mp_dps=mp_dps,
-                )
-                table_values[ientry] = entry_val
+                )[1]
+                for entry_id in invariant_entry_ids
+            ]
+            table_values = self._entry_values_in_table_dtype(
+                entry_values, "Scalar DuffyRadial quadrature"
+            )
             t_quadrature_end = time.perf_counter()
             self._progress_step()
 

@@ -27,6 +27,7 @@ THE SOFTWARE.
 """
 
 import sys
+import warnings
 
 import numpy as np
 import pytest
@@ -1927,6 +1928,132 @@ def test_duffy_radial_batched_matches_scalar_reference_entries(
         )
         rel_err = abs(table.get_entry_data(entry_id) - ref_val) / max(1.0, abs(ref_val))
         assert rel_err < rtol
+
+
+def _build_2d_duffy_table_entries(sumpy_knl, kernel_kwargs, dtype, queue):
+    """Build a q=1 2D DuffyRadial table and return its reduced entries.
+
+    ``queue=None`` takes the scalar builder, a queue the batched one; the
+    routing is checked, so a batched build that failed and fell back to the
+    scalar builder cannot stand in for the batched reference.  The build runs
+    with ``ComplexWarning`` as an error, so a value cast to a real dtype
+    behind numpy's back fails the build instead of passing quietly.
+    """
+    table = npt.NearFieldInteractionTable(
+        quad_order=1,
+        dim=2,
+        build_method="DuffyRadial",
+        kernel_func=npt.sumpy_kernel_to_lambda(
+            sumpy_knl, parameter_values=kernel_kwargs
+        ),
+        kernel_type="complex-arithmetic",
+        sumpy_kernel=sumpy_knl,
+        dtype=dtype,
+        progress_bar=False,
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", np.exceptions.ComplexWarning)
+        table.build_table_via_duffy_radial(
+            queue=queue,
+            radial_rule="tanh-sinh-fast",
+            regular_quad_order=20,
+            radial_quad_order=61,
+            **kernel_kwargs,
+        )
+    assert table.build_routing == ("scalar" if queue is None else "batched")
+    entry_ids = table._get_invariant_entry_info()["entry_ids"]
+    return np.array([table.get_entry_data(int(i)) for i in entry_ids])
+
+
+def test_scalar_duffy_build_keeps_the_imaginary_part_of_2d_helmholtz(ctx_factory):
+    """The 2D scalar builder stored only the real part of a complex kernel.
+
+    Its radial rule called ``float()`` on every integrand value, so a 2D
+    Helmholtz table built without a queue (or by the fallback) was the real
+    part of the right table, behind a ``ComplexWarning`` per node (#180).
+    The batched builder is the reference: the two rules agree to about 1e-11
+    at these orders.  q=1 keeps the scalar build to a fraction of a second;
+    the q=2 build takes seconds, and the geometry it adds is checked on its
+    own below.
+    """
+    from sumpy.kernel import HelmholtzKernel
+
+    queue = _get_cpu_queue_or_skip(ctx_factory)
+    knl = HelmholtzKernel(2)
+
+    scalar = _build_2d_duffy_table_entries(knl, {"k": 1.5}, np.complex128, None)
+    batched = _build_2d_duffy_table_entries(knl, {"k": 1.5}, np.complex128, queue)
+
+    # the part that used to be dropped is not small
+    assert np.max(np.abs(batched.imag)) > 1e-1
+    scale = max(1.0, float(np.max(np.abs(batched))))
+    assert np.max(np.abs(scalar - batched)) <= 1e-9 * scale
+
+
+def test_scalar_duffy_build_of_2d_yukawa_drops_a_zero_imaginary_part(ctx_factory):
+    """2D Yukawa is evaluated as a Hankel function of imaginary argument.
+
+    Its values are complex with a zero imaginary part.  A real table now
+    drops that part after checking it is negligible, once per table, where
+    the radial rule used to cast every integrand value -- 17,640
+    ``ComplexWarning``s in one run of ``test_table_manager.py`` (#180).
+    """
+    from sumpy.kernel import YukawaKernel
+
+    queue = _get_cpu_queue_or_skip(ctx_factory)
+    knl = YukawaKernel(2)
+
+    scalar = _build_2d_duffy_table_entries(knl, {"lam": 3.0}, np.float64, None)
+    batched = _build_2d_duffy_table_entries(knl, {"lam": 3.0}, np.float64, queue)
+
+    assert scalar.dtype == np.float64
+    scale = max(1.0, float(np.max(np.abs(batched))))
+    assert np.max(np.abs(scalar - batched)) <= 1e-9 * scale
+
+
+def test_a_complex_table_keeps_its_geometry_real():
+    """Points are positions, real whatever the table's value dtype.
+
+    A complex table kept precomputed points, and the target points mapped
+    from them, in its complex dtype; the scalar builder then cast every
+    quadrature node back to real behind a ``ComplexWarning`` (#180).
+    """
+    from sumpy.kernel import HelmholtzKernel
+
+    q_points = _precomputed_legendre_q_points(2, 2)
+
+    def make_table(points):
+        return npt.NearFieldInteractionTable(
+            quad_order=2,
+            dim=2,
+            build_method="DuffyRadial",
+            sumpy_kernel=HelmholtzKernel(2),
+            derive_kernel_func=False,
+            dtype=np.complex128,
+            progress_bar=False,
+            precomputed_q_points=points,
+        )
+
+    # as a cache written by a complex table holds them
+    table = make_table(q_points.astype(np.complex128))
+    assert table.q_points.dtype == np.float64
+    np.testing.assert_array_equal(table.q_points, q_points)
+    for case_index in range(table.n_cases):
+        assert table.find_target_point(0, case_index).dtype == np.float64
+
+    with pytest.raises(ValueError, match="quadrature points must be real"):
+        make_table(q_points + 1.0e-3j)
+
+
+def test_a_real_table_refuses_a_complex_kernel_on_the_scalar_path():
+    """A complex kernel built into a real table is an error, not a cast."""
+    from sumpy.kernel import HelmholtzKernel
+
+    with pytest.raises(
+        RuntimeError,
+        match="Scalar DuffyRadial quadrature produced non-negligible imaginary",
+    ):
+        _build_2d_duffy_table_entries(HelmholtzKernel(2), {"k": 1.5}, np.float64, None)
 
 
 def test_duffy_radial_batched_stores_compact_orbit_payload(monkeypatch):
