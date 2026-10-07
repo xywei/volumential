@@ -52,6 +52,7 @@ measured: the finer rule has 3.4 to 4.6 times as many nodes there, and at low
 ``q_order`` P2L costs more per node than the near field.
 """
 
+import hashlib
 import logging
 import math
 from dataclasses import dataclass
@@ -337,6 +338,23 @@ def build_list4_upsampled_sources(
     ), None
 
 
+def _lists_cache_key(lists):
+    """A key that identifies the List 4 lists a wrangler was handed.
+
+    A device array is identified by its buffer, which the traversal keeps
+    alive; a host array, which the FMMLib path makes anew for every solve, by
+    its contents.
+    """
+    if isinstance(lists, np.ndarray):
+        return (
+            "host",
+            lists.shape,
+            lists.dtype.str,
+            hashlib.sha1(np.ascontiguousarray(lists).tobytes()).hexdigest(),
+        )
+    return (_array_layout_cache_token(lists), int(lists.size))
+
+
 class List4UpsamplingMixin:
     """Wrangler state for the upsampled List 4 P2L.
 
@@ -391,7 +409,7 @@ class List4UpsamplingMixin:
         upsampled = None
         if reason is None:
             log = logger.warning
-            key = (_array_layout_cache_token(lists), int(lists.size), fine_q_order)
+            key = (_lists_cache_key(lists), fine_q_order)
             cache = self._list4_upsampling_cache
             if cache is not None and cache[0] == key:
                 _, upsampled, reason = cache
