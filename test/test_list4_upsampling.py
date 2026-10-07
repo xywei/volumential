@@ -162,6 +162,51 @@ def test_matrix_integrates_the_interpolant(dim, q_order, fine_q_order):
     assert abs(np.sum(fine_strengths) - np.sum(strengths)) <= 1e-13
 
 
+def _tensor_polynomial(x, coeffs, degrees):
+    """``sum(c * prod(x[axis] ** p))`` over the exponents ``p <= degrees``."""
+    values = np.zeros(x.shape[1])
+    exponents = product(*(range(degree + 1) for degree in degrees))
+    for c, powers in zip(coeffs, exponents, strict=True):
+        values += c * np.prod(
+            [x[axis] ** p for axis, p in enumerate(powers)], axis=0
+        )
+    return values
+
+
+@pytest.mark.parametrize("dim", [1, 2, 3])
+@pytest.mark.parametrize(
+    ("q_order", "fine_q_order"), [(1, 2), (2, 3), (3, 5), (4, 6), (6, 9), (8, 12)]
+)
+def test_upsampling_reproduces_polynomials_of_the_rule_degree(
+    dim, q_order, fine_q_order
+):
+    """A density of degree ``q_order - 1`` in each variable is its own
+    interpolant, so its upsampled strengths are its values at the finer nodes
+    times the finer weights. One degree more in one variable is not."""
+    rng = np.random.default_rng(q_order + 10 * dim)
+    nodes, weights = _tensor_gauss(q_order, dim)
+    fine_nodes, matrix = list4_upsampling_matrix(q_order, fine_q_order, dim)
+    _, fine_weights = _tensor_gauss(fine_q_order, dim)
+
+    degrees = (q_order - 1,) * dim
+    coeffs = rng.standard_normal(q_order**dim)
+    fine_strengths = matrix @ (_tensor_polynomial(nodes, coeffs, degrees) * weights)
+    expected = _tensor_polynomial(fine_nodes, coeffs, degrees) * fine_weights
+    assert np.max(np.abs(fine_strengths - expected)) <= 1e-13 * np.max(
+        np.abs(expected)
+    )
+
+    # x_0 ** q_order lies outside the interpolation space.
+    def outside(x):
+        return x[0] ** q_order
+
+    fine_strengths = matrix @ (outside(nodes) * weights)
+    expected = outside(fine_nodes) * fine_weights
+    assert np.max(np.abs(fine_strengths - expected)) > 1e-6 * np.max(
+        np.abs(expected)
+    )
+
+
 def _two_box_layout(rng, dim, q_order, *, perturb=0.0, count=None):
     """Two level-1 boxes of a unit root, holding their Gauss nodes shuffled."""
     root_extent = 1.0
@@ -550,6 +595,77 @@ def test_list4_far_field_integrates_the_interpolant_fmmlib(
 
     _check_list4_far_field(dim, q_order, bounds, far_field=far_field,
                            make_wrangler=make_wrangler, exact=exact, point=point)
+
+
+def test_uniform_tree_takes_the_point_quadrature_path(ctx_factory):
+    """A uniform tree has no List 4, so the default upsampling places no
+    sources and P2L is exactly what point quadrature gives."""
+    from sumpy.expansion import DefaultExpansionFactory
+    from sumpy.kernel import LaplaceKernel
+
+    from volumential.expansion_wrangler_fpnd import (
+        FPNDExpansionWrangler,
+        FPNDTreeIndependentDataForWrangler,
+    )
+
+    ctx = ctx_factory()
+    queue = cl.CommandQueue(ctx)
+    dim, q_order = 2, 4
+    mesh = mg.MeshGen2D(q_order, 4, -0.5, 0.5, queue=queue)
+    _, _, tree, trav = mg.build_geometry_info(
+        ctx, queue, dim, q_order, mesh, bbox=np.array([[-0.5, 0.5]] * dim)
+    )
+    assert trav.from_sep_bigger_lists.size == 0
+
+    knl = LaplaceKernel(dim)
+    expn_factory = DefaultExpansionFactory()
+    tree_indep = FPNDTreeIndependentDataForWrangler(
+        ctx,
+        partial(expn_factory.get_multipole_expansion_class(knl), knl),
+        partial(expn_factory.get_local_expansion_class(knl), knl),
+        [knl],
+        exclude_self=True,
+    )
+
+    def make_wrangler(**kwargs):
+        return FPNDExpansionWrangler(
+            tree_indep=tree_indep,
+            queue=queue,
+            traversal=trav,
+            near_field_table=[_fake_table(q_order)],
+            dtype=np.float64,
+            fmm_level_to_order=lambda kernel, kernel_args, tree, lev: 10,
+            quad_order=q_order,
+            **kwargs,
+        )
+
+    wrangler = make_wrangler()
+    assert wrangler.list4_upsampling == LIST4_UPSAMPLING
+    assert (
+        wrangler._get_list4_upsampled_sources(
+            trav.from_sep_bigger_lists, lambda ary: ary.get(queue)
+        )
+        is None
+    )
+
+    rng = np.random.default_rng(13)
+    weights = obj_array_1d(
+        [cl.array.to_device(queue, rng.standard_normal(tree.nsources))]
+    )
+
+    def locals_of(wrangler):
+        local_exps, _ = wrangler.form_locals(
+            trav.level_start_target_or_target_parent_box_nrs,
+            trav.target_or_target_parent_boxes,
+            trav.from_sep_bigger_starts,
+            trav.from_sep_bigger_lists,
+            weights,
+        )
+        return local_exps.get(queue)
+
+    assert np.array_equal(
+        locals_of(wrangler), locals_of(make_wrangler(list4_upsampling=1))
+    )
 
 
 # }}}

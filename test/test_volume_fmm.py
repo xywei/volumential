@@ -7859,8 +7859,9 @@ def test_volume_fmm_far_field_matches_direct_sum_with_leaf_colleagues(
     charges are random, so no interaction is negligible: dropping or doubling
     a single List 2, 3 or 4 entry of the traversal raises the error by many
     orders of magnitude. The direct sum is a point sum, so the List 4 sources
-    are not upsampled here (``list4_upsampling=1``); the upsampled ones are
-    checked in ``test_list4_upsampling.py``.
+    are not upsampled for it (``list4_upsampling=1``). The default, upsampled
+    far field is then checked to differ from it only in its List 4 part; that
+    part itself is checked in ``test_list4_upsampling.py``.
     """
     from sumpy.expansion import DefaultExpansionFactory
     from sumpy.kernel import LaplaceKernel
@@ -8008,6 +8009,77 @@ def test_volume_fmm_far_field_matches_direct_sum_with_leaf_colleagues(
     # the same. Dropping or doubling one List 2, 3 or 4 entry gives 9e-3 to
     # 6e-2.
     assert rel_error < 1e-9, f"far field off by {rel_error:.3e} from a direct sum"
+
+    # By default the List 4 sources are upsampled. That must change the List 4
+    # pairs and nothing else: the far field moves by exactly the change in its
+    # List 4 part, and not at all at the nodes no List 4 source reaches.
+    from pytools.obj_array import new_1d as obj_array_1d
+
+    upsampled_wrangler = FPNDExpansionWrangler(
+        tree_indep=tree_indep,
+        queue=queue,
+        traversal=trav,
+        near_field_table=wrangler.near_field_table,
+        dtype=np.float64,
+        fmm_level_to_order=lambda kernel, kernel_args, tree, lev: fmm_order,
+        quad_order=q_order,
+        self_extra_kwargs={
+            "target_to_source": np.arange(tree.ntargets, dtype=np.int32)
+        },
+    )
+    assert upsampled_wrangler.list4_upsampling > 1
+    (far_upsampled,) = drive_volume_fmm(
+        trav,
+        upsampled_wrangler,
+        cl.array.to_device(queue, weighted_charges),
+        cl.array.to_device(queue, charges),
+        exclude_list1=True,
+    )
+
+    def list4_part(wrangler):
+        weights = obj_array_1d(
+            [wrangler.reorder_sources(cl.array.to_device(queue, weighted_charges))]
+        )
+        local_exps, _ = wrangler.form_locals(
+            trav.level_start_target_or_target_parent_box_nrs,
+            trav.target_or_target_parent_boxes,
+            trav.from_sep_bigger_starts,
+            trav.from_sep_bigger_lists,
+            weights,
+        )
+        local_exps, _ = wrangler.refine_locals(
+            trav.level_start_target_or_target_parent_box_nrs,
+            trav.target_or_target_parent_boxes,
+            local_exps,
+        )
+        potentials, _ = wrangler.eval_locals(
+            trav.level_start_target_box_nrs, trav.target_boxes, local_exps
+        )
+        (potential,) = wrangler.finalize_potentials(
+            wrangler.reorder_potentials(potentials)
+        )
+        return potential.get(queue)
+
+    list4_point = list4_part(wrangler)
+    list4_change = list4_part(upsampled_wrangler) - list4_point
+    change = far_upsampled.get(queue) - far_fmm.get(queue)
+    scale = np.max(np.abs(far_direct))
+    mismatch = np.max(np.abs(change - list4_change)) / scale
+    logger.info(
+        "upsampling List 4 moved its part of the far field by %.2e and the far "
+        "field by that to %.2e, relative to its max",
+        np.max(np.abs(list4_change)) / scale,
+        mismatch,
+    )
+    # On a CPU device the List 4 part changes by 1.3e-6 of the far field's max,
+    # and the far field by that to 2e-15.
+    assert np.max(np.abs(list4_change)) > 1e-8 * scale
+    assert mismatch < 1e-13, (
+        f"upsampling List 4 changed the rest of the far field by {mismatch:.3e}"
+    )
+    unreached = list4_point == 0
+    assert np.any(unreached)
+    assert np.all(change[unreached] == 0)
 
 
 @pytest.mark.skipif(
