@@ -94,7 +94,7 @@ the two-Gaussian source of the graded-tree test, on a CPU device:
 |---|---|---|---|---|
 | 16 x 16, refined twice around the narrow Gaussian | 535 | 8 | 2.90e-9 | 2.28e-9 |
 | 32 x 32, refined three times | 2788 | 4 | 1.02e-6 | 3.80e-7 |
-| | | 6 | 1.58e-8 | 8.49e-10 |
+| | | 6 | 1.57e-8 | 8.49e-10 |
 | | | 8 | 2.96e-10 | 3.50e-11 |
 | 128 x 128, refined three times | 41374 | 4 | 1.15e-7 | 2.60e-9 |
 | | | 6 | 1.71e-9 | 1.03e-11 |
