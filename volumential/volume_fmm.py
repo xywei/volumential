@@ -672,6 +672,7 @@ def _build_source_only_wrangler(traversal, wrangler, queue):
         "helmholtz_split_smooth_quad_order",
         "helmholtz_split_term_tables",
         "helmholtz_split_order1_legacy_subtraction",
+        "list4_upsampling",
     ):
         attr_value = getattr(wrangler, attr_name, None)
         if attr_value is None:

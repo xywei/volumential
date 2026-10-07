@@ -124,7 +124,7 @@
         "portable:0",
         "--full"
       ],
-      "revision": "f9f232346f3750074b734356a28eae1c6ef793a7",
+      "revision": "0473bedba0afd6e82ad0bc9185ddedfcaf1ba0c3",
       "versions": {
         "boxtree": "2024.10 (git f278ab8232bafbb8b2d8399e47fd826fb18bbee9)",
         "loopy": "2025.2 (git b0b45ad42440c98e7f7d2a5efe9b239c57e1d73a)",

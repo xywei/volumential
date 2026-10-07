@@ -7691,8 +7691,20 @@ def test_volume_fmm_laplace(laplace_problem):
     mg.provider != "meshgen_boxtree",
     reason="Adaptive mesh module is not available",
 )
+@pytest.mark.parametrize(
+    ("q_order", "fmm_order", "max_error_bound", "rel_l2_error_bound"),
+    [
+        # About 3.0e-7 and 1.1e-7 on a CPU device.
+        (6, 15, 3e-6, 1e-6),
+        # About 2.28e-9 and 6.1e-10 on a CPU device. With point quadrature for
+        # the List 4 sources (list4_upsampling=1) the max error is 2.90e-9:
+        # those pairs are 21% of it.
+        (8, 25, 2.5e-9, 1e-9),
+    ],
+)
 def test_volume_fmm_laplace_graded_tree_matches_exact_solution(
-    ctx_factory, tmp_path
+    ctx_factory, tmp_path, *, q_order, fmm_order, max_error_bound,
+    rel_l2_error_bound,
 ):
     """The volume FMM keeps its accuracy on a graded tree.
 
@@ -7703,7 +7715,8 @@ def test_volume_fmm_laplace_graded_tree_matches_exact_solution(
     source is large, and the potential is compared with the exact solution.
     On a CPU device, leaving out the list 3, the list 4 or the cross-level
     list 1 interactions raises the relative L2 error from about 1e-7 to above
-    0.1.
+    0.1. At ``q_order`` 8 the bound also needs the List 4 sources upsampled
+    (:mod:`volumential.wranglers.list4_upsampling`).
     """
     from sumpy.expansion import DefaultExpansionFactory
     from sumpy.kernel import LaplaceKernel
@@ -7718,8 +7731,6 @@ def test_volume_fmm_laplace_graded_tree_matches_exact_solution(
     queue = cl.CommandQueue(ctx)
 
     dim = 2
-    q_order = 6
-    fmm_order = 15
     lower, upper = -0.5, 0.5
     # (amplitude, alpha, center) of the Gaussian terms of the exact solution
     # u; outside the box both are below exp(-30).
@@ -7800,7 +7811,7 @@ def test_volume_fmm_laplace_graded_tree_matches_exact_solution(
         queue=queue,
         traversal=trav,
         near_field_table=_get_laplace_2d_table(
-            queue, tmp_path / "nft-laplace2d-graded-q6.sqlite", q_order
+            queue, tmp_path / f"nft-laplace2d-graded-q{q_order}.sqlite", q_order
         ),
         dtype=np.float64,
         fmm_level_to_order=lambda kernel, kernel_args, tree, lev: fmm_order,
@@ -7820,9 +7831,10 @@ def test_volume_fmm_laplace_graded_tree_matches_exact_solution(
     rel_l2_error = float(
         np.sqrt(np.sum(weights * error**2) / np.sum(weights * reference**2))
     )
-    # About 3.1e-7 and 1.1e-7 on a CPU device.
-    assert max_error < 3e-6, f"max error {max_error:.3e} on a graded tree"
-    assert rel_l2_error < 1e-6, (
+    assert max_error < max_error_bound, (
+        f"max error {max_error:.3e} on a graded tree"
+    )
+    assert rel_l2_error < rel_l2_error_bound, (
         f"relative L2 error {rel_l2_error:.3e} on a graded tree"
     )
 
@@ -7846,7 +7858,10 @@ def test_volume_fmm_far_field_matches_direct_sum_with_leaf_colleagues(
     filed there instead of in List 3 or 4 would drop out of both sides. The
     charges are random, so no interaction is negligible: dropping or doubling
     a single List 2, 3 or 4 entry of the traversal raises the error by many
-    orders of magnitude.
+    orders of magnitude. The direct sum is a point sum, so the List 4 sources
+    are not upsampled for it (``list4_upsampling=1``). The default, upsampled
+    far field is then checked to differ from it only in its List 4 part; that
+    part itself is checked in ``test_list4_upsampling.py``.
     """
     from sumpy.expansion import DefaultExpansionFactory
     from sumpy.kernel import LaplaceKernel
@@ -7976,6 +7991,7 @@ def test_volume_fmm_far_field_matches_direct_sum_with_leaf_colleagues(
         self_extra_kwargs={
             "target_to_source": np.arange(tree.ntargets, dtype=np.int32)
         },
+        list4_upsampling=1,
     )
 
     (far_fmm,) = drive_volume_fmm(
@@ -7993,6 +8009,77 @@ def test_volume_fmm_far_field_matches_direct_sum_with_leaf_colleagues(
     # the same. Dropping or doubling one List 2, 3 or 4 entry gives 9e-3 to
     # 6e-2.
     assert rel_error < 1e-9, f"far field off by {rel_error:.3e} from a direct sum"
+
+    # By default the List 4 sources are upsampled. That must change the List 4
+    # pairs and nothing else: the far field moves by exactly the change in its
+    # List 4 part, and not at all at the nodes no List 4 source reaches.
+    from pytools.obj_array import new_1d as obj_array_1d
+
+    upsampled_wrangler = FPNDExpansionWrangler(
+        tree_indep=tree_indep,
+        queue=queue,
+        traversal=trav,
+        near_field_table=wrangler.near_field_table,
+        dtype=np.float64,
+        fmm_level_to_order=lambda kernel, kernel_args, tree, lev: fmm_order,
+        quad_order=q_order,
+        self_extra_kwargs={
+            "target_to_source": np.arange(tree.ntargets, dtype=np.int32)
+        },
+    )
+    assert upsampled_wrangler.list4_upsampling > 1
+    (far_upsampled,) = drive_volume_fmm(
+        trav,
+        upsampled_wrangler,
+        cl.array.to_device(queue, weighted_charges),
+        cl.array.to_device(queue, charges),
+        exclude_list1=True,
+    )
+
+    def list4_part(wrangler):
+        weights = obj_array_1d(
+            [wrangler.reorder_sources(cl.array.to_device(queue, weighted_charges))]
+        )
+        local_exps, _ = wrangler.form_locals(
+            trav.level_start_target_or_target_parent_box_nrs,
+            trav.target_or_target_parent_boxes,
+            trav.from_sep_bigger_starts,
+            trav.from_sep_bigger_lists,
+            weights,
+        )
+        local_exps, _ = wrangler.refine_locals(
+            trav.level_start_target_or_target_parent_box_nrs,
+            trav.target_or_target_parent_boxes,
+            local_exps,
+        )
+        potentials, _ = wrangler.eval_locals(
+            trav.level_start_target_box_nrs, trav.target_boxes, local_exps
+        )
+        (potential,) = wrangler.finalize_potentials(
+            wrangler.reorder_potentials(potentials)
+        )
+        return potential.get(queue)
+
+    list4_point = list4_part(wrangler)
+    list4_change = list4_part(upsampled_wrangler) - list4_point
+    change = far_upsampled.get(queue) - far_fmm.get(queue)
+    scale = np.max(np.abs(far_direct))
+    mismatch = np.max(np.abs(change - list4_change)) / scale
+    logger.info(
+        "upsampling List 4 moved its part of the far field by %.2e and the far "
+        "field by that to %.2e, relative to its max",
+        np.max(np.abs(list4_change)) / scale,
+        mismatch,
+    )
+    # On a CPU device the List 4 part changes by 1.3e-6 of the far field's max,
+    # and the far field by that to 2e-15.
+    assert np.max(np.abs(list4_change)) > 1e-8 * scale
+    assert mismatch < 1e-13, (
+        f"upsampling List 4 changed the rest of the far field by {mismatch:.3e}"
+    )
+    unreached = list4_point == 0
+    assert np.any(unreached)
+    assert np.all(change[unreached] == 0)
 
 
 @pytest.mark.skipif(

@@ -473,6 +473,7 @@ def fmm_stage_operation_counts(
     sep_smaller_by_level,
     multipole_coeff_counts,
     local_coeff_counts,
+    p2l_source_counts=None,
 ) -> dict[str, int]:
     """Operation counts of the seven FMM far-field stages of one solve.
 
@@ -522,6 +523,10 @@ def fmm_stage_operation_counts(
         and ``traversal.from_sep_smaller_by_level[i].starts`` (List 3 far).
     :arg multipole_coeff_counts: multipole coefficients per tree level.
     :arg local_coeff_counts: local coefficients per tree level.
+    :arg p2l_source_counts: per-box number of sources P2L reads from a List 4
+        source box, when that is not ``box_source_counts_nonchild``: a wrangler
+        that upsamples List 4 sources
+        (:mod:`volumential.wranglers.list4_upsampling`) reads its finer nodes.
 
     :returns: a dict with one key per entry of :data:`FMM_FAR_FIELD_STAGES`
         plus ``far_total``.
@@ -592,8 +597,13 @@ def fmm_stage_operation_counts(
     # P2L (List 4 far): every source of every listed bigger box enters every
     # local coefficient of the target box's level.
     bigger_lists = np.asarray(from_sep_bigger_lists, dtype=np.int64)
+    p2l_nsources = (
+        nsources
+        if p2l_source_counts is None
+        else np.asarray(p2l_source_counts, dtype=np.int64)
+    )
     n_list4_sources = _csr_group_sums(
-        nsources[bigger_lists] if bigger_lists.size else bigger_lists,
+        p2l_nsources[bigger_lists] if bigger_lists.size else bigger_lists,
         from_sep_bigger_starts,
     )
     p2l = int(np.sum(n_list4_sources * n_local[totpb_levels]))
@@ -677,9 +687,16 @@ def fmm_stage_operation_counts_from_traversal(
     bigger_lists = _host(
         getattr(traversal, "from_sep_bigger_lists", None), queue
     )
+    p2l_source_counts = None
     if bigger_starts is None:
         bigger_starts = np.zeros(1, dtype=np.int64)
         bigger_lists = np.zeros(0, dtype=np.int64)
+    elif bigger_lists.size and hasattr(wrangler, "_get_list4_upsampled_sources"):
+        upsampled = wrangler._get_list4_upsampled_sources(
+            traversal.from_sep_bigger_lists, lambda ary: _host(ary, queue)
+        )
+        if upsampled is not None:
+            p2l_source_counts = upsampled.box_source_counts_nonchild
 
     return fmm_stage_operation_counts(
         box_levels=_host(tree.box_levels, queue),
@@ -704,6 +721,7 @@ def fmm_stage_operation_counts_from_traversal(
         sep_smaller_by_level=sep_smaller_by_level,
         multipole_coeff_counts=multipole,
         local_coeff_counts=local,
+        p2l_source_counts=p2l_source_counts,
     )
 
 # }}}

@@ -37,6 +37,7 @@ import numpy as np
 import pyopencl as cl
 import pyopencl.array
 from pytools import memoize_method
+from pytools.obj_array import new_1d as obj_array_1d
 from sumpy.array_context import PyOpenCLArrayContext
 from sumpy.fmm import (
     SumpyExpansionWrangler,
@@ -65,6 +66,7 @@ from volumential.wranglers.kernel_symmetry import (
     _extract_symmetry_source_direction,
     _target_kernels_include_source_derivatives,
 )
+from volumential.wranglers.list4_upsampling import List4UpsamplingMixin
 from volumential.wranglers.nearfield_cache import NearFieldPayloadCacheMixin
 from volumential.wranglers.split_terms import (
     _format_helmholtz_split_term_key,
@@ -224,6 +226,7 @@ class FPNDSumpyExpansionWrangler(
     ExpansionWranglerInterface,
     NearFieldPayloadCacheMixin,
     HelmholtzSplitCorrectionMixin,
+    List4UpsamplingMixin,
     SumpyExpansionWrangler,
 ):
     """This expansion wrangler uses "fpnd" strategy. That is, Far field is
@@ -289,6 +292,7 @@ class FPNDSumpyExpansionWrangler(
         helmholtz_split_order1_legacy_subtraction=False,
         translation_classes_data=None,
         preprocessed_mpole_dtype=None,
+        list4_upsampling=None,
     ):
         """
         near_field_table can either one of three things:
@@ -336,6 +340,18 @@ class FPNDSumpyExpansionWrangler(
         split-order-1 correction path that evaluates Helmholtz and Laplace
         kernels separately and subtracts them. By default this is ``False`` and
         split-order-1 uses the analytic series-remainder kernel path.
+
+        ``list4_upsampling`` sets how List 4 sources enter the far field. A
+        List 4 source box is twice the size of the target box and only half
+        its own size away from it, too close for point quadrature at its
+        nodes. Its density is interpolated to a tensor-product Gauss rule with
+        ``ceil(list4_upsampling * quad_order)`` nodes per axis, and P2L runs
+        from those nodes (:mod:`volumential.wranglers.list4_upsampling`).
+        ``1`` gives point quadrature, as for every other far pair. ``None``
+        (default) means 1.5 in 1-D and 2-D and 1 in 3-D, where the upsampled
+        P2L often costs a tenth of the near-field time or more; pass 1.5 to
+        turn it on there. Kernels that take per-source arguments, such as a
+        directional source derivative, always get point quadrature.
         """
 
         queue = _resolve_queue(queue, traversal, tree_indep)
@@ -427,6 +443,8 @@ class FPNDSumpyExpansionWrangler(
 
         self.quad_order = quad_order
         self.potential_kind = potential_kind
+        self._init_list4_upsampling(list4_upsampling, self.tree.dimensions)
+        self._list4_upsampled_device = None
 
         # TODO: make all parameters table-specific (allow using inhomogeneous tables)
         kname = repr(self.tree_indep.target_kernels[0])
@@ -1308,16 +1326,94 @@ class FPNDSumpyExpansionWrangler(
         lists: BoxIndexArray,
         src_weights: FMMArray,
     ) -> StageResult:
-        """P2L: form local expansions from the list-4 sources."""
-        local_exps = SumpyExpansionWrangler.form_locals(
-            self,
-            self._actx,
-            level_start_target_or_target_parent_box_nrs,
-            target_or_target_parent_boxes,
-            starts,
-            lists,
-            src_weights,
+        """P2L: form local expansions from the list-4 sources.
+
+        The sources are upsampled first unless ``list4_upsampling`` is 1 (see
+        the constructor).
+        """
+        upsampled = self._get_list4_upsampled_sources(
+            lists, lambda ary: ary.get(self.queue)
         )
+        if upsampled is None:
+            local_exps = SumpyExpansionWrangler.form_locals(
+                self,
+                self._actx,
+                level_start_target_or_target_parent_box_nrs,
+                target_or_target_parent_boxes,
+                starts,
+                lists,
+                src_weights,
+            )
+            return local_exps, SumpyTimingFuture(self.queue, [])
+
+        device = self._list4_upsampled_device
+        if device is None or device[0] is not upsampled:
+            queue = self.queue
+            device = (
+                upsampled,
+                cl.array.to_device(queue, upsampled.gather.reshape(-1)),
+                {
+                    "sources": obj_array_1d(
+                        [
+                            cl.array.to_device(queue, upsampled.sources[i])
+                            for i in range(upsampled.sources.shape[0])
+                        ]
+                    ),
+                    "box_source_starts": cl.array.to_device(
+                        queue, upsampled.box_source_starts
+                    ),
+                    "box_source_counts_nonchild": cl.array.to_device(
+                        queue, upsampled.box_source_counts_nonchild
+                    ),
+                },
+            )
+            self._list4_upsampled_device = device
+        _, gather, source_kwargs = device
+
+        upsampled_weights = [
+            cl.array.to_device(
+                self.queue,
+                upsampled.upsample_gathered(
+                    weights.with_queue(self.queue)[gather].get(self.queue)
+                ),
+            )
+            for weights in src_weights
+        ]
+        if isinstance(src_weights, np.ndarray):
+            upsampled_weights = obj_array_1d(upsampled_weights)
+
+        # sumpy's SumpyExpansionWrangler.form_locals, reading the sources from
+        # the upsampled arrays instead of the tree's.
+        actx = self._actx
+        local_exps = self.local_expansion_zeros(actx)
+        level_starts = actx.to_numpy(level_start_target_or_target_parent_box_nrs)
+
+        kwargs = dict(self.extra_kwargs)
+        kwargs.update(source_kwargs)
+
+        for lev in range(self.tree.nlevels):
+            start, stop = level_starts[lev : lev + 2]
+            if start == stop:
+                continue
+
+            p2l = self.tree_indep.p2l(self.level_orders[lev])
+            target_level_start_ibox, target_local_exps_view = (
+                self.local_expansions_view(local_exps, lev)
+            )
+            result = p2l(
+                actx,
+                target_boxes=target_or_target_parent_boxes[start:stop],
+                source_box_starts=starts[start : stop + 1],
+                source_box_lists=lists,
+                centers=self.tree.box_centers,
+                strengths=upsampled_weights,
+                tgt_expansions=target_local_exps_view,
+                tgt_base_ibox=target_level_start_ibox,
+                rscale=self.level_to_rscale(lev),
+                **kwargs,
+            )
+            assert result is target_local_exps_view
+
         return local_exps, SumpyTimingFuture(self.queue, [])
 
     def refine_locals(

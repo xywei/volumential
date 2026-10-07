@@ -325,6 +325,14 @@ def test_list2_and_list4_counts_use_the_csr_lists():
     assert counts["multipole_to_local"] == 3 * 7 * 9
     assert counts["form_locals"] == 4 * 9
 
+    # An upsampled List 4 source box is read at its finer nodes.
+    p2l_source_counts = np.array([0, 0, 0, 0, 9], dtype=np.int64)
+    counts = oc.fmm_stage_operation_counts(
+        **data, p2l_source_counts=p2l_source_counts
+    )
+    assert counts["form_locals"] == 9 * 9
+    assert counts["form_multipoles"] == 4 * 4 * 7
+
 
 def test_list3_counts_use_the_per_source_level_lists():
     data = _two_level_quadtree()

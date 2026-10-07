@@ -39,8 +39,9 @@ The remaining modules are the pieces both backends share: near-field table
 marshalling (:mod:`~volumential.wranglers.table_data`), the symmetry-orbit
 reconstruction used to keep reduced tables small
 (:mod:`~volumential.wranglers.arithmetic_orbits`,
-:mod:`~volumential.wranglers.orbit_generated`), and assorted device-array,
-kernel-introspection and layout-validation helpers.
+:mod:`~volumential.wranglers.orbit_generated`), the upsampled List 4 sources of
+the far field (:mod:`~volumential.wranglers.list4_upsampling`), and assorted
+device-array, kernel-introspection and layout-validation helpers.
 
 :mod:`volumential.expansion_wrangler_fpnd` remains importable and re-exports
 every name this package defines.
@@ -53,6 +54,7 @@ from volumential.wranglers.fmmlib_backend import (
 )
 from volumential.wranglers.fmmlib_batched import FMMLibBatchedStagesMixin
 from volumential.wranglers.helmholtz_split import HelmholtzSplitCorrectionMixin
+from volumential.wranglers.list4_upsampling import List4UpsamplingMixin
 from volumential.wranglers.nearfield_cache import NearFieldPayloadCacheMixin
 from volumential.wranglers.split_terms import HelmholtzSplitCacheAccounting
 from volumential.wranglers.sumpy_backend import (
@@ -74,6 +76,7 @@ __all__ = [
     "FPNDTreeIndependentDataForWrangler",
     "HelmholtzSplitCacheAccounting",
     "HelmholtzSplitCorrectionMixin",
+    "List4UpsamplingMixin",
     "NearFieldPayloadCacheMixin",
     "SumpyTimingFuture",
     "inverse_id_map",

@@ -66,6 +66,7 @@ from volumential.wranglers.fmmlib_batched import FMMLibBatchedStagesMixin
 from volumential.wranglers.kernel_symmetry import (
     _extract_symmetry_source_direction,
 )
+from volumential.wranglers.list4_upsampling import List4UpsamplingMixin
 from volumential.wranglers.nearfield_cache import NearFieldPayloadCacheMixin
 from volumential.wranglers.table_data import _table_data_fingerprint
 from volumential.wranglers.timing import SumpyTimingFuture
@@ -156,6 +157,7 @@ class FPNDFMMLibExpansionWrangler(
     ExpansionWranglerInterface,
     NearFieldPayloadCacheMixin,
     FMMLibBatchedStagesMixin,
+    List4UpsamplingMixin,
     FMMLibExpansionWrangler,
 ):
     """This expansion wrangler uses "fpnd" strategy. That is, Far field is
@@ -173,6 +175,13 @@ class FPNDFMMLibExpansionWrangler(
         expansions, but not the source field.
 
     Much of this class is borrowed from pytential.qbx.fmmlib.
+
+    ``list4_upsampling`` is as for
+    :class:`~volumential.wranglers.sumpy_backend.FPNDSumpyExpansionWrangler`:
+    List 4 sources enter P2L from an upsampled rule with
+    ``ceil(list4_upsampling * quad_order)`` Gauss nodes per axis, ``1`` gives
+    point quadrature at their own nodes, and the default is 1.5 in 2-D and 1
+    in 3-D.
     """
 
     # {{{ constructor
@@ -192,6 +201,7 @@ class FPNDFMMLibExpansionWrangler(
         self_extra_kwargs=None,
         list1_extra_kwargs=None,
         *args,
+        list4_upsampling=None,
         **kwargs,
     ):
         self.tree_indep = tree_indep
@@ -387,6 +397,7 @@ class FPNDFMMLibExpansionWrangler(
         self.kernel_extra_kwargs = kernel_extra_kwargs
         self.self_extra_kwargs = self_extra_kwargs
         self.list1_extra_kwargs = list1_extra_kwargs
+        self._init_list4_upsampling(list4_upsampling, tree.dimensions)
         self._table_layout_validation_cache = set()
         self._nearfield_device_payload_cache = OrderedDict()
         self._nearfield_device_payload_cache_max = 16
@@ -883,17 +894,73 @@ class FPNDFMMLibExpansionWrangler(
         lists: BoxIndexArray,
         src_weights: FMMArray,
     ) -> StageResult:
-        """P2L: form local expansions from the list-4 sources."""
-        result = FMMLibExpansionWrangler.form_locals(
-            self,
-            self._fmmlib_actx,
-            level_start_target_or_target_parent_box_nrs,
-            target_or_target_parent_boxes,
-            starts,
-            lists,
-            src_weights,
-        )
-        return result, None
+        """P2L: form local expansions from the list-4 sources.
+
+        The sources are upsampled first unless ``list4_upsampling`` is 1.
+        """
+        upsampled = self._get_list4_upsampled_sources(lists, np.asarray)
+        if upsampled is None:
+            result = FMMLibExpansionWrangler.form_locals(
+                self,
+                self._fmmlib_actx,
+                level_start_target_or_target_parent_box_nrs,
+                target_or_target_parent_boxes,
+                starts,
+                lists,
+                src_weights,
+            )
+            return result, None
+
+        # boxtree's FMMLibExpansionWrangler.form_locals, reading the sources
+        # from the upsampled arrays instead of the tree's. Dipoles come with
+        # per-source arguments, which never reach this point.
+        (weights,) = src_weights
+        local_exps = self.local_expansion_zeros()
+        formta = self.tree_indep.get_routine("%ddformta", suffix="_imany")
+
+        sources = np.asfortranarray(upsampled.sources)
+        sources_offsets = upsampled.box_source_starts[lists]
+        nsources = upsampled.box_source_counts_nonchild
+        centers = self._get_single_box_centers_array()
+        charge = upsampled.upsample(weights)
+
+        for lev in range(self.tree.nlevels):
+            lev_start, lev_stop = level_start_target_or_target_parent_box_nrs[
+                lev : lev + 2
+            ]
+            if lev_start == lev_stop:
+                continue
+
+            target_box_start, target_local_exps_view = self.local_expansions_view(
+                local_exps, lev
+            )
+            centers_offsets = target_or_target_parent_boxes[lev_start:lev_stop]
+            sources_starts = starts[lev_start : 1 + lev_stop]
+
+            kwargs = dict(self.kernel_kwargs)
+            kwargs["charge"] = charge
+            kwargs["charge_starts"] = sources_starts
+            kwargs["charge_offsets"] = sources_offsets
+
+            ier, expn = formta(
+                rscale=self.level_to_rscale(lev),
+                sources=sources,
+                sources_offsets=sources_offsets,
+                sources_starts=sources_starts,
+                nsources=nsources,
+                nsources_starts=sources_starts,
+                nsources_offsets=lists,
+                centers=centers,
+                centers_offsets=centers_offsets,
+                nterms=self.level_orders[lev],
+                **kwargs,
+            )
+            if ier.any():
+                raise RuntimeError("formta failed")
+
+            target_local_exps_view[centers_offsets - target_box_start] = expn.T
+
+        return local_exps, None
 
     def refine_locals(
         self,

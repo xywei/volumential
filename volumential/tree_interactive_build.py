@@ -260,15 +260,18 @@ def _enforce_level_restriction(tob):
     Lists 2, 3 and 4 need nothing more, but on such a graded tree a List 4
     source box, a leaf colleague of the target's parent, is twice the size of
     the target box and only half its own size away from it. List 2 and List 3
-    sources are at least their own size away. The far field integrates that
-    box by point quadrature at its nodes like any other source, and at that
-    distance the error is 7 to 2800 times the error of the far pairs one to
-    two source sizes away (2-D trees graded over two or three levels,
-    ``q_order`` 4 to 8, the gap growing with ``q_order``). On the graded tree
-    of ``test_volume_fmm_laplace_graded_tree_matches_exact_solution`` (535
-    leaves on levels 4 to 6) this is 21% of the max error at ``q_order`` 8 and
-    2% of the relative L2 error. Integrating these pairs from an upsampled
-    source is tracked in https://github.com/xywei/volumential/issues/178.
+    sources are at least their own size away. Point quadrature at the box's
+    nodes is much less accurate at that distance: its error is 7 to 2800
+    times the error of the far pairs one to two source sizes away (2-D trees
+    graded over two or three levels, ``q_order`` 4 to 8, the gap growing with
+    ``q_order``). The wranglers therefore form the local expansions of List 4
+    pairs from upsampled sources (``list4_upsampling``, see
+    :mod:`volumential.wranglers.list4_upsampling`), which brings that error
+    below the other far pairs'. This is on by default in 2-D, where on the
+    graded tree of ``test_volume_fmm_laplace_graded_tree_matches_exact_solution``
+    (535 leaves on levels 4 to 6) it lowers the max error at ``q_order`` 8 by
+    21%, and on a tree with more grading by up to a factor of 166. In 3-D it
+    costs more and is opt-in.
     """
     tob = _rebuild_tob_from_geometry(tob)
 
