@@ -45,10 +45,11 @@ the error of these pairs falls below that of the far pairs one to two source
 sizes away, in 2-D and 3-D.
 
 The upsampling is on by default in 1-D and 2-D and off in 3-D
-(:func:`default_list4_upsampling`), by its cost: P2L from the finer nodes added
-3 to 4% of the near-field time on 2-D graded trees and 10 to 45% on 3-D ones,
-where the finer rule has about 3.4 times as many nodes and P2L costs more per
-node than the near field.
+(:func:`default_list4_upsampling`), by its cost on a CPU device. On 2-D graded
+trees, P2L from the finer nodes added 1.7 to 4% to the near-field time. On 3-D
+ones it added 1.5 to 45%, and 10% or more on six of the ten trees and orders
+measured: the finer rule has 3.4 to 4.6 times as many nodes there, and at low
+``q_order`` P2L costs more per node than the near field.
 """
 
 import logging
@@ -66,8 +67,8 @@ from volumential.wranglers.box_layout import _array_layout_cache_token
 logger = logging.getLogger(__name__)
 
 
-#: The upsampling factor the wranglers use where it is on by default: the
-#: upsampled rule has ``ceil(1.5 * q_order)`` Gauss nodes per axis.
+#: The upsampling factor the wranglers use where it is on by default. The
+#: upsampled rule then has ``ceil(1.5 * q_order)`` Gauss nodes per axis.
 LIST4_UPSAMPLING = 1.5
 
 # Largest distance, in the reference coordinates of a box ([-1, 1] per axis),
@@ -79,7 +80,7 @@ def default_list4_upsampling(dim: int) -> float:
     """The wranglers' ``list4_upsampling`` when none is given.
 
     :data:`LIST4_UPSAMPLING` in 1-D and 2-D, and 1 (point quadrature) in 3-D,
-    where the upsampled P2L costs more than a tenth of the near-field time.
+    where the upsampled P2L often costs a tenth of the near-field time or more.
     """
     return float(LIST4_UPSAMPLING) if int(dim) < 3 else 1.0
 
@@ -191,13 +192,13 @@ class List4UpsampledSources:
 
     #: The List 4 source boxes that hold sources, each once.
     source_boxes: np.ndarray
-    #: Shape ``(len(source_boxes), q_order**dim)``: the tree-order source
-    #: index of each box's nodes, in tensor order.
+    #: The tree-order source index of each box's nodes, in tensor order, of
+    #: shape ``(len(source_boxes), q_order**dim)``.
     gather: np.ndarray
     #: The matrix of :func:`list4_upsampling_matrix`.
     matrix: np.ndarray
-    #: Shape ``(dim, len(source_boxes) * fine_q_order**dim)``: the finer
-    #: nodes, box after box.
+    #: The finer nodes, box after box, of shape
+    #: ``(dim, len(source_boxes) * fine_q_order**dim)``.
     sources: np.ndarray
     #: Per box, where its finer nodes start in :attr:`sources` (zero for the
     #: boxes that are not List 4 sources).
@@ -301,7 +302,7 @@ def build_list4_upsampled_sources(
     # Reference coordinates of every node, shape (dim, nbox, n_q_points).
     ref = (sources[:, gather] - centers[:, :, None]) / half_sizes[None, :, None]
     gauss_nodes, _ = _gauss_legendre(q_order)
-    nearest = np.argmin(np.abs(ref[..., None] - gauss_nodes), axis=-1)
+    nearest = np.searchsorted(0.5 * (gauss_nodes[1:] + gauss_nodes[:-1]), ref)
     mismatch = float(np.max(np.abs(ref - gauss_nodes[nearest])))
     if mismatch > _NODE_MATCH_TOL:
         return None, (
@@ -339,10 +340,10 @@ def build_list4_upsampled_sources(
 class List4UpsamplingMixin:
     """Wrangler state for the upsampled List 4 P2L.
 
-    A wrangler calls :meth:`_init_list4_upsampling` from its constructor,
-    after it has set ``quad_order``, and :meth:`_get_list4_upsampled_sources`
-    from ``form_locals``, which falls back to point quadrature when that
-    returns ``None``.
+    A wrangler calls ``_init_list4_upsampling`` from its constructor, after
+    it has set ``quad_order``, and ``_get_list4_upsampled_sources`` from
+    ``form_locals``, which falls back to point quadrature when that returns
+    ``None``.
 
     .. attribute:: list4_upsampling
 
@@ -382,7 +383,7 @@ class List4UpsamplingMixin:
         :arg to_host: callable that returns a host copy of a tree array.
         """
         fine_q_order = self.list4_upsampled_q_order
-        if fine_q_order <= self.quad_order:
+        if fine_q_order <= self.quad_order or int(lists.size) == 0:
             return None
 
         reason = self._list4_upsampling_unsupported_reason()
@@ -412,11 +413,13 @@ class List4UpsamplingMixin:
                 )
                 self._list4_upsampling_cache = (key, upsampled, reason)
 
+        if upsampled is not None and len(upsampled.source_boxes) == 0:
+            return None
         if upsampled is None and not self._list4_upsampling_logged:
             self._list4_upsampling_logged = True
             log(
-                "List 4 sources use point quadrature, not the requested "
-                "upsampling (list4_upsampling=%g): %s",
+                "List 4 sources fall back to point quadrature "
+                "(list4_upsampling=%g): %s",
                 self.list4_upsampling,
                 reason,
             )

@@ -349,8 +349,8 @@ class FPNDSumpyExpansionWrangler(
         from those nodes (:mod:`volumential.wranglers.list4_upsampling`).
         ``1`` gives point quadrature, as for every other far pair. ``None``
         (default) means 1.5 in 1-D and 2-D and 1 in 3-D, where the upsampled
-        P2L costs more than a tenth of the near-field time; pass 1.5 to turn
-        it on there. Kernels that take per-source arguments, such as a
+        P2L often costs a tenth of the near-field time or more; pass 1.5 to
+        turn it on there. Kernels that take per-source arguments, such as a
         directional source derivative, always get point quadrature.
         """
 

@@ -69,19 +69,40 @@ It does let one kind of far-field pair come closer than the others. A box can
 be split while a neighbour of the same size stays a leaf, and that leaf then
 reaches the children of the split box that do not touch it through List 4. It
 is twice the size of such a target box and only half its own size away from
-it; a List 2 or List 3 source is never closer than its own size. The far field
-integrates it like every other source, by point quadrature at its nodes, and
-at half a box size that quadrature is much worse. On 2-D trees graded over two
-or three levels, at `q_order` 4 to 8, the error these pairs add is 7 to 2800
-times the error of the far pairs one to two source sizes away, and the gap
-grows with `q_order`.
+it; a List 2 or List 3 source is never closer than its own size. Point
+quadrature at its nodes is much worse at half a box size: on 2-D trees graded
+over two or three levels, at `q_order` 4 to 8, its error is 7 to 2800 times the
+error of the far pairs one to two source sizes away, and the gap grows with
+`q_order`.
 
-In the total error they are a minor term so far. On a 16 x 16 tree refined
-twice around a narrow source (535 leaves on levels 4 to 6), at `q_order` 8 they
-account for 21% of the max error, which is 2.9e-9, and 2% of the relative L2
-error; at `q_order` 4 they do not show. Integrating them from an upsampled
-source is [#178](https://github.com/xywei/volumential/issues/178), which has
-the measurements.
+So the far field integrates these sources from an upsampled rule: the box's
+density is interpolated to a Gauss rule with `ceil(1.5 * q_order)` nodes per
+axis, and the local expansion is formed from those nodes
+({mod}`volumential.wranglers.list4_upsampling`). That brings the error of these
+pairs below that of the other far pairs. The wranglers' `list4_upsampling` sets
+the factor 1.5, and `1` gives point quadrature at the box's own nodes. The
+default is 1.5 in 2-D, where the finer rule added 1.7 to 4% to the near-field
+time on a CPU device, and 1 in 3-D, where it added 1.5 to 45%, and 10% or more
+on six of the ten trees and orders measured; pass `list4_upsampling=1.5` to
+turn it on there.
+
+What it changes in the total error depends on how much of the tree is grading.
+The max error against the exact solution, for 2-D Laplace at FMM order 25 and
+the two-Gaussian source of the graded-tree test, on a CPU device:
+
+| tree | leaves | `q_order` | point quadrature | upsampled |
+|---|---|---|---|---|
+| 16 x 16, refined twice around the narrow Gaussian | 535 | 8 | 2.90e-9 | 2.28e-9 |
+| 32 x 32, refined three times | 2788 | 4 | 1.02e-6 | 3.80e-7 |
+| | | 6 | 1.58e-8 | 8.49e-10 |
+| | | 8 | 2.96e-10 | 3.50e-11 |
+| 128 x 128, refined three times | 41374 | 4 | 1.15e-7 | 2.60e-9 |
+| | | 6 | 1.71e-9 | 1.03e-11 |
+| | | 8 | 3.11e-11 | 1.19e-11 |
+
+The first tree is the one of the graded-tree test; there the List 4 pairs were
+21% of the max error at `q_order` 8 and did not show at lower orders. The
+measurements are in [#178](https://github.com/xywei/volumential/issues/178).
 
 ## Where symmetry enters
 
