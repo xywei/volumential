@@ -101,8 +101,10 @@ the two-Gaussian source of the graded-tree test, on a CPU device:
 | | | 8 | 3.11e-11 | 1.19e-11 |
 
 The first tree is the one of the graded-tree test; there the List 4 pairs were
-21% of the max error at `q_order` 8 and did not show at lower orders. The
-measurements are in [#178](https://github.com/xywei/volumential/issues/178).
+21% of the max error at `q_order` 8 and did not show at lower orders
+([#178](https://github.com/xywei/volumential/issues/178)). The measurements,
+the choice of the rule and its cost are in
+[#204](https://github.com/xywei/volumential/pull/204).
 
 ## Where symmetry enters
 

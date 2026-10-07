@@ -11,6 +11,20 @@ for what will have to change when tagging starts.
 ### October 2026
 
 Tables and numerics
+: [#204](https://github.com/xywei/volumential/pull/204) — form the local
+  expansions of List 4 pairs from upsampled sources. On a 2:1 tree such a
+  source box is twice the size of the target box and only half its own size
+  away from it, where point quadrature at its nodes is much less accurate than
+  for the other far pairs. Its density is now interpolated to a Gauss rule with
+  `ceil(1.5 * q_order)` nodes per axis, and P2L runs from those nodes; both
+  wranglers take `list4_upsampling`, and `1` restores point quadrature. **What
+  changes for existing callers:** in 1-D and 2-D the upsampling is on by
+  default, so results on graded trees change; uniform trees have no List 4 and
+  do not. On the graded-tree test the max error at `q_order` 8 falls by 21%,
+  and on trees with more grading by up to a factor of 166, for 1.7 to 4% of
+  the near-field time. In 3-D it added 1.5 to 45% and is opt-in
+  (`list4_upsampling=1.5`) ({ref}`graded-tree-list4`,
+  [#178](https://github.com/xywei/volumential/issues/178)).
 : [#203](https://github.com/xywei/volumential/pull/203) — rebuild the 2D
   tables that a cache got from the scalar builder before #200 for a kernel that
   can be complex valued. Such a table holds the real part of the right table:
