@@ -21,6 +21,12 @@ configuration is hashed into the table-cache fingerprint, so changing a
 `DuffyBuildConfig` field invalidates cached tables by itself — which is exactly
 why the build-routing strictness switch of
 {doc}`../user-guide/table-build-routing` is an environment variable instead.
+A fix that changes the values a DuffyRadial builder produces bumps
+`DUFFY_BUILDER_REVISION` in `volumential/nearfield_potential_table.py`, not
+the table-cache schema version, which describes the layout of the cache file.
+Every table records the revision it was built at, and the table manager's
+loader reads the cached tables the fix affects, at an older revision or none,
+as cache misses, so those are rebuilt and the rest of the cache stays valid.
 
 ## Status
 

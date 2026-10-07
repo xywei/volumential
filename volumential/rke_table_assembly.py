@@ -420,12 +420,13 @@ def _clear_inherited_build_routing(table) -> None:
     ``"scalar-fallback"`` -- and a reloaded assembled table would claim its
     values came from Duffy quadrature that never touched them.  No
     :data:`~volumential.nearfield_potential_table.DUFFY_BUILD_ROUTINGS` value
-    describes an RKE assembly, so clear the pair to *None*; the serializer
-    then omits both keys and
+    describes an RKE assembly, so clear the routing, its fallback reason and
+    the ``builder_revision`` recorded with them to *None*; the serializer
+    then omits all three keys and
     :func:`volumential.opcounters.direct_build_routing` reports ``unknown``,
     which is the honest answer for data no DuffyRadial builder produced.
     """
-    for attr in ("build_routing", "build_fallback_reason"):
+    for attr in ("build_routing", "build_fallback_reason", "builder_revision"):
         if hasattr(table, attr):
             setattr(table, attr, None)
 

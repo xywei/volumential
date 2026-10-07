@@ -8,6 +8,28 @@ for what will have to change when tagging starts.
 
 ## Unreleased
 
+### October 2026
+
+Tables and numerics
+: [#203](https://github.com/xywei/volumential/pull/203) — rebuild the complex
+  2D tables that a cache got from the scalar builder before #200. Such a table
+  holds the real part of the right table, with an imaginary part of zero, and
+  loaded as if nothing were wrong. Every DuffyRadial build now records
+  `table.builder_revision` with its routing, and the cache stores it with the
+  payload. **What happens to an existing cache:** a 2D DuffyRadial table that
+  records no revision, whose routing is not `batched`, whose entries are
+  complex with every imaginary part exactly zero, and whose kernel can be
+  complex valued is a cache miss: the first `get_table` rebuilds it, logs a
+  `WARNING` naming it, and stores the rebuilt table with the revision. That
+  takes in some tables that were right, such as complex 2D Yukawa tables, whose
+  imaginary part is zero in fact; they are rebuilt once. A manager opened
+  read-only cannot rebuild, so `get_table` raises a `RuntimeError` for such a
+  table instead of serving it. Everything else in the cache — real tables, 3D
+  tables, batched builds, tables with a nonzero imaginary part, registered
+  external tables — loads as before, and the cache schema version does not
+  change ({doc}`user-guide/table-build-routing`,
+  [#201](https://github.com/xywei/volumential/issues/201)).
+
 ### September 2026
 
 Documentation

@@ -161,9 +161,11 @@ def test_series_assembly_does_not_inherit_the_channel_build_routing(tmp_path):
         ["laplace"], None, False,
     )["laplace"]
     assert base.build_routing in DUFFY_BUILD_ROUTINGS
+    assert base.builder_revision is not None
 
     assert table.build_routing is None
     assert table.build_fallback_reason is None
+    assert table.builder_revision is None
     assert opcounters.direct_build_routing(table) == "unknown"
 
     cache = tmp_path / "registered-routing.sqlite"
@@ -245,6 +247,7 @@ def test_windowed_assembly_clears_the_build_routing_too(assembled_yukawa):
     table, _ = assembled_yukawa
     assert table.build_routing is None
     assert table.build_fallback_reason is None
+    assert table.builder_revision is None
     assert opcounters.direct_build_routing(table) == "unknown"
 
 

@@ -88,6 +88,7 @@ EXTERNAL_TABLE_BUILD_METHOD = "ExternalAssembly"
 _PAYLOAD_OWNED_ATTRIBUTES = frozenset({
     "build_routing",
     "build_fallback_reason",
+    "builder_revision",
 })
 _ACCEPTED_BUILD_METHODS = (_TABLE_BUILD_METHOD, EXTERNAL_TABLE_BUILD_METHOD)
 
@@ -266,6 +267,14 @@ def _serialize_table_payload(table):
     build_fallback_reason = getattr(table, "build_fallback_reason", None)
     if build_fallback_reason is not None:
         payload["build_fallback_reason"] = np.array([str(build_fallback_reason)])
+    # The revision of the builder, so the loader can tell which builder
+    # fixes a cached table predates (_stale_complex_2d_scalar_build).
+    # Absent from payloads written before it was recorded.
+    builder_revision = getattr(table, "builder_revision", None)
+    if builder_revision is not None:
+        payload["builder_revision"] = np.array(
+            [int(builder_revision)], dtype=np.int64
+        )
 
     if table_data_is_symmetry_reduced:
         if hasattr(table, "get_reduced_table_data"):
@@ -295,6 +304,15 @@ def _deserialize_table_payload(blob):
 
 class UnverifiedBuildRoutingError(RuntimeError):
     """A cached table's recorded build routing is refused by strict mode."""
+
+
+def _request_identity(table_request):
+    """The fields that name a cache slot, for messages about its table."""
+    return (
+        f"dim={table_request.dim} kernel={table_request.kernel_type} "
+        f"q_order={table_request.q_order} "
+        f"source_box_level={table_request.source_box_level}"
+    )
 
 
 def _refuse_unverified_build_routing(table, table_request, build_method=None):
@@ -345,11 +363,7 @@ def _refuse_unverified_build_routing(table, table_request, build_method=None):
     if recognized and routing != "scalar-fallback":
         return
 
-    identity = (
-        f"dim={table_request.dim} kernel={table_request.kernel_type} "
-        f"q_order={table_request.q_order} "
-        f"source_box_level={table_request.source_box_level}"
-    )
+    identity = _request_identity(table_request)
     if routing == "scalar-fallback":
         reason = opcounters.direct_build_fallback_reason(table)
         detail = (
@@ -375,6 +389,73 @@ def _refuse_unverified_build_routing(table, table_request, build_method=None):
         "force_recompute=True (which will fail loudly if the batched build "
         f"still cannot run), or unset {DUFFY_NO_FALLBACK_ENV_VAR} to accept "
         "the cached data."
+    )
+
+
+#: The first :data:`~volumential.nearfield_potential_table.DUFFY_BUILDER_REVISION`
+#: whose 2D scalar rule keeps complex values.
+_COMPLEX_2D_SCALAR_FIX_REVISION = 1
+
+
+def _stale_complex_2d_scalar_build(
+        table, table_request, build_method, payload, sumpy_kernel):
+    """Why a cached table is a complex 2D scalar build from before the fix
+    of #180, or *None* when it is not one.
+
+    Until builder revision 1 the 2D scalar DuffyRadial rule cast every
+    integrand value to ``float``, so a complex table it built holds the real
+    part of the right table and an imaginary part of exactly zero.  The
+    payload checksums cleanly, and the routing alone does not date the
+    build.  The loader reads such a table as a cache miss, which
+    ``get_table`` rebuilds, when all of these hold:
+
+    - it is a DuffyRadial table of dimension 2: an external assembly never
+      went through the rule, and the 3D rule always kept complex values;
+    - it records no builder revision, or one older than the fix;
+    - its routing is not ``batched``, the one builder never affected; an
+      ``unknown`` or unrecognized routing cannot be shown to be batched;
+    - its entries are complex and every imaginary part is zero, which is
+      what the cast leaves, so a table with any nonzero imaginary part was
+      not built by the old rule;
+    - its kernel can be complex valued: the cast loses nothing for a kernel
+      whose ``is_complex_valued`` is false, and a load without a sumpy
+      kernel, or with one that does not say, cannot tell.
+
+    2D Yukawa meets all five, since sumpy reports it as complex valued and
+    its imaginary part is zero in fact, so a complex Yukawa table cached
+    before the fix is rebuilt once too: nothing in the cache tells it apart
+    from a Helmholtz table that lost its imaginary part.  The rebuilt table
+    records the revision and loads from then on.
+    """
+    if build_method == EXTERNAL_TABLE_BUILD_METHOD or table_request.dim != 2:
+        return None
+
+    revision = getattr(table, "builder_revision", None)
+    if revision is not None and revision >= _COMPLEX_2D_SCALAR_FIX_REVISION:
+        return None
+
+    from volumential import opcounters
+
+    routing = opcounters.direct_build_routing(table)
+    if routing == "batched":
+        return None
+
+    values = np.asarray(_payload_checksum_arrays(payload)[1])
+    if not np.iscomplexobj(values) or np.any(values.imag):
+        return None
+
+    # None when there is no kernel or it does not say: possibly complex
+    complex_valued = getattr(sumpy_kernel, "is_complex_valued", None)
+    if complex_valued is not None and not complex_valued:
+        return None
+
+    return (
+        f"cached near-field table [{_request_identity(table_request)}] may "
+        "hold only the real part of a complex table: its routing is "
+        f"{routing!r} and it records no builder revision of "
+        f"{_COMPLEX_2D_SCALAR_FIX_REVISION} or later, so it predates the fix "
+        "that keeps complex values on the 2D scalar DuffyRadial path; "
+        "discarding the cached data"
     )
 
 
@@ -1790,7 +1871,7 @@ class NearFieldInteractionTableManager:
                     **request_kwargs,
                 )
 
-            except KeyError:
+            except KeyError as exc:
                 import traceback
 
                 logger.debug(traceback.format_exc())
@@ -1799,7 +1880,7 @@ class NearFieldInteractionTableManager:
                     raise RuntimeError(
                         "Cached table data is unavailable in read-only mode and "
                         "cannot be recomputed."
-                    )
+                    ) from exc
 
                 logger.info("Recomputing due to cache miss/corruption.")
                 is_recomputed = True
@@ -1987,6 +2068,8 @@ class NearFieldInteractionTableManager:
                 table.build_fallback_reason = str(
                     payload["build_fallback_reason"][0]
                 )
+            if "builder_revision" in payload:
+                table.builder_revision = int(payload["builder_revision"].item())
 
         except KeyError:
             raise
@@ -2107,6 +2190,17 @@ class NearFieldInteractionTableManager:
                 continue
             setattr(table, atkey, atval)
         t_kwargs_load_end = time.perf_counter()
+
+        # A cache miss like the checks above, so before the strict-mode
+        # refusal: a table known to hold the wrong values is rebuilt, not
+        # refused with a request to rebuild it.
+        stale = _stale_complex_2d_scalar_build(
+            table, table_request, stored_build_method, payload,
+            kernel_bundle.sumpy_kernel,
+        )
+        if stale is not None:
+            logger.warning("%s", stale)
+            raise KeyError(stale)
 
         # Last, after every compatibility check above.  Those raise KeyError,
         # which get_table reads as a cache miss and recomputes; refusing the
