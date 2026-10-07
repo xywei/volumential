@@ -770,9 +770,65 @@ def test_a_complex_2d_scalar_table_cached_before_the_fix_is_rebuilt(tmp_path):
     np.testing.assert_array_equal(entries(loaded), right)
 
 
+def _as_cached_by_a_real_manager_before_the_complex_fix(payload):
+    """*payload* as a real manager's 2D scalar builder wrote it before #200
+    fixed #180: real arrays holding the real part, and no builder revision."""
+    payload = _without_builder_revision(payload)
+    for key in (
+        "reduced_data", "data", "mode_normalizers",
+        "kernel_exterior_normalizers",
+    ):
+        if key in payload:
+            payload[key] = np.ascontiguousarray(payload[key].real)
+    return payload
+
+
+def test_a_real_2d_scalar_table_of_a_complex_kernel_is_rebuilt_too(
+        tmp_path, caplog):
+    """A real manager's 2D Helmholtz table from before the fix is stale too.
+
+    The scalar builder of a real manager stored the real part of a complex
+    kernel's table, as real entries.  The cache key does not hold the dtype,
+    so a complex manager read that payload as a complex table with a zero
+    imaginary part, and a real manager served it as it was.
+    """
+    from sumpy.kernel import HelmholtzKernel
+
+    kwargs = {"sumpy_knl": HelmholtzKernel(2), "k": 1.5}
+    cache_file = tmp_path / "nft-real-helmholtz-before-the-complex-fix.sqlite"
+
+    def get(dtype):
+        with NFTable(
+            str(cache_file), dtype=dtype, progress_bar=False
+        ) as table_manager:
+            return table_manager.get_table(2, "Helmholtz", q_order=1, **kwargs)
+
+    def entries(table):
+        return np.array(table.get_reduced_table_data()[1])
+
+    right = entries(get(np.complex128)[0])
+    _rewrite_cached_payloads(
+        cache_file, _as_cached_by_a_real_manager_before_the_complex_fix
+    )
+
+    # A real manager cannot rebuild it: the scalar builder now refuses a
+    # real table of a kernel whose imaginary part is not negligible.
+    caplog.clear()
+    with pytest.raises(RuntimeError, match="non-negligible imaginary"):
+        get(np.float64)
+    assert "only the real part" in caplog.text
+
+    # A complex manager rebuilds it.
+    caplog.clear()
+    rebuilt, is_recomputed = get(np.complex128)
+    assert is_recomputed
+    assert "only the real part" in caplog.text
+    np.testing.assert_array_equal(entries(rebuilt), right)
+
+
 #: A complex 2D scalar build from before the fix: Helmholtz, complex entries
 #: whose imaginary part is zero, no builder revision.  Each case below changes
-#: one input.
+#: one input, or two.
 _PRE_FIX_SCALAR_BUILD = {
     "dim": 2,
     "build_method": "DuffyRadial",
@@ -808,7 +864,10 @@ _PRE_FIX_SCALAR_BUILD = {
         ({"revision": 1}, False),
         ({"dim": 3}, False),
         ({"build_method": "ExternalAssembly"}, False),
-        ({"values": np.array([1.0, -2.0, 0.5])}, False),
+        # a real payload, as a real manager wrote it; a complex manager
+        # reads it as complex entries with a zero imaginary part
+        ({"values": np.array([1.0, -2.0, 0.5])}, True),
+        ({"values": np.array([1.0, -2.0, 0.5]), "kernel": "laplace"}, False),
         ({"values": np.array([1.0, -2.0 + 1.0e-300j, 0.5])}, False),
         ({"kernel": "laplace"}, False),
         ({"kernel": "laplace-dx"}, False),

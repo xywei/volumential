@@ -399,33 +399,40 @@ _COMPLEX_2D_SCALAR_FIX_REVISION = 1
 
 def _stale_complex_2d_scalar_build(
         table, table_request, build_method, payload, sumpy_kernel):
-    """Why a cached table is a complex 2D scalar build from before the fix
-    of #180, or *None* when it is not one.
+    """Why a cached table is a 2D scalar build of a complex kernel from
+    before the fix of #180, or *None* when it is not one.
 
-    Until builder revision 1 the 2D scalar DuffyRadial rule cast every
-    integrand value to ``float``, so a complex table it built holds the real
-    part of the right table and an imaginary part of exactly zero.  The
-    payload checksums cleanly, and the routing alone does not date the
-    build.  The loader reads such a table as a cache miss, which
-    ``get_table`` rebuilds, when all of these hold:
+    Before builder revision 1 the 2D scalar DuffyRadial rule cast every
+    integrand value to ``float``, so a table it built holds the real part of
+    the right table: as real entries in a real table, or as entries with an
+    imaginary part of exactly zero in a complex one.  The payload loads
+    cleanly, and the routing alone does not date the build.  Nor does the
+    payload's dtype say which manager will read it: the cache key does not
+    hold the dtype, and a complex manager reads a real payload as complex
+    entries with a zero imaginary part.  The loader reads such a table as a
+    cache miss, which ``get_table`` rebuilds, when all of these hold:
 
     - it is a DuffyRadial table of dimension 2: an external assembly never
       went through the rule, and the 3D rule always kept complex values;
     - it records no builder revision, or one older than the fix;
     - its routing is not ``batched``, the one builder never affected; an
       ``unknown`` or unrecognized routing cannot be shown to be batched;
-    - its entries are complex and every imaginary part is zero, which is
-      what the cast leaves, so a table with any nonzero imaginary part was
-      not built by the old rule;
+    - its entries are real, or complex with every imaginary part zero, which
+      is what the cast leaves, so a table with any nonzero imaginary part
+      was not built by the old rule;
     - its kernel can be complex valued: the cast loses nothing for a kernel
       whose ``is_complex_valued`` is false, and a load without a sumpy
       kernel, or with one that does not say, cannot tell.
 
     2D Yukawa meets all five, since sumpy reports it as complex valued and
-    its imaginary part is zero in fact, so a complex Yukawa table cached
-    before the fix is rebuilt once too: nothing in the cache tells it apart
-    from a Helmholtz table that lost its imaginary part.  The rebuilt table
-    records the revision and loads from then on.
+    its imaginary part is zero in fact, so a Yukawa table cached before the
+    fix is rebuilt once too: nothing in the cache tells it apart from a
+    Helmholtz table that lost its imaginary part.  The rebuilt table records
+    the revision and loads from then on.  A real manager cannot rebuild a
+    table of a kernel whose imaginary part is not negligible, such as 2D
+    Helmholtz: the scalar builder now refuses one, as the batched builder
+    always did, so ``get_table`` raises where it used to serve the real
+    part.
     """
     if build_method == EXTERNAL_TABLE_BUILD_METHOD or table_request.dim != 2:
         return None
@@ -441,7 +448,7 @@ def _stale_complex_2d_scalar_build(
         return None
 
     values = np.asarray(_payload_checksum_arrays(payload)[1])
-    if not np.iscomplexobj(values) or np.any(values.imag):
+    if np.iscomplexobj(values) and np.any(values.imag):
         return None
 
     # None when there is no kernel or it does not say: possibly complex
@@ -451,8 +458,8 @@ def _stale_complex_2d_scalar_build(
 
     return (
         f"cached near-field table [{_request_identity(table_request)}] may "
-        "hold only the real part of a complex table: its routing is "
-        f"{routing!r} and it records no builder revision of "
+        "hold only the real part of its complex-valued kernel's table: its "
+        f"routing is {routing!r} and it records no builder revision of "
         f"{_COMPLEX_2D_SCALAR_FIX_REVISION} or later, so it predates the fix "
         "that keeps complex values on the 2D scalar DuffyRadial path; "
         "discarding the cached data"

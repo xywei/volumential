@@ -11,21 +11,26 @@ for what will have to change when tagging starts.
 ### October 2026
 
 Tables and numerics
-: [#203](https://github.com/xywei/volumential/pull/203) — rebuild the complex
-  2D tables that a cache got from the scalar builder before #200. Such a table
-  holds the real part of the right table, with an imaginary part of zero, and
-  loaded as if nothing were wrong. Every DuffyRadial build now records
-  `table.builder_revision` with its routing, and the cache stores it with the
-  payload. **What happens to an existing cache:** a 2D DuffyRadial table that
-  records no revision, whose routing is not `batched`, whose entries are
-  complex with every imaginary part exactly zero, and whose kernel can be
-  complex valued is a cache miss: the first `get_table` rebuilds it, logs a
-  `WARNING` naming it, and stores the rebuilt table with the revision. That
-  takes in some tables that were right, such as complex 2D Yukawa tables, whose
-  imaginary part is zero in fact; they are rebuilt once. A manager opened
-  read-only cannot rebuild, so `get_table` raises a `RuntimeError` for such a
-  table instead of serving it. Everything else in the cache — real tables, 3D
-  tables, batched builds, tables with a nonzero imaginary part, registered
+: [#203](https://github.com/xywei/volumential/pull/203) — rebuild the 2D
+  tables that a cache got from the scalar builder before #200 for a kernel that
+  can be complex valued. Such a table holds the real part of the right table:
+  real entries in a real table, which a complex manager also reads, or an
+  imaginary part of zero in a complex one. It loaded as if nothing were wrong.
+  Every DuffyRadial build now records `table.builder_revision` with its
+  routing, and the cache stores it with the payload. **What happens to an
+  existing cache:** a 2D DuffyRadial table that records no revision, whose
+  routing is not `batched`, whose entries are real or complex with every
+  imaginary part exactly zero, and whose kernel can be complex valued is a
+  cache miss: the first `get_table` rebuilds it, logs a `WARNING` naming it,
+  and stores the rebuilt table with the revision. That takes in some tables
+  that were right, such as 2D Yukawa tables, whose imaginary part is zero in
+  fact; they are rebuilt once. A real manager cannot rebuild a 2D Helmholtz
+  table, since the scalar builder now refuses one, so its `get_table` raises a
+  `RuntimeError` where it used to serve the real part; a complex manager
+  rebuilds it as a complex table. A manager opened read-only cannot rebuild, so
+  `get_table` raises a `RuntimeError` for any such table instead of serving it.
+  Everything else in the cache — tables of real-valued kernels such as Laplace,
+  3D tables, batched builds, tables with a nonzero imaginary part, registered
   external tables — loads as before, and the cache schema version does not
   change ({doc}`user-guide/table-build-routing`,
   [#201](https://github.com/xywei/volumential/issues/201)).
