@@ -456,10 +456,16 @@ def _stale_complex_2d_scalar_build(
     if complex_valued is not None and not complex_valued:
         return None
 
+    kernel_note = (
+        "" if sumpy_kernel is not None
+        else " (no sumpy kernel was given to say whether it is real valued; "
+        "pass sumpy_knl)"
+    )
     return (
         f"cached near-field table [{_request_identity(table_request)}] may "
-        "hold only the real part of its complex-valued kernel's table: its "
-        f"routing is {routing!r} and it records no builder revision of "
+        "hold only the real part of the table of a kernel that can be "
+        f"complex valued{kernel_note}: its routing is {routing!r} and it "
+        "records no builder revision of "
         f"{_COMPLEX_2D_SCALAR_FIX_REVISION} or later, so it predates the fix "
         "that keeps complex values on the 2D scalar DuffyRadial path; "
         "discarding the cached data"

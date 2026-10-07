@@ -921,6 +921,7 @@ def test_which_cached_tables_predate_the_complex_fix(change, stale):
         assert reason is not None
         assert "only the real part" in reason
         assert "discarding the cached data" in reason
+        assert ("pass sumpy_knl" in reason) == (kernel is None)
     else:
         assert reason is None
 
