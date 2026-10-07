@@ -75,6 +75,22 @@ DUFFY_BUILD_ROUTINGS = (
     "scalar-fallback",
 )
 
+#: Revision of the DuffyRadial builders.  Every build records it on the table
+#: as ``table.builder_revision``, next to the routing, and the cache stores it
+#: with the payload, so a cached table says which builder fixes it predates.
+#: Bump it whenever a fix changes the values a builder produces, add the fix
+#: to this list, and have the table manager's loader read the cached tables
+#: the fix affects, and that record an older revision or none, as cache
+#: misses:
+#:
+#: 1. The 2D scalar rule keeps complex values
+#:    (`#180 <https://github.com/xywei/volumential/issues/180>`__). Before,
+#:    it cast every integrand value to ``float``, so a complex 2D table built
+#:    by the scalar builder held only the real part.
+#:
+#: A payload cached before revisions were recorded has none.
+DUFFY_BUILDER_REVISION = 1
+
 
 def _duffy_fallback_is_disabled():
     """Whether :data:`DUFFY_NO_FALLBACK_ENV_VAR` forbids the scalar fallback."""
@@ -1345,11 +1361,13 @@ class NearFieldInteractionTable:
         self.table_data_is_symmetry_reduced = False
 
         # Which DuffyRadial builder actually produced this table's data (one
-        # of DUFFY_BUILD_ROUTINGS), and, when the batched builder failed and
-        # the scalar builder took over, why.  Both are persisted with the
-        # table payload so a cached table remembers how it was built.
+        # of DUFFY_BUILD_ROUTINGS), when the batched builder failed and the
+        # scalar builder took over, why, and the DUFFY_BUILDER_REVISION of
+        # the builder.  All three are persisted with the table payload so a
+        # cached table remembers how it was built.
         self.build_routing = None
         self.build_fallback_reason = None
+        self.builder_revision = None
 
     # }}} End constructor
 
@@ -2554,7 +2572,8 @@ class NearFieldInteractionTable:
 
         ``routing`` is one of :data:`DUFFY_BUILD_ROUTINGS`; ``reason`` is the
         ``"<ExceptionType>: <message>"`` that forced a ``scalar-fallback`` and
-        is ``None`` for every other routing.
+        is ``None`` for every other routing.  The builder's
+        :data:`DUFFY_BUILDER_REVISION` is recorded with it.
         """
         routing = str(routing)
         if routing not in DUFFY_BUILD_ROUTINGS:
@@ -2564,6 +2583,7 @@ class NearFieldInteractionTable:
             )
         self.build_routing = routing
         self.build_fallback_reason = None if reason is None else str(reason)
+        self.builder_revision = DUFFY_BUILDER_REVISION
 
     def _supports_batched_duffy_builder(self):
         if self.integral_knl is None:

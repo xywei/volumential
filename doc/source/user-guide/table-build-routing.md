@@ -40,6 +40,11 @@ never a batched attempt looks exactly like a fast one in a default log.
   and, for a fallback, `table.build_fallback_reason`. Both are persisted with the cached
   payload, so a warm, cache-loaded table still reports how it was originally
   built (`volumential.opcounters.direct_build_routing`).
+- With them the builder records `table.builder_revision`, the
+  `DUFFY_BUILDER_REVISION` of the builder that ran, which dates the build
+  against the builder fixes that changed its values. A payload cached before
+  revisions were recorded loads with `None`; see "Complex kernels on the
+  scalar path" below for what the loader does with that.
 - `volumential.opcounters.direct_build_routing` is what measurement code
   reads to emit the routing as a `direct_build_routing` CSV column, which is
   why it belongs in the record of any table-timing run
@@ -105,10 +110,39 @@ Until [#180](https://github.com/xywei/volumential/issues/180) the 2D rule cast
 every integrand value to `float` instead. For 2D Yukawa that was right and cost
 a `ComplexWarning` per quadrature node. For 2D Helmholtz it was wrong: a table
 built by the scalar builder in 2D held the real part of the right table, with
-an imaginary part of zero. Such a table can still sit in a cache written
-before the fix. Its routing is `scalar`, `scalar-adaptive` or
-`scalar-fallback`, so rebuild any complex 2D table with one of those routings,
-with `force_recompute=True`. The 3D rule always kept complex values.
+an imaginary part of zero in a complex table, and silently in a real one. Such
+a table can still sit in a cache written before the fix, and it loads like any
+other. The cache key does not hold the dtype either, so a complex manager reads
+a real manager's payload as complex entries with a zero imaginary part. The 3D
+rule and the batched builder always kept complex values.
+
+Since [#201](https://github.com/xywei/volumential/issues/201) the manager
+reads such a table as a cache miss, so `get_table` rebuilds it and logs a
+`WARNING` naming it. A cached table is taken for one when all of these hold:
+
+- it is a 2D DuffyRadial table (not a registered `ExternalAssembly`);
+- it records no `builder_revision`, or one older than 1, the first that keeps
+  complex values;
+- its routing is not `batched`: `scalar`, `scalar-adaptive`,
+  `scalar-fallback`, or `unknown` for a payload older than routing recording;
+- its entries are real, or complex with every imaginary part exactly zero,
+  which is what the cast left; and
+- its kernel can be complex valued: the sumpy kernel's `is_complex_valued` is
+  true, or there is no sumpy kernel to ask, as when a kernel type the manager
+  does not know is loaded without `sumpy_knl`.
+
+A table rebuilt this way records the revision and loads from then on. Some
+tables that were right are rebuilt once too, since nothing in the cache tells
+them apart: a 2D Yukawa table, real or complex, whose imaginary part is zero in
+fact, and a table of any other complex-valued kernel whose entries happen to be
+real. A real manager cannot rebuild a table of a kernel whose imaginary part
+is not negligible, 2D Helmholtz among them: the scalar builder now refuses one,
+so `get_table` raises its `RuntimeError` where it used to serve the real part.
+A manager opened read-only cannot rebuild at all, so `get_table` raises a
+`RuntimeError` there, whose cause names the table; `load_saved_table` raises
+the `KeyError` of any other cache miss. Tables of real-valued kernels such as
+Laplace, 3D tables, batched builds and tables with any nonzero imaginary part
+load as before.
 
 ## Complex exponentials in the generated quadrature kernel
 

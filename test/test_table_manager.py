@@ -268,6 +268,8 @@ def test_batched_build_routing_survives_the_cache_round_trip(
     assert loaded.build_routing == "batched"
     assert loaded.build_fallback_reason is None
     assert opcounters.direct_build_routing(loaded) == "batched"
+    assert built.builder_revision is not None
+    assert loaded.builder_revision == built.builder_revision
 
 
 def _build_fallback_table_cache(cache_file, queue):
@@ -501,6 +503,7 @@ def test_public_batched_builder_records_its_own_routing(monkeypatch):
         progress_bar=False,
     )
     assert table.build_routing is None
+    assert table.builder_revision is None
 
     def fake_batched_values(
         queue, invariant_info, local_entry_indices, *args, **kwargs
@@ -515,6 +518,7 @@ def test_public_batched_builder_records_its_own_routing(monkeypatch):
     assert table.is_built
     assert table.build_routing == "batched"
     assert table.build_fallback_reason is None
+    assert table.builder_revision == npt.DUFFY_BUILDER_REVISION
     assert opcounters.direct_build_routing(table) == "batched"
 
 
@@ -644,6 +648,282 @@ def test_strict_mode_accepts_a_cached_batched_build(
         )
     assert not is_recomputed
     assert loaded.build_routing == "batched"
+
+
+def _rewrite_cached_payloads(cache_file, edit):
+    """Replace the payload of every row of *cache_file* by ``edit(payload)``.
+
+    *edit* takes and returns the deserialized payload, a dict of arrays.
+    """
+    import sqlite3
+    from io import BytesIO
+
+    from volumential.table_manager import _deserialize_table_payload
+
+    conn = sqlite3.connect(str(cache_file))
+    try:
+        rows = conn.execute(
+            "SELECT rowid, payload FROM nearfield_cache"
+        ).fetchall()
+        for rowid, blob in rows:
+            payload = edit(_deserialize_table_payload(blob))
+            with BytesIO() as f:
+                np.savez(f, **payload)
+                conn.execute(
+                    "UPDATE nearfield_cache SET payload=? WHERE rowid=?",
+                    (f.getvalue(), rowid),
+                )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _without_builder_revision(payload):
+    """*payload* as a build written before builder revisions were recorded."""
+    payload = dict(payload)
+    payload.pop("builder_revision", None)
+    return payload
+
+
+def _as_cached_before_the_complex_fix(payload):
+    """*payload* as the 2D scalar builder wrote it before #200 fixed #180:
+    the real part of the entries, and no builder revision."""
+    payload = _without_builder_revision(payload)
+    key = "reduced_data" if "reduced_data" in payload else "data"
+    payload[key] = payload[key].real.astype(payload[key].dtype)
+    return payload
+
+
+def test_a_complex_2d_scalar_table_cached_before_the_fix_is_rebuilt(tmp_path):
+    """A cached complex 2D table that lost its imaginary part is rebuilt (#201).
+
+    Until #200 fixed #180, the 2D scalar DuffyRadial rule cast every
+    integrand value to ``float``, so a complex 2D table built by the scalar
+    builder held the real part of the right table.  Its cache entry loaded
+    cleanly and its routing was an ordinary ``scalar``, so a warm run went on
+    using it.
+    """
+    import sqlite3
+    from contextlib import closing
+
+    from sumpy.kernel import HelmholtzKernel
+
+    from volumential.nearfield_potential_table import DUFFY_BUILDER_REVISION
+
+    kwargs = {"sumpy_knl": HelmholtzKernel(2), "k": 1.5}
+    cache_file = tmp_path / "nft-helmholtz-before-the-complex-fix.sqlite"
+
+    def manager(**manager_kwargs):
+        return NFTable(
+            str(cache_file), dtype=np.complex128, progress_bar=False,
+            **manager_kwargs,
+        )
+
+    def get(**manager_kwargs):
+        with manager(**manager_kwargs) as table_manager:
+            return table_manager.get_table(2, "Helmholtz", q_order=1, **kwargs)
+
+    def entries(table):
+        return np.array(table.get_reduced_table_data()[1])
+
+    # no queue, so the scalar builder
+    built, _ = get()
+    assert built.build_routing == "scalar"
+    assert built.builder_revision == DUFFY_BUILDER_REVISION
+    right = entries(built)
+    # the part the old rule dropped is not small
+    assert np.max(np.abs(right.imag)) > 1e-2
+
+    # A table built after the fix, but cached before the revision was
+    # recorded, keeps its imaginary part, and loads as it is.
+    _rewrite_cached_payloads(cache_file, _without_builder_revision)
+    loaded, is_recomputed = get()
+    assert not is_recomputed
+    assert loaded.builder_revision is None
+    np.testing.assert_array_equal(entries(loaded), right)
+
+    _rewrite_cached_payloads(cache_file, _as_cached_before_the_complex_fix)
+
+    # A cache kwarg of the same name does not vouch for the table: the
+    # payload owns the revision.
+    with closing(sqlite3.connect(str(cache_file))) as conn, conn:
+        conn.execute(
+            "INSERT INTO nearfield_cache_kwargs (dim, kernel_type, q_order, "
+            "source_box_level, key, value_type, value_text) "
+            "VALUES (2, 'Helmholtz', 1, 0, 'builder_revision', 'int', ?)",
+            (str(DUFFY_BUILDER_REVISION),),
+        )
+
+    # read-only, the table cannot be rebuilt, and is refused, not served
+    with pytest.raises(RuntimeError, match="read-only") as refused:
+        get(read_only=True)
+    assert "only the real part" in str(refused.value.__cause__)
+
+    rebuilt, is_recomputed = get()
+    assert is_recomputed
+    np.testing.assert_array_equal(entries(rebuilt), right)
+
+    # the rebuilt entry records the revision, so it loads from now on
+    loaded, is_recomputed = get()
+    assert not is_recomputed
+    assert loaded.builder_revision == DUFFY_BUILDER_REVISION
+    np.testing.assert_array_equal(entries(loaded), right)
+
+
+def _as_cached_by_a_real_manager_before_the_complex_fix(payload):
+    """*payload* as a real manager's 2D scalar builder wrote it before #200
+    fixed #180: real arrays holding the real part, and no builder revision."""
+    payload = _without_builder_revision(payload)
+    for key in (
+        "reduced_data", "data", "mode_normalizers",
+        "kernel_exterior_normalizers",
+    ):
+        if key in payload:
+            payload[key] = np.ascontiguousarray(payload[key].real)
+    return payload
+
+
+def test_a_real_2d_scalar_table_of_a_complex_kernel_is_rebuilt_too(
+        tmp_path, caplog):
+    """A real manager's 2D Helmholtz table from before the fix is stale too.
+
+    The scalar builder of a real manager stored the real part of a complex
+    kernel's table, as real entries.  The cache key does not hold the dtype,
+    so a complex manager read that payload as a complex table with a zero
+    imaginary part, and a real manager served it as it was.
+    """
+    from sumpy.kernel import HelmholtzKernel
+
+    kwargs = {"sumpy_knl": HelmholtzKernel(2), "k": 1.5}
+    cache_file = tmp_path / "nft-real-helmholtz-before-the-complex-fix.sqlite"
+
+    def get(dtype):
+        with NFTable(
+            str(cache_file), dtype=dtype, progress_bar=False
+        ) as table_manager:
+            return table_manager.get_table(2, "Helmholtz", q_order=1, **kwargs)
+
+    def entries(table):
+        return np.array(table.get_reduced_table_data()[1])
+
+    right = entries(get(np.complex128)[0])
+    _rewrite_cached_payloads(
+        cache_file, _as_cached_by_a_real_manager_before_the_complex_fix
+    )
+
+    # A real manager cannot rebuild it: the scalar builder now refuses a
+    # real table of a kernel whose imaginary part is not negligible.
+    caplog.clear()
+    with pytest.raises(RuntimeError, match="non-negligible imaginary"):
+        get(np.float64)
+    assert "only the real part" in caplog.text
+
+    # A complex manager rebuilds it.
+    caplog.clear()
+    rebuilt, is_recomputed = get(np.complex128)
+    assert is_recomputed
+    assert "only the real part" in caplog.text
+    np.testing.assert_array_equal(entries(rebuilt), right)
+
+
+#: A complex 2D scalar build from before the fix: Helmholtz, complex entries
+#: whose imaginary part is zero, no builder revision.  Each case below changes
+#: one input, or two.
+_PRE_FIX_SCALAR_BUILD = {
+    "dim": 2,
+    "build_method": "DuffyRadial",
+    "routing": "scalar",
+    "revision": None,
+    "values": np.array([1.0, -2.0, 0.5], dtype=np.complex128),
+    "layout": "reduced",
+    "kernel": "helmholtz",
+}
+
+
+@pytest.mark.parametrize(
+    ("change", "stale"),
+    [
+        ({}, True),
+        ({"routing": "scalar-adaptive"}, True),
+        ({"routing": "scalar-fallback"}, True),
+        # a payload written before routings were recorded
+        ({"routing": None}, True),
+        # a damaged routing is not a batched one
+        ({"routing": "BATCHED"}, True),
+        ({"revision": 0}, True),
+        # a legacy row records no build method
+        ({"build_method": None}, True),
+        ({"layout": "dense"}, True),
+        # its imaginary part is zero in fact, but nothing in the cache says so
+        ({"kernel": "yukawa"}, True),
+        # a load without a sumpy kernel cannot tell, nor a kernel that
+        # does not say
+        ({"kernel": None}, True),
+        ({"kernel": "silent"}, True),
+        ({"routing": "batched"}, False),
+        ({"revision": 1}, False),
+        ({"dim": 3}, False),
+        ({"build_method": "ExternalAssembly"}, False),
+        # a real payload, as a real manager wrote it; a complex manager
+        # reads it as complex entries with a zero imaginary part
+        ({"values": np.array([1.0, -2.0, 0.5])}, True),
+        ({"values": np.array([1.0, -2.0, 0.5]), "kernel": "laplace"}, False),
+        ({"values": np.array([1.0, -2.0 + 1.0e-300j, 0.5])}, False),
+        ({"kernel": "laplace"}, False),
+        ({"kernel": "laplace-dx"}, False),
+    ],
+)
+def test_which_cached_tables_predate_the_complex_fix(change, stale):
+    """Only a table that can hold the old rule's real part is rebuilt."""
+    from types import SimpleNamespace
+
+    from sumpy.kernel import (
+        AxisTargetDerivative,
+        HelmholtzKernel,
+        LaplaceKernel,
+        YukawaKernel,
+    )
+
+    from volumential.table_manager import _stale_complex_2d_scalar_build
+
+    inputs = {**_PRE_FIX_SCALAR_BUILD, **change}
+    dim = inputs["dim"]
+    kernel = {
+        None: None,
+        "silent": SimpleNamespace(),
+        "helmholtz": HelmholtzKernel(dim),
+        "yukawa": YukawaKernel(dim),
+        "laplace": LaplaceKernel(dim),
+        "laplace-dx": AxisTargetDerivative(0, LaplaceKernel(dim)),
+    }[inputs["kernel"]]
+    values = inputs["values"]
+    if inputs["layout"] == "reduced":
+        payload = {
+            "reduced_entry_ids": np.arange(len(values)),
+            "reduced_data": values,
+        }
+    else:
+        payload = {"data": values}
+
+    table = SimpleNamespace(
+        build_routing=inputs["routing"],
+        builder_revision=inputs["revision"],
+    )
+    reason = _stale_complex_2d_scalar_build(
+        table,
+        TableRequest.from_args(dim, "Helmholtz", 1, 0),
+        inputs["build_method"],
+        payload,
+        kernel,
+    )
+
+    if stale:
+        assert reason is not None
+        assert "only the real part" in reason
+        assert "discarding the cached data" in reason
+        assert ("pass sumpy_knl" in reason) == (kernel is None)
+    else:
+        assert reason is None
 
 
 def laplace_const_source_same_box(table_2d_order1, queue, q_order, dim=2):
