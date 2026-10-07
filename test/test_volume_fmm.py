@@ -7691,8 +7691,20 @@ def test_volume_fmm_laplace(laplace_problem):
     mg.provider != "meshgen_boxtree",
     reason="Adaptive mesh module is not available",
 )
+@pytest.mark.parametrize(
+    ("q_order", "fmm_order", "max_error_bound", "rel_l2_error_bound"),
+    [
+        # About 3.0e-7 and 1.1e-7 on a CPU device.
+        (6, 15, 3e-6, 1e-6),
+        # About 2.28e-9 and 6.1e-10 on a CPU device. With point quadrature for
+        # the List 4 sources (list4_upsampling=1) the max error is 2.90e-9:
+        # those pairs are 21% of it.
+        (8, 25, 2.5e-9, 1e-9),
+    ],
+)
 def test_volume_fmm_laplace_graded_tree_matches_exact_solution(
-    ctx_factory, tmp_path
+    ctx_factory, tmp_path, *, q_order, fmm_order, max_error_bound,
+    rel_l2_error_bound,
 ):
     """The volume FMM keeps its accuracy on a graded tree.
 
@@ -7703,7 +7715,8 @@ def test_volume_fmm_laplace_graded_tree_matches_exact_solution(
     source is large, and the potential is compared with the exact solution.
     On a CPU device, leaving out the list 3, the list 4 or the cross-level
     list 1 interactions raises the relative L2 error from about 1e-7 to above
-    0.1.
+    0.1. At ``q_order`` 8 the bound also needs the List 4 sources upsampled
+    (:mod:`volumential.wranglers.list4_upsampling`).
     """
     from sumpy.expansion import DefaultExpansionFactory
     from sumpy.kernel import LaplaceKernel
@@ -7718,8 +7731,6 @@ def test_volume_fmm_laplace_graded_tree_matches_exact_solution(
     queue = cl.CommandQueue(ctx)
 
     dim = 2
-    q_order = 6
-    fmm_order = 15
     lower, upper = -0.5, 0.5
     # (amplitude, alpha, center) of the Gaussian terms of the exact solution
     # u; outside the box both are below exp(-30).
@@ -7800,7 +7811,7 @@ def test_volume_fmm_laplace_graded_tree_matches_exact_solution(
         queue=queue,
         traversal=trav,
         near_field_table=_get_laplace_2d_table(
-            queue, tmp_path / "nft-laplace2d-graded-q6.sqlite", q_order
+            queue, tmp_path / f"nft-laplace2d-graded-q{q_order}.sqlite", q_order
         ),
         dtype=np.float64,
         fmm_level_to_order=lambda kernel, kernel_args, tree, lev: fmm_order,
@@ -7820,9 +7831,10 @@ def test_volume_fmm_laplace_graded_tree_matches_exact_solution(
     rel_l2_error = float(
         np.sqrt(np.sum(weights * error**2) / np.sum(weights * reference**2))
     )
-    # About 3.1e-7 and 1.1e-7 on a CPU device.
-    assert max_error < 3e-6, f"max error {max_error:.3e} on a graded tree"
-    assert rel_l2_error < 1e-6, (
+    assert max_error < max_error_bound, (
+        f"max error {max_error:.3e} on a graded tree"
+    )
+    assert rel_l2_error < rel_l2_error_bound, (
         f"relative L2 error {rel_l2_error:.3e} on a graded tree"
     )
 
@@ -7846,7 +7858,9 @@ def test_volume_fmm_far_field_matches_direct_sum_with_leaf_colleagues(
     filed there instead of in List 3 or 4 would drop out of both sides. The
     charges are random, so no interaction is negligible: dropping or doubling
     a single List 2, 3 or 4 entry of the traversal raises the error by many
-    orders of magnitude.
+    orders of magnitude. The direct sum is a point sum, so the List 4 sources
+    are not upsampled here (``list4_upsampling=1``); the upsampled ones are
+    checked in ``test_list4_upsampling.py``.
     """
     from sumpy.expansion import DefaultExpansionFactory
     from sumpy.kernel import LaplaceKernel
@@ -7976,6 +7990,7 @@ def test_volume_fmm_far_field_matches_direct_sum_with_leaf_colleagues(
         self_extra_kwargs={
             "target_to_source": np.arange(tree.ntargets, dtype=np.int32)
         },
+        list4_upsampling=1,
     )
 
     (far_fmm,) = drive_volume_fmm(

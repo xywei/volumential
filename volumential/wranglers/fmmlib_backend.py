@@ -179,8 +179,9 @@ class FPNDFMMLibExpansionWrangler(
     ``list4_upsampling`` is as for
     :class:`~volumential.wranglers.sumpy_backend.FPNDSumpyExpansionWrangler`:
     List 4 sources enter P2L from an upsampled rule with
-    ``ceil(list4_upsampling * quad_order)`` Gauss nodes per axis, and ``1``
-    gives point quadrature at their own nodes.
+    ``ceil(list4_upsampling * quad_order)`` Gauss nodes per axis, ``1`` gives
+    point quadrature at their own nodes, and the default is 1.5 in 2-D and 1
+    in 3-D.
     """
 
     # {{{ constructor
@@ -396,7 +397,7 @@ class FPNDFMMLibExpansionWrangler(
         self.kernel_extra_kwargs = kernel_extra_kwargs
         self.self_extra_kwargs = self_extra_kwargs
         self.list1_extra_kwargs = list1_extra_kwargs
-        self._init_list4_upsampling(list4_upsampling)
+        self._init_list4_upsampling(list4_upsampling, tree.dimensions)
         self._table_layout_validation_cache = set()
         self._nearfield_device_payload_cache = OrderedDict()
         self._nearfield_device_payload_cache_max = 16

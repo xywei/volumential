@@ -347,11 +347,11 @@ class FPNDSumpyExpansionWrangler(
         nodes. Its density is interpolated to a tensor-product Gauss rule with
         ``ceil(list4_upsampling * quad_order)`` nodes per axis, and P2L runs
         from those nodes (:mod:`volumential.wranglers.list4_upsampling`).
-        ``None`` (default) means
-        :data:`~volumential.wranglers.list4_upsampling.DEFAULT_LIST4_UPSAMPLING`;
-        ``1`` gives point quadrature, as for every other far pair. Kernels
-        that take per-source arguments, such as a directional source
-        derivative, always get point quadrature.
+        ``1`` gives point quadrature, as for every other far pair. ``None``
+        (default) means 1.5 in 1-D and 2-D and 1 in 3-D, where the upsampled
+        P2L costs more than a tenth of the near-field time; pass 1.5 to turn
+        it on there. Kernels that take per-source arguments, such as a
+        directional source derivative, always get point quadrature.
         """
 
         queue = _resolve_queue(queue, traversal, tree_indep)
@@ -443,7 +443,7 @@ class FPNDSumpyExpansionWrangler(
 
         self.quad_order = quad_order
         self.potential_kind = potential_kind
-        self._init_list4_upsampling(list4_upsampling)
+        self._init_list4_upsampling(list4_upsampling, self.tree.dimensions)
         self._list4_upsampled_device = None
 
         # TODO: make all parameters table-specific (allow using inhomogeneous tables)

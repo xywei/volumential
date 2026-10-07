@@ -40,17 +40,15 @@ quadrature.
 
 A higher-order Gauss rule on the whole box is used rather than the same rule
 on each sub-box: for the same number of nodes it is far more accurate at the
-List 4 distance. At ``1.5 * q_order`` nodes per axis the error of these pairs
-falls below that of the far pairs one source size away.
+List 4 distance. At :data:`LIST4_UPSAMPLING` times ``q_order`` nodes per axis,
+the error of these pairs falls below that of the far pairs one to two source
+sizes away, in 2-D and 3-D.
 
-.. autodata:: DEFAULT_LIST4_UPSAMPLING
-
-.. autofunction:: normalize_list4_upsampling
-.. autofunction:: list4_upsampled_q_order
-.. autofunction:: list4_upsampling_matrix
-.. autoclass:: List4UpsampledSources
-.. autofunction:: build_list4_upsampled_sources
-.. autoclass:: List4UpsamplingMixin
+The upsampling is on by default in 1-D and 2-D and off in 3-D
+(:func:`default_list4_upsampling`), by its cost: P2L from the finer nodes added
+3 to 4% of the near-field time on 2-D graded trees and 10 to 45% on 3-D ones,
+where the finer rule has about 3.4 times as many nodes and P2L costs more per
+node than the near field.
 """
 
 import logging
@@ -68,27 +66,36 @@ from volumential.wranglers.box_layout import _array_layout_cache_token
 logger = logging.getLogger(__name__)
 
 
-#: Default of the wranglers' ``list4_upsampling``: the upsampled rule has
-#: ``ceil(1.5 * q_order)`` Gauss nodes per axis.
-DEFAULT_LIST4_UPSAMPLING = 1.5
+#: The upsampling factor the wranglers use where it is on by default: the
+#: upsampled rule has ``ceil(1.5 * q_order)`` Gauss nodes per axis.
+LIST4_UPSAMPLING = 1.5
 
 # Largest distance, in the reference coordinates of a box ([-1, 1] per axis),
 # between a source and the Gauss node it is matched to.
 _NODE_MATCH_TOL = 1.0e-6
 
 
-def normalize_list4_upsampling(list4_upsampling) -> float:
+def default_list4_upsampling(dim: int) -> float:
+    """The wranglers' ``list4_upsampling`` when none is given.
+
+    :data:`LIST4_UPSAMPLING` in 1-D and 2-D, and 1 (point quadrature) in 3-D,
+    where the upsampled P2L costs more than a tenth of the near-field time.
+    """
+    return float(LIST4_UPSAMPLING) if int(dim) < 3 else 1.0
+
+
+def normalize_list4_upsampling(list4_upsampling, dim: int) -> float:
     """Validate a ``list4_upsampling`` argument and return it as a float.
 
-    ``None`` stands for :data:`DEFAULT_LIST4_UPSAMPLING`; ``1`` turns the
-    upsampling off.
+    ``None`` stands for :func:`default_list4_upsampling` of *dim*; ``1`` turns
+    the upsampling off.
 
     :raises TypeError: for a value that is not a real number, booleans
         included.
     :raises ValueError: for a value below 1 or not finite.
     """
     if list4_upsampling is None:
-        return float(DEFAULT_LIST4_UPSAMPLING)
+        return default_list4_upsampling(dim)
     if isinstance(list4_upsampling, bool) or not isinstance(
         list4_upsampling, Real
     ):
@@ -177,39 +184,26 @@ def list4_upsampling_matrix(q_order: int, fine_q_order: int, dim: int):
 
 @dataclass(frozen=True)
 class List4UpsampledSources:
-    """The upsampled sources of a traversal's List 4 source boxes.
+    """The upsampled sources of a traversal's List 4 source boxes, on the
+    host. :attr:`box_source_starts` and :attr:`box_source_counts_nonchild`
+    replace the tree's arrays of the same names in P2L, and :attr:`sources`
+    the tree's sources."""
 
-    .. attribute:: source_boxes
-
-        The List 4 source boxes that hold sources, each once.
-
-    .. attribute:: gather
-
-        Shape ``(len(source_boxes), q_order**dim)``: the tree-order source
-        index of each box's nodes, in tensor order.
-
-    .. attribute:: matrix
-
-        The matrix of :func:`list4_upsampling_matrix`.
-
-    .. attribute:: sources
-
-        Shape ``(dim, len(source_boxes) * fine_q_order**dim)``: the finer
-        nodes, box after box.
-
-    .. attribute:: box_source_starts
-    .. attribute:: box_source_counts_nonchild
-
-        Per-box start and count of each box's finer nodes in :attr:`sources`,
-        zero for the boxes that are not List 4 sources; they replace the
-        tree's arrays of the same names in P2L.
-    """
-
+    #: The List 4 source boxes that hold sources, each once.
     source_boxes: np.ndarray
+    #: Shape ``(len(source_boxes), q_order**dim)``: the tree-order source
+    #: index of each box's nodes, in tensor order.
     gather: np.ndarray
+    #: The matrix of :func:`list4_upsampling_matrix`.
     matrix: np.ndarray
+    #: Shape ``(dim, len(source_boxes) * fine_q_order**dim)``: the finer
+    #: nodes, box after box.
     sources: np.ndarray
+    #: Per box, where its finer nodes start in :attr:`sources` (zero for the
+    #: boxes that are not List 4 sources).
     box_source_starts: np.ndarray
+    #: Per box, how many finer nodes it has (zero for the boxes that are not
+    #: List 4 sources).
     box_source_counts_nonchild: np.ndarray
 
     @property
@@ -355,8 +349,8 @@ class List4UpsamplingMixin:
         The upsampling factor, at least 1; 1 means point quadrature.
     """
 
-    def _init_list4_upsampling(self, list4_upsampling) -> None:
-        self.list4_upsampling = normalize_list4_upsampling(list4_upsampling)
+    def _init_list4_upsampling(self, list4_upsampling, dim: int) -> None:
+        self.list4_upsampling = normalize_list4_upsampling(list4_upsampling, dim)
         self._list4_upsampling_cache = None
         self._list4_upsampling_logged = False
 
