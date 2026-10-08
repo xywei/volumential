@@ -3,6 +3,11 @@ name: Publish
 # A tag v<version> publishes that version to PyPI through Trusted Publishing:
 # PyPI trusts this workflow (owner xywei, repository volumential, workflow
 # publish.yml, no environment) to upload, so no token is stored anywhere.
+#
+# Building and publishing are two jobs. The build runs third-party code (pip,
+# the setuptools backend and what they pull in) with read access only; the
+# publish job, the only one allowed to ask for the OIDC token PyPI trusts,
+# runs no checkout and no build, only the upload of what the build produced.
 on:
   push:
     tags: ["v*"]
@@ -14,12 +19,10 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
-  publish:
-    name: Build and publish
+  build:
+    name: Build
     runs-on: ubuntu-latest
     permissions:
-      # Required for PyPI Trusted Publishing (OIDC).
-      id-token: write
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -76,5 +79,24 @@ jobs:
           test "$(ls dist | wc -l)" -eq 2
           python -m twine check --strict dist/*
 
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: distributions
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      # Required for PyPI Trusted Publishing (OIDC), and given to this job only.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: distributions
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2

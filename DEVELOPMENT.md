@@ -348,10 +348,12 @@ environment), so no token is stored in the repository. To release:
 3. Tag the merge commit and push the tag, e.g. `git tag -a v2026.1 -m
    "volumential 2026.1"` and `git push origin v2026.1`.
 
-The workflow first checks that the tag, `pyproject.toml` and
+The workflow's build job first checks that the tag, `pyproject.toml` and
 `volumential.version` agree, and stops before building if they do not. It then
 checks that the build is one sdist and one wheel of that version, which
-`twine check --strict` accepts. The published metadata names dependencies
+`twine check --strict` accepts. The build runs with read access only; a
+second job, the only one allowed the OIDC token PyPI trusts, downloads those
+two files and uploads them, and runs no checkout or build of its own. The published metadata names dependencies
 without the Git sources of `[tool.uv.sources]`, so an install from PyPI gets
 the released versions of the inducer stack: check that those versions run the
 test suite before tagging.
