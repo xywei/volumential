@@ -117,16 +117,19 @@ jobs:
       # PEP 440 calls a pre-release is marked as one, so that GitHub does not
       # offer it as the latest release: a version with a pre-release segment
       # (2026.1a1, 2026.1rc1, 2026.1a1.post1) or a development segment
-      # (2026.1.dev1, 2026.1a1.dev1). The build job has already checked that
-      # the version is the normalized one the distributions are named with.
+      # (2026.1.dev1, 2026.1a1.dev1). A local segment (+cpu) is ignored, as
+      # PEP 440 ignores it, so 2026.1.dev1+cpu is a pre-release too. The build
+      # job has already checked that the version is the normalized one the
+      # distributions are named with.
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
+          public="${version%%+*}"
           prerelease=()
-          if [[ "${version}" =~ [0-9](a|b|rc)[0-9]+ || "${version}" =~ \.dev[0-9]+$ ]]; then
+          if [[ "${public}" =~ [0-9](a|b|rc)[0-9]+ || "${public}" =~ \.dev[0-9]+$ ]]; then
             prerelease=(--prerelease)
           fi
           cat > notes.md <<EOF
