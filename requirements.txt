@@ -1,23 +1,8 @@
-# Legacy compatibility entrypoint for pip-based workflows.
-# Prefer `uv sync --extra test --extra doc` for development.
-# Keep this file aligned with `[tool.uv.sources]` in `pyproject.toml`.
-
---index-url https://pypi.python.org/simple/
-
-filelock
-
--e git+https://github.com/inducer/gmsh_interop.git#egg=gmsh_interop
--e git+https://github.com/inducer/pytential.git#egg=pytential
--e git+https://github.com/inducer/pytools.git#egg=pytools
--e git+https://github.com/inducer/cgen.git#egg=cgen
--e git+https://github.com/inducer/loopy.git#egg=loopy
--e git+https://github.com/inducer/pymbolic.git#egg=pymbolic
--e git+https://github.com/inducer/boxtree.git#egg=boxtree
--e git+https://github.com/inducer/arraycontext.git#egg=arraycontext
--e git+https://github.com/inducer/meshmode.git#egg=meshmode
--e git+https://github.com/inducer/genpy.git#egg=genpy
--e git+https://github.com/inducer/pyvisfile.git#egg=pyvisfile
--e git+https://github.com/inducer/sumpy.git#egg=sumpy
--e git+https://github.com/inducer/modepy.git#egg=modepy
+# A pip entry point for a development checkout, kept for tools that look for
+# this file. It names no dependency itself: pyproject.toml declares them all,
+# the Git dependencies as direct references pinned to a commit, so pip
+# installs the same commits from here as from a release tag.
+# Prefer `uv sync --extra test --extra doc`, which installs what uv.lock
+# records; see DEVELOPMENT.md.
 
 -e .[test,doc]

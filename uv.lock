@@ -52,7 +52,7 @@ wheels = [
 [[package]]
 name = "arraycontext"
 version = "2024.0"
-source = { git = "https://github.com/inducer/arraycontext.git#4ed685da024473266b2a635b350615e36c3ce176" }
+source = { git = "https://github.com/inducer/arraycontext.git?rev=4ed685da024473266b2a635b350615e36c3ce176#4ed685da024473266b2a635b350615e36c3ce176" }
 dependencies = [
     { name = "constantdict" },
     { name = "numpy" },
@@ -103,7 +103,7 @@ wheels = [
 [[package]]
 name = "boxtree"
 version = "2024.10"
-source = { git = "https://github.com/inducer/boxtree.git#82a86d8c0701cd1aa4c1596365ad4206a212c5d2" }
+source = { git = "https://github.com/inducer/boxtree.git?rev=82a86d8c0701cd1aa4c1596365ad4206a212c5d2#82a86d8c0701cd1aa4c1596365ad4206a212c5d2" }
 dependencies = [
     { name = "arraycontext" },
     { name = "cgen" },
@@ -445,7 +445,7 @@ sdist = { url = "https://files.pythonhosted.org/packages/04/03/1578d2a701e5596f9
 [[package]]
 name = "gmsh-interop"
 version = "2025.1"
-source = { git = "https://github.com/inducer/gmsh_interop.git#0250c1eff69bf17b2d1e9b296163f2aef5cdbda5" }
+source = { git = "https://github.com/inducer/gmsh_interop.git?rev=0250c1eff69bf17b2d1e9b296163f2aef5cdbda5#0250c1eff69bf17b2d1e9b296163f2aef5cdbda5" }
 dependencies = [
     { name = "numpy" },
     { name = "packaging" },
@@ -772,7 +772,7 @@ wheels = [
 [[package]]
 name = "loopy"
 version = "2026.1"
-source = { git = "https://github.com/inducer/loopy.git#8807bdd42344ef619106866f8f41908e1a461a6f" }
+source = { git = "https://github.com/inducer/loopy.git?rev=8807bdd42344ef619106866f8f41908e1a461a6f#8807bdd42344ef619106866f8f41908e1a461a6f" }
 dependencies = [
     { name = "cgen" },
     { name = "codepy" },
@@ -923,7 +923,7 @@ wheels = [
 [[package]]
 name = "meshmode"
 version = "2024.0"
-source = { git = "https://github.com/inducer/meshmode.git#fa2d5450a42468ef31b9b8f420e2514465ba7a5c" }
+source = { git = "https://github.com/inducer/meshmode.git?rev=fa2d5450a42468ef31b9b8f420e2514465ba7a5c#fa2d5450a42468ef31b9b8f420e2514465ba7a5c" }
 dependencies = [
     { name = "arraycontext" },
     { name = "gmsh-interop" },
@@ -939,7 +939,7 @@ dependencies = [
 [[package]]
 name = "modepy"
 version = "2026.1"
-source = { git = "https://github.com/inducer/modepy.git#a0f44097f4f470c9107c60ef322512ecabda1174" }
+source = { git = "https://github.com/inducer/modepy.git?rev=a0f44097f4f470c9107c60ef322512ecabda1174#a0f44097f4f470c9107c60ef322512ecabda1174" }
 dependencies = [
     { name = "numpy" },
     { name = "optype" },
@@ -1287,10 +1287,27 @@ wheels = [
 
 [[package]]
 name = "pyfmmlib"
-version = "2024.2"
-source = { git = "https://github.com/inducer/pyfmmlib.git#5d3887281f607bccc27c6ec1825584f9c7138f03" }
+version = "2026.1"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/2d/10/2b43f9e2c404bd4c44070f3038a53f4093c81f164cee4724a6b233e24fdc/pyfmmlib-2026.1.tar.gz", hash = "sha256:3cbef7e859bf474ca72a96c8775e5b7c352eca78f369713f8618c849b44c877c", size = 6099772, upload-time = "2026-09-18T21:12:23.868Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4e/40/59da037695bef02e25a982fd36591b98e0a37cc459f8e5437a4a9f9663aa/pyfmmlib-2026.1-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:21e9803303b8826cf64dae4eec74047027c9cd4b4ef7b32984b538d72059f28d", size = 1909931, upload-time = "2026-09-18T21:12:02.873Z" },
+    { url = "https://files.pythonhosted.org/packages/68/4e/ce67ec2dd4c17746e4bebef28a1a1baf22d907ef621685c03638c1a87812/pyfmmlib-2026.1-cp311-cp311-musllinux_1_2_x86_64.whl", hash = "sha256:2c60636c0765d0b6bd7ca8366ca57922f65f0487c0ce8e2a4e9a4e7513dd58b7", size = 2347932, upload-time = "2026-09-18T21:12:04.864Z" },
+    { url = "https://files.pythonhosted.org/packages/b7/ef/47b1b0b090316f70dc19393fa42b452194bf14c024a4353cf2bf42638029/pyfmmlib-2026.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:3ae22fb0d42250f89041449e09c7beb924f75fd12ffdcc5916528b039ca633a0", size = 1912255, upload-time = "2026-09-18T21:12:06.222Z" },
+    { url = "https://files.pythonhosted.org/packages/5b/f1/82ca111439ceec3391898506f9f6f637a38db724230ed81876ae41d42ea7/pyfmmlib-2026.1-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:3b1fa16349bbe343f8fb55d9a099fa70681add3c28ae0024160883fc12272fe3", size = 2349399, upload-time = "2026-09-18T21:12:07.749Z" },
+    { url = "https://files.pythonhosted.org/packages/b4/43/0af210abd35a7b39c2978bf281957124f4f58097524e9ce5fd7162b027a9/pyfmmlib-2026.1-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:90166c1888efd3b59ab9345a78b9fd3de0150fa38ef4f6435955f5b7e0551be0", size = 1912258, upload-time = "2026-09-18T21:12:09.054Z" },
+    { url = "https://files.pythonhosted.org/packages/ce/30/d6ba3c1bfc213ac65db66ffe16bb7c629a47cd8e3924271f54b0d0a151dc/pyfmmlib-2026.1-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:f4e4c9ff82c9db00046bcfed885182377bb1f0efd199e42560f40d36cd262241", size = 2349394, upload-time = "2026-09-18T21:12:10.772Z" },
+    { url = "https://files.pythonhosted.org/packages/57/e7/027d018c81824b84ac70e7f329f25d70eaaa346ee5d9e72514d68bd270d4/pyfmmlib-2026.1-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:1708578348048eba0487b3f30061fff361e116ec20ae5e60cee355a2a6624487", size = 1911849, upload-time = "2026-09-18T21:12:12.021Z" },
+    { url = "https://files.pythonhosted.org/packages/14/b9/45cdefbb2034f206ae498368daa664dea1871a26faa2f28d4bf87b05034d/pyfmmlib-2026.1-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:3263264d6e9c21c073eae80b1ca4d5caedc573981f970cfde313caf541f912a9", size = 2349387, upload-time = "2026-09-18T21:12:13.73Z" },
+    { url = "https://files.pythonhosted.org/packages/b6/b9/7a73019ae07ee5ca0bb050307c5a50f7cc91e9947a4a066e05037658f45e/pyfmmlib-2026.1-cp314-cp314t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:188e82c578db942c403226fd7f33e19fb0da880086ded57c03bf01ce056b1348", size = 1918112, upload-time = "2026-09-18T21:12:15.154Z" },
+    { url = "https://files.pythonhosted.org/packages/f0/30/fb89e04fd849ac39023cc781369390c7bd2279625ece64eab1cf248382c9/pyfmmlib-2026.1-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:7d678590e8ba7cf9d0667e374c518f1eacf00f0824935cfe00035efa95f6affc", size = 2354277, upload-time = "2026-09-18T21:12:16.481Z" },
+    { url = "https://files.pythonhosted.org/packages/35/87/1e62c318ac7ba0994769398b1e596f46d1d5647c945f0f392ccfd1952fb5/pyfmmlib-2026.1-cp315-cp315-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:0575a9d6b0dbca7e3d0835b68f5af7a8e2e43949ce38bed99323826b1a605edd", size = 1911867, upload-time = "2026-09-18T21:12:18.2Z" },
+    { url = "https://files.pythonhosted.org/packages/ff/5e/803748805315703bff2cc4aa8b379fc1ce05078b5713f29e7e627728e0d9/pyfmmlib-2026.1-cp315-cp315-musllinux_1_2_x86_64.whl", hash = "sha256:e67742a893a314909006c859ac3123bc4fdad2fc8cd1a4c37282296a83197be6", size = 2349384, upload-time = "2026-09-18T21:12:19.59Z" },
+    { url = "https://files.pythonhosted.org/packages/92/a1/2d834c87b8194a56a15b0c2ad1f0e1de50f084de17dd93de56b90533672f/pyfmmlib-2026.1-cp315-cp315t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:03f053c3967ebf5381a62e81cbe6c98ba238aed7b8f23c079d9b7a4af8a07b5f", size = 1918099, upload-time = "2026-09-18T21:12:20.814Z" },
+    { url = "https://files.pythonhosted.org/packages/19/1b/41d1277be30fa7dae7129a3f1da97771a99972be371dc71e470bcbc092e7/pyfmmlib-2026.1-cp315-cp315t-musllinux_1_2_x86_64.whl", hash = "sha256:14ffc1bf5a007b8874d4ce7d6e3b080b31dd41b7fbe91541798fd5a4bad9cb8e", size = 2354373, upload-time = "2026-09-18T21:12:22.156Z" },
 ]
 
 [[package]]
@@ -1305,7 +1322,7 @@ wheels = [
 [[package]]
 name = "pymbolic"
 version = "2025.1"
-source = { git = "https://github.com/inducer/pymbolic.git#3963dd2d0be04e3f06ce7b5d1151dff3955ff5aa" }
+source = { git = "https://github.com/inducer/pymbolic.git?rev=3963dd2d0be04e3f06ce7b5d1151dff3955ff5aa#3963dd2d0be04e3f06ce7b5d1151dff3955ff5aa" }
 dependencies = [
     { name = "constantdict" },
     { name = "pytools" },
@@ -1362,7 +1379,7 @@ wheels = [
 [[package]]
 name = "pytential"
 version = "2024.0"
-source = { git = "https://github.com/inducer/pytential.git#09a0316b88ddb3fd75670089dc64411186740606" }
+source = { git = "https://github.com/inducer/pytential.git?rev=09a0316b88ddb3fd75670089dc64411186740606#09a0316b88ddb3fd75670089dc64411186740606" }
 dependencies = [
     { name = "arraycontext" },
     { name = "boxtree" },
@@ -1409,7 +1426,7 @@ wheels = [
 [[package]]
 name = "pytools"
 version = "2026.1.1"
-source = { git = "https://github.com/inducer/pytools.git#295ffaebfacdb1ffb2a7ef85a0862f3ee0519c8f" }
+source = { git = "https://github.com/inducer/pytools.git?rev=295ffaebfacdb1ffb2a7ef85a0862f3ee0519c8f#295ffaebfacdb1ffb2a7ef85a0862f3ee0519c8f" }
 dependencies = [
     { name = "platformdirs" },
     { name = "siphash24" },
@@ -2129,7 +2146,7 @@ wheels = [
 [[package]]
 name = "sumpy"
 version = "2024.0"
-source = { git = "https://github.com/inducer/sumpy.git#019e780a31113af35a823e0178e032b4d70ebdbc" }
+source = { git = "https://github.com/inducer/sumpy.git?rev=019e780a31113af35a823e0178e032b4d70ebdbc#019e780a31113af35a823e0178e032b4d70ebdbc" }
 dependencies = [
     { name = "arraycontext" },
     { name = "boxtree" },
@@ -2269,25 +2286,25 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "arraycontext", git = "https://github.com/inducer/arraycontext.git" },
-    { name = "boxtree", git = "https://github.com/inducer/boxtree.git" },
+    { name = "arraycontext", git = "https://github.com/inducer/arraycontext.git?rev=4ed685da024473266b2a635b350615e36c3ce176" },
+    { name = "boxtree", git = "https://github.com/inducer/boxtree.git?rev=82a86d8c0701cd1aa4c1596365ad4206a212c5d2" },
     { name = "filelock", marker = "extra == 'test'" },
-    { name = "gmsh-interop", marker = "extra == 'gmsh-support'", git = "https://github.com/inducer/gmsh_interop.git" },
-    { name = "gmsh-interop", marker = "extra == 'test'", git = "https://github.com/inducer/gmsh_interop.git" },
+    { name = "gmsh-interop", marker = "extra == 'gmsh-support'", git = "https://github.com/inducer/gmsh_interop.git?rev=0250c1eff69bf17b2d1e9b296163f2aef5cdbda5" },
+    { name = "gmsh-interop", marker = "extra == 'test'", git = "https://github.com/inducer/gmsh_interop.git?rev=0250c1eff69bf17b2d1e9b296163f2aef5cdbda5" },
     { name = "interrogate", marker = "extra == 'doc'" },
-    { name = "loopy", git = "https://github.com/inducer/loopy.git" },
-    { name = "meshmode", git = "https://github.com/inducer/meshmode.git" },
-    { name = "modepy", git = "https://github.com/inducer/modepy.git" },
+    { name = "loopy", git = "https://github.com/inducer/loopy.git?rev=8807bdd42344ef619106866f8f41908e1a461a6f" },
+    { name = "meshmode", git = "https://github.com/inducer/meshmode.git?rev=fa2d5450a42468ef31b9b8f420e2514465ba7a5c" },
+    { name = "modepy", git = "https://github.com/inducer/modepy.git?rev=a0f44097f4f470c9107c60ef322512ecabda1174" },
     { name = "mpmath", marker = "extra == 'benchmark'" },
     { name = "myst-nb", marker = "extra == 'doc'" },
     { name = "myst-parser", marker = "extra == 'doc'" },
     { name = "pydata-sphinx-theme", marker = "extra == 'doc'" },
-    { name = "pyfmmlib", marker = "extra == 'fmmlib'", git = "https://github.com/inducer/pyfmmlib.git" },
-    { name = "pymbolic", git = "https://github.com/inducer/pymbolic.git" },
+    { name = "pyfmmlib", marker = "extra == 'fmmlib'", specifier = ">=2026.1" },
+    { name = "pymbolic", git = "https://github.com/inducer/pymbolic.git?rev=3963dd2d0be04e3f06ce7b5d1151dff3955ff5aa" },
     { name = "pyopencl" },
-    { name = "pytential", git = "https://github.com/inducer/pytential.git" },
+    { name = "pytential", git = "https://github.com/inducer/pytential.git?rev=09a0316b88ddb3fd75670089dc64411186740606" },
     { name = "pytest", marker = "extra == 'test'" },
-    { name = "pytools", git = "https://github.com/inducer/pytools.git" },
+    { name = "pytools", git = "https://github.com/inducer/pytools.git?rev=295ffaebfacdb1ffb2a7ef85a0862f3ee0519c8f" },
     { name = "scipy" },
     { name = "sphinx", marker = "extra == 'doc'" },
     { name = "sphinx-autobuild", marker = "extra == 'doc'" },
@@ -2295,7 +2312,7 @@ requires-dist = [
     { name = "sphinx-design", marker = "extra == 'doc'" },
     { name = "sphinx-sitemap", marker = "extra == 'doc'" },
     { name = "sphinxext-opengraph", marker = "extra == 'doc'" },
-    { name = "sumpy", git = "https://github.com/inducer/sumpy.git" },
+    { name = "sumpy", git = "https://github.com/inducer/sumpy.git?rev=019e780a31113af35a823e0178e032b4d70ebdbc" },
 ]
 provides-extras = ["benchmark", "fmmlib", "gmsh-support", "test", "doc"]
 

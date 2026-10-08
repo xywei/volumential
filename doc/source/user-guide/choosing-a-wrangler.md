@@ -138,7 +138,8 @@ should be subtracted from the other.
 That is **9.1x on the same hardware**, and it is entirely a threading result:
 the serial FMMLib far field is *slower* than the sumpy one. The `_imany`
 routines scale about 17x from 1 to 30 threads, but only once `pyfmmlib`
-actually carries OpenMP, which the PyPI `2024.1.1` wheel does not.
+actually carries OpenMP, which the PyPI `2024.1.1` wheel does not and
+`2026.1`, the release the `fmmlib` extra asks for, does.
 
 Those middle rows are both the same thing — a **serial** rotation M2L — and
 there are two ways to get one, which the same numbers cannot tell apart:
@@ -291,7 +292,7 @@ CPU classes never belong in one table whatever produced them.
 ## Related
 
 - {doc}`volume-fmm-workflow` — what each wrangler is and what it plugs into.
-- {doc}`../getting-started/installation` — the OpenMP `pyfmmlib` build and its
+- {doc}`../getting-started/installation` — the OpenMP `pyfmmlib` and its
   verification.
 - {doc}`../getting-started/device-selection` — `PYOPENCL_CTX`, device classes,
   thread caps.

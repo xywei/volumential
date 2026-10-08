@@ -8,12 +8,6 @@ dependencies:
   - cmake
   - colorama
   - cython
-  # For the source build of pyfmmlib that the ``fmmlib`` extra pulls in: the
-  # released wheels carry neither the batched ``*formmp_imany`` wrappers nor
-  # the OpenMP option.  ``fortran-compiler`` is the conda-forge metapackage
-  # that installs gfortran together with its activation scripts, so ``FC`` is
-  # already set inside ``micromamba-shell``.
-  - fortran-compiler
   - genpy
   - git
   - iniconfig
@@ -23,9 +17,10 @@ dependencies:
   - packaging
   - pluggy
   - pocl
-  # The release build, for the jobs that install no extra beyond ``test``.
-  # ``Testing (Linux)`` installs the ``fmmlib`` extra on top, which replaces
-  # this with the source build that has the batched wrappers.
+  # 2026.1 and later carry the batched ``*formmp_imany`` wrappers and the
+  # OpenMP option.  The ``fmmlib`` extra that ``Testing (Linux)`` installs
+  # asks for that version, so it keeps this build, and only replaces an older
+  # one with the PyPI wheel; it needs no Fortran compiler for either.
   - pyfmmlib
   - pyopencl
   - pyrsistent

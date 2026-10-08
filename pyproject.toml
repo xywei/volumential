@@ -27,24 +27,30 @@ classifiers = [
   "Topic :: Utilities",
 ]
 dependencies = [
-  "arraycontext",
-  "boxtree",
-  "loopy",
-  "meshmode",
-  "modepy",
-  "pymbolic",
+  "arraycontext @ git+https://github.com/inducer/arraycontext.git@4ed685da024473266b2a635b350615e36c3ce176",
+  "boxtree @ git+https://github.com/inducer/boxtree.git@82a86d8c0701cd1aa4c1596365ad4206a212c5d2",
+  "loopy @ git+https://github.com/inducer/loopy.git@8807bdd42344ef619106866f8f41908e1a461a6f",
+  "meshmode @ git+https://github.com/inducer/meshmode.git@fa2d5450a42468ef31b9b8f420e2514465ba7a5c",
+  "modepy @ git+https://github.com/inducer/modepy.git@a0f44097f4f470c9107c60ef322512ecabda1174",
+  "pymbolic @ git+https://github.com/inducer/pymbolic.git@3963dd2d0be04e3f06ce7b5d1151dff3955ff5aa",
   "pyopencl",
-  "pytools",
-  "pytential",
+  "pytools @ git+https://github.com/inducer/pytools.git@295ffaebfacdb1ffb2a7ef85a0862f3ee0519c8f",
+  "pytential @ git+https://github.com/inducer/pytential.git@09a0316b88ddb3fd75670089dc64411186740606",
   "scipy",
-  "sumpy",
+  "sumpy @ git+https://github.com/inducer/sumpy.git@019e780a31113af35a823e0178e032b4d70ebdbc",
 ]
 
 [project.optional-dependencies]
 benchmark = ["mpmath"]
-fmmlib = ["pyfmmlib>=2024.1"]
-gmsh_support = ["gmsh_interop"]
-test = ["filelock", "gmsh_interop", "pytest"]
+fmmlib = ["pyfmmlib>=2026.1"]
+gmsh_support = [
+  "gmsh_interop @ git+https://github.com/inducer/gmsh_interop.git@0250c1eff69bf17b2d1e9b296163f2aef5cdbda5",
+]
+test = [
+  "filelock",
+  "gmsh_interop @ git+https://github.com/inducer/gmsh_interop.git@0250c1eff69bf17b2d1e9b296163f2aef5cdbda5",
+  "pytest",
+]
 doc = [
   "interrogate",
   "myst-nb",
@@ -66,22 +72,6 @@ include = ["volumential*"]
 
 [tool.uv]
 default-groups = []
-
-[tool.uv.sources]
-arraycontext = { git = "https://github.com/inducer/arraycontext.git" }
-boxtree = { git = "https://github.com/inducer/boxtree.git" }
-cgen = { git = "https://github.com/inducer/cgen.git" }
-genpy = { git = "https://github.com/inducer/genpy.git" }
-gmsh_interop = { git = "https://github.com/inducer/gmsh_interop.git" }
-loopy = { git = "https://github.com/inducer/loopy.git" }
-meshmode = { git = "https://github.com/inducer/meshmode.git" }
-modepy = { git = "https://github.com/inducer/modepy.git" }
-pyfmmlib = { git = "https://github.com/inducer/pyfmmlib.git" }
-pymbolic = { git = "https://github.com/inducer/pymbolic.git" }
-pytential = { git = "https://github.com/inducer/pytential.git" }
-pytools = { git = "https://github.com/inducer/pytools.git" }
-pyvisfile = { git = "https://github.com/inducer/pyvisfile.git" }
-sumpy = { git = "https://github.com/inducer/sumpy.git" }
 
 [tool.interrogate]
 # The docstring half of the documentation coverage question; the module and

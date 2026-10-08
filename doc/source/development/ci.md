@@ -17,10 +17,11 @@ gets **none** of these checks. See
 
 | Job | What it does |
 | --- | --- |
-| Typos | `crate-ci/typos` over the workflows, `volumential/`, `README.md`, `DEVELOPMENT.md` and `pyproject.toml`, configured by `.typos.toml` |
+| Typos | `crate-ci/typos` over the workflows, `volumential/`, `scripts/`, `README.md`, `DEVELOPMENT.md` and `pyproject.toml`, configured by `.typos.toml` |
 | Ruff | `ruff check --select E9,F63,F7,F82` — the error-level smoke subset, not the full `ruff.toml` rule set |
+| Lock | `uv lock --check`: `uv.lock` records the commits `pyproject.toml` pins the Git dependencies to, and the versions it resolved, for `pyproject.toml` as it stands |
 | Type checking | `basedpyright -p pyproject.toml --level error` |
-| Testing (Linux) | the default pytest suite, on four `pytest-xdist` workers, under a micromamba environment, installing `.[test]` plus the `pyfmmlib` commit that `uv.lock` pins (the `fmmlib` extra's content, passed as a pinned requirement so uv sees one Git URL), with a wrapper timeout and a diagnostics artifact (`linux-pytest.log`, `pytest.xml`) uploaded on every outcome |
+| Testing (Linux) | the default pytest suite, on four `pytest-xdist` workers, under a micromamba environment, installing `.[test,fmmlib]`, so the Git dependencies at the commits `pyproject.toml` pins, with a wrapper timeout and a diagnostics artifact (`linux-pytest.log`, `pytest.xml`) uploaded on every outcome |
 | Examples (Smoke) | four examples under `VOLUMENTIAL_EXAMPLE_SMOKE=1` — `laplace2d.py`, `laplace2d_adaptive.py`, `helmholtz2d.py`, `helmholtz3d.py` — under `set -euo pipefail`; the two Laplace examples run through `doc/tools/render_gallery.py`, and the upload of their figures and manifest as a `gallery-laplace2d-*` artifact is attempted on every outcome, so the artifact exists whenever the renderer wrote files, even if a later example fails (see {doc}`gallery-assets`) |
 | Documentation | this site: `sphinx-build -W --keep-going -n -b html`, then the two coverage reports (`-b coverage` and `interrogate`), then `-b linkcheck` last. The built HTML is uploaded as a `docs-html-*` artifact and the reports as `docs-coverage-*`; the job installs `.[test,doc]` |
 
@@ -58,26 +59,27 @@ were added in [#151](https://github.com/xywei/volumential/issues/151):
   reaches GitHub, and a failing example is reported green — which is exactly
   what happened to `helmholtz2d.py` for as long as it was broken. Keep the
   `set` line if the block is ever rewritten, or give each command its own step.
-- `Testing (Linux)` installs the `fmmlib` extra, which resolves `pyfmmlib` to
-  a Git source rather than to a release and so **builds it from source**
-  against the Fortran compiler `.test-conda-env-py3.yml` installs. That build
-  is what gives `test/test_fmmlib_batched_stages.py` its batched
-  `{l,h}{2,3}dformmp_imany` entry points; against a released wheel, PyPI's or
-  conda-forge's, eight of its tests skip and the batched-P2M path has no CI
-  coverage (see {doc}`../getting-started/installation`).
-
-  Two details of *that* are worth knowing before editing the step. First,
-  `uv pip install` does not read `uv.lock` — only `uv sync` does, and an exact
-  sync would uninstall the conda-provided half of the environment — so the
-  `[tool.uv.sources]` entry, which names a repository but no revision, would
-  float on upstream `main`. `.github/scripts/pyfmmlib_requirement.py` reads the
-  locked commit and prints it as a requirement, which the step passes to `uv`;
-  `uv.lock` therefore stays both the one place the revision is written down and
-  the thing that decides what CI builds. Second, the step then imports the four
+- `Testing (Linux)` installs the `fmmlib` extra, which asks for `pyfmmlib`
+  `2026.1` or later, the first release with the batched
+  `{l,h}{2,3}dformmp_imany` entry points that `test/test_fmmlib_batched_stages.py`
+  exercises; without them eight of its tests skip and the batched-P2M path has
+  no CI coverage (see {doc}`../getting-started/installation`). The conda
+  environment's own `pyfmmlib` satisfies it. The step then imports the four
   wrappers, because `FPNDFMMLibExpansionWrangler` falls back to the serial
-  per-box path *without complaining* when they are missing: a build that
-  silently fell back has to fail the environment rather than quietly reduce the
-  suite to what it covered before.
+  per-box path *without complaining* when they are missing: an environment
+  that ended up without them has to fail rather than quietly reduce the suite
+  to what it covered before. Before `2026.1`, this step built `pyfmmlib` from
+  a locked Git commit with a Fortran compiler from the conda environment.
+
+Every job that installs Volumential tests the commits `pyproject.toml` pins
+the Git dependencies to. `uv pip install` does not read `uv.lock` — only
+`uv sync` does, and an exact sync would uninstall the conda-provided half of
+the environment — but the pins are direct references in the package
+metadata, so `uv pip install --editable .` installs them as they stand, and
+the `Lock` job checks that `uv.lock` records the same commits. Before the
+pins, the Git dependencies were `[tool.uv.sources]` entries that named a
+repository but no commit, so these jobs installed whatever upstream `main`
+was on the day, whatever `uv.lock` said.
 
 The link check runs last on purpose: it is the only step whose outcome depends
 on hosts nobody here controls, so a rate-limited or unreachable third party
@@ -112,6 +114,7 @@ move.
 | --- | --- |
 | Testing (macOS) | the suite on macOS |
 | Full Accuracy Tests | scheduled or manual only — collects **and** runs the `full_accuracy` marker on the PoCL CPU, and fails if any of it skips |
+| Testing (Linux, dependency heads) | scheduled or manual only — moves the Git pins to the heads of their repositories and runs the `Testing (Linux)` suite there |
 | Examples | the maintained examples at full settings, with a cached Laplace 3D table |
 
 The full-accuracy job runs on a GitHub-hosted CPU runner, on the PoCL CPU that
@@ -130,6 +133,18 @@ split-versus-nonsplit tests. So the job sets
 `VOLUMENTIAL_FULL_ACCURACY_REDUCED=1`, which runs those two at a reduced size
 (see {doc}`testing`). In two runs at that size the tier took 55 and 38
 minutes; the runners had different CPUs. The full size is for a manual run.
+
+The dependency-heads job answers a question no other job asks: would the
+next bump of the Git pins break anything? It runs
+`scripts/bump_git_pins.py --no-lock`, which rewrites the pins in the runner's
+copy of `pyproject.toml` to the commits `git ls-remote` reports for each
+repository's default branch, then installs `.[test,fmmlib]` and runs the
+pull-request suite under the settings and timeout of `Testing (Linux)`. The
+job summary lists each pin it moved, with a compare link, and the list is in
+its diagnostics artifact too. A red run means upstream has moved in a way the
+next bump will have to deal with; the pins on `main`, and every other job,
+are unaffected. The bump itself is a pull request made with the same script
+(see `DEVELOPMENT.md`).
 
 ## Adding a documentation dependency
 
