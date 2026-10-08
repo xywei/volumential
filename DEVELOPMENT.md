@@ -427,10 +427,10 @@ It builds the sdist and the wheel and checks that they are one of each, of
 that version, and that `twine check --strict` accepts them. A second job
 creates the GitHub Release of the tag with the two files attached, with the
 install command in its notes, and marks it as a pre-release when the version
-has a pre-release suffix. The build runs with read access only; the release
-job is the only one allowed to write to the repository, and it runs no
-checkout or build of its own. The attached files carry the same pinned
-metadata as the tag.
+has a pre-release or development segment (`2026.1rc1`, `2026.1.dev1`). The
+build runs with read access only; the release job is the only one allowed to
+write to the repository, and it runs no checkout or build of its own. The
+attached files carry the same pinned metadata as the tag.
 
 The PyPI project keeps its Trusted Publisher for this workflow (owner
 `xywei`, repository `volumential`, workflow `publish.yml`, no environment),
