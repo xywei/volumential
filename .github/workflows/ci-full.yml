@@ -213,6 +213,95 @@ jobs:
               raise SystemExit(f"{skipped} full-accuracy tests were skipped")
           PYEOF
 
+  # Every other job installs the commits pyproject.toml pins the Git
+  # dependencies to.  This one first moves the pins to the heads of the
+  # inducer repositories, with the script a maintainer bumps them with, and
+  # then runs the pull-request suite: a failure here is upstream moving in a
+  # way the next bump will have to deal with, found before anyone bumps.  It
+  # changes nothing in the repository; the moves it tested are in the job
+  # summary.
+  pytest_heads:
+    name: Testing (Linux, dependency heads)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: mamba-org/setup-micromamba@f457c30a868e4760d3a6fcea5f25dc655b8edf39 # v3.2.1
+        with:
+          environment-file: .test-conda-env-py3.yml
+          environment-name: testing
+          cache-downloads: true
+          generate-run-shell: true
+      - name: Move the pins to the dependency heads
+        shell: micromamba-shell {0}
+        run: |
+          set -euo pipefail
+
+          # --no-lock: uv pip install reads the pins from pyproject.toml, not
+          # from uv.lock, so there is nothing to relock for.
+          python scripts/bump_git_pins.py --no-lock | tee dependency-heads.txt
+          {
+            echo "### Dependency heads under test"
+            echo
+            echo '```'
+            cat dependency-heads.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Prepare Test Environment
+        shell: micromamba-shell {0}
+        run: |
+          set -euxo pipefail
+
+          export PY_EXE=python
+
+          python -m pip install --upgrade pip
+          python -m pip install uv
+          # The same install as in Testing (Linux) of CI, from the moved pins.
+          uv pip install --system --editable ".[test,fmmlib]"
+
+          python -c "from pyfmmlib import \
+              h2dformmp_imany, h3dformmp_imany, l2dformmp_imany, l3dformmp_imany"
+
+      - name: Run pytest suite (guarded)
+        shell: micromamba-shell {0}
+        run: |
+          set -euxo pipefail
+
+          # The settings of the same step in Testing (Linux) of CI.
+          export PY_EXE=python
+          export PYTHONFAULTHANDLER=1
+          export PYTEST_FLAGS="-vv -o faulthandler_timeout=300"
+          export CISUPPORT_PARALLEL_PYTEST=xdist
+          export VOLUMENTIAL_LEVEL_RESTRICTION_MAX_PAIR_CHECKS=20000000
+          export VOLUMENTIAL_LEVEL_RESTRICTION_MAX_NBOXES=500000
+          export VOLUMENTIAL_LEVEL_RESTRICTION_MAX_LEAF_PAIR_TOTAL=50000000000
+
+          curl -L -O https://tiker.net/ci-support-v0
+
+          set +e
+          timeout --signal=SIGINT --kill-after=120 900 bash -c 'source ./ci-support-v0; test_py_project' \
+            2>&1 | tee linux-pytest.log
+          test_status=${PIPESTATUS[0]}
+          set -e
+
+          if [ "$test_status" -eq 124 ]; then
+            echo "::error::Linux pytest wrapper timed out after 900s"
+          fi
+
+          exit "$test_status"
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: testing-heads-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            dependency-heads.txt
+            linux-pytest.log
+            pytest.xml
+          if-no-files-found: warn
+
   examples:
     name: Examples
     runs-on: ubuntu-latest

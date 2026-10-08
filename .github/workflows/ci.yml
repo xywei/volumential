@@ -32,6 +32,7 @@ jobs:
           files: |
             .github/workflows
             volumential
+            scripts
             README.md
             DEVELOPMENT.md
             pyproject.toml
@@ -50,6 +51,23 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install ruff
           ruff check --select E9,F63,F7,F82
+
+  lock:
+    name: Lock
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      # pyproject.toml pins the Git dependencies and uv.lock records the same
+      # commits.  A pin edited without a relock would leave ``uv sync``
+      # installing other commits than the ones a release installs and the
+      # other jobs test; scripts/bump_git_pins.py moves a pin and relocks.
+      - name: Check that uv.lock agrees with pyproject.toml
+        run: |
+          python -m pip install uv
+          uv lock --check
 
   basedpyright:
     name: Type Checking (basedpyright)
@@ -189,40 +207,28 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install uv
 
+          # pyproject.toml pins each Git dependency to a commit, as a direct
+          # reference, so this installs the commits uv.lock records, and those
+          # are what this job tests.  ``uv pip install`` does not read the
+          # lock; it does not need to, since the pins are in the package
+          # metadata, where an install of a release finds them too.  The
+          # ``Lock`` job checks that the lock and the pins agree.
+          #
           # The ``fmmlib`` extra is what gives test_fmmlib_batched_stages.py
-          # something to test: it resolves pyfmmlib to a Git source rather
-          # than to a release, and only upstream ``main`` carries the batched
-          # ``{l,h}{2,3}dformmp_imany`` wrappers and the OpenMP feature option.
-          # No released wheel -- PyPI's or conda-forge's -- has them, so the
-          # batched-P2M tests skipped for "pyfmmlib lacks the formmp_imany
-          # routines".  The source build needs a Fortran compiler, which
-          # .test-conda-env-py3.yml installs; meson-python and ninja come from
-          # uv's build isolation.
-          #
-          # Which commit of it, though, uv.lock does not decide by itself
-          # here: ``uv pip install`` does not read the lock -- only ``uv sync``
-          # does, and an exact sync would uninstall the conda half of this
-          # environment -- so the unqualified source in ``[tool.uv.sources]``
-          # would float on upstream ``main``.  The helper reads the pinned
-          # revision out of the lock and prints it as a requirement, which
-          # keeps uv.lock both the one place the revision is written down and
-          # the thing that decides what CI builds.
-          #
-          # The pinned requirement stands in for the ``fmmlib`` extra rather
-          # than joining it: naming both hands uv two Git URLs for pyfmmlib,
-          # the extra's unpinned repository and the helper's pinned commit,
-          # and uv 0.12.15 and later refuse that as conflicting URLs (0.12.13
-          # still let the pinned one win).  The extra pulls in nothing else,
-          # so the environment is the same one ``.[test,fmmlib]`` described.
-          PYFMMLIB_SPEC="$(python .github/scripts/pyfmmlib_requirement.py)"
-
-          uv pip install --system --editable ".[test]" "$PYFMMLIB_SPEC"
+          # something to test: it asks for pyfmmlib 2026.1 or later, the first
+          # release with the batched ``{l,h}{2,3}dformmp_imany`` wrappers and
+          # the OpenMP feature option.  The conda environment already carries
+          # conda-forge's build of it; anything older would be replaced by the
+          # PyPI wheel.  Before 2026.1 this step built pyfmmlib from a Git
+          # commit, with the Fortran compiler the environment then installed.
+          uv pip install --system --editable ".[test,fmmlib]"
 
           python -V
           python -m pip --version
 
-          # Fail the environment, not the tests, if the build silently fell
-          # back to a wrapper-less pyfmmlib (see DEVELOPMENT.md).
+          # Fail the environment, not the tests, if the pyfmmlib that ended up
+          # installed lacks the wrappers: the backend would fall back to the
+          # per-box path silently (see DEVELOPMENT.md).
           python -c "from pyfmmlib import \
               h2dformmp_imany, h3dformmp_imany, l2dformmp_imany, l3dformmp_imany"
 
