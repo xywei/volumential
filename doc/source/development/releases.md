@@ -42,11 +42,40 @@ at the GitHub Pages site, <https://xywei.github.io/volumential/>, which
 `.github/workflows/docs-pages.yml` deploys from `main` (see {doc}`ci`). Until a
 first tag is published the switcher lists that one entry and nothing else.
 
+## Releases are Git tags
+
+A release is a tag `v<version>`, and it is installed from GitHub:
+
+```bash
+pip install "volumential @ git+https://github.com/xywei/volumential@v<version>"
+```
+
+It is not on PyPI. PyPI rejects any distribution whose metadata has a direct
+reference (`name @ git+https://...`), pinned or not, in an extra or not, and
+Volumential's dependencies on the `inducer` stack have to be such references:
+`pytential` has no installable release on PyPI, and `sumpy`, `boxtree`,
+`meshmode` and `arraycontext` only years-old ones
+([#211](https://github.com/xywei/volumential/issues/211)). `pyproject.toml`
+pins each of them to a commit, so a tag fixes the whole dependency set that
+matters, and an install of the tag gets the commits CI tested at that tag
+({doc}`../getting-started/installation`).
+
+Pushing the tag runs `.github/workflows/publish.yml`. Its build job checks that
+the tag, `pyproject.toml` and `volumential.version` agree, builds the sdist
+and the wheel, and checks them with `twine check --strict`; its release job,
+the only one with write access to the repository, creates the GitHub Release
+of the tag with both files attached. The PyPI project keeps a Trusted
+Publisher for that workflow, unused until the `inducer` packages are released
+on PyPI and the dependencies can be plain names again. `DEVELOPMENT.md` has
+the steps.
+
 ## When tagging starts
 
 The pieces that have to move together:
 
-1. `volumential/version.py` and the `version` field of `pyproject.toml`.
+1. `volumential/version.py` and the `version` field of `pyproject.toml`. The
+   suggestion for the version itself is a calendar version, `<year>.<n>`, as
+   the `inducer` packages use.
 2. A Git tag on the release commit.
 3. A new entry in `doc/source/_static/switcher.json`, with the previous
    `latest` gaining a version-specific URL.
@@ -54,5 +83,5 @@ The pieces that have to move together:
 
 Until then, anything that needs to identify a build should identify a commit —
 which is what {doc}`../benchmarks/index` requires of a measurement anyway, and
-why promoted evidence pins the generating commit and the locked dependency
+why promoted evidence pins the generating commit and the pinned dependency
 commits rather than a version string.

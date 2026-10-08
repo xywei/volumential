@@ -49,6 +49,26 @@ Tables and numerics
   change ({doc}`user-guide/table-build-routing`,
   [#201](https://github.com/xywei/volumential/issues/201)).
 
+Infrastructure
+: [#212](https://github.com/xywei/volumential/pull/212) — pin the Git
+  dependencies in `pyproject.toml` and release through Git tags. PyPI rejects
+  any distribution whose metadata has a direct reference, and Volumential's
+  `inducer` dependencies are only usable from Git
+  ([#211](https://github.com/xywei/volumential/issues/211)), so a release is a
+  tag `v<version>`, installed with
+  `pip install "volumential @ git+https://github.com/xywei/volumential@v<version>"`,
+  and a tag now makes a GitHub Release with the sdist and wheel rather than a
+  PyPI upload. The dependencies that came from Git are direct references
+  pinned to the commits `uv.lock` had, so pip installs them too, and the
+  `[tool.uv.sources]` table is gone. **What changes for an existing
+  environment:** nothing, if it was synced from `uv.lock`, since the pins are
+  the commits the lock had. CI installed the heads of upstream `main`,
+  whatever the lock said; it now tests the pins, and a weekly job in
+  `CI Full` tests the heads. The `fmmlib` extra takes `pyfmmlib`
+  `2026.1` from PyPI, the locked commit plus a version bump, so it needs no
+  Fortran compiler on Linux x86_64. `scripts/bump_git_pins.py` moves the pins
+  ({doc}`getting-started/installation`, {doc}`development/releases`).
+
 ### September 2026
 
 Documentation

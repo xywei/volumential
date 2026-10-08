@@ -15,6 +15,29 @@ adaptively refined 2:1-balanced trees.
 
 ## Install
 
+A release is a Git tag, installed from GitHub with pip or uv:
+
+```bash
+pip install "volumential @ git+https://github.com/xywei/volumential@v<version>"
+uv pip install "volumential @ git+https://github.com/xywei/volumential@v<version>"
+```
+
+No version is tagged yet; until one is, `@main` or `@<commit>` installs the
+same way. Either brings in the `inducer` packages Volumential is built on
+(`arraycontext`, `boxtree`, `loopy`, `meshmode`, `modepy`, `pymbolic`,
+`pytential`, `pytools`, `sumpy`) at the Git commits `pyproject.toml` pins,
+which are the ones CI tests, and everything else from PyPI. It needs `git`, a
+C compiler for the extension `pytential` builds, and an OpenCL runtime:
+conda-forge's `pocl` as below, or a vendor ICD. The `fmmlib` extra,
+`"volumential[fmmlib] @ git+..."`, adds the FMMLib far-field backend.
+
+Releases are not on PyPI, which rejects any package that names a Git
+dependency, and the pins have to be Git dependencies: `pytential` has no
+installable release there, and `sumpy`, `boxtree`, `meshmode` and
+`arraycontext` only years-old ones ([#211][issue-211]).
+
+To work on Volumential, clone it and sync the environment from `uv.lock`:
+
 ```bash
 micromamba create -n volumential-dev -c conda-forge -c nodefaults \
   python=3.12 pyopencl pocl scipy numpy
@@ -30,8 +53,8 @@ which `uv` builds a `.venv` with no OpenCL runtime. See
 [Installation][docs-install].)
 
 Released wheels of the `inducer` stack have shipped defects that corrupt
-adaptive-tree results *silently*, so `uv.lock` pins those dependencies (and
-`pyfmmlib`) to Git sources. Run the traversal sanity check before trusting a
+adaptive-tree results *silently*, which is another reason those dependencies
+are pinned to Git commits. Run the traversal sanity check before trusting a
 fresh environment — see [Installation][docs-install].
 
 ## Run
@@ -118,6 +141,7 @@ the Overseas Research Award.
 The project's name `volumential` [courtesy of Andreas Klöckner][volumential-name].
 
 [docs-install]: https://xywei.github.io/volumential/getting-started/installation.html
+[issue-211]: https://github.com/xywei/volumential/issues/211
 [docs-first]: https://xywei.github.io/volumential/getting-started/first-volume-potential.html
 [docs-getting-started]: https://xywei.github.io/volumential/getting-started/
 [docs-examples]: https://xywei.github.io/volumential/examples/gallery.html
