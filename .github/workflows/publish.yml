@@ -1,0 +1,77 @@
+name: Publish
+
+# A tag v<version> publishes that version to PyPI through Trusted Publishing:
+# PyPI trusts this workflow (owner xywei, repository volumential, workflow
+# publish.yml, no environment) to upload, so no token is stored anywhere.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+  publish:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    permissions:
+      # Required for PyPI Trusted Publishing (OIDC).
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+
+      # A tag publishes the version the package says it is, so the two have to
+      # be the same: v2026.1 for version 2026.1 in pyproject.toml and in
+      # volumential.version.VERSION_TEXT. The module is read, not imported,
+      # since importing it needs volumential's dependencies. A tag that is not
+      # the version stops here, before anything is built, and nothing reaches
+      # PyPI.
+      - name: Check that the tag is the package's version
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          project=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          module=$(python - <<'EOF'
+          import ast
+          values = {}
+          for node in ast.parse(open("volumential/version.py").read()).body:
+              if isinstance(node, ast.Assign) and len(node.targets) == 1:
+                  name = getattr(node.targets[0], "id", None)
+                  if name in ("VERSION", "VERSION_STATUS"):
+                      values[name] = ast.literal_eval(node.value)
+          print(".".join(str(i) for i in values["VERSION"]) + values["VERSION_STATUS"])
+          EOF
+          )
+          echo "tag ${GITHUB_REF_NAME}, pyproject.toml ${project}, volumential.version ${module}"
+          if [[ "${tag}" != "${project}" || "${tag}" != "${module}" ]]; then
+            echo "the tag ${GITHUB_REF_NAME} is not the package's version: pyproject.toml has ${project}, volumential.version ${module}" >&2
+            exit 1
+          fi
+
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install --upgrade build twine
+          python -m build
+
+      # What was built is what the tag names, one sdist and one wheel, and
+      # their metadata renders on PyPI.
+      - name: Check the distributions
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          ls dist
+          test -f "dist/volumential-${tag}.tar.gz"
+          test -f "dist/volumential-${tag}-py3-none-any.whl"
+          test "$(ls dist | wc -l)" -eq 2
+          python -m twine check --strict dist/*
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2

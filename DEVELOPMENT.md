@@ -334,6 +334,28 @@ target when the name belongs to a dependency, and a commented
 `nitpick_ignore` entry in `doc/source/conf.py` only when a third-party project
 publishes no inventory for it.
 
+## Releasing
+
+A tag `v<version>` publishes that version to PyPI. `.github/workflows/publish.yml`
+builds the sdist and the wheel and uploads them through PyPI's Trusted
+Publishing (owner `xywei`, repository `volumential`, workflow `publish.yml`, no
+environment), so no token is stored in the repository. To release:
+
+1. Set the version in both places it is written: `version` in
+   `pyproject.toml`, and `VERSION` and `VERSION_STATUS` in
+   `volumential/version.py` (`VERSION_TEXT` is built from them).
+2. Merge that change to `main`.
+3. Tag the merge commit and push the tag, e.g. `git tag -a v2026.1 -m
+   "volumential 2026.1"` and `git push origin v2026.1`.
+
+The workflow first checks that the tag, `pyproject.toml` and
+`volumential.version` agree, and stops before building if they do not. It then
+checks that the build is one sdist and one wheel of that version, which
+`twine check --strict` accepts. The published metadata names dependencies
+without the Git sources of `[tool.uv.sources]`, so an install from PyPI gets
+the released versions of the inducer stack: check that those versions run the
+test suite before tagging.
+
 ## Notes
 
 - Keep local and remote environments on the same Python minor version.
