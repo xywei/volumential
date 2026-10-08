@@ -945,12 +945,9 @@ def run(config, output_dir):
     _validate_config(config)
     if config.fmm_backend == "fmmlib" and find_spec("pyfmmlib") is None:
         raise RuntimeError(
-            "The FMMLib backend requires pyfmmlib, built from upstream "
-            "main for its OpenMP support and batched wrappers: "
-            "uv pip install --active "
-            '"pyfmmlib @ git+https://github.com/inducer/pyfmmlib.git" '
-            "(the volumential[fmmlib] extra resolves to a PyPI release "
-            "that has neither)"
+            "The FMMLib backend requires pyfmmlib 2026.1 or later, the "
+            "first release with OpenMP support and the batched wrappers: "
+            'install the volumential[fmmlib] extra, or "pyfmmlib>=2026.1"'
         )
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
