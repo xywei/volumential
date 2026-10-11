@@ -134,7 +134,7 @@ jobs:
           # there, as conda-forge's pyopencl does, which finds the
           # environment's PoCL.  Once conda-forge catches up, uv keeps its
           # build and the flag does nothing.
-          uv pip install --system --no-binary-package pyopencl --editable ".[test]"
+          uv pip install --system --no-binary pyopencl --editable ".[test]"
 
           curl -L -O https://tiker.net/ci-support-v0
           . ./ci-support-v0
@@ -301,8 +301,9 @@ jobs:
           so = next(Path(pyfmmlib.__file__).parent.glob("_internal*.so"))
           ldd = subprocess.run(["ldd", so], capture_output=True, text=True,
                                check=True).stdout
-          if "libgomp" not in ldd:
-              raise SystemExit(f"{so.name} does not link libgomp:\n{ldd}")
+          # Any OpenMP runtime will do; the name follows the compiler.
+          if not any(rt in ldd for rt in ("libgomp", "libomp", "libiomp")):
+              raise SystemExit(f"{so.name} links no OpenMP runtime:\n{ldd}")
           print(f"pyfmmlib {dist.version}, built from {pinned}, with OpenMP")
           PYEOF
 
