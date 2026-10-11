@@ -1,10 +1,12 @@
 """Move the Git pins of Volumential's dependencies, then relock.
 
-The inducer packages Volumential needs have no usable release, so
+Most of the inducer packages Volumential needs have no usable release, so
 ``pyproject.toml`` declares each of them as a direct reference pinned to a
-commit, ``name @ git+https://github.com/inducer/<repo>.git@<commit>``. That
-pin is what an install of Volumential gets, ``uv.lock`` records the same
-commit, and CI tests it. This script is how the pins move.
+commit, ``name @ git+https://github.com/inducer/<repo>.git@<commit>``, and
+pins ``pyfmmlib`` in the ``fmmlib`` extra the same way. That pin is what an
+install of Volumential gets, ``uv.lock`` records the same commit, and CI tests
+it. This script is how the pins move: every Git requirement of
+``[project]``, in ``dependencies`` and in each extra, is a pin it moves.
 
 With no package named, every pin moves to the head of its repository's
 default branch, as ``git ls-remote <url> HEAD`` reports it. Name packages to

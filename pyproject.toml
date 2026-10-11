@@ -33,7 +33,7 @@ dependencies = [
   "meshmode @ git+https://github.com/inducer/meshmode.git@fa2d5450a42468ef31b9b8f420e2514465ba7a5c",
   "modepy @ git+https://github.com/inducer/modepy.git@a0f44097f4f470c9107c60ef322512ecabda1174",
   "pymbolic @ git+https://github.com/inducer/pymbolic.git@3963dd2d0be04e3f06ce7b5d1151dff3955ff5aa",
-  "pyopencl",
+  "pyopencl>=2026.1.4",
   "pytools @ git+https://github.com/inducer/pytools.git@295ffaebfacdb1ffb2a7ef85a0862f3ee0519c8f",
   "pytential @ git+https://github.com/inducer/pytential.git@09a0316b88ddb3fd75670089dc64411186740606",
   "scipy",
@@ -42,7 +42,9 @@ dependencies = [
 
 [project.optional-dependencies]
 benchmark = ["mpmath"]
-fmmlib = ["pyfmmlib>=2026.1"]
+fmmlib = [
+  "pyfmmlib @ git+https://github.com/inducer/pyfmmlib.git@c168359adbf20c2402829e85258c21a300446148",
+]
 gmsh_support = [
   "gmsh_interop @ git+https://github.com/inducer/gmsh_interop.git@0250c1eff69bf17b2d1e9b296163f2aef5cdbda5",
 ]
