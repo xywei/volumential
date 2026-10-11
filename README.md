@@ -15,23 +15,56 @@ adaptively refined 2:1-balanced trees.
 
 ## Install
 
+A release is a Git tag, installed from GitHub with pip or uv. The first is
+`2026.1`:
+
+```bash
+pip install "volumential @ git+https://github.com/xywei/volumential@v2026.1"
+uv pip install "volumential @ git+https://github.com/xywei/volumential@v2026.1"
+```
+
+`@main` or `@<commit>` installs the same way. Either brings in the `inducer`
+packages Volumential is built on (`arraycontext`, `boxtree`, `loopy`,
+`meshmode`, `modepy`, `pymbolic`, `pytential`, `pytools`, `sumpy`) at the Git
+commits `pyproject.toml` pins, which are the ones CI tests, and everything
+else from PyPI, `pyopencl` `2026.1.4` or later among it. It needs `git`, a C
+compiler for the extension `pytential` builds, and an OpenCL runtime:
+conda-forge's `pocl` as below, or a vendor ICD. PyPI's `pyopencl` wheel finds
+conda-forge's PoCL through `OCL_ICD_VENDORS`, as below; on macOS it cannot
+load PoCL at all ([Installation][docs-install] has the way around that).
+
+The `fmmlib` extra, `"volumential[fmmlib] @ git+..."`, adds the FMMLib
+far-field backend. It builds `pyfmmlib` from Git, at the commit of its
+`v2026.1` tag, so it needs a Fortran compiler with OpenMP. Without one, leave
+the extra out and install `pyfmmlib` `2026.1` or later from PyPI's wheels
+(Linux x86_64) or conda-forge instead.
+
+Releases are not on PyPI, which rejects any package that names a Git
+dependency, and the pins have to be Git dependencies: `pytential` has no
+installable release there, and `sumpy`, `boxtree`, `meshmode` and
+`arraycontext` only years-old ones ([#211][issue-211]).
+
+To work on Volumential, clone it and sync the environment from `uv.lock`:
+
 ```bash
 micromamba create -n volumential-dev -c conda-forge -c nodefaults \
-  python=3.12 pyopencl pocl scipy numpy
+  python=3.12 pocl scipy numpy
 eval "$(micromamba shell hook -s bash)" && micromamba activate volumential-dev
 export UV_PROJECT_ENVIRONMENT="$CONDA_PREFIX"
+export OCL_ICD_VENDORS="$CONDA_PREFIX/etc/OpenCL/vendors"
 git clone https://github.com/xywei/volumential.git && cd volumential
 uv sync --extra test
 ```
 
 (`micromamba activate` is a shell function, hence the hook;
 `UV_PROJECT_ENVIRONMENT` is what points `uv` at the conda environment, without
-which `uv` builds a `.venv` with no OpenCL runtime. See
-[Installation][docs-install].)
+which `uv` builds a `.venv` with no OpenCL runtime; `OCL_ICD_VENDORS` is what
+points the ICD loader of PyPI's `pyopencl` wheel, which `uv sync` installs, at
+the environment's PoCL. See [Installation][docs-install].)
 
 Released wheels of the `inducer` stack have shipped defects that corrupt
-adaptive-tree results *silently*, so `uv.lock` pins those dependencies (and
-`pyfmmlib`) to Git sources. Run the traversal sanity check before trusting a
+adaptive-tree results *silently*, which is another reason those dependencies
+are pinned to Git commits. Run the traversal sanity check before trusting a
 fresh environment — see [Installation][docs-install].
 
 ## Run
@@ -118,6 +151,7 @@ the Overseas Research Award.
 The project's name `volumential` [courtesy of Andreas Klöckner][volumential-name].
 
 [docs-install]: https://xywei.github.io/volumential/getting-started/installation.html
+[issue-211]: https://github.com/xywei/volumential/issues/211
 [docs-first]: https://xywei.github.io/volumential/getting-started/first-volume-potential.html
 [docs-getting-started]: https://xywei.github.io/volumential/getting-started/
 [docs-examples]: https://xywei.github.io/volumential/examples/gallery.html

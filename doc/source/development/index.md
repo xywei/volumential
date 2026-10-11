@@ -22,7 +22,7 @@ versioning works.
 Set up with {doc}`../getting-started/installation`, then read `DEVELOPMENT.md`
 for the parts that only matter once you are producing evidence:
 
-- the dependency-provisioning rules (inducer stack from Git sources,
+- the dependency-provisioning rules (inducer stack pinned to Git commits,
   `pyfmmlib` with OpenMP and the batched P2M wrappers, the post-provisioning
   traversal sanity check, and the thread caps to record in run metadata);
 - remote setup for heavier numerical experiments;

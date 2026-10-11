@@ -1,11 +1,62 @@
 # Installation
 
-`pyproject.toml` plus [uv](https://docs.astral.sh/uv/) are the source of truth
-for dependency resolution, and `uv.lock` records the exact resolution an
-environment was built from — a commit for each Git-sourced dependency, a
-version and artifact hashes for each one that comes from PyPI. `DEVELOPMENT.md` at the repository root carries the
-same recipe in the form a maintainer runs it; this page is the version a new
-user needs.
+Volumential is installed from GitHub. A release is a Git tag, and
+`pyproject.toml` pins the `inducer` packages it depends on to Git commits.
+For a development environment, `pyproject.toml` plus
+[uv](https://docs.astral.sh/uv/) are the source of truth for dependency
+resolution, and `uv.lock` records the exact resolution an environment was
+built from — those same commits, and a version and artifact hashes for each
+dependency that comes from PyPI. `DEVELOPMENT.md` at the repository root
+carries the same recipe in the form a maintainer runs it; this page is the
+version a new user needs.
+
+## Install a release
+
+```bash
+pip install "volumential @ git+https://github.com/xywei/volumential@v2026.1"
+uv pip install "volumential @ git+https://github.com/xywei/volumential@v2026.1"
+```
+
+The first release is `2026.1`; a later one is `@v<version>`, and `@main` or
+`@<commit>` installs the same way. Extras go before the `@`, as in
+`"volumential[fmmlib] @ git+https://github.com/xywei/volumential@v2026.1"`.
+pip or uv builds Volumential and installs the `inducer` packages at the
+commits its `pyproject.toml` pins — `arraycontext`, `boxtree`, `loopy`,
+`meshmode`, `modepy`, `pymbolic`, `pytential`, `pytools`, `sumpy`,
+`gmsh_interop` with the `test` extra, and `pyfmmlib` with the `fmmlib` extra
+— which are the commits CI tests, and everything else from PyPI, `pyopencl`
+`2026.1.4` or later among it. That needs:
+
+- **`git`**, to clone each pinned dependency;
+- **a C compiler**, for the extension `pytential` builds;
+- for the `fmmlib` extra, **a Fortran compiler with OpenMP**, since the extra
+  builds `pyfmmlib` from Git (see [The FMMLib backend](#the-fmmlib-backend));
+- to run anything, an **OpenCL runtime**: the conda-forge environment of
+  [Install](#install) below provides PoCL, and a vendor ICD works too.
+
+`pyopencl` comes from PyPI's wheel, which brings its own ICD loader. On Linux
+that loader reads `/etc/OpenCL/vendors` unless `OCL_ICD_VENDORS` names another
+directory, so to use conda-forge's PoCL, point it at the conda environment:
+`export OCL_ICD_VENDORS="$CONDA_PREFIX/etc/OpenCL/vendors"`. On macOS the
+wheel links Apple's OpenCL framework, which cannot load PoCL. To use PoCL
+there, build `pyopencl` from source in a conda environment that has
+`libopencl-devel` (`--no-binary pyopencl` for `pip` and `uv pip`,
+`--no-binary-package pyopencl` for `uv sync`): it then links that
+environment's ICD loader, which finds the environment's PoCL. conda-forge's
+own `pyopencl` is built that way, but conda-forge has no `2026.1.4` yet, so
+installing Volumential replaces it with the wheel.
+
+Releases are not on PyPI. PyPI rejects any distribution whose metadata names
+a dependency by a direct reference (`name @ git+https://...`), pinned or not,
+in an extra or not. The pins have to be such references, because `pytential`
+has no installable release on PyPI and `sumpy`, `boxtree`, `meshmode` and
+`arraycontext` only years-old ones
+([#211](https://github.com/xywei/volumential/issues/211)). Each release is
+also a GitHub Release, with its sdist and wheel attached; they carry the same
+pins.
+
+The rest of this page builds a development environment from a clone, which
+is also the recipe for any environment that produces evidence.
 
 ## Prerequisites
 
@@ -23,7 +74,11 @@ user needs.
   OpenCL runtime. Skip it only if the host already has a working ICD and a
   3.12 interpreter, in which case create the environment however you normally
   would and pick the recipe up at the `git clone`.
-- **`gfortran` and `ninja`**, only for the optional `fmmlib` extra.
+- **`git` and a C compiler**: the pinned dependencies are cloned, and
+  `pytential` builds a C extension.
+- **A Fortran compiler with OpenMP** (`gfortran`), only for the optional
+  `fmmlib` extra, which builds `pyfmmlib` from Git; meson-python and ninja
+  come from build isolation.
 
 ## Install
 
@@ -37,21 +92,34 @@ environment there and let `uv` fill in the rest:
 
 ```bash
 micromamba create -n volumential-dev -c conda-forge -c nodefaults \
-  python=3.12 pyopencl pocl scipy numpy
+  python=3.12 pocl scipy numpy
 
 eval "$(micromamba shell hook -s bash)"   # once per shell, if not shell-init'd
 micromamba activate volumential-dev
 export UV_PROJECT_ENVIRONMENT="$CONDA_PREFIX"
+export OCL_ICD_VENDORS="$CONDA_PREFIX/etc/OpenCL/vendors"
 
 git clone https://github.com/xywei/volumential.git
 cd volumential
 uv sync --extra test --extra doc
 ```
 
-Two lines there are load-bearing, and they fail differently if you skip them:
-without the `eval`, `micromamba activate` fails at once because the shell
-function does not exist yet; without `UV_PROJECT_ENVIRONMENT`, `uv` fails
-quietly and installs into a checkout-local `.venv` instead.
+Three lines there are load-bearing, and they fail differently if you skip
+them: without the `eval`, `micromamba activate` fails at once because the
+shell function does not exist yet; without `UV_PROJECT_ENVIRONMENT`, `uv`
+fails quietly and installs into a checkout-local `.venv` instead; without
+`OCL_ICD_VENDORS`, `pyopencl` looks for platforms in `/etc/OpenCL/vendors`
+and not in the environment, so it finds the host's ICDs, if any, rather than
+the environment's PoCL, or fails with `PLATFORM_NOT_FOUND_KHR`.
+
+The environment carries PoCL but not `pyopencl`: `uv sync` installs the
+`pyopencl` that `uv.lock` records, `2026.1.4`, from PyPI, and would replace a
+conda-forge one anyway, since conda-forge has nothing that recent yet. PyPI's
+wheel brings its own ICD loader, which is what `OCL_ICD_VENDORS` steers. On
+macOS that wheel links Apple's OpenCL framework instead, which cannot load
+PoCL, so add `libopencl-devel` to the environment and sync with
+`--no-binary-package pyopencl`, which builds it against the environment's ICD
+loader (see [Install a release](#install-a-release)).
 
 `micromamba activate` is a shell function, not a binary, so a fresh shell has
 to evaluate the hook before it exists. `micromamba shell init -s bash` makes it
@@ -68,15 +136,19 @@ activating and both `uv sync` and `uv run` do the right thing.
 
 ## Why the dependencies come from Git
 
-`[tool.uv.sources]` points most of the `inducer` stack at its main branches,
-and `uv.lock` records the resolved commits: `arraycontext`, `boxtree`, `cgen`,
-`genpy`, `gmsh_interop`, `loopy`, `meshmode`, `modepy`, `pyfmmlib`,
-`pymbolic`, `pytential`, `pytools`, `pyvisfile`, `sumpy`. **`pyopencl` is not
-among them** — it resolves from PyPI, and `uv.lock` pins a release
-(`2026.1.2`) rather than a commit, so that is the version an audit of an
-evidence environment should expect to find. These projects release rarely, and released wheels have shipped
-defects that corrupt results *silently*, which is a different and worse failure
-than a crash.
+`pyproject.toml` pins most of the `inducer` stack to commits of its main
+branches, as direct references (`name @ git+https://...@<commit>`), and
+`uv.lock` records the same commits: `arraycontext`, `boxtree`, `loopy`,
+`meshmode`, `modepy`, `pymbolic`, `pytential`, `pytools`, `sumpy`,
+`gmsh_interop` in the `test` and `gmsh_support` extras, and `pyfmmlib` in the
+`fmmlib` extra, at the commit of its `v2026.1` tag. **`pyopencl` is not among
+them** — it resolves from PyPI, `2026.1.4` or later, and `uv.lock` pins a
+release (`2026.1.4`) rather than a commit, so that is the version an audit of
+an evidence environment should expect to find; so do `cgen`, `genpy` and
+`islpy`, which Volumential only needs through the packages above. These
+projects release rarely, and released wheels have shipped defects that
+corrupt results *silently*, which is a different and worse failure than a
+crash.
 
 The specific one that matters here: `boxtree` must be at or after the upstream
 commit that fixed `refine_and_coarsen_tree_of_boxes` (parent/child id remapping
@@ -101,22 +173,40 @@ include. Naming only `--extra fmmlib` would therefore remove the `test` and
 `doc` extras installed above, `pytest` included, so list every extra you want
 in the environment on each sync.
 
-This builds `pyfmmlib` from upstream `main`, which carries both the restored
-OpenMP feature option ([inducer/pyfmmlib#93](https://github.com/inducer/pyfmmlib/pull/93))
-and the batched `{l,h}{2,3}dformmp_imany` wrappers
-([inducer/pyfmmlib#94](https://github.com/inducer/pyfmmlib/pull/94)). The PyPI
-`2024.1.1` release has neither. Since
-[#135](https://github.com/xywei/volumential/pull/135) `pyfmmlib` has a
-`[tool.uv.sources]` entry like the inducer packages, so the extra resolves to
-the commit `uv.lock` pins; installing it by hand with
-`uv pip install "pyfmmlib @ git+..."` still works but bypasses the lock, and
-two hosts provisioned on different days then end up on different revisions.
+The extra pins `pyfmmlib` to the commit of its `v2026.1` tag. `2026.1` is the
+first release with both the restored OpenMP feature option
+([inducer/pyfmmlib#93](https://github.com/inducer/pyfmmlib/pull/93)) and the
+batched `{l,h}{2,3}dformmp_imany` wrappers
+([inducer/pyfmmlib#94](https://github.com/inducer/pyfmmlib/pull/94));
+earlier releases, `2024.1.1` included, have neither. Being a Git pin like the
+others, the extra **builds `pyfmmlib` from source**, which needs a Fortran
+compiler with OpenMP (`gfortran`, say); meson-python and ninja come from build
+isolation. The `openmp` feature option defaults to `auto`, so a host with a
+usable OpenMP toolchain needs no extra build flag, and one without OpenMP
+builds a serial `pyfmmlib` without complaint, which the check below catches.
 
-The `openmp` feature option defaults to `auto`, so a host with a usable OpenMP
-toolchain needs no extra build flag. Verify the build before trusting any
-FMMLib timing — `FPNDFMMLibExpansionWrangler` falls back to the serial per-box
-path *without complaining* when the batched entry points are missing, so a
-mis-provisioned environment is correct but slow:
+Without a Fortran compiler, leave the extra out and install `pyfmmlib`
+`2026.1` or later yourself: PyPI has wheels for Linux x86_64, which carry the
+wrappers and link `libgomp`, and conda-forge has `2026.1`. For a release
+install that is
+
+```bash
+pip install "volumential @ git+https://github.com/xywei/volumential@v2026.1" \
+  "pyfmmlib>=2026.1"
+```
+
+and in an environment synced from `uv.lock`, install it and then sync with
+`--inexact`, since an exact sync uninstalls whatever it was not asked for.
+Asking for the extra as well does not get around the compiler. pip reads the
+pin's metadata before it decides anything, which runs `pyfmmlib`'s meson
+configure step and fails without a Fortran compiler; with one, pip keeps an
+installed `2026.1` rather than building the pin. uv replaces an installed
+release with a build of the pin, so it needs the compiler either way.
+
+Verify the installation before trusting any FMMLib timing —
+`FPNDFMMLibExpansionWrangler` falls back to the serial per-box path *without
+complaining* when the batched entry points are missing, so a mis-provisioned
+environment is correct but slow:
 
 ```bash
 # Batched wrappers present.  The backend picks {l,h}{2,3}dformmp_imany from the
@@ -127,8 +217,8 @@ python -c "from pyfmmlib import \
     h2dformmp_imany, h3dformmp_imany, l2dformmp_imany, l3dformmp_imany"
 # Dipole sources (a DirectionalSourceDerivative kernel, i.e. a dipole_vec)
 # take a different P2M wrapper, {l,h}{2,3}dformmp_dp_imany, and fall back to
-# the per-box routine just as silently when it is absent.  pyfmmlib generates
-# both families at the revision uv.lock pins, so an import failure here means
+# the per-box routine just as silently when it is absent.  pyfmmlib 2026.1
+# generates both families, so an import failure here means
 # the dipole P2M will run per box, not that the charge path is broken.
 python -c "from pyfmmlib import \
     h2dformmp_dp_imany, h3dformmp_dp_imany, \
@@ -199,7 +289,7 @@ tree-of-boxes refinement is the broken one: stop and re-provision. The driver
 also fails loudly if the adaptive tree comes out uniform, unbalanced, or free
 of cross-level List 1 work; that is the same verdict.
 
-This check is the reason the Git sources above are not optional. It is cheap,
+This check is the reason the Git pins above are not optional. It is cheap,
 it is decisive, and skipping it is how a corrupted neighbour list reaches a
 plot.
 

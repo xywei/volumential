@@ -32,6 +32,7 @@ jobs:
           files: |
             .github/workflows
             volumential
+            scripts
             README.md
             DEVELOPMENT.md
             pyproject.toml
@@ -50,6 +51,27 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install ruff
           ruff check --select E9,F63,F7,F82
+
+  lock:
+    name: Lock
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # uv, and the build backends it may run to resolve the Git
+          # dependencies, have no use for a Git token.
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      # pyproject.toml pins the Git dependencies and uv.lock records the same
+      # commits.  A pin edited without a relock would leave ``uv sync``
+      # installing other commits than the ones a release installs and the
+      # other jobs test; scripts/bump_git_pins.py moves a pin and relocks.
+      - name: Check that uv.lock agrees with pyproject.toml
+        run: |
+          python -m pip install uv
+          uv lock --check
 
   basedpyright:
     name: Type Checking (basedpyright)
@@ -189,42 +211,65 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install uv
 
+          # pyproject.toml pins each Git dependency to a commit, as a direct
+          # reference, so this installs the commits uv.lock records, and those
+          # are what this job tests.  ``uv pip install`` does not read the
+          # lock; it does not need to, since the pins are in the package
+          # metadata, where an install of a release finds them too.  The
+          # ``Lock`` job checks that the lock and the pins agree.
+          #
           # The ``fmmlib`` extra is what gives test_fmmlib_batched_stages.py
-          # something to test: it resolves pyfmmlib to a Git source rather
-          # than to a release, and only upstream ``main`` carries the batched
-          # ``{l,h}{2,3}dformmp_imany`` wrappers and the OpenMP feature option.
-          # No released wheel -- PyPI's or conda-forge's -- has them, so the
-          # batched-P2M tests skipped for "pyfmmlib lacks the formmp_imany
-          # routines".  The source build needs a Fortran compiler, which
-          # .test-conda-env-py3.yml installs; meson-python and ninja come from
+          # something to test: it pins pyfmmlib to the commit of its v2026.1
+          # tag, the first release with the batched
+          # ``{l,h}{2,3}dformmp_imany`` wrappers and the OpenMP feature
+          # option.  Being a Git pin, it replaces the conda-forge build the
+          # environment carries with a build of that commit, made with the
+          # environment's Fortran compiler; meson-python and ninja come from
           # uv's build isolation.
           #
-          # Which commit of it, though, uv.lock does not decide by itself
-          # here: ``uv pip install`` does not read the lock -- only ``uv sync``
-          # does, and an exact sync would uninstall the conda half of this
-          # environment -- so the unqualified source in ``[tool.uv.sources]``
-          # would float on upstream ``main``.  The helper reads the pinned
-          # revision out of the lock and prints it as a requirement, which
-          # keeps uv.lock both the one place the revision is written down and
-          # the thing that decides what CI builds.
-          #
-          # The pinned requirement stands in for the ``fmmlib`` extra rather
-          # than joining it: naming both hands uv two Git URLs for pyfmmlib,
-          # the extra's unpinned repository and the helper's pinned commit,
-          # and uv 0.12.15 and later refuse that as conflicting URLs (0.12.13
-          # still let the pinned one win).  The extra pulls in nothing else,
-          # so the environment is the same one ``.[test,fmmlib]`` described.
-          PYFMMLIB_SPEC="$(python .github/scripts/pyfmmlib_requirement.py)"
-
-          uv pip install --system --editable ".[test]" "$PYFMMLIB_SPEC"
+          # conda-forge has no pyopencl as new as the floor in pyproject.toml,
+          # so this also replaces the environment's pyopencl with PyPI's
+          # wheel; the test steps point its ICD loader at the environment's
+          # PoCL (OCL_ICD_VENDORS).
+          uv pip install --system --editable ".[test,fmmlib]"
 
           python -V
           python -m pip --version
 
-          # Fail the environment, not the tests, if the build silently fell
-          # back to a wrapper-less pyfmmlib (see DEVELOPMENT.md).
+          # Fail the environment, not the tests, if the pyfmmlib that ended up
+          # installed lacks the wrappers: the backend would fall back to the
+          # per-box path silently (see DEVELOPMENT.md).
           python -c "from pyfmmlib import \
               h2dformmp_imany, h3dformmp_imany, l2dformmp_imany, l3dformmp_imany"
+
+          # And check that it is what a user of the extra gets: the build of
+          # the pinned commit, not the conda-forge build it replaced, and
+          # built with OpenMP.
+          python - <<'PYEOF'
+          import json
+          import subprocess
+          import tomllib
+          from importlib.metadata import distribution
+          from pathlib import Path
+
+          import pyfmmlib
+
+          (requirement,) = tomllib.loads(Path("pyproject.toml").read_text())[
+              "project"]["optional-dependencies"]["fmmlib"]
+          pinned = requirement.rpartition("@")[2]
+          dist = distribution("pyfmmlib")
+          direct_url = json.loads(dist.read_text("direct_url.json") or "{}")
+          if direct_url.get("vcs_info", {}).get("commit_id") != pinned:
+              raise SystemExit(f"pyfmmlib {dist.version} is not the build of "
+                               f"{pinned}: direct_url.json is {direct_url}")
+          so = next(Path(pyfmmlib.__file__).parent.glob("_internal*.so"))
+          ldd = subprocess.run(["ldd", so], capture_output=True, text=True,
+                               check=True).stdout
+          # Any OpenMP runtime will do; the name follows the compiler.
+          if not any(rt in ldd for rt in ("libgomp", "libomp", "libiomp")):
+              raise SystemExit(f"{so.name} links no OpenMP runtime:\n{ldd}")
+          print(f"pyfmmlib {dist.version}, built from {pinned}, with OpenMP")
+          PYEOF
 
       - name: Run pytest suite (guarded)
         shell: micromamba-shell {0}
@@ -232,6 +277,10 @@ jobs:
           set -euxo pipefail
 
           export PY_EXE=python
+          # PyPI's pyopencl wheel brings its own ICD loader, which reads
+          # /etc/OpenCL/vendors unless told otherwise; the PoCL this job
+          # tests on is the conda environment's.
+          export OCL_ICD_VENDORS="$CONDA_PREFIX/etc/OpenCL/vendors"
           export PYTHONFAULTHANDLER=1
           export PYTEST_FLAGS="-vv -o faulthandler_timeout=300"
           # ci-support knows two schemes: "xdist" (or empty), which passes
@@ -290,6 +339,9 @@ jobs:
           export PY_EXE=python
           export VOLUMENTIAL_EXAMPLE_SMOKE=1
           export PYOPENCL_CTX="portable:0"
+          # The conda environment's PoCL, for the ICD loader of PyPI's
+          # pyopencl wheel that the install below brings (see Testing (Linux)).
+          export OCL_ICD_VENDORS="$CONDA_PREFIX/etc/OpenCL/vendors"
 
           python -m pip install --upgrade pip
           python -m pip install uv

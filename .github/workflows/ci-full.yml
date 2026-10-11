@@ -126,7 +126,15 @@ jobs:
 
           python -m pip install --upgrade pip
           python -m pip install uv
-          uv pip install --system --editable ".[test]"
+          # pyproject.toml asks for a pyopencl newer than conda-forge has
+          # (2026.1.4 against 2026.1.3), so uv replaces the environment's.
+          # PyPI's macOS wheel links Apple's OpenCL framework, which cannot
+          # load PoCL, so the replacement is built from the sdist instead:
+          # its build finds the conda environment and links the ICD loader
+          # there, as conda-forge's pyopencl does, which finds the
+          # environment's PoCL.  Once conda-forge catches up, uv keeps its
+          # build and the flag does nothing.
+          uv pip install --system --no-binary pyopencl --editable ".[test]"
 
           curl -L -O https://tiker.net/ci-support-v0
           . ./ci-support-v0
@@ -165,6 +173,10 @@ jobs:
           # GPU, found none on this runner, and all of them skipped.
           export PYOPENCL_CTX="portable:0"
           export PYOPENCL_TEST="portable:0"
+          # The conda environment's PoCL, for the ICD loader of PyPI's
+          # pyopencl wheel that the install below brings (see Testing (Linux)
+          # in CI).
+          export OCL_ICD_VENDORS="$CONDA_PREFIX/etc/OpenCL/vendors"
           export PYTHONFAULTHANDLER=1
           # At full size the two 3D split-versus-nonsplit tests took 57 of
           # the 90 minutes this run needed on the CPU; this runs them at the
@@ -213,6 +225,128 @@ jobs:
               raise SystemExit(f"{skipped} full-accuracy tests were skipped")
           PYEOF
 
+  # Every other job installs the commits pyproject.toml pins the Git
+  # dependencies to.  This one first moves the pins to the heads of the
+  # inducer repositories, with the script a maintainer bumps them with --
+  # every pin, pyfmmlib's in the fmmlib extra included, so it builds
+  # pyfmmlib's head -- and then runs the pull-request suite: a failure here
+  # is upstream moving in a way the next bump will have to deal with, found
+  # before anyone bumps.  It changes nothing in the repository; the moves it
+  # tested are in the job summary.
+  pytest_heads:
+    name: Testing (Linux, dependency heads)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # This job runs code from upstream heads nobody here has
+          # reviewed yet, which has no use for a Git token.
+          persist-credentials: false
+      - uses: mamba-org/setup-micromamba@f457c30a868e4760d3a6fcea5f25dc655b8edf39 # v3.2.1
+        with:
+          environment-file: .test-conda-env-py3.yml
+          environment-name: testing
+          cache-downloads: true
+          generate-run-shell: true
+      - name: Move the pins to the dependency heads
+        shell: micromamba-shell {0}
+        run: |
+          set -euo pipefail
+
+          # --no-lock: uv pip install reads the pins from pyproject.toml, not
+          # from uv.lock, so there is nothing to relock for.
+          python scripts/bump_git_pins.py --no-lock | tee dependency-heads.txt
+          {
+            echo "### Dependency heads under test"
+            echo
+            echo '```'
+            cat dependency-heads.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Prepare Test Environment
+        shell: micromamba-shell {0}
+        run: |
+          set -euxo pipefail
+
+          export PY_EXE=python
+
+          python -m pip install --upgrade pip
+          python -m pip install uv
+          # The same install and checks as in Testing (Linux) of CI, from the
+          # moved pins, pyfmmlib's among them.
+          uv pip install --system --editable ".[test,fmmlib]"
+
+          python -c "from pyfmmlib import \
+              h2dformmp_imany, h3dformmp_imany, l2dformmp_imany, l3dformmp_imany"
+
+          python - <<'PYEOF'
+          import json
+          import subprocess
+          import tomllib
+          from importlib.metadata import distribution
+          from pathlib import Path
+
+          import pyfmmlib
+
+          (requirement,) = tomllib.loads(Path("pyproject.toml").read_text())[
+              "project"]["optional-dependencies"]["fmmlib"]
+          pinned = requirement.rpartition("@")[2]
+          dist = distribution("pyfmmlib")
+          direct_url = json.loads(dist.read_text("direct_url.json") or "{}")
+          if direct_url.get("vcs_info", {}).get("commit_id") != pinned:
+              raise SystemExit(f"pyfmmlib {dist.version} is not the build of "
+                               f"{pinned}: direct_url.json is {direct_url}")
+          so = next(Path(pyfmmlib.__file__).parent.glob("_internal*.so"))
+          ldd = subprocess.run(["ldd", so], capture_output=True, text=True,
+                               check=True).stdout
+          # Any OpenMP runtime will do; the name follows the compiler.
+          if not any(rt in ldd for rt in ("libgomp", "libomp", "libiomp")):
+              raise SystemExit(f"{so.name} links no OpenMP runtime:\n{ldd}")
+          print(f"pyfmmlib {dist.version}, built from {pinned}, with OpenMP")
+          PYEOF
+
+      - name: Run pytest suite (guarded)
+        shell: micromamba-shell {0}
+        run: |
+          set -euxo pipefail
+
+          # The settings of the same step in Testing (Linux) of CI.
+          export PY_EXE=python
+          export OCL_ICD_VENDORS="$CONDA_PREFIX/etc/OpenCL/vendors"
+          export PYTHONFAULTHANDLER=1
+          export PYTEST_FLAGS="-vv -o faulthandler_timeout=300"
+          export CISUPPORT_PARALLEL_PYTEST=xdist
+          export VOLUMENTIAL_LEVEL_RESTRICTION_MAX_PAIR_CHECKS=20000000
+          export VOLUMENTIAL_LEVEL_RESTRICTION_MAX_NBOXES=500000
+          export VOLUMENTIAL_LEVEL_RESTRICTION_MAX_LEAF_PAIR_TOTAL=50000000000
+
+          curl -L -O https://tiker.net/ci-support-v0
+
+          set +e
+          timeout --signal=SIGINT --kill-after=120 900 bash -c 'source ./ci-support-v0; test_py_project' \
+            2>&1 | tee linux-pytest.log
+          test_status=${PIPESTATUS[0]}
+          set -e
+
+          if [ "$test_status" -eq 124 ]; then
+            echo "::error::Linux pytest wrapper timed out after 900s"
+          fi
+
+          exit "$test_status"
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: testing-heads-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            dependency-heads.txt
+            linux-pytest.log
+            pytest.xml
+          if-no-files-found: warn
+
   examples:
     name: Examples
     runs-on: ubuntu-latest
@@ -236,6 +370,10 @@ jobs:
         run: |
           export PY_EXE=python
           export PYOPENCL_CTX="portable:0"
+          # The conda environment's PoCL, for the ICD loader of PyPI's
+          # pyopencl wheel that the install below brings (see Testing (Linux)
+          # in CI).
+          export OCL_ICD_VENDORS="$CONDA_PREFIX/etc/OpenCL/vendors"
 
           python -m pip install --upgrade pip
           python -m pip install uv
