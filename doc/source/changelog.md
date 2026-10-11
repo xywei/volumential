@@ -67,15 +67,14 @@ Infrastructure
   extra out and install `pyfmmlib` `2026.1` or later from PyPI's wheels or
   conda-forge. `pyopencl` asks for `2026.1.4` or later, which conda-forge does
   not have yet, so it comes from PyPI's wheel, whose ICD loader has to be
-  pointed at a conda environment's PoCL with `OCL_ICD_VENDORS`.
-  **What changes for an existing environment:** the other pins are the
-  commits the lock had; a sync moves `pyfmmlib` from the locked commit of
-  upstream `main` to the `v2026.1` commit, the same code plus a version bump,
-  and `pyopencl` from `2026.1.2` to `2026.1.4`, and an environment that used
-  conda-forge's PoCL through that wheel needs `OCL_ICD_VENDORS` exported. CI
-  installed the heads of upstream `main`, whatever the lock said; it now tests
-  the pins, and a weekly job in `CI Full` tests the heads, `pyfmmlib`'s
-  included. `scripts/bump_git_pins.py` moves the pins
+  pointed at a conda environment's PoCL with `OCL_ICD_VENDORS`; the
+  development recipes now export it. **What changes for an existing
+  environment:** the other pins are the commits the lock had; a sync moves
+  `pyfmmlib` from the locked commit of upstream `main` to the `v2026.1`
+  commit, the same code plus a version bump, and `pyopencl` from `2026.1.2`
+  to `2026.1.4`. CI installed the heads of upstream `main`, whatever the lock
+  said; it now tests the pins, and a weekly job in `CI Full` tests the heads,
+  `pyfmmlib`'s included. `scripts/bump_git_pins.py` moves the pins
   ({doc}`getting-started/installation`, {doc}`development/releases`).
 
 ### September 2026
