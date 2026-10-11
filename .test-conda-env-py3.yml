@@ -8,6 +8,13 @@ dependencies:
   - cmake
   - colorama
   - cython
+  # For the source build of pyfmmlib that the ``fmmlib`` extra pulls in:
+  # the extra pins pyfmmlib to a Git commit, so ``Testing (Linux)`` and the
+  # dependency-heads job of ``CI Full`` build it.  ``fortran-compiler`` is
+  # the conda-forge metapackage that installs gfortran, which has OpenMP,
+  # together with its activation scripts, so ``FC`` is already set inside
+  # ``micromamba-shell``; meson-python and ninja come from build isolation.
+  - fortran-compiler
   - genpy
   - git
   - iniconfig
@@ -17,11 +24,16 @@ dependencies:
   - packaging
   - pluggy
   - pocl
+  # The release build, for the jobs that install no extra beyond ``test``;
   # 2026.1 and later carry the batched ``*formmp_imany`` wrappers and the
-  # OpenMP option.  The ``fmmlib`` extra that ``Testing (Linux)`` installs
-  # asks for that version, so it keeps this build, and only replaces an older
-  # one with the PyPI wheel; it needs no Fortran compiler for either.
+  # OpenMP option.  The jobs that install the ``fmmlib`` extra replace it
+  # with the build of the pinned commit, which is what a user of the extra
+  # gets, and check that they did.
   - pyfmmlib
+  # Older than the floor in pyproject.toml (conda-forge has no 2026.1.4), so
+  # every job's install replaces it with PyPI's wheel.  That wheel's ICD
+  # loader reads /etc/OpenCL/vendors unless OCL_ICD_VENDORS names another
+  # directory, so the jobs that run OpenCL point it at this environment's.
   - pyopencl
   - pyrsistent
   - pytest

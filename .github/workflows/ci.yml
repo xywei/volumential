@@ -219,12 +219,18 @@ jobs:
           # ``Lock`` job checks that the lock and the pins agree.
           #
           # The ``fmmlib`` extra is what gives test_fmmlib_batched_stages.py
-          # something to test: it asks for pyfmmlib 2026.1 or later, the first
-          # release with the batched ``{l,h}{2,3}dformmp_imany`` wrappers and
-          # the OpenMP feature option.  The conda environment already carries
-          # conda-forge's build of it; anything older would be replaced by the
-          # PyPI wheel.  Before 2026.1 this step built pyfmmlib from a Git
-          # commit, with the Fortran compiler the environment then installed.
+          # something to test: it pins pyfmmlib to the commit of its v2026.1
+          # tag, the first release with the batched
+          # ``{l,h}{2,3}dformmp_imany`` wrappers and the OpenMP feature
+          # option.  Being a Git pin, it replaces the conda-forge build the
+          # environment carries with a build of that commit, made with the
+          # environment's Fortran compiler; meson-python and ninja come from
+          # uv's build isolation.
+          #
+          # conda-forge has no pyopencl as new as the floor in pyproject.toml,
+          # so this also replaces the environment's pyopencl with PyPI's
+          # wheel; the test steps point its ICD loader at the environment's
+          # PoCL (OCL_ICD_VENDORS).
           uv pip install --system --editable ".[test,fmmlib]"
 
           python -V
@@ -236,12 +242,44 @@ jobs:
           python -c "from pyfmmlib import \
               h2dformmp_imany, h3dformmp_imany, l2dformmp_imany, l3dformmp_imany"
 
+          # And check that it is what a user of the extra gets: the build of
+          # the pinned commit, not the conda-forge build it replaced, and
+          # built with OpenMP.
+          python - <<'PYEOF'
+          import json
+          import subprocess
+          import tomllib
+          from importlib.metadata import distribution
+          from pathlib import Path
+
+          import pyfmmlib
+
+          (requirement,) = tomllib.loads(Path("pyproject.toml").read_text())[
+              "project"]["optional-dependencies"]["fmmlib"]
+          pinned = requirement.rpartition("@")[2]
+          dist = distribution("pyfmmlib")
+          direct_url = json.loads(dist.read_text("direct_url.json") or "{}")
+          if direct_url.get("vcs_info", {}).get("commit_id") != pinned:
+              raise SystemExit(f"pyfmmlib {dist.version} is not the build of "
+                               f"{pinned}: direct_url.json is {direct_url}")
+          so = next(Path(pyfmmlib.__file__).parent.glob("_internal*.so"))
+          ldd = subprocess.run(["ldd", so], capture_output=True, text=True,
+                               check=True).stdout
+          if "libgomp" not in ldd:
+              raise SystemExit(f"{so.name} does not link libgomp:\n{ldd}")
+          print(f"pyfmmlib {dist.version}, built from {pinned}, with OpenMP")
+          PYEOF
+
       - name: Run pytest suite (guarded)
         shell: micromamba-shell {0}
         run: |
           set -euxo pipefail
 
           export PY_EXE=python
+          # PyPI's pyopencl wheel brings its own ICD loader, which reads
+          # /etc/OpenCL/vendors unless told otherwise; the PoCL this job
+          # tests on is the conda environment's.
+          export OCL_ICD_VENDORS="$CONDA_PREFIX/etc/OpenCL/vendors"
           export PYTHONFAULTHANDLER=1
           export PYTEST_FLAGS="-vv -o faulthandler_timeout=300"
           # ci-support knows two schemes: "xdist" (or empty), which passes
@@ -300,6 +338,9 @@ jobs:
           export PY_EXE=python
           export VOLUMENTIAL_EXAMPLE_SMOKE=1
           export PYOPENCL_CTX="portable:0"
+          # The conda environment's PoCL, for the ICD loader of PyPI's
+          # pyopencl wheel that the install below brings (see Testing (Linux)).
+          export OCL_ICD_VENDORS="$CONDA_PREFIX/etc/OpenCL/vendors"
 
           python -m pip install --upgrade pip
           python -m pip install uv

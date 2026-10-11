@@ -30,6 +30,12 @@ dependencies:
   # into a failed solve rather than a silent PoCL downgrade.
   - pocl>=7
   - pyfmmlib
+  # conda-forge's pyopencl is older than the floor in pyproject.toml, so
+  # ``Testing (macOS)`` replaces it with one built from the sdist against
+  # this environment's ICD loader; ``libopencl-devel`` is that loader's
+  # development files.  PyPI's macOS wheel would not do: it links Apple's
+  # OpenCL framework, which cannot load PoCL.
+  - libopencl-devel
   - pyopencl
   - pyrsistent
   - pytest
