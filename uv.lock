@@ -2234,7 +2234,7 @@ wheels = [
 
 [[package]]
 name = "volumential"
-version = "2017.1a0"
+version = "2026.1"
 source = { editable = "." }
 default-groups = []
 dependencies = [

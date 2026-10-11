@@ -108,10 +108,10 @@ __all__ = [
 ]
 
 #: The package version as a tuple of integers.
-VERSION = (2017, 1)
+VERSION = (2026, 1)
 
 #: Pre-release suffix appended to :data:`VERSION_TEXT`.
-VERSION_STATUS = "a0"
+VERSION_STATUS = ""
 
 #: The package version as a string.
 VERSION_TEXT = ".".join(str(i) for i in VERSION) + VERSION_STATUS
