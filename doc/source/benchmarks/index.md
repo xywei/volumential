@@ -26,8 +26,9 @@ At minimum:
   that reports several bits to one. Print the resolution once, before the work
   starts, so a multi-hour log says on its first lines what answered.
 - **The Volumential revision**, and the locked resolution around it — a commit
-  for each Git-pinned dependency, a version and artifact hashes for each PyPI
-  one, and the `pyfmmlib` version (and its commit, for a build from Git).
+  for each Git-pinned dependency, `pyfmmlib`'s included, a version and
+  artifact hashes for each PyPI one, and the `pyfmmlib` version where it came
+  from a release wheel instead of the `fmmlib` extra's pin.
 - **The CPU model class**, and whether it has hardware FMA, plus the
   worker-thread caps in force (`OMP_NUM_THREADS`, `POCL_MAX_PTHREAD_COUNT`). An
   unset cap is a different run from a cap of `1`, so record the difference

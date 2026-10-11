@@ -20,7 +20,9 @@ the source-frozen local kernel.
 Use ``--smoke`` for a small local validation.  The default configuration is a
 large publication-pilot workload and should be run on approved remote
 compute resources.  It uses the optional ``pyfmmlib`` backend; install the
-``fmmlib`` project extra before running it.
+``fmmlib`` project extra before running it, which builds ``pyfmmlib`` from
+Git and needs a Fortran compiler with OpenMP, or, without one,
+``pyfmmlib>=2026.1`` from PyPI's wheels or conda-forge.
 
 ``PYOPENCL_CTX`` selects the OpenCL device when it is set.  Without it the
 script picks the first fp64-capable GPU, else an fp64-capable CPU.
@@ -947,7 +949,10 @@ def run(config, output_dir):
         raise RuntimeError(
             "The FMMLib backend requires pyfmmlib 2026.1 or later, the "
             "first release with OpenMP support and the batched wrappers: "
-            'install the volumential[fmmlib] extra, or "pyfmmlib>=2026.1"'
+            "install the volumential[fmmlib] extra, which builds the "
+            "pinned v2026.1 commit from Git and needs a Fortran compiler "
+            "with OpenMP, or, without one, pyfmmlib>=2026.1 from PyPI's "
+            "wheels or conda-forge"
         )
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)

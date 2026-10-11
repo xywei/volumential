@@ -15,21 +15,29 @@ adaptively refined 2:1-balanced trees.
 
 ## Install
 
-A release is a Git tag, installed from GitHub with pip or uv:
+A release is a Git tag, installed from GitHub with pip or uv. The first is
+`2026.1`:
 
 ```bash
-pip install "volumential @ git+https://github.com/xywei/volumential@v<version>"
-uv pip install "volumential @ git+https://github.com/xywei/volumential@v<version>"
+pip install "volumential @ git+https://github.com/xywei/volumential@v2026.1"
+uv pip install "volumential @ git+https://github.com/xywei/volumential@v2026.1"
 ```
 
-No version is tagged yet; until one is, `@main` or `@<commit>` installs the
-same way. Either brings in the `inducer` packages Volumential is built on
-(`arraycontext`, `boxtree`, `loopy`, `meshmode`, `modepy`, `pymbolic`,
-`pytential`, `pytools`, `sumpy`) at the Git commits `pyproject.toml` pins,
-which are the ones CI tests, and everything else from PyPI. It needs `git`, a
-C compiler for the extension `pytential` builds, and an OpenCL runtime:
-conda-forge's `pocl` as below, or a vendor ICD. The `fmmlib` extra,
-`"volumential[fmmlib] @ git+..."`, adds the FMMLib far-field backend.
+`@main` or `@<commit>` installs the same way. Either brings in the `inducer`
+packages Volumential is built on (`arraycontext`, `boxtree`, `loopy`,
+`meshmode`, `modepy`, `pymbolic`, `pytential`, `pytools`, `sumpy`) at the Git
+commits `pyproject.toml` pins, which are the ones CI tests, and everything
+else from PyPI, `pyopencl` `2026.1.4` or later among it. It needs `git`, a C
+compiler for the extension `pytential` builds, and an OpenCL runtime:
+conda-forge's `pocl` as below, or a vendor ICD. PyPI's `pyopencl` wheel finds
+conda-forge's PoCL through `OCL_ICD_VENDORS`, as below; on macOS it cannot
+load PoCL at all ([Installation][docs-install] has the way around that).
+
+The `fmmlib` extra, `"volumential[fmmlib] @ git+..."`, adds the FMMLib
+far-field backend. It builds `pyfmmlib` from Git, at the commit of its
+`v2026.1` tag, so it needs a Fortran compiler with OpenMP. Without one, leave
+the extra out and install `pyfmmlib` `2026.1` or later from PyPI's wheels
+(Linux x86_64) or conda-forge instead.
 
 Releases are not on PyPI, which rejects any package that names a Git
 dependency, and the pins have to be Git dependencies: `pytential` has no
@@ -40,17 +48,19 @@ To work on Volumential, clone it and sync the environment from `uv.lock`:
 
 ```bash
 micromamba create -n volumential-dev -c conda-forge -c nodefaults \
-  python=3.12 pyopencl pocl scipy numpy
+  python=3.12 pocl scipy numpy
 eval "$(micromamba shell hook -s bash)" && micromamba activate volumential-dev
 export UV_PROJECT_ENVIRONMENT="$CONDA_PREFIX"
+export OCL_ICD_VENDORS="$CONDA_PREFIX/etc/OpenCL/vendors"
 git clone https://github.com/xywei/volumential.git && cd volumential
 uv sync --extra test
 ```
 
 (`micromamba activate` is a shell function, hence the hook;
 `UV_PROJECT_ENVIRONMENT` is what points `uv` at the conda environment, without
-which `uv` builds a `.venv` with no OpenCL runtime. See
-[Installation][docs-install].)
+which `uv` builds a `.venv` with no OpenCL runtime; `OCL_ICD_VENDORS` is what
+points the ICD loader of PyPI's `pyopencl` wheel, which `uv sync` installs, at
+the environment's PoCL. See [Installation][docs-install].)
 
 Released wheels of the `inducer` stack have shipped defects that corrupt
 adaptive-tree results *silently*, which is another reason those dependencies

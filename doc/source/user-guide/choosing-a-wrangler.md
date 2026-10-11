@@ -139,7 +139,7 @@ That is **9.1x on the same hardware**, and it is entirely a threading result:
 the serial FMMLib far field is *slower* than the sumpy one. The `_imany`
 routines scale about 17x from 1 to 30 threads, but only once `pyfmmlib`
 actually carries OpenMP, which the PyPI `2024.1.1` wheel does not and
-`2026.1`, the release the `fmmlib` extra asks for, does.
+`2026.1`, the release whose commit the `fmmlib` extra pins and builds, does.
 
 Those middle rows are both the same thing — a **serial** rotation M2L — and
 there are two ways to get one, which the same numbers cannot tell apart:

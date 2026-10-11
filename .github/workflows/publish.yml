@@ -141,10 +141,13 @@ jobs:
 
           or \`uv pip install\` with the same argument. Its metadata pins the
           inducer packages it depends on to Git commits, so the install needs
-          \`git\`, and a C compiler for the extension pytential builds; to run,
-          it needs an OpenCL runtime, such as conda-forge's \`pocl\`. The sdist
-          and the wheel attached here carry the same pins.
+          \`git\`, and a C compiler for the extension pytential builds. The
+          \`fmmlib\` extra pins pyfmmlib the same way and builds it, which
+          needs a Fortran compiler with OpenMP. To run, it needs an OpenCL
+          runtime, such as conda-forge's \`pocl\`. The sdist and the wheel
+          attached here carry the same pins.
 
+          Installation: https://xywei.github.io/volumential/getting-started/installation.html
           Changes: https://xywei.github.io/volumential/changelog.html
           EOF
           gh release create "${GITHUB_REF_NAME}" dist/* \

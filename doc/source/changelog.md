@@ -1,12 +1,12 @@
 # Changelog
 
-Volumential has no Git tags yet and is pre-release
-(`Development Status :: 3 - Alpha`), so there is nothing to organize this list
-by except merged pull requests. Each entry links to the pull request, which
+Volumential's first release is `2026.1`, and it carries everything merged
+before it, so this list is organized by merged pull request, by month, under
+the release that carries it. Each entry links to the pull request, which
 carries the review discussion and the full diff. See {doc}`development/releases`
-for what will have to change when tagging starts.
+for how a release is made.
 
-## Unreleased
+## 2026.1
 
 ### October 2026
 
@@ -51,22 +51,31 @@ Tables and numerics
 
 Infrastructure
 : [#212](https://github.com/xywei/volumential/pull/212) — pin the Git
-  dependencies in `pyproject.toml` and release through Git tags. PyPI rejects
-  any distribution whose metadata has a direct reference, and Volumential's
-  `inducer` dependencies are only usable from Git
+  dependencies in `pyproject.toml`, release through Git tags, and set the
+  version to `2026.1`, the first release. PyPI rejects any distribution whose
+  metadata has a direct reference, and Volumential's `inducer` dependencies
+  are only usable from Git
   ([#211](https://github.com/xywei/volumential/issues/211)), so a release is a
   tag `v<version>`, installed with
-  `pip install "volumential @ git+https://github.com/xywei/volumential@v<version>"`,
+  `pip install "volumential @ git+https://github.com/xywei/volumential@v2026.1"`,
   and a tag now makes a GitHub Release with the sdist and wheel rather than a
   PyPI upload. The dependencies that came from Git are direct references
   pinned to the commits `uv.lock` had, so pip installs them too, and the
-  `[tool.uv.sources]` table is gone. **What changes for an existing
-  environment:** nothing, if it was synced from `uv.lock`, since the pins are
-  the commits the lock had. CI installed the heads of upstream `main`,
-  whatever the lock said; it now tests the pins, and a weekly job in
-  `CI Full` tests the heads. The `fmmlib` extra takes `pyfmmlib`
-  `2026.1` from PyPI, the locked commit plus a version bump, so it needs no
-  Fortran compiler on Linux x86_64. `scripts/bump_git_pins.py` moves the pins
+  `[tool.uv.sources]` table is gone. The `fmmlib` extra pins `pyfmmlib` the
+  same way, to the commit of its `v2026.1` tag, so it builds `pyfmmlib` from
+  source and needs a Fortran compiler with OpenMP; without one, leave the
+  extra out and install `pyfmmlib` `2026.1` or later from PyPI's wheels or
+  conda-forge. `pyopencl` asks for `2026.1.4` or later, which conda-forge does
+  not have yet, so it comes from PyPI's wheel, whose ICD loader has to be
+  pointed at a conda environment's PoCL with `OCL_ICD_VENDORS`.
+  **What changes for an existing environment:** the other pins are the
+  commits the lock had; a sync moves `pyfmmlib` from the locked commit of
+  upstream `main` to the `v2026.1` commit, the same code plus a version bump,
+  and `pyopencl` from `2026.1.2` to `2026.1.4`, and an environment that used
+  conda-forge's PoCL through that wheel needs `OCL_ICD_VENDORS` exported. CI
+  installed the heads of upstream `main`, whatever the lock said; it now tests
+  the pins, and a weekly job in `CI Full` tests the heads, `pyfmmlib`'s
+  included. `scripts/bump_git_pins.py` moves the pins
   ({doc}`getting-started/installation`, {doc}`development/releases`).
 
 ### September 2026
@@ -249,7 +258,7 @@ Infrastructure
   `uv.lock` rather than to a release that lacks OpenMP and the batched
   wrappers ({doc}`getting-started/installation`).
 
-## Earlier
+### Earlier
 
 Before September 2026 the project's history lives in the pull requests and
 commits themselves; `git log` is the reference. The pieces of it that still

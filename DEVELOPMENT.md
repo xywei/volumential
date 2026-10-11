@@ -13,8 +13,9 @@ from PyPI.
 - Package manager: `uv`
 - `git` and a C compiler: required, since the pinned dependencies are cloned
   and `pytential` builds a C extension
-- Fortran toolchain (`gfortran`, `ninja`): only for the `fmmlib` extra, and
-  only where `pyfmmlib` has no wheel (PyPI has them for Linux x86_64)
+- A Fortran compiler with OpenMP (`gfortran`): only for the `fmmlib` extra,
+  which builds `pyfmmlib` from its Git pin (meson-python and ninja come from
+  build isolation)
 
 `requires-python` in `pyproject.toml` is still `>=3.11`, and nothing in
 Volumential itself needs 3.12. CI pins 3.12 because that is the environment
@@ -39,14 +40,22 @@ re-measuring.
 
    ```bash
    micromamba create -n volumential-dev -c conda-forge -c nodefaults \
-     python=3.12 pyopencl pocl scipy numpy
+     python=3.12 pocl scipy numpy
    eval "$(micromamba shell hook -s bash)"   # unless the shell is init'd
    micromamba activate volumential-dev
    export UV_PROJECT_ENVIRONMENT="$CONDA_PREFIX"
+   export OCL_ICD_VENDORS="$CONDA_PREFIX/etc/OpenCL/vendors"
    ```
 
    `micromamba activate` is a shell function, so a shell that has not been
    `micromamba shell init`-ed needs the hook first, or activation fails.
+
+   The environment provides PoCL, not `pyopencl`: `uv sync` installs the
+   `pyopencl` `uv.lock` records from PyPI (conda-forge has nothing as recent
+   as the `2026.1.4` floor yet, so a conda-forge one would be replaced
+   anyway). That wheel's ICD loader reads `/etc/OpenCL/vendors` unless
+   `OCL_ICD_VENDORS` says otherwise; see
+   [OpenCL ICD discovery](#opencl-icd-discovery), which also covers macOS.
 
    `UV_PROJECT_ENVIRONMENT` is what makes `uv` use the conda environment.
    Activating conda sets `CONDA_PREFIX`, not `VIRTUAL_ENV`, and `uv --active`
@@ -82,16 +91,17 @@ Most of the `inducer` stack releases rarely, and `pytential` not at all, so
 `pyproject.toml` declares those dependencies as direct references pinned to a
 commit, `name @ git+https://github.com/inducer/<repo>.git@<commit>`:
 `arraycontext`, `boxtree`, `loopy`, `meshmode`, `modepy`, `pymbolic`,
-`pytential`, `pytools` and `sumpy`, and `gmsh_interop` in the `test` and
-`gmsh_support` extras. `uv.lock` records the same commits. The pins are part
-of the package metadata, so every install gets them: `uv sync`,
+`pytential`, `pytools` and `sumpy`, `gmsh_interop` in the `test` and
+`gmsh_support` extras, and `pyfmmlib` in the `fmmlib` extra, at the commit of
+its `v2026.1` tag. `uv.lock` records the same commits. The pins are part of
+the package metadata, so every install gets them: `uv sync`,
 `pip install -e .`, and `pip install` of a release tag (see
 [Releasing](#releasing)). Everything else resolves from PyPI, and `uv.lock`
-pins a release: `pyopencl`, `pyfmmlib`, and the inducer packages Volumential
-only needs through others (`cgen`, `genpy`, `islpy`), so run metadata records
-their versions rather than commits. Do not swap the pinned packages for PyPI
-wheels in an experiment environment, and capture the pinned commits in the
-run metadata of any promoted result.
+pins a release: `pyopencl` (`2026.1.4`, the floor `pyproject.toml` sets), and
+the inducer packages Volumential only needs through others (`cgen`, `genpy`,
+`islpy`), so run metadata records their versions rather than commits. Do
+not swap the pinned packages for PyPI wheels in an experiment environment,
+and capture the pinned commits in the run metadata of any promoted result.
 
 There is no `[tool.uv.sources]` table, and there must not be one for a pinned
 package: uv lets such a source override the direct reference without a
@@ -129,20 +139,21 @@ before it produces evidence. `--no-lock` rewrites `pyproject.toml` only.
 
 Nobody has to bump to find out whether a bump would break. Every week, the
 `Testing (Linux, dependency heads)` job of `CI Full` moves every pin to its
-head with `--no-lock`, installs, and runs the pull-request suite; its summary
-lists the commits it tested. A failure there is the next bump's problem,
+head with `--no-lock`, `pyfmmlib`'s included, installs (building `pyfmmlib`'s
+head), and runs the pull-request suite; its summary lists the commits it
+tested. A failure there is the next bump's problem,
 found before anyone tries it, and the pins on `main` are unaffected.
 
 ### pyfmmlib with OpenMP and the batched P2M wrappers
 
 The FMMLib backend needs a `pyfmmlib` with both the restored OpenMP feature
 option (inducer/pyfmmlib#93) and the batched `{l,h}{2,3}dformmp_imany`
-wrappers (inducer/pyfmmlib#94). `2026.1` is the first release that has them,
-and the `fmmlib` extra asks for it (`pyfmmlib>=2026.1`). Its Linux x86_64
-wheels on PyPI carry all eight batched wrappers, charge and dipole, and link
-`libgomp`; conda-forge has `2026.1` too. Where there is no wheel, pip and uv
-build the sdist, which needs `gfortran` and `ninja`. Releases before `2026.1`,
-`2024.1.1` included, have neither feature.
+wrappers (inducer/pyfmmlib#94). `2026.1` is the first release that has them;
+releases before it, `2024.1.1` included, have neither. The `fmmlib` extra
+pins `pyfmmlib` to the commit of its `v2026.1` tag, `c168359a`, as a direct
+reference like the inducer packages above, so the extra builds it from
+source: that needs a Fortran compiler with OpenMP (`gfortran`), and
+meson-python and ninja come from build isolation.
 
 ```bash
 uv sync --extra test --extra doc --extra fmmlib
@@ -151,11 +162,21 @@ uv sync --extra test --extra doc --extra fmmlib
 `uv sync` is an exact sync, so naming only `--extra fmmlib` uninstalls the
 `test` and `doc` extras: list every extra the environment needs on each sync.
 
-From #135 until `2026.1` was released, the extra took `pyfmmlib` from a
-locked commit of upstream `main` instead; `2026.1` is that commit plus a
-version bump. For a source build, the `openmp` feature option defaults to
-`auto`, so a host with a usable OpenMP toolchain needs no extra build flag —
-the `ldd` check below is what confirms it took.
+Since #135 the extra has taken `pyfmmlib` from Git; `uv.lock` pinned a commit
+of upstream `main` until the pin moved into `pyproject.toml`, and `v2026.1` is
+that commit plus a version bump and a CI change. The `openmp` feature option
+defaults to `auto`, so a host with a usable OpenMP toolchain needs no extra
+build flag, and a host without one builds a serial `pyfmmlib` without
+complaint — the `ldd` check below is what confirms OpenMP took.
+
+Without a Fortran compiler, leave the extra out and install `pyfmmlib`
+`2026.1` or later from PyPI's wheels (Linux x86_64; they carry all eight
+batched wrappers, charge and dipole, and link `libgomp`) or from conda-forge,
+then `uv sync --inexact`, or the next exact sync uninstalls it. Asking for
+the extra as well does not help: pip reads the pin's metadata first, which
+runs `pyfmmlib`'s meson configure step and fails without a Fortran compiler
+(with one, pip keeps an installed `2026.1` instead of building the pin), and
+uv replaces an installed release with a build of the pin.
 
 Verify the build before trusting FMMLib timings -- `FPNDFMMLibExpansionWrangler`
 falls back to the serial per-box path without complaining when the batched
@@ -238,7 +259,8 @@ export POCL_MAX_PTHREAD_COUNT=4   # pocl worker threads
 ```
 
 Run metadata for a promoted result should carry, at minimum: the pinned
-dependency commits, the `pyfmmlib` version, `OMP_NUM_THREADS`,
+dependency commits (`pyfmmlib`'s, or its version for a release wheel),
+`OMP_NUM_THREADS`,
 the pocl thread cap, the selected OpenCL platform, and the benchmark
 parameters. Keep host-identifying details out of anything published.
 
@@ -251,6 +273,25 @@ enumerates first:
 export PYOPENCL_CTX=portable:0
 export PYOPENCL_TEST=portable:0
 ```
+
+`pyopencl` comes from PyPI's wheel: `uv.lock` records `2026.1.4`, and
+conda-forge has nothing that recent yet, so even a conda-forge `pyopencl` is
+replaced by the wheel. The wheel brings its own ICD loader. On Linux it reads
+`/etc/OpenCL/vendors` unless `OCL_ICD_VENDORS` names another directory, so in
+a conda environment point it at the environment's PoCL:
+
+```bash
+export OCL_ICD_VENDORS="$CONDA_PREFIX/etc/OpenCL/vendors"
+```
+
+Without it, a host with no system ICDs fails with `PLATFORM_NOT_FOUND_KHR`,
+and one with them gets those instead of the environment's PoCL. On macOS the
+wheel links Apple's OpenCL framework, which cannot load PoCL, so build
+`pyopencl` from source there, in an environment that also has
+`libopencl-devel`: `uv sync --no-binary-package pyopencl ...`, or
+`--no-binary pyopencl` for `uv pip install` and pip. The build links the
+environment's ICD loader, as conda-forge's own build does, and that finds
+the environment's PoCL. `Testing (macOS)` in `CI Full` installs it this way.
 
 The `portable` match has to be unique. `pip install "pyopencl[pocl]"` puts a
 PoCL inside `pyopencl`'s own loader directory, which pip's `pyopencl` wheel
@@ -278,10 +319,11 @@ ssh <remote-host>
 git clone <repo-url>
 cd volumential
 micromamba create -n volumential-dev -c conda-forge -c nodefaults \
-  python=3.12 pyopencl pocl scipy numpy
+  python=3.12 pocl scipy numpy
 eval "$(micromamba shell hook -s bash)"
 micromamba activate volumential-dev
 export UV_PROJECT_ENVIRONMENT="$CONDA_PREFIX"
+export OCL_ICD_VENDORS="$CONDA_PREFIX/etc/OpenCL/vendors"
 uv sync --extra test --extra doc
 ```
 
@@ -382,20 +424,26 @@ publishes no inventory for it.
 
 ## Releasing
 
-A release is a Git tag `v<version>`, installed from GitHub:
+A release is a Git tag `v<version>`, installed from GitHub. The first is
+`2026.1`:
 
 ```bash
-pip install "volumential @ git+https://github.com/xywei/volumential@v<version>"
-uv pip install "volumential @ git+https://github.com/xywei/volumential@v<version>"
+pip install "volumential @ git+https://github.com/xywei/volumential@v2026.1"
+uv pip install "volumential @ git+https://github.com/xywei/volumential@v2026.1"
 ```
 
-Extras go before the `@`: `"volumential[fmmlib] @ git+...@v<version>"`.
+Extras go before the `@`: `"volumential[fmmlib] @ git+...@v2026.1"`.
 pip or uv builds Volumential from the tag and installs the dependency commits
 its `pyproject.toml` pins, the ones `uv.lock` records and CI tested, and
-releases from PyPI for everything else. That needs `git`, a C compiler for
-the extension `pytential` builds, and, to run anything, an OpenCL runtime as
+releases from PyPI for everything else, `pyopencl` `2026.1.4` or later among
+them. That needs `git`, a C compiler for the extension `pytential` builds, a
+Fortran compiler with OpenMP for the `fmmlib` extra, which builds `pyfmmlib`
+from its pin (see
+[pyfmmlib with OpenMP and the batched P2M wrappers](#pyfmmlib-with-openmp-and-the-batched-p2m-wrappers)
+for what to do without one), and, to run anything, an OpenCL runtime as
 before: conda-forge's `pocl`, which CI tests, or a vendor ICD (see
-[OpenCL ICD discovery](#opencl-icd-discovery)). Not the PoCL that
+[OpenCL ICD discovery](#opencl-icd-discovery), which says how PyPI's
+`pyopencl` wheel finds it). Not the PoCL that
 `pip install "pyopencl[pocl]"` adds: that is PoCL 3.0, from 2022, which
 failed to build some of the suite's kernels on a recent CPU
 (`unknown target CPU`).
@@ -408,18 +456,17 @@ installable release there and `sumpy`, `boxtree`, `meshmode` and
 
 To release:
 
-1. Choose the version. The suggestion is a calendar version like the
-   `inducer` packages use, `<year>.<n>` (`2026.1`, then `2026.2`), with a
-   suffix for a pre-release (`2026.1a1`, `2026.1rc1`).
+1. Choose the version: a calendar version like the `inducer` packages use,
+   `<year>.<n>` (`2026.1` was the first, then `2026.2`), with a suffix for a
+   pre-release (`2026.2a1`, `2026.2rc1`).
 2. Set it in both places it is written: `version` in `pyproject.toml`, and
    `VERSION` and `VERSION_STATUS` in `volumential/version.py` (`VERSION_TEXT`
    is built from them).
-   The same change adds the release's section to the changelog and its
-   entry to the version switcher; `doc/source/development/releases.md` lists
-   the pieces.
+   The same change gives the release its section in the changelog;
+   `doc/source/development/releases.md` lists the pieces.
 3. Merge that change to `main`.
-4. Tag the merge commit and push the tag, e.g. `git tag -a v2026.1 -m
-   "volumential 2026.1"` and `git push origin v2026.1`.
+4. Tag the merge commit and push the tag, e.g. `git tag -a v2026.2 -m
+   "volumential 2026.2"` and `git push origin v2026.2`.
 
 `.github/workflows/publish.yml` then checks that the tag, `pyproject.toml`
 and `volumential.version` agree, and stops before building if they do not.

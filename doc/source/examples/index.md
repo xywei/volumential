@@ -210,9 +210,12 @@ only one that exercises the optional fixed right preconditioners, including the
 Lagrange palette of fixed-wave-number tables. `--smoke` uses the `sumpy`
 far-field backend and needs nothing extra; the default configuration uses
 `fmmlib`, so it needs the `fmmlib` extra installed (`uv sync --extra test
---extra doc --extra fmmlib`), which brings `pyfmmlib` `2026.1` or later with
-the OpenMP and batched entry points `DEVELOPMENT.md` describes. Output lands
-under `--output-dir`, `build/branched-flow-helmholtz2d` by default.
+--extra doc --extra fmmlib`), which builds `pyfmmlib` from the commit of its
+`v2026.1` tag, with the OpenMP and batched entry points `DEVELOPMENT.md`
+describes, and needs a Fortran compiler with OpenMP for that; without one,
+`pyfmmlib` `2026.1` or later from PyPI's wheels or conda-forge does instead
+({doc}`../getting-started/installation`). Output lands under `--output-dir`,
+`build/branched-flow-helmholtz2d` by default.
 
 ```bash
 uv run python examples/branched_flow_helmholtz2d.py --smoke
